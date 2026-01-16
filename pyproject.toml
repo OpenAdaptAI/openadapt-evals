@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "openadapt-evals"
+version = "0.1.0"
+description = "Evaluation infrastructure for GUI agent benchmarks"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    {name = "Richard Abrich", email = "richard@openadapt.ai"}
+]
+
+dependencies = [
+    "pillow>=10.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.1.0",
+]
+waa = [
+    # Windows Agent Arena dependencies
+]
+all = [
+    "openadapt-evals[dev,waa]",
+]
+
+[project.urls]
+Homepage = "https://github.com/OpenAdaptAI/openadapt-evals"
+Repository = "https://github.com/OpenAdaptAI/openadapt-evals"
+
+[tool.hatch.build.targets.wheel]
+packages = ["openadapt_evals"]
+
+[tool.ruff]
+line-length = 100
