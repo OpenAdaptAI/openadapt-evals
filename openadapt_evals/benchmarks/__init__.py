@@ -75,6 +75,15 @@ from openadapt_evals.benchmarks.runner import (
 )
 from openadapt_evals.benchmarks.viewer import generate_benchmark_viewer
 from openadapt_evals.benchmarks.waa import WAAAdapter, WAAConfig, WAAMockAdapter
+from openadapt_evals.benchmarks.waa_live import WAALiveAdapter, WAALiveConfig
+
+# Lazy imports for optional dependencies
+def __getattr__(name: str):
+    """Lazy import Azure modules (requires azure-ai-ml, azure-identity)."""
+    if name in ("AzureConfig", "AzureWAAOrchestrator", "AzureMLClient", "estimate_cost"):
+        from openadapt_evals.benchmarks import azure
+        return getattr(azure, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
     # Base classes
@@ -99,6 +108,13 @@ __all__ = [
     "WAAAdapter",
     "WAAConfig",
     "WAAMockAdapter",
+    "WAALiveAdapter",
+    "WAALiveConfig",
+    # Azure (lazy imports)
+    "AzureConfig",
+    "AzureWAAOrchestrator",
+    "AzureMLClient",
+    "estimate_cost",
     # Viewer
     "generate_benchmark_viewer",
     # Data collection

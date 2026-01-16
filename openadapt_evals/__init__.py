@@ -68,6 +68,8 @@ from openadapt_evals.benchmarks import (
     WAAAdapter,
     WAAConfig,
     WAAMockAdapter,
+    WAALiveAdapter,
+    WAALiveConfig,
     # Viewer
     generate_benchmark_viewer,
     # Data collection
@@ -105,6 +107,8 @@ __all__ = [
     "WAAAdapter",
     "WAAConfig",
     "WAAMockAdapter",
+    "WAALiveAdapter",
+    "WAALiveConfig",
     # Viewer
     "generate_benchmark_viewer",
     # Data collection

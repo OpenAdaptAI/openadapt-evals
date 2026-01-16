@@ -120,7 +120,55 @@ class MyAgent(BenchmarkAgent):
 
 ## Windows Agent Arena Integration
 
-For real WAA evaluation (requires Windows VM):
+### Command Line Interface
+
+The package provides a CLI for running WAA evaluations:
+
+```bash
+# Run mock evaluation (no Windows VM required)
+python -m openadapt_evals.benchmarks.cli mock --tasks 10
+
+# Check if WAA server is ready
+python -m openadapt_evals.benchmarks.cli probe --server http://vm-ip:5000
+
+# Run live evaluation against a WAA server
+python -m openadapt_evals.benchmarks.cli live --server http://vm-ip:5000 --task-ids notepad_1,notepad_2
+
+# Generate HTML viewer for results
+python -m openadapt_evals.benchmarks.cli view --run-name my_eval_run
+
+# Estimate Azure costs
+python -m openadapt_evals.benchmarks.cli estimate --tasks 154 --workers 10
+```
+
+### Live WAA Adapter
+
+Connect to a WAA Flask server running inside a Windows VM:
+
+```python
+from openadapt_evals import WAALiveAdapter, WAALiveConfig
+
+# Configure connection to WAA server
+config = WAALiveConfig(
+    server_url="http://vm-ip:5000",
+    a11y_backend="uia",  # or "win32"
+    max_steps=15,
+)
+
+# Create adapter
+adapter = WAALiveAdapter(config)
+
+# Check connection
+if not adapter.check_connection():
+    print("WAA server not ready")
+
+# Run evaluation
+results = evaluate_agent_on_benchmark(agent, adapter, task_ids=["notepad_1"])
+```
+
+### Local WAA Evaluation
+
+For real WAA evaluation with local WAA repository:
 
 ```python
 from openadapt_evals import WAAAdapter
@@ -129,6 +177,44 @@ adapter = WAAAdapter(waa_repo_path="/path/to/WindowsAgentArena")
 tasks = adapter.list_tasks(domain="notepad")
 
 results = evaluate_agent_on_benchmark(agent, adapter, task_ids=[t.task_id for t in tasks[:5]])
+```
+
+### Azure-based Parallel Evaluation
+
+Run WAA at scale using Azure ML compute:
+
+```bash
+# Install Azure dependencies
+pip install openadapt-evals[azure]
+
+# Set environment variables
+export AZURE_SUBSCRIPTION_ID="your-subscription-id"
+export AZURE_ML_RESOURCE_GROUP="your-resource-group"
+export AZURE_ML_WORKSPACE_NAME="your-workspace"
+
+# Run evaluation with multiple workers
+python -m openadapt_evals.benchmarks.cli azure \
+    --waa-path /path/to/WindowsAgentArena \
+    --workers 10 \
+    --timeout-hours 4
+```
+
+Or programmatically:
+
+```python
+from openadapt_evals.benchmarks.azure import AzureConfig, AzureWAAOrchestrator
+
+config = AzureConfig.from_env()
+orchestrator = AzureWAAOrchestrator(
+    config=config,
+    waa_repo_path="/path/to/WindowsAgentArena",
+)
+
+results = orchestrator.run_evaluation(
+    agent=my_agent,
+    num_workers=40,  # 40 parallel VMs
+    cleanup_on_complete=True,
+)
 ```
 
 ## API Reference
