@@ -1,0 +1,11 @@
+{
+  "task_id": "coding_1",
+  "instruction": "Mock task 1 in coding domain",
+  "domain": "coding",
+  "initial_state_ref": null,
+  "time_limit_steps": 15,
+  "raw_config": {
+    "mock": true
+  },
+  "evaluation_spec": null
+}

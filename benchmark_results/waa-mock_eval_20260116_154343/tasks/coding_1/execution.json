@@ -1,0 +1,60 @@
+{
+  "task_id": "coding_1",
+  "model_id": "unknown",
+  "success": true,
+  "score": 1.0,
+  "num_steps": 1,
+  "total_time_seconds": 0.17749166699650232,
+  "error": null,
+  "reason": "clicked=['4'], typed=False, done=False",
+  "steps": [
+    {
+      "step_idx": 0,
+      "screenshot_path": "screenshots/step_000.png",
+      "action": {
+        "type": "click",
+        "x": null,
+        "y": null,
+        "target_node_id": "4",
+        "target_bbox": null,
+        "target_role": null,
+        "target_name": null,
+        "text": null,
+        "key": null,
+        "modifiers": null,
+        "scroll_direction": null,
+        "scroll_amount": null,
+        "end_x": null,
+        "end_y": null,
+        "answer": null,
+        "raw_action": null
+      },
+      "reasoning": null,
+      "timestamp": 1768596223.6836
+    },
+    {
+      "step_idx": 1,
+      "screenshot_path": "screenshots/step_001.png",
+      "action": {
+        "type": "done",
+        "x": null,
+        "y": null,
+        "target_node_id": null,
+        "target_bbox": null,
+        "target_role": null,
+        "target_name": null,
+        "text": null,
+        "key": null,
+        "modifiers": null,
+        "scroll_direction": null,
+        "scroll_amount": null,
+        "end_x": null,
+        "end_y": null,
+        "answer": null,
+        "raw_action": null
+      },
+      "reasoning": null,
+      "timestamp": 1768596223.773221
+    }
+  ]
+}

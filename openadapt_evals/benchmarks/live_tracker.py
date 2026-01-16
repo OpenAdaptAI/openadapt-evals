@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from openadapt_evals.benchmarks.base import (
+from openadapt_evals.adapters import (
     BenchmarkAction,
     BenchmarkObservation,
     BenchmarkResult,

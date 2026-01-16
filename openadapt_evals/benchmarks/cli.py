@@ -89,9 +89,9 @@ def cmd_mock(args: argparse.Namespace) -> int:
 
 def cmd_live(args: argparse.Namespace) -> int:
     """Run live evaluation against a WAA server."""
-    from openadapt_evals.benchmarks.waa_live import WAALiveAdapter, WAALiveConfig
+    from openadapt_evals.adapters import WAALiveAdapter, WAALiveConfig
+    from openadapt_evals.agents import SmartMockAgent, ApiAgent
     from openadapt_evals.benchmarks import (
-        SmartMockAgent,
         EvaluationConfig,
         evaluate_agent_on_benchmark,
         compute_metrics,
@@ -114,9 +114,40 @@ def cmd_live(args: argparse.Namespace) -> int:
 
     print("Connected!")
 
-    # Create agent
-    # TODO: Support different agent types (API-backed, etc.)
-    agent = SmartMockAgent()
+    # Create agent based on --agent option
+    agent_type = getattr(args, "agent", "mock") or "mock"
+
+    # Load demo from file if provided
+    demo_text = None
+    if hasattr(args, "demo") and args.demo:
+        demo_path = Path(args.demo)
+        if demo_path.exists():
+            demo_text = demo_path.read_text()
+            print(f"Loaded demo from {demo_path} ({len(demo_text)} chars)")
+        else:
+            # Treat as direct demo text
+            demo_text = args.demo
+
+    if agent_type == "mock":
+        agent = SmartMockAgent()
+    elif agent_type in ("api-claude", "claude", "anthropic"):
+        try:
+            agent = ApiAgent(provider="anthropic", demo=demo_text)
+            print(f"Using ApiAgent with Claude (demo={'yes' if agent.demo else 'no'})")
+        except RuntimeError as e:
+            print(f"ERROR: {e}")
+            return 1
+    elif agent_type in ("api-openai", "openai", "gpt"):
+        try:
+            agent = ApiAgent(provider="openai", demo=demo_text)
+            print(f"Using ApiAgent with GPT-5.1 (demo={'yes' if agent.demo else 'no'})")
+        except RuntimeError as e:
+            print(f"ERROR: {e}")
+            return 1
+    else:
+        print(f"ERROR: Unknown agent type: {agent_type}")
+        print("Available: mock, api-claude, api-openai")
+        return 1
 
     # Create config for trace collection
     eval_config = None
@@ -345,6 +376,9 @@ def main() -> int:
     live_parser = subparsers.add_parser("live", help="Run live evaluation against WAA server")
     live_parser.add_argument("--server", type=str, default="http://localhost:5000",
                             help="WAA server URL")
+    live_parser.add_argument("--agent", type=str, default="mock",
+                            help="Agent type: mock, api-claude, api-openai")
+    live_parser.add_argument("--demo", type=str, help="Demo trajectory file for ApiAgent")
     live_parser.add_argument("--task-ids", type=str, help="Comma-separated task IDs")
     live_parser.add_argument("--max-steps", type=int, default=15, help="Max steps per task")
     live_parser.add_argument("--output", type=str, help="Output directory for traces")

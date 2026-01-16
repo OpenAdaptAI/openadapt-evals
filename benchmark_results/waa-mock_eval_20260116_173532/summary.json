@@ -1,0 +1,27 @@
+{
+  "benchmark_name": "waa-mock",
+  "run_name": "waa-mock_eval_20260116_173532",
+  "model_id": "unknown",
+  "num_tasks": 2,
+  "num_success": 2,
+  "success_rate": 1.0,
+  "avg_score": 1.0,
+  "avg_steps": 1.0,
+  "avg_time_seconds": 0.031142332998570055,
+  "tasks": [
+    {
+      "task_id": "browser_1",
+      "success": true,
+      "score": 1.0,
+      "num_steps": 1,
+      "error": null
+    },
+    {
+      "task_id": "office_1",
+      "success": true,
+      "score": 1.0,
+      "num_steps": 1,
+      "error": null
+    }
+  ]
+}

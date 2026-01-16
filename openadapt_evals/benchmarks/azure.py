@@ -37,8 +37,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from openadapt_evals.benchmarks.agent import BenchmarkAgent
-from openadapt_evals.benchmarks.base import BenchmarkResult, BenchmarkTask
+from openadapt_evals.agents import BenchmarkAgent
+from openadapt_evals.adapters import BenchmarkResult, BenchmarkTask
 
 logger = logging.getLogger(__name__)
 

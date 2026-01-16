@@ -20,8 +20,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
-from openadapt_evals.benchmarks.agent import BenchmarkAgent
-from openadapt_evals.benchmarks.base import (
+from openadapt_evals.agents import BenchmarkAgent
+from openadapt_evals.adapters import (
     BenchmarkAdapter,
     BenchmarkAction,
     BenchmarkObservation,
