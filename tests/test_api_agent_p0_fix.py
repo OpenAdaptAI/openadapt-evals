@@ -23,7 +23,9 @@ def create_test_screenshot():
 def create_mock_response():
     """Create a mock API response."""
     mock_response = Mock()
-    mock_response.content = [Mock(text="""```memory
+    mock_content = Mock()
+    mock_content.type = "text"
+    mock_content.text = """```memory
 # Working on task
 ```
 
@@ -33,7 +35,8 @@ CONTINUE
 
 ```python
 computer.click(500, 300)
-```""")]
+```"""
+    mock_response.content = [mock_content]
     return mock_response
 
 
@@ -226,9 +229,11 @@ class TestDemoIntegration:
                             if 'DEMONSTRATION' in item['text']:
                                 demo_appearances.append(True)
 
-                # Return mock response
+                # Return mock response with proper type attribute
                 mock_response = Mock()
-                mock_response.content = [Mock(text="""```memory
+                mock_content = Mock()
+                mock_content.type = "text"
+                mock_content.text = """```memory
 # task in progress
 ```
 
@@ -238,7 +243,8 @@ CONTINUE
 
 ```python
 computer.click(100, 100)
-```""")]
+```"""
+                mock_response.content = [mock_content]
                 return mock_response
 
             mock_client = Mock()

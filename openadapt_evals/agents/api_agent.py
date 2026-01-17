@@ -23,6 +23,7 @@ Usage:
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import os
 import re
@@ -39,6 +40,34 @@ from openadapt_evals.adapters.base import (
 )
 
 logger = logging.getLogger("openadapt_evals.agents.api")
+
+# Clarification prompt for retry on parse failure
+CLARIFICATION_PROMPT = """Your previous response could not be parsed. Please respond with EXACTLY this format:
+
+```memory
+# Your notes about the task state
+```
+
+```decision
+CONTINUE
+```
+
+```python
+computer.click(x, y)
+```
+
+Or use one of these actions:
+- computer.click(x, y)
+- computer.double_click(x, y)
+- computer.right_click(x, y)
+- computer.type("text")
+- computer.press("key")
+- computer.hotkey("key1", "key2")
+- computer.scroll(amount)
+- computer.drag(x1, y1, x2, y2)
+
+Respond with your action now:
+"""
 
 
 # System prompt for GUI automation
@@ -238,6 +267,10 @@ class ApiAgent(BenchmarkAgent):
         self.memory_block_text = "# empty memory block"
         self.step_counter = 0
 
+        # Parsing configuration
+        self.max_parse_retries = 2  # Number of retries on parse failure
+        self.loop_detection_threshold = 3  # Trigger alternative strategy after N identical actions
+
         logger.info(f"ApiAgent initialized with provider={provider}, model={self.model}")
         if self.demo:
             logger.info(f"Demo trajectory provided ({len(self.demo)} chars) - will persist across all steps")
@@ -384,52 +417,64 @@ class ApiAgent(BenchmarkAgent):
         user_prompt = "\n\n".join(content_parts)
         logs["user_question"] = user_prompt
 
-        # Call the API
-        try:
-            response_text = self._call_api(screenshot_bytes, user_prompt)
-        except Exception as e:
-            logger.error(f"API call failed: {e}")
-            return "", ["# API call failed"], logs, {}
+        # Call the API with retry logic for parse failures
+        response_text = None
+        actions = None
+        parse_attempts = 0
 
-        logs["plan_result"] = response_text
+        while parse_attempts <= self.max_parse_retries:
+            try:
+                if parse_attempts == 0:
+                    response_text = self._call_api(screenshot_bytes, user_prompt)
+                else:
+                    # Retry with clarification prompt
+                    logger.warning(f"Parse retry {parse_attempts}/{self.max_parse_retries}")
+                    retry_prompt = user_prompt + "\n\n" + CLARIFICATION_PROMPT
+                    response_text = self._call_api(screenshot_bytes, retry_prompt)
+                    logs[f"retry_{parse_attempts}_response"] = response_text
+            except Exception as e:
+                logger.error(f"API call failed: {e}")
+                return "", ["# API call failed"], logs, {}
 
-        # Extract memory block
-        memory_match = re.search(r"```memory\n(.*?)```", response_text, re.DOTALL)
-        if memory_match:
-            self.memory_block_text = memory_match.group(1).strip()
+            logs["plan_result"] = response_text
 
-        # Extract decision block
-        decision_match = re.search(r"```decision\n(.*?)```", response_text, re.DOTALL)
-        if decision_match:
-            decision = decision_match.group(1).strip().upper()
-            if "DONE" in decision:
-                self.prev_actions.append("DONE")
-                return "", ["DONE"], logs, {}
-            elif "FAIL" in decision:
-                self.prev_actions.append("FAIL")
-                return "", ["FAIL"], logs, {}
-            elif "WAIT" in decision:
-                self.prev_actions.append("WAIT")
-                return "", ["WAIT"], logs, {}
+            # Parse the response with robust error handling
+            parse_result = self._parse_api_response(response_text, w, h, logs)
 
-        # Extract Python code block
-        code_match = re.search(r"```python\n(.*?)```", response_text, re.DOTALL)
-        if code_match:
-            code_text = code_match.group(1).strip()
-            actions = [code_text]
-            self.prev_actions.append(code_text)
-            # Store rich history with reasoning (memory + action)
-            self._add_to_history(f"Thought: {self.memory_block_text}\nAction: {code_text}")
-        else:
-            # Try to extract action from response text
-            action = self._parse_action_from_text(response_text, w, h)
-            if action:
-                actions = [action]
-                self.prev_actions.append(action)
-                self._add_to_history(f"Thought: {self.memory_block_text}\nAction: {action}")
-            else:
-                logger.warning("Could not extract action from response")
-                actions = ["# Could not parse action"]
+            if parse_result["status"] == "terminal":
+                # DONE, FAIL, or WAIT
+                terminal_action = parse_result["action"]
+                self.prev_actions.append(terminal_action)
+                return "", [terminal_action], logs, {}
+
+            if parse_result["status"] == "success":
+                actions = [parse_result["action"]]
+                self.prev_actions.append(parse_result["action"])
+                self._add_to_history(f"Thought: {self.memory_block_text}\nAction: {parse_result['action']}")
+                break
+
+            # Parse failed, retry
+            parse_attempts += 1
+            logs[f"parse_error_{parse_attempts}"] = parse_result.get("error", "Unknown parse error")
+
+        # If all retries failed, return error
+        if actions is None:
+            logger.error(f"All {self.max_parse_retries + 1} parse attempts failed")
+            logs["parse_failure"] = True
+            actions = ["# Could not parse action after retries"]
+
+        # Check for action loop detection
+        if actions and actions[0].startswith("computer."):
+            loop_detected = self._detect_action_loop(actions[0])
+            if loop_detected:
+                logs["loop_detected"] = True
+                logger.warning(f"Action loop detected: {actions[0]} repeated {self.loop_detection_threshold}+ times")
+                # Add hint to break the loop
+                alternative_action = self._generate_alternative_action(actions[0], w, h)
+                if alternative_action:
+                    logger.info(f"Substituting alternative action: {alternative_action}")
+                    actions = [alternative_action]
+                    logs["alternative_action"] = alternative_action
 
         # Build computer_update_args (for WAA compatibility)
         computer_update_args = {
@@ -553,6 +598,308 @@ class ApiAgent(BenchmarkAgent):
             return f'computer.hotkey("{key1}", "{key2}")'
 
         return None
+
+    def _parse_api_response(
+        self, response_text: str, width: int, height: int, logs: dict
+    ) -> dict[str, Any]:
+        """Parse API response with multiple strategies and defensive error handling.
+
+        This method tries multiple parsing strategies to extract an action from the
+        API response, handling cases where the response format varies (the root cause
+        of the 'str' object has no attribute 'get' error in runs 194740, 194940, 195137).
+
+        Strategies tried in order:
+        1. Standard code block extraction (```python ... ```)
+        2. JSON extraction from response
+        3. Code block with alternative markers (```json ... ```, ``` ... ```)
+        4. Regex fallback for action patterns
+        5. Direct computer.* call extraction
+
+        Args:
+            response_text: The raw API response text.
+            width: Screen width for coordinate validation.
+            height: Screen height for coordinate validation.
+            logs: Logs dict to record parsing details.
+
+        Returns:
+            Dict with:
+                - status: "success", "terminal", or "failed"
+                - action: The parsed action string (if success/terminal)
+                - error: Error message (if failed)
+        """
+        try:
+            # Defensive: ensure response_text is actually a string
+            if not isinstance(response_text, str):
+                try:
+                    # Handle case where response might be a dict or other object
+                    if hasattr(response_text, 'get'):
+                        # It's a dict-like object
+                        response_text = str(response_text)
+                        logs["response_type_coerced"] = "dict_to_str"
+                    elif hasattr(response_text, 'text'):
+                        # It might be a response object with a text attribute
+                        response_text = response_text.text
+                        logs["response_type_coerced"] = "obj_text_attr"
+                    else:
+                        response_text = str(response_text)
+                        logs["response_type_coerced"] = "generic_str"
+                except Exception as e:
+                    return {"status": "failed", "error": f"Response type coercion failed: {e}"}
+
+            # Extract memory block (update internal state)
+            try:
+                memory_match = re.search(r"```memory\n(.*?)```", response_text, re.DOTALL)
+                if memory_match:
+                    self.memory_block_text = memory_match.group(1).strip()
+            except Exception as e:
+                logger.warning(f"Memory extraction failed: {e}")
+
+            # Strategy 0: Check for terminal decisions (DONE, FAIL, WAIT)
+            try:
+                decision_match = re.search(r"```decision\n(.*?)```", response_text, re.DOTALL)
+                if decision_match:
+                    decision = decision_match.group(1).strip().upper()
+                    if "DONE" in decision:
+                        return {"status": "terminal", "action": "DONE"}
+                    elif "FAIL" in decision:
+                        return {"status": "terminal", "action": "FAIL"}
+                    elif "WAIT" in decision:
+                        return {"status": "terminal", "action": "WAIT"}
+            except Exception as e:
+                logger.warning(f"Decision extraction failed: {e}")
+
+            # Strategy 1: Standard Python code block
+            try:
+                code_match = re.search(r"```python\n(.*?)```", response_text, re.DOTALL)
+                if code_match:
+                    code_text = code_match.group(1).strip()
+                    if self._validate_action(code_text, width, height):
+                        logs["parse_strategy"] = "python_code_block"
+                        return {"status": "success", "action": code_text}
+            except Exception as e:
+                logger.warning(f"Python code block extraction failed: {e}")
+
+            # Strategy 2: JSON extraction
+            try:
+                action = self._extract_action_from_json(response_text, width, height)
+                if action:
+                    logs["parse_strategy"] = "json_extraction"
+                    return {"status": "success", "action": action}
+            except Exception as e:
+                logger.warning(f"JSON extraction failed: {e}")
+
+            # Strategy 3: Generic code block (no language specified or ```json)
+            try:
+                # Try ```json blocks
+                json_block_match = re.search(r"```json\n(.*?)```", response_text, re.DOTALL)
+                if json_block_match:
+                    json_text = json_block_match.group(1).strip()
+                    action = self._extract_action_from_json(json_text, width, height)
+                    if action:
+                        logs["parse_strategy"] = "json_code_block"
+                        return {"status": "success", "action": action}
+
+                # Try generic ``` blocks
+                generic_block_match = re.search(r"```\n(.*?)```", response_text, re.DOTALL)
+                if generic_block_match:
+                    code_text = generic_block_match.group(1).strip()
+                    if self._validate_action(code_text, width, height):
+                        logs["parse_strategy"] = "generic_code_block"
+                        return {"status": "success", "action": code_text}
+            except Exception as e:
+                logger.warning(f"Generic code block extraction failed: {e}")
+
+            # Strategy 4: Direct computer.* pattern matching
+            try:
+                # Look for computer.action(...) patterns directly in text
+                computer_patterns = [
+                    r"(computer\.click\s*\(\s*\d+\s*,\s*\d+\s*\))",
+                    r"(computer\.double_click\s*\(\s*\d+\s*,\s*\d+\s*\))",
+                    r"(computer\.right_click\s*\(\s*\d+\s*,\s*\d+\s*\))",
+                    r'(computer\.type\s*\(\s*["\'].*?["\']\s*\))',
+                    r'(computer\.press\s*\(\s*["\'].*?["\']\s*\))',
+                    r'(computer\.hotkey\s*\(\s*["\'].*?["\']\s*(?:,\s*["\'].*?["\']\s*)*\))',
+                    r"(computer\.scroll\s*\(\s*-?\d+\s*\))",
+                    r"(computer\.drag\s*\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\))",
+                ]
+                for pattern in computer_patterns:
+                    match = re.search(pattern, response_text, re.IGNORECASE)
+                    if match:
+                        action = match.group(1).strip()
+                        # Normalize whitespace
+                        action = re.sub(r'\s+', '', action)
+                        # Restore proper formatting
+                        action = action.replace('computer.', 'computer.')
+                        if self._validate_action(action, width, height):
+                            logs["parse_strategy"] = "direct_computer_pattern"
+                            return {"status": "success", "action": action}
+            except Exception as e:
+                logger.warning(f"Direct computer pattern extraction failed: {e}")
+
+            # Strategy 5: Fallback regex extraction using _parse_action_from_text
+            try:
+                action = self._parse_action_from_text(response_text, width, height)
+                if action:
+                    logs["parse_strategy"] = "regex_fallback"
+                    return {"status": "success", "action": action}
+            except Exception as e:
+                logger.warning(f"Regex fallback extraction failed: {e}")
+
+            # All strategies failed
+            return {
+                "status": "failed",
+                "error": "All parsing strategies failed to extract a valid action"
+            }
+
+        except Exception as e:
+            logger.error(f"Unexpected error in _parse_api_response: {e}")
+            return {"status": "failed", "error": f"Unexpected parsing error: {e}"}
+
+    def _extract_action_from_json(
+        self, text: str, width: int, height: int
+    ) -> str | None:
+        """Extract action from JSON in the response text.
+
+        Args:
+            text: Text that may contain JSON.
+            width: Screen width.
+            height: Screen height.
+
+        Returns:
+            Action string or None.
+        """
+        # Try to find JSON objects in the text
+        json_patterns = [
+            r'\{[^{}]*"action"[^{}]*\}',  # Simple object with action key
+            r'\{[^{}]*"type"[^{}]*\}',     # Object with type key
+            r'\{[^{}]*"command"[^{}]*\}',  # Object with command key
+        ]
+
+        for pattern in json_patterns:
+            matches = re.findall(pattern, text, re.DOTALL)
+            for match in matches:
+                try:
+                    data = json.loads(match)
+                    if isinstance(data, dict):
+                        # Try various keys that might contain the action
+                        for key in ['action', 'command', 'code', 'python']:
+                            if key in data and isinstance(data[key], str):
+                                action = data[key]
+                                if self._validate_action(action, width, height):
+                                    return action
+
+                        # Try to construct action from structured data
+                        action_type = data.get('type') or data.get('action_type')
+                        if action_type:
+                            if action_type in ('click', 'left_click'):
+                                x = data.get('x', data.get('coordinate', {}).get('x'))
+                                y = data.get('y', data.get('coordinate', {}).get('y'))
+                                if x is not None and y is not None:
+                                    return f"computer.click({int(x)}, {int(y)})"
+                            elif action_type == 'type':
+                                text_val = data.get('text', data.get('value', ''))
+                                if text_val:
+                                    return f'computer.type("{text_val}")'
+                            elif action_type == 'press':
+                                key = data.get('key', data.get('value', ''))
+                                if key:
+                                    return f'computer.press("{key}")'
+                except (json.JSONDecodeError, TypeError, KeyError):
+                    continue
+
+        return None
+
+    def _validate_action(self, action: str, width: int, height: int) -> bool:
+        """Validate that an action string is properly formed.
+
+        Args:
+            action: The action string to validate.
+            width: Screen width for coordinate bounds.
+            height: Screen height for coordinate bounds.
+
+        Returns:
+            True if the action is valid.
+        """
+        if not action or not isinstance(action, str):
+            return False
+
+        # Must start with computer.
+        if not action.startswith("computer."):
+            return False
+
+        # Check for valid action types
+        valid_patterns = [
+            r"^computer\.click\(\d+,\s*\d+\)$",
+            r"^computer\.double_click\(\d+,\s*\d+\)$",
+            r"^computer\.right_click\(\d+,\s*\d+\)$",
+            r'^computer\.type\(["\'].+["\']\)$',
+            r'^computer\.press\(["\'].+["\']\)$',
+            r'^computer\.hotkey\(["\'].+["\'](?:,\s*["\'].+["\']\s*)*\)$',
+            r"^computer\.scroll\(-?\d+\)$",
+            r"^computer\.drag\(\d+,\s*\d+,\s*\d+,\s*\d+\)$",
+        ]
+
+        for pattern in valid_patterns:
+            if re.match(pattern, action):
+                # For click/drag actions, validate coordinates are in bounds
+                coord_match = re.search(r"\((\d+),\s*(\d+)", action)
+                if coord_match:
+                    x, y = int(coord_match.group(1)), int(coord_match.group(2))
+                    if x > width * 2 or y > height * 2:  # Allow some slack
+                        logger.warning(f"Coordinates ({x}, {y}) seem out of bounds for {width}x{height}")
+                        return False
+                return True
+
+        return False
+
+    def _detect_action_loop(self, current_action: str) -> bool:
+        """Detect if the agent is stuck in an action loop.
+
+        Args:
+            current_action: The current action to check.
+
+        Returns:
+            True if a loop is detected (3+ identical consecutive actions).
+        """
+        if len(self.prev_actions) < self.loop_detection_threshold - 1:
+            return False
+
+        # Check if the last N actions are all identical to current
+        recent_actions = self.prev_actions[-(self.loop_detection_threshold - 1):]
+        return all(action == current_action for action in recent_actions)
+
+    def _generate_alternative_action(
+        self, stuck_action: str, width: int, height: int
+    ) -> str | None:
+        """Generate an alternative action when a loop is detected.
+
+        Args:
+            stuck_action: The action that's being repeated.
+            width: Screen width.
+            height: Screen height.
+
+        Returns:
+            An alternative action or None.
+        """
+        # If stuck on a click, try a slight offset or press escape
+        click_match = re.match(r"computer\.click\((\d+),\s*(\d+)\)", stuck_action)
+        if click_match:
+            x, y = int(click_match.group(1)), int(click_match.group(2))
+            # Try clicking slightly offset
+            offset_x = min(x + 50, width - 10)
+            offset_y = min(y + 50, height - 10)
+            return f"computer.click({offset_x}, {offset_y})"
+
+        # If stuck on typing, try pressing enter
+        if "computer.type" in stuck_action:
+            return 'computer.press("enter")'
+
+        # If stuck on pressing a key, try escape
+        if "computer.press" in stuck_action:
+            return 'computer.press("escape")'
+
+        # Default: press escape to try to break out
+        return 'computer.press("escape")'
 
     def _parse_computer_action(
         self, code: str, observation: BenchmarkObservation
