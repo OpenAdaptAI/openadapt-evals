@@ -1,0 +1,65 @@
+TASK: Apply formula in Excel
+DOMAIN: office
+
+STEPS:
+1. Open the Start menu to access applications
+   REASONING: Need to launch Excel/Calc to work with spreadsheets and formulas
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for Start menu to appear
+   REASONING: Allow the UI to fully render before proceeding
+   ACTION: WAIT(1.0)
+
+3. Type to search for Excel application
+   REASONING: Quickly locate the spreadsheet application (LibreOffice Calc or Excel)
+   ACTION: TYPE("excel")
+
+4. Wait for search results to populate
+   REASONING: Give the system time to display matching applications
+   ACTION: WAIT(1.0)
+
+5. Click on Excel/LibreOffice Calc from search results
+   REASONING: Launch the spreadsheet application to begin working with formulas
+   ACTION: CLICK(x=0.15, y=0.25)
+
+6. Wait for application to fully load
+   REASONING: Ensure the spreadsheet interface is ready for interaction
+   ACTION: WAIT(2.0)
+
+7. Click on cell A1 to enter first value
+   REASONING: Start by entering data that will be used in the formula
+   ACTION: CLICK(x=0.15, y=0.20)
+
+8. Type a numeric value in cell A1
+   REASONING: Provide the first operand for our formula calculation
+   ACTION: TYPE("100")
+
+9. Press Enter to confirm and move to next cell
+   REASONING: Lock in the value and navigate to the next row
+   ACTION: HOTKEY("Return")
+
+10. Type another numeric value in cell A2
+    REASONING: Provide the second operand for our formula
+    ACTION: TYPE("50")
+
+11. Press Enter to move to cell A3
+    REASONING: Navigate to the cell where we'll apply our formula
+    ACTION: HOTKEY("Return")
+
+12. Type the SUM formula to add the values above
+    REASONING: Apply a formula that calculates the sum of cells A1 and A2
+    ACTION: TYPE("=SUM(A1:A2)")
+
+13. Press Enter to execute the formula
+    REASONING: Confirm and calculate the formula result, which should display 150
+    ACTION: HOTKEY("Return")
+
+14. Click on cell A3 to verify the formula was applied
+    REASONING: Confirm the formula is working correctly and showing the result
+    ACTION: CLICK(x=0.15, y=0.24)
+
+15. Task completed successfully
+    REASONING: Formula has been applied and calculated correctly in the spreadsheet
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: A spreadsheet is open with values 100 and 50 in cells A1 and A2 respectively, and cell A3 contains the formula =SUM(A1:A2) displaying the result 150. The formula is successfully applied and calculating the sum of the two cells above it.

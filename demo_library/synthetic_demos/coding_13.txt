@@ -1,0 +1,65 @@
+TASK: Set a breakpoint and debug
+DOMAIN: coding
+
+STEPS:
+1. Open Visual Studio Code from the taskbar
+   REASONING: Visual Studio Code is the primary IDE needed for setting breakpoints and debugging code
+   ACTION: CLICK(x=0.5, y=0.98)
+
+2. Wait for Visual Studio Code to launch
+   REASONING: Allow sufficient time for the application to fully load before proceeding
+   ACTION: WAIT(2.0)
+
+3. Open an existing Python file or create a new one
+   REASONING: Need a code file to demonstrate breakpoint and debugging functionality
+   ACTION: HOTKEY("ctrl", "o")
+
+4. Wait for file dialog to appear
+   REASONING: File explorer dialog needs time to render
+   ACTION: WAIT(1.0)
+
+5. Navigate to and select a Python file (or create new file)
+   REASONING: Select a sample Python script that contains executable code for debugging
+   ACTION: TYPE("sample_script.py")
+
+6. Confirm file selection
+   REASONING: Open the selected file in the editor
+   ACTION: HOTKEY("enter")
+
+7. Wait for file to load in editor
+   REASONING: Allow the file content to be displayed in the editor pane
+   ACTION: WAIT(1.0)
+
+8. Click on the line number where breakpoint should be set (e.g., line 5)
+   REASONING: Clicking on the gutter next to the line number is the standard way to set a breakpoint in VS Code
+   ACTION: CLICK(x=0.03, y=0.35)
+
+9. Wait for breakpoint indicator to appear
+   REASONING: Verify the red dot breakpoint indicator has been placed on the selected line
+   ACTION: WAIT(0.5)
+
+10. Open the Run and Debug panel
+    REASONING: Need to access the debugging interface to start a debug session
+    ACTION: HOTKEY("ctrl", "shift", "d")
+
+11. Wait for debug panel to open
+    REASONING: Allow the debug sidebar to fully render with debug controls
+    ACTION: WAIT(1.0)
+
+12. Click the "Start Debugging" button (green play icon)
+    REASONING: Initiate the debug session which will run the code and pause at the breakpoint
+    ACTION: CLICK(x=0.05, y=0.15)
+
+13. Wait for debugger to start and hit the breakpoint
+    REASONING: The debugger needs time to initialize, execute code, and pause at the breakpoint
+    ACTION: WAIT(2.0)
+
+14. Observe the debug toolbar and variable values
+    REASONING: Verify that execution has paused at the breakpoint and debugging controls are available (step over, step into, continue, etc.)
+    ACTION: WAIT(1.0)
+
+15. Complete the debugging demonstration
+    REASONING: The breakpoint has been successfully set and the debugger has stopped at that point, allowing code inspection
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: Visual Studio Code should be open with a Python file displayed, a breakpoint (red dot) visible on a specific line number, and the debugger active and paused at that breakpoint. The debug toolbar should be visible at the top showing controls like continue, step over, step into, and stop. The variables pane should display current variable values at the breakpoint location.

@@ -1,0 +1,41 @@
+TASK: Change view mode
+DOMAIN: file_explorer
+
+STEPS:
+1. Open File Explorer
+   REASONING: Need to launch File Explorer to access view mode settings
+   ACTION: HOTKEY("win", "e")
+
+2. Wait for File Explorer to open
+   REASONING: Allow time for the application window to fully load and render
+   ACTION: WAIT(1.5)
+
+3. Click on the View tab in the ribbon
+   REASONING: The View tab contains all options for changing the display mode of files and folders
+   ACTION: CLICK(x=0.15, y=0.05)
+
+4. Wait for View ribbon to expand
+   REASONING: Allow the ribbon interface to display all view options
+   ACTION: WAIT(0.5)
+
+5. Locate the Layout section in the View ribbon
+   REASONING: The Layout section contains different view mode options (Extra large icons, Large icons, Medium icons, Small icons, List, Details, Tiles, Content)
+   ACTION: CLICK(x=0.25, y=0.09)
+
+6. Wait for view options dropdown to appear
+   REASONING: Allow the view mode selection menu to fully display
+   ACTION: WAIT(0.3)
+
+7. Select "Details" view mode
+   REASONING: Details view is a commonly used mode that shows file information in columns (Name, Date modified, Type, Size)
+   ACTION: CLICK(x=0.25, y=0.15)
+
+8. Wait for view to update
+   REASONING: Allow File Explorer to refresh and display files in the new view mode
+   ACTION: WAIT(0.5)
+
+9. Verify view mode has changed
+   REASONING: Confirm that the files are now displayed in Details view with columns visible
+   ACTION: DONE()
+
+EXPECTED_OUTCOME: File Explorer should now display files and folders in Details view mode, showing columns for Name, Date modified, Type, and Size. The view will have changed from the previous layout to a list-based format with detailed information about each item.

@@ -1,0 +1,21 @@
+TASK: Open a new tab
+DOMAIN: browser
+
+STEPS:
+1. Verify browser is running
+   REASONING: Before opening a new tab, we need to ensure a browser window is active. If the browser isn't already open, we would need to launch it first.
+   ACTION: WAIT(0.5)
+
+2. Use keyboard shortcut to open a new tab
+   REASONING: The most efficient way to open a new tab in Chrome or Edge is using the Ctrl+T keyboard shortcut, which works universally across all major browsers.
+   ACTION: HOTKEY("ctrl", "t")
+
+3. Wait for new tab to load
+   REASONING: Allow the browser to process the new tab creation and display the default new tab page (usually showing search bar and frequently visited sites).
+   ACTION: WAIT(1.0)
+
+4. Verify new tab is active
+   REASONING: The new tab should now be the active tab in the browser, with the address bar focused and ready for input, confirming the task has been completed successfully.
+   ACTION: DONE()
+
+EXPECTED_OUTCOME: A new browser tab is opened and becomes the active tab in the browser window. The tab displays the browser's default new tab page (typically showing a search bar and frequently visited sites or shortcuts), and the address bar is focused and ready for user input. The tab counter in the browser should increment by one.

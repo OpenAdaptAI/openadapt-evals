@@ -1,0 +1,29 @@
+TASK: Adjust volume to 50%
+DOMAIN: media
+
+STEPS:
+1. Click on the system tray volume icon in the taskbar
+   REASONING: Access the volume control interface to adjust the system volume level
+   ACTION: CLICK(x=0.95, y=0.98)
+
+2. Wait for volume slider to appear
+   REASONING: Allow time for the volume control popup to fully render before interacting with it
+   ACTION: WAIT(0.5)
+
+3. Click on the volume slider at the 50% position
+   REASONING: Set the volume to exactly 50% by clicking at the midpoint of the volume slider
+   ACTION: CLICK(x=0.93, y=0.75)
+
+4. Verify the volume level displays 50%
+   REASONING: Ensure the volume has been successfully adjusted to the target level before completing the task
+   ACTION: WAIT(0.5)
+
+5. Click outside the volume popup to close it
+   REASONING: Dismiss the volume control interface to return to normal desktop view
+   ACTION: CLICK(x=0.5, y=0.5)
+
+6. Task completed
+   REASONING: Volume has been successfully adjusted to 50%
+   ACTION: DONE()
+
+EXPECTED_OUTCOME: The system volume should be set to 50%, visible both in the volume slider position and the numerical percentage display. The volume icon in the system tray should reflect a medium volume level, and any media playing should now play at 50% of maximum volume.

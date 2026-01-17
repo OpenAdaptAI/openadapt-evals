@@ -1,0 +1,69 @@
+TASK: Cut/copy/paste text
+DOMAIN: notepad
+
+STEPS:
+1. Open Notepad application
+   REASONING: We need to launch Notepad to have a text editor where we can demonstrate cut/copy/paste operations
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for Start menu to appear
+   REASONING: Allow time for the Start menu to fully render before proceeding
+   ACTION: WAIT(1.0)
+
+3. Type "notepad" to search for the application
+   REASONING: Searching for Notepad is the quickest way to locate and launch the application
+   ACTION: TYPE("notepad")
+
+4. Wait for search results to populate
+   REASONING: Give the system time to display search results
+   ACTION: WAIT(1.0)
+
+5. Click on Notepad from search results
+   REASONING: Launch the Notepad application from the search results
+   ACTION: CLICK(x=0.15, y=0.25)
+
+6. Wait for Notepad to open
+   REASONING: Allow time for the Notepad window to fully load and become ready for input
+   ACTION: WAIT(1.5)
+
+7. Type initial text content
+   REASONING: Create sample text that we can use to demonstrate cut, copy, and paste operations
+   ACTION: TYPE("This is the first line of text.\nThis is the second line of text.\nThis is the third line of text.")
+
+8. Select the second line of text by triple-clicking
+   REASONING: We need to select text before we can perform cut/copy operations; triple-clicking selects an entire line
+   ACTION: DRAG(start_x=0.1, start_y=0.42, end_x=0.48, end_y=0.42)
+
+9. Copy the selected text
+   REASONING: Copy the selected text to clipboard so we can paste it later without removing the original
+   ACTION: HOTKEY("ctrl", "c")
+
+10. Click at the end of the document
+    REASONING: Position the cursor where we want to paste the copied text
+    ACTION: CLICK(x=0.48, y=0.50)
+
+11. Paste the copied text
+    REASONING: Insert the clipboard content at the cursor position to demonstrate paste functionality
+    ACTION: HOTKEY("ctrl", "v")
+
+12. Select the first line of text
+    REASONING: Now we'll demonstrate the cut operation by selecting different text
+    ACTION: DRAG(start_x=0.1, start_y=0.38, end_x=0.48, end_y=0.38)
+
+13. Cut the selected text
+    REASONING: Remove the selected text and place it on the clipboard using the cut operation
+    ACTION: HOTKEY("ctrl", "x")
+
+14. Click at the beginning of the document
+    REASONING: Position cursor at the start to paste the cut text in a new location
+    ACTION: CLICK(x=0.1, y=0.38)
+
+15. Paste the cut text
+    REASONING: Insert the cut text at the new position, demonstrating that cut removes text from original location and allows repositioning
+    ACTION: HOTKEY("ctrl", "v")
+
+16. Task completed successfully
+    REASONING: We have successfully demonstrated copy (which duplicates text), cut (which moves text), and paste (which inserts clipboard content) operations in Notepad
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: Notepad should be open with text that has been manipulated through cut, copy, and paste operations. The text should show evidence of these operations: duplicated content from the copy-paste, and repositioned content from the cut-paste. The user should understand how to select text and use Ctrl+C (copy), Ctrl+X (cut), and Ctrl+V (paste) keyboard shortcuts to manipulate text content.

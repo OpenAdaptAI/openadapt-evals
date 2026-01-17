@@ -1,0 +1,49 @@
+TASK: Add bullet points
+DOMAIN: office
+
+STEPS:
+1. Open LibreOffice Writer application
+   REASONING: Need to launch a word processing application to add bullet points to a document
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for Start menu to appear
+   REASONING: Allow the system to display the Start menu before proceeding
+   ACTION: WAIT(1.0)
+
+3. Type to search for LibreOffice Writer
+   REASONING: Quickly locate the word processing application through search
+   ACTION: TYPE("libreoffice writer")
+
+4. Wait for search results to populate
+   REASONING: Give the system time to display matching applications
+   ACTION: WAIT(1.0)
+
+5. Click on LibreOffice Writer in search results
+   REASONING: Launch the application to begin working with the document
+   ACTION: CLICK(x=0.15, y=0.20)
+
+6. Wait for LibreOffice Writer to fully load
+   REASONING: Ensure the application window is completely ready before interaction
+   ACTION: WAIT(2.0)
+
+7. Type sample text content for bullet points
+   REASONING: Create text items that will be converted to bullet points
+   ACTION: TYPE("First item\nSecond item\nThird item\nFourth item")
+
+8. Select all the typed text
+   REASONING: Need to select the text to apply bullet point formatting to all items
+   ACTION: HOTKEY("ctrl", "a")
+
+9. Click on the bullet points button in the toolbar
+   REASONING: Apply bullet point formatting to the selected text
+   ACTION: CLICK(x=0.15, y=0.13)
+
+10. Click elsewhere in the document to deselect
+    REASONING: Deselect the text to view the final result of the bullet points
+    ACTION: CLICK(x=0.5, y=0.6)
+
+11. Task completion
+    REASONING: Bullet points have been successfully added to the document content
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: A LibreOffice Writer document is open with four bullet points displayed, each containing one of the typed items (First item, Second item, Third item, Fourth item). The text is formatted with standard bullet point markers, creating a clear list structure in the document.

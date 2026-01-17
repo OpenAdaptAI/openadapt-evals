@@ -1,0 +1,65 @@
+TASK: Add bullet points
+DOMAIN: office
+
+STEPS:
+1. Open LibreOffice Writer application
+   REASONING: Need to launch a word processing application to add bullet points to a document
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for Start menu to appear
+   REASONING: Allow the system time to display the Start menu before proceeding
+   ACTION: WAIT(1.0)
+
+3. Type to search for LibreOffice Writer
+   REASONING: Quickly locate the LibreOffice Writer application through search
+   ACTION: TYPE("libreoffice writer")
+
+4. Wait for search results
+   REASONING: Allow time for the search to complete and display results
+   ACTION: WAIT(1.0)
+
+5. Click on LibreOffice Writer from search results
+   REASONING: Launch the application to begin working with the document
+   ACTION: CLICK(x=0.15, y=0.25)
+
+6. Wait for LibreOffice Writer to fully load
+   REASONING: Ensure the application is completely ready before interacting with it
+   ACTION: WAIT(2.0)
+
+7. Type sample text for the first bullet point
+   REASONING: Create content that will be formatted as a bulleted list
+   ACTION: TYPE("First item in the list")
+
+8. Press Enter to create a new line
+   REASONING: Move to a new line for the next list item
+   ACTION: HOTKEY("Return")
+
+9. Type second item text
+   REASONING: Add more content for the bulleted list
+   ACTION: TYPE("Second item in the list")
+
+10. Press Enter for another line
+    REASONING: Create space for a third list item
+    ACTION: HOTKEY("Return")
+
+11. Type third item text
+    REASONING: Complete the list with a third item
+    ACTION: TYPE("Third item in the list")
+
+12. Select all text to apply bullet formatting
+    REASONING: Need to select the text before applying bullet point formatting
+    ACTION: HOTKEY("ctrl", "a")
+
+13. Click on the bullet points button in the toolbar
+    REASONING: Apply bullet point formatting to the selected text, typically located in the formatting toolbar
+    ACTION: CLICK(x=0.18, y=0.13)
+
+14. Click elsewhere in the document to deselect
+    REASONING: Deselect the text to view the final formatted result with bullet points
+    ACTION: CLICK(x=0.5, y=0.5)
+
+15. Task completed successfully
+    REASONING: The bullet points have been added to the text items in the document
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: A LibreOffice Writer document should be open containing three lines of text, each formatted with a bullet point at the beginning. The items "First item in the list", "Second item in the list", and "Third item in the list" should all be displayed as a bulleted list with proper indentation and bullet symbols.

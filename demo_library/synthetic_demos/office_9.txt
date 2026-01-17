@@ -1,0 +1,65 @@
+TASK: Apply formula in Excel
+DOMAIN: office
+
+STEPS:
+1. Open the Start menu to access applications
+   REASONING: Need to launch Excel or LibreOffice Calc to work with spreadsheets
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for Start menu to appear
+   REASONING: Allow time for the Start menu interface to fully load
+   ACTION: WAIT(1.0)
+
+3. Type to search for Excel application
+   REASONING: Quickly locate the spreadsheet application instead of manually browsing
+   ACTION: TYPE("excel")
+
+4. Wait for search results to populate
+   REASONING: Give the system time to find and display matching applications
+   ACTION: WAIT(1.0)
+
+5. Click on Excel or LibreOffice Calc from search results
+   REASONING: Launch the spreadsheet application to begin working
+   ACTION: CLICK(x=0.15, y=0.35)
+
+6. Wait for Excel to fully load
+   REASONING: Ensure the application window and interface are completely ready
+   ACTION: WAIT(2.0)
+
+7. Click on cell A1 to start entering data
+   REASONING: Set up example data to demonstrate formula application
+   ACTION: CLICK(x=0.15, y=0.22)
+
+8. Enter first value
+   REASONING: Create sample data for the formula to operate on
+   ACTION: TYPE("10")
+
+9. Press Enter to move to next cell
+   REASONING: Confirm the entry and move to cell A2
+   ACTION: HOTKEY("Return")
+
+10. Enter second value in A2
+    REASONING: Add another data point for calculation
+    ACTION: TYPE("20")
+
+11. Press Enter to move to cell A3
+    REASONING: Confirm entry and move to the cell where formula will be applied
+    ACTION: HOTKEY("Return")
+
+12. Type the SUM formula
+    REASONING: Apply a formula to calculate the sum of the two values above
+    ACTION: TYPE("=SUM(A1:A2)")
+
+13. Press Enter to execute the formula
+    REASONING: Apply and calculate the formula result, which should display 30
+    ACTION: HOTKEY("Return")
+
+14. Click on cell A3 to verify formula was applied
+    REASONING: Confirm the formula is active and showing the correct calculated result
+    ACTION: CLICK(x=0.15, y=0.26)
+
+15. Task completion
+    REASONING: Formula has been successfully entered and applied to calculate the sum
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: Excel or LibreOffice Calc should be open with a working SUM formula in cell A3 that displays the value 30 (sum of 10 and 20 from cells A1 and A2). The formula bar should show "=SUM(A1:A2)" when cell A3 is selected, demonstrating that a formula has been successfully applied rather than just entering a static value.

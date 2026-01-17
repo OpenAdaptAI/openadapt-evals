@@ -1,0 +1,41 @@
+TASK: Draw a rectangle
+DOMAIN: paint
+
+STEPS:
+1. Open the Start menu to access applications
+   REASONING: Need to launch Windows Paint application to complete the drawing task
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for Start menu to appear
+   REASONING: Allow time for the Start menu animation to complete before typing
+   ACTION: WAIT(1.0)
+
+3. Type "paint" to search for Paint application
+   REASONING: Searching for Paint is the quickest way to locate and launch the application
+   ACTION: TYPE("paint")
+
+4. Wait for search results to populate
+   REASONING: Give the system time to find and display Paint in the search results
+   ACTION: WAIT(1.0)
+
+5. Click on Paint application in search results
+   REASONING: Launch the Paint application to access drawing tools
+   ACTION: CLICK(x=0.5, y=0.3)
+
+6. Wait for Paint to fully load
+   REASONING: Ensure the Paint interface and all tools are ready before proceeding
+   ACTION: WAIT(2.0)
+
+7. Click on the Rectangles tool in the Shapes section
+   REASONING: Select the rectangle drawing tool from the ribbon menu to enable rectangle drawing mode
+   ACTION: CLICK(x=0.45, y=0.12)
+
+8. Draw a rectangle on the canvas by dragging
+   REASONING: Create the rectangle shape by clicking and dragging from one corner to the opposite corner
+   ACTION: DRAG(start_x=0.3, start_y=0.35, end_x=0.65, end_y=0.65)
+
+9. Mark task as complete
+   REASONING: The rectangle has been successfully drawn on the canvas
+   ACTION: DONE()
+
+EXPECTED_OUTCOME: A rectangle should be visible on the Paint canvas, drawn from the specified starting point to the ending point, creating a rectangular shape in the default outline style.

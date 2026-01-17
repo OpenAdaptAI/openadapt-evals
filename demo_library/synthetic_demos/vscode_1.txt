@@ -1,0 +1,61 @@
+TASK: Open VS Code workspace
+DOMAIN: vscode
+
+STEPS:
+1. Click on the Start menu to access applications
+   REASONING: Need to open the Start menu to search for and launch Visual Studio Code
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for Start menu to appear
+   REASONING: Allow time for the Start menu animation and content to fully load
+   ACTION: WAIT(1.0)
+
+3. Type "Visual Studio Code" in the search box
+   REASONING: Search for VS Code application to launch it quickly
+   ACTION: TYPE("Visual Studio Code")
+
+4. Wait for search results to populate
+   REASONING: Allow time for Windows to find and display the VS Code application in search results
+   ACTION: WAIT(0.5)
+
+5. Click on Visual Studio Code application from search results
+   REASONING: Launch the VS Code application
+   ACTION: CLICK(x=0.15, y=0.35)
+
+6. Wait for VS Code to fully launch
+   REASONING: VS Code needs time to initialize and display its welcome screen or previous workspace
+   ACTION: WAIT(2.0)
+
+7. Click on the File menu in the top menu bar
+   REASONING: Access the File menu to find workspace-related options
+   ACTION: CLICK(x=0.05, y=0.02)
+
+8. Wait for File menu to expand
+   REASONING: Allow the dropdown menu to fully display all options
+   ACTION: WAIT(0.5)
+
+9. Click on "Open Workspace from File..." option
+   REASONING: This option allows us to browse and select a workspace file (.code-workspace) to open
+   ACTION: CLICK(x=0.10, y=0.20)
+
+10. Wait for file explorer dialog to open
+    REASONING: The system file browser needs time to launch and display available files
+    ACTION: WAIT(1.0)
+
+11. Navigate to and select the desired workspace file
+    REASONING: Select the .code-workspace file that contains the saved workspace configuration
+    ACTION: CLICK(x=0.50, y=0.50)
+
+12. Click the "Open" button in the file dialog
+    REASONING: Confirm the selection and instruct VS Code to open the selected workspace
+    ACTION: CLICK(x=0.85, y=0.92)
+
+13. Wait for workspace to load
+    REASONING: VS Code needs time to load the workspace configuration, folders, and restore the previous state
+    ACTION: WAIT(2.0)
+
+14. Task completed successfully
+    REASONING: The VS Code workspace has been opened and is now ready for use
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: Visual Studio Code should be running with the selected workspace loaded, displaying all configured folders in the Explorer panel and restoring any previously open files and editor layout from that workspace.

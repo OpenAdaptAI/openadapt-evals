@@ -1,0 +1,69 @@
+TASK: Insert an image
+DOMAIN: office
+
+STEPS:
+1. Open the Start menu to access applications
+   REASONING: Need to launch an office application (LibreOffice Writer) to insert an image into a document
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for Start menu to appear
+   REASONING: Allow time for the Start menu animation and rendering to complete
+   ACTION: WAIT(1.0)
+
+3. Type to search for LibreOffice Writer
+   REASONING: Quickly locate the word processing application where we can insert an image
+   ACTION: TYPE("libreoffice writer")
+
+4. Wait for search results to populate
+   REASONING: Give the system time to find and display the application in search results
+   ACTION: WAIT(1.0)
+
+5. Click on LibreOffice Writer from search results
+   REASONING: Launch the application to begin working with documents
+   ACTION: CLICK(x=0.15, y=0.25)
+
+6. Wait for LibreOffice Writer to fully load
+   REASONING: Allow the application to initialize and display a blank document
+   ACTION: WAIT(2.0)
+
+7. Click on the Insert menu in the menu bar
+   REASONING: Access the Insert menu which contains the image insertion option
+   ACTION: CLICK(x=0.12, y=0.05)
+
+8. Wait for Insert menu to expand
+   REASONING: Allow the dropdown menu to fully display all available options
+   ACTION: WAIT(0.5)
+
+9. Click on the Image option in the Insert menu
+   REASONING: Select the image insertion function to open the file browser dialog
+   ACTION: CLICK(x=0.15, y=0.15)
+
+10. Wait for file browser dialog to open
+    REASONING: Allow the file selection dialog to appear and populate with files
+    ACTION: WAIT(1.5)
+
+11. Navigate to Pictures folder by clicking on it in the sidebar
+    REASONING: Access the common location where image files are typically stored
+    ACTION: CLICK(x=0.15, y=0.35)
+
+12. Wait for Pictures folder to load
+    REASONING: Allow the folder contents to display available image files
+    ACTION: WAIT(1.0)
+
+13. Select an image file from the Pictures folder
+    REASONING: Choose a specific image file to insert into the document
+    ACTION: CLICK(x=0.5, y=0.4)
+
+14. Click the Open or Insert button to confirm selection
+    REASONING: Confirm the image selection and insert it into the document
+    ACTION: CLICK(x=0.75, y=0.85)
+
+15. Wait for image to be inserted and rendered in the document
+    REASONING: Allow the application to process and display the image in the document
+    ACTION: WAIT(1.0)
+
+16. Task completion
+    REASONING: The image has been successfully inserted into the document and is now visible
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: LibreOffice Writer should be open with a document containing an inserted image. The image should be visible in the document and can be resized or repositioned as needed. The document is ready for further editing or saving.

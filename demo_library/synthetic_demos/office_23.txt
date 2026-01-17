@@ -1,0 +1,65 @@
+TASK: Format text as bold/italic
+DOMAIN: office
+
+STEPS:
+1. Open LibreOffice Writer application
+   REASONING: Need to launch a word processing application to work with text formatting
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for Start menu to appear
+   REASONING: Allow time for the Start menu interface to fully load
+   ACTION: WAIT(1.0)
+
+3. Type application name to search
+   REASONING: Quickly locate LibreOffice Writer through search functionality
+   ACTION: TYPE("libreoffice writer")
+
+4. Wait for search results
+   REASONING: Allow search to complete and display matching applications
+   ACTION: WAIT(1.0)
+
+5. Click on LibreOffice Writer from results
+   REASONING: Launch the application to begin working with documents
+   ACTION: CLICK(x=0.15, y=0.35)
+
+6. Wait for application to fully load
+   REASONING: Ensure the application window and interface are completely ready
+   ACTION: WAIT(2.0)
+
+7. Type sample text to format
+   REASONING: Need text content to apply formatting to
+   ACTION: TYPE("This text will be formatted as bold and italic")
+
+8. Select all the typed text
+   REASONING: Must select text before applying formatting options
+   ACTION: HOTKEY("ctrl", "a")
+
+9. Wait for text selection
+   REASONING: Ensure text is fully selected before applying formatting
+   ACTION: WAIT(0.5)
+
+10. Apply bold formatting
+    REASONING: Make the selected text bold using keyboard shortcut
+    ACTION: HOTKEY("ctrl", "b")
+
+11. Wait for bold formatting to apply
+    REASONING: Allow the formatting change to be processed and rendered
+    ACTION: WAIT(0.5)
+
+12. Apply italic formatting while text is still selected
+    REASONING: Add italic styling in addition to bold to achieve bold/italic combination
+    ACTION: HOTKEY("ctrl", "i")
+
+13. Wait for italic formatting to apply
+    REASONING: Ensure both bold and italic formatting are fully rendered
+    ACTION: WAIT(0.5)
+
+14. Click elsewhere to deselect text and view result
+    REASONING: Deselecting allows clear visualization of the applied formatting
+    ACTION: CLICK(x=0.5, y=0.6)
+
+15. Task completed successfully
+    REASONING: Text has been formatted with both bold and italic styling as required
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: The text "This text will be formatted as bold and italic" should appear in LibreOffice Writer with both bold and italic formatting applied, displaying as emphasized text that is both heavier in weight and slanted.
