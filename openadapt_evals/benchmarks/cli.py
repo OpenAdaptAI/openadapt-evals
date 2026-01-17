@@ -44,14 +44,48 @@ def cmd_mock(args: argparse.Namespace) -> int:
         evaluate_agent_on_benchmark,
         compute_metrics,
     )
+    from openadapt_evals.agents import ApiAgent
 
     print(f"Running mock WAA evaluation with {args.tasks} tasks...")
 
     # Create mock adapter
     adapter = WAAMockAdapter(num_tasks=args.tasks)
 
-    # Create agent
-    agent = SmartMockAgent()
+    # Create agent based on --agent option
+    agent_type = getattr(args, "agent", "mock") or "mock"
+
+    # Load demo from file if provided
+    demo_text = None
+    if hasattr(args, "demo") and args.demo:
+        demo_path = Path(args.demo)
+        if demo_path.exists():
+            demo_text = demo_path.read_text()
+            print(f"Loaded demo from {demo_path} ({len(demo_text)} chars)")
+        else:
+            # Treat as direct demo text
+            demo_text = args.demo
+
+    if agent_type == "mock":
+        agent = SmartMockAgent()
+        print("Using SmartMockAgent (deterministic mock)")
+    elif agent_type in ("api-claude", "claude", "anthropic"):
+        try:
+            agent = ApiAgent(provider="anthropic", demo=demo_text)
+            print(f"Using ApiAgent with Claude (demo={'yes' if agent.demo else 'no'})")
+        except RuntimeError as e:
+            print(f"ERROR: {e}")
+            return 1
+    elif agent_type in ("api-openai", "openai", "gpt"):
+        try:
+            agent = ApiAgent(provider="openai", demo=demo_text)
+            print(f"Using ApiAgent with GPT-5.1 (demo={'yes' if agent.demo else 'no'})")
+        except RuntimeError as e:
+            print(f"ERROR: {e}")
+            return 1
+    else:
+        print(f"ERROR: Unknown agent type: {agent_type}")
+        print("Available for mock: mock, api-claude, api-openai")
+        return 1
 
     # Create config for trace collection
     config = None
@@ -513,6 +547,94 @@ echo "WAA server will be available once Windows boots (~5-10 min first time, ~2 
     return 0
 
 
+def cmd_dashboard(args: argparse.Namespace) -> int:
+    """Generate and display VM usage dashboard."""
+    import subprocess
+    from pathlib import Path
+
+    vm_name = args.vm_name
+    resource_group = args.resource_group
+    workspace_name = args.workspace_name
+
+    # Get the project root directory
+    project_root = Path(__file__).parent.parent.parent
+
+    # Run the refresh script
+    refresh_script = project_root / "refresh_vm_dashboard.py"
+    output_file = project_root / "VM_USAGE_DASHBOARD.md"
+
+    if not refresh_script.exists():
+        print(f"ERROR: Dashboard script not found at {refresh_script}")
+        return 1
+
+    print("Generating VM usage dashboard...")
+
+    result = subprocess.run(
+        [
+            "python",
+            str(refresh_script),
+            "--vm-name", vm_name,
+            "--resource-group", resource_group,
+            "--workspace-name", workspace_name,
+            "--output", str(output_file),
+        ],
+        capture_output=False,
+    )
+
+    if result.returncode != 0:
+        print("ERROR: Failed to generate dashboard")
+        return 1
+
+    # Display the dashboard
+    if not args.no_display:
+        print("\n" + "=" * 70)
+        print(output_file.read_text())
+        print("=" * 70)
+
+    # Open in browser if requested
+    if args.open:
+        import webbrowser
+        # Convert to HTML for better browser viewing
+        try:
+            import markdown
+            html_content = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>VM Usage Dashboard</title>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+               max-width: 1200px; margin: 40px auto; padding: 0 20px; }}
+        h1 {{ color: #0078d4; }}
+        h2 {{ color: #106ebe; border-bottom: 2px solid #0078d4; padding-bottom: 5px; }}
+        table {{ border-collapse: collapse; width: 100%; margin: 20px 0; }}
+        th, td {{ border: 1px solid #ddd; padding: 12px; text-align: left; }}
+        th {{ background-color: #0078d4; color: white; }}
+        tr:nth-child(even) {{ background-color: #f2f2f2; }}
+        code {{ background-color: #f4f4f4; padding: 2px 6px; border-radius: 3px; }}
+        pre {{ background-color: #f4f4f4; padding: 15px; border-radius: 5px; overflow-x: auto; }}
+        .status-running {{ color: #28a745; font-weight: bold; }}
+        .status-stopped {{ color: #6c757d; font-weight: bold; }}
+        .status-failed {{ color: #dc3545; font-weight: bold; }}
+    </style>
+</head>
+<body>
+{markdown.markdown(output_file.read_text(), extensions=['tables', 'fenced_code'])}
+</body>
+</html>
+"""
+            html_file = output_file.with_suffix(".html")
+            html_file.write_text(html_content)
+            webbrowser.open(f"file://{html_file.absolute()}")
+            print(f"\nOpened dashboard in browser: {html_file}")
+        except ImportError:
+            print("\nNote: Install 'markdown' package for HTML viewing: pip install markdown")
+            webbrowser.open(f"file://{output_file.absolute()}")
+
+    return 0
+
+
 def cmd_up(args: argparse.Namespace) -> int:
     """Start VM, wait for boot, start WAA server, and probe until ready."""
     import subprocess
@@ -702,6 +824,9 @@ def main() -> int:
     mock_parser = subparsers.add_parser("mock", help="Run mock evaluation (no Windows VM)")
     mock_parser.add_argument("--tasks", type=int, default=10, help="Number of tasks")
     mock_parser.add_argument("--max-steps", type=int, default=15, help="Max steps per task")
+    mock_parser.add_argument("--agent", type=str, default="mock",
+                            help="Agent type: mock, api-claude, api-openai")
+    mock_parser.add_argument("--demo", type=str, help="Demo trajectory file for ApiAgent")
     mock_parser.add_argument("--output", type=str, help="Output directory for traces")
     mock_parser.add_argument("--run-name", type=str, help="Name for this evaluation run")
 
@@ -806,6 +931,18 @@ def main() -> int:
     up_parser.add_argument("--probe-interval", type=int, default=5,
                           help="Seconds between probe attempts")
 
+    dashboard_parser = subparsers.add_parser("dashboard", help="Generate VM usage dashboard")
+    dashboard_parser.add_argument("--vm-name", type=str, default="waa-eval-vm",
+                                 help="Azure VM name")
+    dashboard_parser.add_argument("--resource-group", type=str, default="openadapt-agents",
+                                 help="Azure resource group")
+    dashboard_parser.add_argument("--workspace-name", type=str, default="openadapt-ml",
+                                 help="Azure ML workspace name")
+    dashboard_parser.add_argument("--no-display", action="store_true",
+                                 help="Don't display dashboard in terminal")
+    dashboard_parser.add_argument("--open", action="store_true",
+                                 help="Open dashboard in browser")
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -825,6 +962,7 @@ def main() -> int:
         "vm-status": cmd_vm_status,
         "server-start": cmd_server_start,
         "up": cmd_up,
+        "dashboard": cmd_dashboard,
     }
 
     handler = handlers.get(args.command)
