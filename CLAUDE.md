@@ -68,7 +68,11 @@ openadapt_evals/
 │   ├── __init__.py
 │   ├── base.py               # BenchmarkAdapter ABC, data classes
 │   ├── waa.py                # WAAAdapter, WAAMockAdapter
-│   └── waa_live.py           # WAALiveAdapter (HTTP)
+│   └── waa_live.py           # WAALiveAdapter (HTTP, with /evaluate support)
+├── server/                    # WAA server extensions
+│   ├── __init__.py
+│   ├── evaluate_endpoint.py  # /evaluate endpoint for WAA server
+│   └── waa_server_patch.py   # Script to patch WAA server with /evaluate
 ├── benchmarks/                # Evaluation utilities
 │   ├── runner.py             # evaluate_agent_on_benchmark()
 │   ├── data_collection.py    # ExecutionTraceCollector
@@ -107,7 +111,9 @@ agent = ApiAgent(
 | `agents/base.py` | BenchmarkAgent ABC, parse_action_response() |
 | `adapters/base.py` | BenchmarkAdapter ABC, BenchmarkTask, BenchmarkAction |
 | `adapters/waa.py` | WAAAdapter (full WAA integration), WAAMockAdapter |
-| `adapters/waa_live.py` | WAALiveAdapter (HTTP to remote WAA server) |
+| `adapters/waa_live.py` | WAALiveAdapter (HTTP, calls /evaluate endpoint) |
+| `server/evaluate_endpoint.py` | /evaluate endpoint for WAA server integration |
+| `server/waa_server_patch.py` | Script to deploy /evaluate to WAA server |
 | `benchmarks/runner.py` | evaluate_agent_on_benchmark(), compute_metrics() |
 | `benchmarks/cli.py` | CLI entry point |
 
@@ -237,11 +243,70 @@ uv run python -m openadapt_evals.benchmarks.cli vm-stop
 - Azure CLI installed and logged in (`az login`)
 - VM with WAA installed at `/home/azureuser/WindowsAgentArena/`
 
+## WAA /evaluate Endpoint
+
+The `WAALiveAdapter.evaluate()` method calls a `/evaluate` endpoint on the WAA server that runs WAA's native evaluators (getters + metrics) to determine task success.
+
+### Deploying the /evaluate Endpoint
+
+The WAA server needs the `/evaluate` endpoint to be added. Use one of these methods:
+
+**Option 1: Run the patch script on the VM**
+```bash
+# Copy to VM and run
+scp openadapt_evals/server/waa_server_patch.py azureuser@vm:/tmp/
+ssh azureuser@vm "python /tmp/waa_server_patch.py"
+```
+
+**Option 2: Add to WAA's main.py manually**
+See `openadapt_evals/server/waa_server_patch.py` for the code to add.
+
+**Option 3: Use standalone evaluator (fallback)**
+```python
+from openadapt_evals.server.evaluate_endpoint import create_standalone_evaluator
+
+# Creates evaluator that works without WAA's evaluator modules
+evaluate = create_standalone_evaluator("http://vm:5000")
+result = evaluate(task_config)
+```
+
+### Task Configuration for Evaluation
+
+For proper evaluation, tasks need evaluator configs in `raw_config`:
+
+```python
+from openadapt_evals import WAALiveAdapter, WAALiveConfig
+
+# Option A: Set waa_examples_path to load configs from disk
+config = WAALiveConfig(
+    server_url="http://vm:5000",
+    waa_examples_path="/path/to/WindowsAgentArena/src/win-arena-container/client/evaluation_examples_windows"
+)
+adapter = WAALiveAdapter(config)
+
+# Option B: Load task with full config
+adapter = WAALiveAdapter(WAALiveConfig(server_url="http://vm:5000"))
+task = adapter.load_task_from_json("notepad_1", {
+    "instruction": "Open Notepad and type hello",
+    "evaluator": {
+        "func": "exact_match",
+        "result": {"type": "vm_file", "path": "C:/test.txt"},
+        "expected": {"type": "rule", "rules": {"match": "hello"}}
+    }
+})
+```
+
 ## Running Tests
 
 ```bash
+# Run all tests
+uv run pytest tests/ -v
+
 # Run mock evaluation (basic sanity check)
 uv run python -m openadapt_evals.benchmarks.cli mock --tasks 5
+
+# Test evaluate endpoint
+uv run pytest tests/test_evaluate_endpoint.py -v
 
 # Test imports
 uv run python -c "from openadapt_evals import ApiAgent, WAAMockAdapter; print('OK')"

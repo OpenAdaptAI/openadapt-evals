@@ -53,6 +53,9 @@ class WAALiveConfig:
         max_steps: Default maximum steps per task.
         action_delay: Delay after actions in seconds (for UI to settle).
         timeout: Request timeout in seconds.
+        waa_examples_path: Path to WAA evaluation_examples_windows directory
+            for loading task configs with evaluator specs. If not set, tasks
+            are loaded from server or created as minimal placeholders.
     """
 
     server_url: str = "http://localhost:5000"
@@ -62,6 +65,7 @@ class WAALiveConfig:
     max_steps: int = 15
     action_delay: float = 0.5
     timeout: float = 90.0
+    waa_examples_path: str | None = None
 
 
 class WAALiveAdapter(BenchmarkAdapter):
@@ -128,20 +132,132 @@ class WAALiveAdapter(BenchmarkAdapter):
     def load_task(self, task_id: str) -> BenchmarkTask:
         """Load a specific task by ID.
 
+        Attempts to load the full task config with evaluator specification
+        from multiple sources:
+        1. WAA server's /task/<task_id> endpoint (if available)
+        2. Local WAA examples directory (if waa_examples_path is set)
+        3. Creates minimal task as fallback
+
         Args:
-            task_id: Task identifier.
+            task_id: Task identifier (e.g., "notepad_1", "browser_abc123").
 
         Returns:
-            BenchmarkTask object.
+            BenchmarkTask object with evaluator config if available.
         """
-        # For now, create a minimal task - actual task configs should be
-        # loaded from WAA repo if needed
+        import requests
+
+        # Try to load from server first
+        try:
+            resp = requests.get(
+                f"{self.config.server_url}/task/{task_id}",
+                timeout=10.0,
+            )
+            if resp.status_code == 200:
+                config = resp.json()
+                return self._create_task_from_config(task_id, config)
+        except Exception:
+            pass  # Server doesn't support /task endpoint, try other methods
+
+        # Try to load from local WAA examples directory
+        if hasattr(self.config, "waa_examples_path") and self.config.waa_examples_path:
+            task = self._load_task_from_disk(task_id, self.config.waa_examples_path)
+            if task:
+                return task
+
+        # Fallback: create minimal task
+        logger.warning(
+            f"Could not load full task config for {task_id}. "
+            "Evaluation will use fallback heuristics. "
+            "Set waa_examples_path or deploy /task endpoint for proper evaluation."
+        )
         return BenchmarkTask(
             task_id=task_id,
             instruction=f"Task {task_id}",
             domain=task_id.split("_")[0] if "_" in task_id else "unknown",
             time_limit_steps=self.config.max_steps,
         )
+
+    def load_task_from_json(self, task_id: str, config: dict) -> BenchmarkTask:
+        """Load a task from a JSON config dict.
+
+        Use this to pass in task configs directly without server/disk lookup.
+
+        Args:
+            task_id: Task identifier.
+            config: Full task configuration including evaluator spec.
+
+        Returns:
+            BenchmarkTask with evaluator config.
+        """
+        return self._create_task_from_config(task_id, config)
+
+    def _create_task_from_config(self, task_id: str, config: dict) -> BenchmarkTask:
+        """Create BenchmarkTask from WAA JSON config.
+
+        Args:
+            task_id: Task identifier.
+            config: WAA task configuration dict.
+
+        Returns:
+            BenchmarkTask with raw_config containing evaluator spec.
+        """
+        # Parse domain from task_id if not in config
+        domain = config.get("domain")
+        if not domain:
+            domain = task_id.split("_")[0] if "_" in task_id else "unknown"
+
+        return BenchmarkTask(
+            task_id=task_id,
+            instruction=config.get("instruction", config.get("task", f"Task {task_id}")),
+            domain=domain,
+            initial_state_ref=config.get("snapshot"),
+            time_limit_steps=config.get("max_steps", self.config.max_steps),
+            raw_config=config,  # Includes evaluator spec
+            evaluation_spec=config.get("evaluator"),
+        )
+
+    def _load_task_from_disk(self, task_id: str, base_path: str) -> BenchmarkTask | None:
+        """Load task from WAA examples directory on disk.
+
+        Args:
+            task_id: Task identifier (e.g., "notepad_1" or "notepad_abc123-def").
+            base_path: Path to WAA evaluation_examples_windows directory.
+
+        Returns:
+            BenchmarkTask or None if not found.
+        """
+        import json
+        from pathlib import Path
+
+        base = Path(base_path)
+
+        # Parse task_id to get domain and task file name
+        # Format: domain_taskname or domain_uuid
+        parts = task_id.split("_", 1)
+        if len(parts) < 2:
+            return None
+
+        domain = parts[0]
+        task_name = parts[1]
+
+        # Try different file locations
+        candidates = [
+            base / "examples" / domain / f"{task_name}.json",
+            base / domain / f"{task_name}.json",
+            base / "examples" / domain / f"{task_id}.json",
+        ]
+
+        for task_file in candidates:
+            if task_file.exists():
+                try:
+                    with open(task_file, encoding="utf-8") as f:
+                        config = json.load(f)
+                    logger.info(f"Loaded task config from {task_file}")
+                    return self._create_task_from_config(task_id, config)
+                except Exception as e:
+                    logger.warning(f"Failed to load {task_file}: {e}")
+
+        return None
 
     def reset(self, task: BenchmarkTask) -> BenchmarkObservation:
         """Reset environment to task's initial state.
@@ -247,8 +363,12 @@ class WAALiveAdapter(BenchmarkAdapter):
     def evaluate(self, task: BenchmarkTask) -> BenchmarkResult:
         """Evaluate current state against task success criteria.
 
-        For live adapter, full evaluation requires running WAA's evaluators.
-        Currently returns a placeholder result.
+        Calls the /evaluate endpoint on the WAA server which runs WAA's
+        native evaluators (getters + metrics) to determine task success.
+
+        If the task has an evaluator config in raw_config, it's sent to
+        the server. If the /evaluate endpoint is not available, falls back
+        to a simple heuristic based on actions taken.
 
         Args:
             task: Task to evaluate.
@@ -256,17 +376,117 @@ class WAALiveAdapter(BenchmarkAdapter):
         Returns:
             BenchmarkResult with success/score.
         """
-        # TODO: Implement proper evaluation by calling WAA evaluators
-        # For now, check if agent took any actions
+        import requests
+
+        # Build evaluation request
+        eval_request = {}
+
+        # Include evaluator config from task if available
+        if task.raw_config:
+            eval_request = task.raw_config.copy()
+
+        # Add agent's last action for infeasible task detection
+        if self._actions:
+            last_action = self._actions[-1]
+            if last_action.type == "done":
+                eval_request["agent_last_action"] = "DONE"
+            elif last_action.answer:
+                eval_request["agent_last_action"] = last_action.answer
+
+        # Try the /evaluate endpoint
+        try:
+            resp = requests.post(
+                f"{self.config.server_url}/evaluate",
+                json=eval_request,
+                timeout=self.config.timeout,
+            )
+
+            if resp.status_code == 200:
+                result = resp.json()
+                return BenchmarkResult(
+                    task_id=task.task_id,
+                    success=result.get("success", False),
+                    score=result.get("score", 0.0),
+                    num_steps=self._step_count,
+                    reason=result.get("reason"),
+                )
+
+            elif resp.status_code == 404:
+                # /evaluate endpoint not available - fall back to heuristic
+                logger.warning(
+                    "/evaluate endpoint not found on WAA server. "
+                    "Deploy openadapt_evals.server.evaluate_endpoint to enable "
+                    "proper evaluation."
+                )
+                return self._evaluate_fallback(task)
+
+            else:
+                logger.error(
+                    f"Evaluation request failed ({resp.status_code}): {resp.text}"
+                )
+                return BenchmarkResult(
+                    task_id=task.task_id,
+                    success=False,
+                    score=0.0,
+                    num_steps=self._step_count,
+                    reason=f"Evaluation failed: HTTP {resp.status_code}",
+                )
+
+        except requests.Timeout:
+            logger.error("Evaluation request timed out")
+            return BenchmarkResult(
+                task_id=task.task_id,
+                success=False,
+                score=0.0,
+                num_steps=self._step_count,
+                reason="Evaluation timed out",
+            )
+
+        except requests.RequestException as e:
+            logger.error(f"Evaluation request error: {e}")
+            return self._evaluate_fallback(task)
+
+    def _evaluate_fallback(self, task: BenchmarkTask) -> BenchmarkResult:
+        """Fallback evaluation when /evaluate endpoint is unavailable.
+
+        Uses a simple heuristic based on:
+        - Whether the agent took any actions
+        - Whether the agent called DONE
+        - Whether the task has success criteria we can check locally
+
+        Args:
+            task: Task to evaluate.
+
+        Returns:
+            BenchmarkResult with heuristic-based score.
+        """
         has_actions = len(self._actions) > 0
         called_done = any(a.type == "done" for a in self._actions)
+        typed_text = any(a.type == "type" and a.text for a in self._actions)
+
+        # Calculate heuristic score
+        score = 0.0
+        if has_actions:
+            score += 0.2
+        if called_done:
+            score += 0.2
+        if typed_text:
+            score += 0.1
+        if self._step_count >= 2:
+            score += 0.1
+
+        # Cap at 0.5 since we can't truly verify success
+        score = min(score, 0.5)
 
         return BenchmarkResult(
             task_id=task.task_id,
-            success=False,  # Can't determine without evaluator
-            score=0.5 if has_actions and called_done else 0.0,
+            success=False,  # Can't determine without proper evaluation
+            score=score,
             num_steps=self._step_count,
-            reason="Evaluation requires WAA evaluators (not yet implemented)",
+            reason=(
+                "Fallback evaluation (WAA /evaluate endpoint unavailable). "
+                f"Heuristic: actions={len(self._actions)}, done={called_done}, typed={typed_text}"
+            ),
         )
 
     def close(self) -> None:
