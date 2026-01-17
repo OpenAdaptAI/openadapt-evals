@@ -47,6 +47,11 @@ uv run python -m openadapt_evals.benchmarks.cli view --run-name my_eval
 | `probe` | Check if WAA server is ready |
 | `view` | Generate HTML viewer for results |
 | `estimate` | Estimate Azure costs |
+| `up` | **All-in-one**: Start VM + WAA server + wait until ready |
+| `vm-start` | Start an Azure VM |
+| `vm-stop` | Stop (deallocate) an Azure VM |
+| `vm-status` | Check Azure VM status and IP |
+| `server-start` | Start WAA server on VM via run-command |
 
 ## Architecture
 
@@ -195,6 +200,42 @@ from openadapt_ml.benchmarks import WAAMockAdapter  # DeprecationWarning
 # NEW (preferred)
 from openadapt_evals import WAAMockAdapter  # No warning
 ```
+
+## Azure VM Management
+
+The CLI includes commands to manage Azure VMs programmatically - no manual Azure portal or RDP needed.
+
+**All-in-one startup:**
+```bash
+# Start VM, boot, start WAA server, wait until ready
+uv run python -m openadapt_evals.benchmarks.cli up
+
+# With custom VM name
+uv run python -m openadapt_evals.benchmarks.cli up --vm-name my-waa-vm --resource-group MY-RG
+```
+
+**Individual commands:**
+```bash
+# Check VM status
+uv run python -m openadapt_evals.benchmarks.cli vm-status
+
+# Start VM only
+uv run python -m openadapt_evals.benchmarks.cli vm-start
+
+# Start WAA server on running VM
+uv run python -m openadapt_evals.benchmarks.cli server-start
+
+# Stop VM (deallocate to stop billing)
+uv run python -m openadapt_evals.benchmarks.cli vm-stop
+```
+
+**Defaults:**
+- VM Name: `waa-eval-vm`
+- Resource Group: `OPENADAPT-AGENTS`
+
+**Prerequisites:**
+- Azure CLI installed and logged in (`az login`)
+- VM with WAA installed at `/home/azureuser/WindowsAgentArena/`
 
 ## Running Tests
 

@@ -84,17 +84,21 @@ Think step by step:
 """
 
 
-def _format_accessibility_tree(tree: dict, indent: int = 0, max_depth: int = 5) -> str:
+def _format_accessibility_tree(tree: dict | str, indent: int = 0, max_depth: int = 5) -> str:
     """Format accessibility tree for prompt.
 
     Args:
-        tree: Accessibility tree dict from WAA.
+        tree: Accessibility tree dict from WAA, or XML string.
         indent: Current indentation level.
         max_depth: Maximum depth to traverse.
 
     Returns:
         Formatted string representation.
     """
+    # Handle XML string input (WAA returns XML from /accessibility endpoint)
+    if isinstance(tree, str):
+        return tree  # Return as-is; caller should truncate if needed
+
     if indent >= max_depth:
         return ""
 

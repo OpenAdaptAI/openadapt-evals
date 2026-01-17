@@ -313,7 +313,11 @@ class WAALiveAdapter(BenchmarkAdapter):
             )
             if resp.status_code == 200:
                 result = resp.json()
-                a11y_tree = result.get("AT", {})
+                # Handle both dict response with "AT" key and direct string/dict response
+                if isinstance(result, dict):
+                    a11y_tree = result.get("AT", result)  # Use "AT" if present, else use whole dict
+                else:
+                    a11y_tree = result  # String (XML) or other format
                 self._current_a11y = a11y_tree
                 # Extract rects for element-based grounding
                 self._current_rects = self._extract_rects_from_a11y(a11y_tree)
@@ -532,59 +536,76 @@ class WAALiveAdapter(BenchmarkAdapter):
 
         if action.type == "scroll":
             direction = action.scroll_direction or "down"
-            return f"computer.mouse.scroll('{direction}')"
+            # pyautogui.scroll(clicks) - positive is up, negative is down
+            clicks = 3 if direction == "up" else -3
+            return f"import pyautogui; pyautogui.scroll({clicks})"
 
         if action.type == "drag":
-            # Drag requires start and end - use element IDs or coordinates
+            # Get start position
+            start_x, start_y = 0, 0
             if action.target_node_id is not None:
                 elem_id = str(action.target_node_id)
                 if elem_id in self._current_rects:
-                    # Start at element, drag to end coords
-                    end_x = action.end_x or 0
-                    end_y = action.end_y or 0
-                    if isinstance(end_x, float) and 0 <= end_x <= 1:
-                        end_x = int(end_x * self.config.screen_width)
-                    if isinstance(end_y, float) and 0 <= end_y <= 1:
-                        end_y = int(end_y * self.config.screen_height)
-                    return (
-                        f"computer.mouse.move_id('{elem_id}'); "
-                        f"computer.mouse.drag({int(end_x)}, {int(end_y)})"
-                    )
-            logger.warning("Drag requires target_node_id with valid element")
-            return None
+                    rect = self._current_rects[elem_id]
+                    start_x = (rect[0] + rect[2]) // 2
+                    start_y = (rect[1] + rect[3]) // 2
+            elif action.x is not None and action.y is not None:
+                start_x = action.x if not isinstance(action.x, float) or action.x > 1 else int(action.x * self.config.screen_width)
+                start_y = action.y if not isinstance(action.y, float) or action.y > 1 else int(action.y * self.config.screen_height)
+
+            # Get end position
+            end_x = action.end_x or 0
+            end_y = action.end_y or 0
+            if isinstance(end_x, float) and 0 <= end_x <= 1:
+                end_x = int(end_x * self.config.screen_width)
+            if isinstance(end_y, float) and 0 <= end_y <= 1:
+                end_y = int(end_y * self.config.screen_height)
+
+            return f"import pyautogui; pyautogui.moveTo({int(start_x)}, {int(start_y)}); pyautogui.drag({int(end_x - start_x)}, {int(end_y - start_y)}, duration=0.5)"
 
         logger.warning(f"Unknown action type: {action.type}")
         return None
 
     def _translate_click_action(self, action: BenchmarkAction, click_method: str) -> str:
-        """Translate click-type action to element-based command.
+        """Translate click-type action to pyautogui command.
 
         Args:
             action: The click action.
             click_method: "single_click", "double_click", or "right_click".
 
         Returns:
-            Python command string using computer.mouse.move_id() for grounding.
+            Python command string using pyautogui for direct control.
         """
+        # Map click method to pyautogui function
+        pyautogui_method = {
+            "single_click": "click",
+            "double_click": "doubleClick",
+            "right_click": "rightClick",
+        }.get(click_method, "click")
+
         # Prefer element ID for grounding (SoM mode)
         if action.target_node_id is not None:
             elem_id = str(action.target_node_id)
             if elem_id in self._current_rects:
-                return f"computer.mouse.move_id('{elem_id}'); computer.mouse.{click_method}()"
+                # Get center of element bounding box
+                rect = self._current_rects[elem_id]
+                cx = (rect[0] + rect[2]) // 2
+                cy = (rect[1] + rect[3]) // 2
+                return f"import pyautogui; pyautogui.{pyautogui_method}({cx}, {cy})"
             else:
                 logger.warning(f"Element ID '{elem_id}' not found in rects, falling back to coordinates")
 
-        # Fallback: use coordinates if provided (less precise)
+        # Fallback: use coordinates if provided
         x = action.x if action.x is not None else 0
         y = action.y if action.y is not None else 0
 
-        # Normalize coordinates
+        # Convert normalized coordinates to pixels
         if isinstance(x, float) and 0 <= x <= 1:
-            x = x  # Keep normalized - move_abs handles it
+            x = int(x * self.config.screen_width)
         if isinstance(y, float) and 0 <= y <= 1:
-            y = y  # Keep normalized
+            y = int(y * self.config.screen_height)
 
-        return f"computer.mouse.move_abs({x}, {y}); computer.mouse.{click_method}()"
+        return f"import pyautogui; pyautogui.{pyautogui_method}({int(x)}, {int(y)})"
 
     def _translate_key_action(self, action: BenchmarkAction) -> str:
         """Translate key press action using pyautogui (no grounding needed)."""

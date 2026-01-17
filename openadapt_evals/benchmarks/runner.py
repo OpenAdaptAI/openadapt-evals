@@ -299,7 +299,8 @@ def _run_single_task(
             # Extract reasoning if available from PolicyAgent
             reasoning = None
             if hasattr(action, "raw_action") and action.raw_action:
-                reasoning = action.raw_action.get("thought")
+                if isinstance(action.raw_action, dict):
+                    reasoning = action.raw_action.get("thought")
 
             # Record step in trace collector
             if trace_collector is not None:

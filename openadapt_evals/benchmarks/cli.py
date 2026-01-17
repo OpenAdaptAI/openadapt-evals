@@ -319,6 +319,310 @@ def cmd_estimate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_vm_start(args: argparse.Namespace) -> int:
+    """Start an Azure VM."""
+    import subprocess
+
+    vm_name = args.vm_name
+    resource_group = args.resource_group
+
+    print(f"Starting VM '{vm_name}' in resource group '{resource_group}'...")
+
+    result = subprocess.run(
+        ["az", "vm", "start", "--name", vm_name, "--resource-group", resource_group],
+        capture_output=True,
+        text=True,
+    )
+
+    if result.returncode != 0:
+        print(f"ERROR: Failed to start VM: {result.stderr}")
+        return 1
+
+    print(f"VM '{vm_name}' started successfully.")
+
+    # Get public IP
+    result = subprocess.run(
+        [
+            "az", "vm", "show",
+            "--name", vm_name,
+            "--resource-group", resource_group,
+            "--show-details",
+            "--query", "publicIps",
+            "-o", "tsv",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    if result.returncode == 0 and result.stdout.strip():
+        print(f"Public IP: {result.stdout.strip()}")
+
+    return 0
+
+
+def cmd_vm_stop(args: argparse.Namespace) -> int:
+    """Stop an Azure VM."""
+    import subprocess
+
+    vm_name = args.vm_name
+    resource_group = args.resource_group
+
+    print(f"Stopping VM '{vm_name}' in resource group '{resource_group}'...")
+
+    cmd = ["az", "vm", "deallocate", "--name", vm_name, "--resource-group", resource_group]
+    if args.no_wait:
+        cmd.append("--no-wait")
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+
+    if result.returncode != 0:
+        print(f"ERROR: Failed to stop VM: {result.stderr}")
+        return 1
+
+    print(f"VM '{vm_name}' stopped (deallocated).")
+    return 0
+
+
+def cmd_vm_status(args: argparse.Namespace) -> int:
+    """Check Azure VM status."""
+    import subprocess
+    import json as json_module
+
+    vm_name = args.vm_name
+    resource_group = args.resource_group
+
+    result = subprocess.run(
+        [
+            "az", "vm", "show",
+            "--name", vm_name,
+            "--resource-group", resource_group,
+            "--show-details",
+            "--query", "{name:name, status:powerState, publicIp:publicIps, privateIp:privateIps, size:hardwareProfile.vmSize}",
+            "-o", "json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    if result.returncode != 0:
+        print(f"ERROR: Failed to get VM status: {result.stderr}")
+        return 1
+
+    try:
+        data = json_module.loads(result.stdout)
+        print(f"VM Name:    {data.get('name', 'N/A')}")
+        print(f"Status:     {data.get('status', 'N/A')}")
+        print(f"Public IP:  {data.get('publicIp', 'N/A')}")
+        print(f"Private IP: {data.get('privateIp', 'N/A')}")
+        print(f"Size:       {data.get('size', 'N/A')}")
+
+        if args.json:
+            print(f"\nJSON: {result.stdout.strip()}")
+
+    except json_module.JSONDecodeError:
+        print(result.stdout)
+
+    return 0
+
+
+def cmd_server_start(args: argparse.Namespace) -> int:
+    """Start WAA server on the Azure VM via run-command.
+
+    WAA runs inside a Docker container with Windows nested virtualization.
+    This command starts the existing 'winarena' container.
+    """
+    import subprocess
+    import time
+
+    vm_name = args.vm_name
+    resource_group = args.resource_group
+
+    print(f"Starting WAA Docker container on VM '{vm_name}'...")
+
+    # Script to start the WAA Docker container
+    # The winarena container runs Windows 11 via QEMU with WAA server inside
+    start_script = '''
+# Check if container exists
+CONTAINER_ID=$(docker ps -aq -f name=winarena)
+if [ -z "$CONTAINER_ID" ]; then
+    echo "ERROR: No 'winarena' container found. Run setup-waa first."
+    exit 1
+fi
+
+# Check if already running
+RUNNING=$(docker ps -q -f name=winarena)
+if [ -n "$RUNNING" ]; then
+    echo "Container already running"
+else
+    echo "Starting container..."
+    docker start winarena
+fi
+
+# Wait a moment and show status
+sleep 3
+docker ps -f name=winarena --format "ID: {{.ID}}, Status: {{.Status}}"
+echo "Container started. Windows VM booting..."
+echo "WAA server will be available once Windows boots (~5-10 min first time, ~2 min after)"
+'''
+
+    result = subprocess.run(
+        [
+            "az", "vm", "run-command", "invoke",
+            "--resource-group", resource_group,
+            "--name", vm_name,
+            "--command-id", "RunShellScript",
+            "--scripts", start_script,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+
+    if result.returncode != 0:
+        print(f"ERROR: Failed to start container: {result.stderr}")
+        return 1
+
+    # Parse output
+    try:
+        import json as json_module
+        output = json_module.loads(result.stdout)
+        message = output.get("value", [{}])[0].get("message", "")
+        print(message)
+    except Exception:
+        print(result.stdout)
+
+    # Get public IP for convenience
+    ip_result = subprocess.run(
+        [
+            "az", "vm", "show",
+            "--name", vm_name,
+            "--resource-group", resource_group,
+            "--show-details",
+            "--query", "publicIps",
+            "-o", "tsv",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    if ip_result.returncode == 0 and ip_result.stdout.strip():
+        public_ip = ip_result.stdout.strip()
+        print(f"\nServer URL: http://{public_ip}:5000")
+        print(f"Probe with: uv run python -m openadapt_evals.benchmarks.cli probe --server http://{public_ip}:5000 --wait")
+
+    return 0
+
+
+def cmd_up(args: argparse.Namespace) -> int:
+    """Start VM, wait for boot, start WAA server, and probe until ready."""
+    import subprocess
+    import time
+
+    vm_name = args.vm_name
+    resource_group = args.resource_group
+
+    # Step 1: Start VM
+    print(f"[1/4] Starting VM '{vm_name}'...")
+    result = subprocess.run(
+        ["az", "vm", "start", "--name", vm_name, "--resource-group", resource_group],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print(f"ERROR: Failed to start VM: {result.stderr}")
+        return 1
+    print("      VM started.")
+
+    # Step 2: Get public IP
+    print("[2/4] Getting public IP...")
+    result = subprocess.run(
+        [
+            "az", "vm", "show",
+            "--name", vm_name,
+            "--resource-group", resource_group,
+            "--show-details",
+            "--query", "publicIps",
+            "-o", "tsv",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        print(f"ERROR: Could not get public IP")
+        return 1
+    public_ip = result.stdout.strip()
+    server_url = f"http://{public_ip}:5000"
+    print(f"      Public IP: {public_ip}")
+
+    # Step 3: Wait for VM to boot and start WAA Docker container
+    print(f"[3/4] Waiting {args.boot_wait}s for VM to boot, then starting WAA container...")
+    time.sleep(args.boot_wait)
+
+    # WAA runs inside a Docker container with Windows nested virtualization
+    start_script = '''
+# Check if container exists
+CONTAINER_ID=$(docker ps -aq -f name=winarena)
+if [ -z "$CONTAINER_ID" ]; then
+    echo "ERROR: No winarena container found"
+    echo "This VM may need setup. See openadapt-ml vm setup-waa command."
+    exit 1
+fi
+
+# Start container if not running
+RUNNING=$(docker ps -q -f name=winarena)
+if [ -z "$RUNNING" ]; then
+    echo "Starting winarena container..."
+    docker start winarena
+fi
+
+sleep 3
+docker ps -f name=winarena --format "Container: {{.Names}}, Status: {{.Status}}"
+'''
+
+    result = subprocess.run(
+        [
+            "az", "vm", "run-command", "invoke",
+            "--resource-group", resource_group,
+            "--name", vm_name,
+            "--command-id", "RunShellScript",
+            "--scripts", start_script,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    if result.returncode != 0:
+        print(f"WARNING: Server start command may have failed: {result.stderr}")
+    else:
+        print("      Server start command sent.")
+
+    # Step 4: Probe until ready
+    print(f"[4/4] Probing server at {server_url}...")
+
+    try:
+        import requests
+    except ImportError:
+        print("ERROR: requests package required")
+        return 1
+
+    for attempt in range(args.probe_attempts):
+        try:
+            resp = requests.get(f"{server_url}/probe", timeout=5.0)
+            if resp.status_code == 200:
+                print(f"\nSUCCESS: WAA server ready at {server_url}")
+                print(f"\nRun evaluation with:")
+                print(f"  uv run python -m openadapt_evals.benchmarks.cli live --server {server_url} --agent api-claude --task-ids notepad_1")
+                return 0
+        except Exception:
+            pass
+        print(f"      Attempt {attempt + 1}/{args.probe_attempts}: waiting...")
+        time.sleep(args.probe_interval)
+
+    print(f"\nWARNING: Server not responding after {args.probe_attempts} attempts.")
+    print(f"Check server logs: az vm run-command invoke --resource-group {resource_group} --name {vm_name} --command-id RunShellScript --scripts 'cat /tmp/waa_server.log'")
+    return 1
+
+
 def cmd_azure(args: argparse.Namespace) -> int:
     """Run Azure-based parallel evaluation."""
     from openadapt_evals.benchmarks.azure import AzureConfig, AzureWAAOrchestrator
@@ -461,6 +765,47 @@ def main() -> int:
     azure_parser.add_argument("--no-cleanup", action="store_true",
                              help="Don't delete VMs after completion")
 
+    # VM management commands
+    vm_start_parser = subparsers.add_parser("vm-start", help="Start an Azure VM")
+    vm_start_parser.add_argument("--vm-name", type=str, default="waa-eval-vm",
+                                help="Azure VM name")
+    vm_start_parser.add_argument("--resource-group", type=str, default="OPENADAPT-AGENTS",
+                                help="Azure resource group")
+
+    vm_stop_parser = subparsers.add_parser("vm-stop", help="Stop (deallocate) an Azure VM")
+    vm_stop_parser.add_argument("--vm-name", type=str, default="waa-eval-vm",
+                               help="Azure VM name")
+    vm_stop_parser.add_argument("--resource-group", type=str, default="OPENADAPT-AGENTS",
+                               help="Azure resource group")
+    vm_stop_parser.add_argument("--no-wait", action="store_true",
+                               help="Don't wait for deallocation to complete")
+
+    vm_status_parser = subparsers.add_parser("vm-status", help="Check Azure VM status")
+    vm_status_parser.add_argument("--vm-name", type=str, default="waa-eval-vm",
+                                 help="Azure VM name")
+    vm_status_parser.add_argument("--resource-group", type=str, default="OPENADAPT-AGENTS",
+                                 help="Azure resource group")
+    vm_status_parser.add_argument("--json", action="store_true",
+                                 help="Output raw JSON")
+
+    server_start_parser = subparsers.add_parser("server-start", help="Start WAA server on VM")
+    server_start_parser.add_argument("--vm-name", type=str, default="waa-eval-vm",
+                                    help="Azure VM name")
+    server_start_parser.add_argument("--resource-group", type=str, default="OPENADAPT-AGENTS",
+                                    help="Azure resource group")
+
+    up_parser = subparsers.add_parser("up", help="Start VM + WAA server (all-in-one)")
+    up_parser.add_argument("--vm-name", type=str, default="waa-eval-vm",
+                          help="Azure VM name")
+    up_parser.add_argument("--resource-group", type=str, default="OPENADAPT-AGENTS",
+                          help="Azure resource group")
+    up_parser.add_argument("--boot-wait", type=int, default=30,
+                          help="Seconds to wait for VM to boot")
+    up_parser.add_argument("--probe-attempts", type=int, default=30,
+                          help="Max probe attempts")
+    up_parser.add_argument("--probe-interval", type=int, default=5,
+                          help="Seconds between probe attempts")
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -475,6 +820,11 @@ def main() -> int:
         "view": cmd_view,
         "estimate": cmd_estimate,
         "azure": cmd_azure,
+        "vm-start": cmd_vm_start,
+        "vm-stop": cmd_vm_stop,
+        "vm-status": cmd_vm_status,
+        "server-start": cmd_server_start,
+        "up": cmd_up,
     }
 
     handler = handlers.get(args.command)

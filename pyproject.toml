@@ -55,6 +55,9 @@ retrieval = [
 all = [
     "openadapt-evals[dev,waa,azure,retrieval]",
 ]
+test = [
+    "anthropic>=0.76.0",
+]
 
 [project.scripts]
 openadapt-evals = "openadapt_evals.benchmarks.cli:main"
