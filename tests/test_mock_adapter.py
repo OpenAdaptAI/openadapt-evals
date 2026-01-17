@@ -2,13 +2,14 @@
 
 import pytest
 
-from openadapt_evals.benchmarks.base import (
+from openadapt_evals.adapters import (
     BenchmarkAction,
     BenchmarkObservation,
     BenchmarkResult,
     BenchmarkTask,
+    WAAMockAdapter,
 )
-from openadapt_evals.benchmarks.waa import WAAMockAdapter, WAA_DOMAINS
+from openadapt_evals.adapters.waa import WAA_DOMAINS
 
 
 class TestWAAMockAdapterInit:

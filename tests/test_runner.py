@@ -3,11 +3,12 @@
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 
-from openadapt_evals.benchmarks.base import (
+from openadapt_evals.adapters import (
     BenchmarkAction,
     BenchmarkObservation,
     BenchmarkResult,
     BenchmarkTask,
+    WAAMockAdapter,
 )
 from openadapt_evals.benchmarks.runner import (
     EvaluationConfig,
@@ -16,8 +17,7 @@ from openadapt_evals.benchmarks.runner import (
     evaluate_agent_on_benchmark,
     _run_single_task,
 )
-from openadapt_evals.benchmarks.waa import WAAMockAdapter
-from openadapt_evals.benchmarks.agent import (
+from openadapt_evals.agents import (
     BenchmarkAgent,
     ScriptedAgent,
     SmartMockAgent,
