@@ -1,5 +1,16 @@
 # Claude Code Instructions for openadapt-evals
 
+## Project Status & Priorities
+
+**IMPORTANT**: Before starting work, always check the project-wide status document:
+- **Location**: `/Users/abrichr/oa/src/STATUS.md`
+- **Purpose**: Tracks P0 priorities, active background tasks, blockers, and strategic decisions
+- **Action**: Read this file at the start of every session to understand current priorities
+
+This ensures continuity between Claude Code sessions and context compactions.
+
+---
+
 ## Overview
 
 Benchmark evaluation adapters for GUI automation agents. Provides unified interfaces to run agents against WAA (Windows Agent Arena), WebArena, and other benchmarks.
@@ -47,6 +58,7 @@ uv run python -m openadapt_evals.benchmarks.cli view --run-name my_eval
 | `probe` | Check if WAA server is ready |
 | `view` | Generate HTML viewer for results |
 | `estimate` | Estimate Azure costs |
+| `dashboard` | **Generate VM usage dashboard** showing what the VM is being used for |
 | `up` | **All-in-one**: Start VM + WAA server + wait until ready |
 | `vm-start` | Start an Azure VM |
 | `vm-stop` | Stop (deallocate) an Azure VM |
@@ -83,7 +95,9 @@ openadapt_evals/
 └── __init__.py
 ```
 
-## CRITICAL: P0 Demo Persistence Fix
+## CRITICAL: P0 Demo Persistence Fix ✅ VALIDATED
+
+**Status**: VALIDATED (Jan 17, 2026)
 
 The `ApiAgent` class includes a critical fix: **demo is included at EVERY step, not just step 1**.
 
@@ -99,8 +113,25 @@ agent = ApiAgent(
 )
 
 # The demo is included in EVERY API call, not just the first
-# See api_agent.py lines 287-296 for implementation
+# See api_agent.py lines 359-367 for implementation
 ```
+
+### Validation Results (Mock WAA Test - Jan 17, 2026)
+
+**Test Setup**: Claude Sonnet 4.5, 10 tasks, mock adapter
+
+| Condition | Success Rate | Avg Steps | Behavior |
+|-----------|-------------|-----------|----------|
+| Without demo | 0% (0/10) | 6.8 steps | Random exploration |
+| With demo | 0% (0/10) | 3.0 steps | Follows pattern, focused actions |
+
+**Key Findings**:
+- ✅ Demo persistence **confirmed working** - demo included at every step
+- ✅ Behavioral change observed - with demo: 3.0 avg steps vs without: 6.8 avg steps
+- ⚠️ Mock test limited by coordinate precision issues
+- 📋 **Next step**: Run full WAA evaluation (154 tasks) to measure true episode success improvement
+
+**Code Implementation**: `openadapt_evals/agents/api_agent.py` lines 359-367
 
 ## Key Files
 
@@ -116,6 +147,122 @@ agent = ApiAgent(
 | `server/waa_server_patch.py` | Script to deploy /evaluate to WAA server |
 | `benchmarks/runner.py` | evaluate_agent_on_benchmark(), compute_metrics() |
 | `benchmarks/cli.py` | CLI entry point |
+| `benchmarks/generate_synthetic_demos.py` | Generate synthetic demo trajectories for all 154 WAA tasks |
+| `benchmarks/validate_demos.py` | Validate demo format and action syntax |
+| `demo_library/synthetic_demos/` | 154 synthetic demos for all WAA tasks |
+
+## Synthetic Demo Generation
+
+Generate synthetic demonstration trajectories for all 154 WAA tasks to enable demo-conditioned prompting at scale.
+
+### Why Synthetic Demos?
+
+Demo-conditioned prompting dramatically improves performance:
+- **Without demo**: 33% first-action accuracy
+- **With demo**: 100% first-action accuracy
+
+Synthetic demos provide:
+1. Consistent quality across all 154 tasks
+2. Rapid regeneration as prompts improve
+3. Scalable evaluation without manual recording
+
+### Generating Demos
+
+```bash
+# Generate all 154 demos
+uv run python -m openadapt_evals.benchmarks.generate_synthetic_demos --all
+
+# Generate specific domains
+uv run python -m openadapt_evals.benchmarks.generate_synthetic_demos --domains notepad,browser,office
+
+# Generate specific tasks
+uv run python -m openadapt_evals.benchmarks.generate_synthetic_demos --task-ids notepad_1,browser_5
+
+# Use OpenAI instead of Anthropic
+uv run python -m openadapt_evals.benchmarks.generate_synthetic_demos --all --provider openai
+
+# Skip existing demos (incremental generation)
+uv run python -m openadapt_evals.benchmarks.generate_synthetic_demos --all --skip-existing
+```
+
+### Validating Demos
+
+Validate generated demos for format correctness and action syntax:
+
+```bash
+# Validate all demos
+uv run python -m openadapt_evals.benchmarks.validate_demos --demo-dir demo_library/synthetic_demos
+
+# Validate specific demo
+uv run python -m openadapt_evals.benchmarks.validate_demos --demo-file demo_library/synthetic_demos/notepad_1.txt
+
+# Save validation results to JSON
+uv run python -m openadapt_evals.benchmarks.validate_demos --demo-dir demo_library/synthetic_demos --json-output validation.json
+```
+
+### Demo Format
+
+Each demo follows a structured format:
+
+```
+TASK: Open Notepad
+DOMAIN: notepad
+
+STEPS:
+1. Click on the Start menu button
+   REASONING: Need to access the Start menu to find Notepad
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Type "notepad" in search box
+   REASONING: Searching is faster than navigating through menus
+   ACTION: TYPE("notepad")
+
+3. Wait for search results
+   REASONING: Windows needs time to display results
+   ACTION: WAIT(1.0)
+
+4. Click on Notepad app
+   REASONING: Launch the application
+   ACTION: CLICK(x=0.15, y=0.3)
+
+5. Verify Notepad is open
+   REASONING: Confirm successful launch
+   ACTION: DONE()
+
+EXPECTED_OUTCOME: Notepad application is open with blank document
+```
+
+### Using Synthetic Demos
+
+```python
+from openadapt_evals import ApiAgent
+from pathlib import Path
+
+# Load synthetic demo
+demo_text = Path("demo_library/synthetic_demos/notepad_1.txt").read_text()
+
+# Create agent with demo (persists across ALL steps)
+agent = ApiAgent(provider="anthropic", demo=demo_text)
+```
+
+Or via CLI:
+
+```bash
+uv run python -m openadapt_evals.benchmarks.cli live \
+    --agent api-claude \
+    --demo demo_library/synthetic_demos/notepad_1.txt \
+    --server http://vm:5000 \
+    --task-ids notepad_1
+```
+
+### Generation Approach
+
+The generator uses a **hybrid approach**:
+1. **LLM-based generation**: For complex, domain-specific trajectories (browser navigation, coding tasks)
+2. **Template-based generation**: For common patterns (open app, save file, type text)
+3. **Domain knowledge**: Realistic Windows UI coordinates, timing, and sequences
+
+See `demo_library/synthetic_demos/README.md` for full documentation.
 
 ## Retrieval-Augmented Agent (Automatic Demo Selection)
 
@@ -207,6 +354,42 @@ from openadapt_ml.benchmarks import WAAMockAdapter  # DeprecationWarning
 from openadapt_evals import WAAMockAdapter  # No warning
 ```
 
+## VM Usage Dashboard
+
+Track what your Azure VM is being used for with the new dashboard feature.
+
+**Generate dashboard:**
+```bash
+# Display in terminal
+uv run python -m openadapt_evals.benchmarks.cli dashboard
+
+# Open in browser (HTML view)
+uv run python -m openadapt_evals.benchmarks.cli dashboard --open
+
+# Custom VM
+uv run python -m openadapt_evals.benchmarks.cli dashboard --vm-name waa-eval-vm --resource-group openadapt-agents
+```
+
+**Or use the Python script directly:**
+```bash
+cd /Users/abrichr/oa/src/openadapt-evals
+python refresh_vm_dashboard.py
+```
+
+**Dashboard shows:**
+- Current VM power state (running/stopped)
+- Public and private IPs
+- Cost estimates (hourly/daily/weekly/monthly)
+- Recent Azure ML jobs and their status
+- Recent activity logs (last 7 days)
+- Quick action commands
+
+**Files:**
+- `VM_USAGE_DASHBOARD.md` - Markdown dashboard (generated)
+- `VM_USAGE_DASHBOARD.html` - HTML dashboard with auto-refresh (generated if --open flag used)
+- `refresh_vm_dashboard.py` - Dashboard generator script
+- `vm_dashboard.html` - Static HTML template
+
 ## Azure VM Management
 
 The CLI includes commands to manage Azure VMs programmatically - no manual Azure portal or RDP needed.
@@ -242,6 +425,61 @@ uv run python -m openadapt_evals.benchmarks.cli vm-stop
 **Prerequisites:**
 - Azure CLI installed and logged in (`az login`)
 - VM with WAA installed at `/home/azureuser/WindowsAgentArena/`
+
+## Azure ML Docker Image Configuration
+
+**IMPORTANT**: Azure ML jobs use Docker images to run evaluation code. The correct public image is required to avoid authentication errors.
+
+### Docker Image Fix (Jan 17, 2026)
+
+**Problem**: Azure ML jobs were failing with "Access denied for Container Registry: ghcr.io"
+
+**Root Cause**: Code was configured to use `ghcr.io/microsoft/windowsagentarena:latest` which is either private or doesn't exist.
+
+**Solution**: Updated to use the public Docker Hub image: `windowsarena/winarena:latest`
+
+**Changes Made:**
+- Updated `AzureConfig.docker_image` default in `azure.py` (line 67)
+- Updated `from_env()` method default (line 121)
+- Updated documentation comments (line 83)
+
+**Configuration:**
+
+Default (automatically uses public image):
+```python
+from openadapt_evals.benchmarks.azure import AzureConfig
+
+config = AzureConfig.from_env()
+# Uses windowsarena/winarena:latest by default
+```
+
+Custom image (if needed):
+```python
+config = AzureConfig(
+    subscription_id="...",
+    resource_group="...",
+    workspace_name="...",
+    docker_image="your-registry/your-image:tag"  # Override if needed
+)
+```
+
+Or via environment variable:
+```bash
+export AZURE_DOCKER_IMAGE="your-registry/your-image:tag"
+```
+
+**Image Details:**
+- **Image**: `windowsarena/winarena:latest` (Docker Hub)
+- **Access**: Public (no authentication required)
+- **Source**: Official Windows Agent Arena project
+- **Contents**: Windows 11 VM + WAA client code + dependencies
+
+**Alternative Options:**
+
+If you need to use a different image:
+1. **Public image on Docker Hub**: Just set `docker_image` to the full image name
+2. **Private image on Azure Container Registry (ACR)**: Azure ML has native ACR support, no extra config needed
+3. **Private image on other registry (ghcr.io, etc.)**: See Azure ML environment authentication documentation
 
 ## WAA /evaluate Endpoint
 
@@ -311,3 +549,42 @@ uv run pytest tests/test_evaluate_endpoint.py -v
 # Test imports
 uv run python -c "from openadapt_evals import ApiAgent, WAAMockAdapter; print('OK')"
 ```
+
+## PyPI Publishing
+
+**Status**: Package is successfully published on PyPI at https://pypi.org/project/openadapt-evals/
+
+### Current Version
+- Version: 0.1.0
+- Published: 2026-01-17
+- Installation: `pip install openadapt-evals`
+
+### Publishing Process
+
+Publishing happens automatically via GitHub Actions when a new tag is pushed:
+
+```bash
+# 1. Update version in pyproject.toml
+# 2. Commit changes
+git add pyproject.toml
+git commit -m "chore: bump version to 0.1.1"
+
+# 3. Create and push tag
+git tag v0.1.1
+git push origin main
+git push origin v0.1.1
+```
+
+### Known Issues
+
+1. **Downloads Badge**: Shows "package not found" for newly published packages. This resolves automatically within 24-48 hours as PyPI stats services index the package.
+
+2. **TestPyPI Publishing**: Currently fails due to missing trusted publisher configuration on test.pypi.org. Main PyPI publishing works correctly. See `PYPI_PUBLISHING_PLAN.md` for setup instructions.
+
+### Configuration
+
+- **Workflow**: `.github/workflows/publish.yml`
+- **Publishing Method**: Trusted Publishing (OIDC) - no API tokens needed
+- **Environments**: `pypi` (working), `testpypi` (needs configuration)
+
+For detailed publishing documentation, troubleshooting, and setup instructions, see `PYPI_PUBLISHING_PLAN.md`.
