@@ -90,7 +90,7 @@ def cmd_mock(args: argparse.Namespace) -> int:
 def cmd_live(args: argparse.Namespace) -> int:
     """Run live evaluation against a WAA server."""
     from openadapt_evals.adapters import WAALiveAdapter, WAALiveConfig
-    from openadapt_evals.agents import SmartMockAgent, ApiAgent
+    from openadapt_evals.agents import SmartMockAgent, ApiAgent, RetrievalAugmentedAgent
     from openadapt_evals.benchmarks import (
         EvaluationConfig,
         evaluate_agent_on_benchmark,
@@ -128,6 +128,9 @@ def cmd_live(args: argparse.Namespace) -> int:
             # Treat as direct demo text
             demo_text = args.demo
 
+    # Check for demo library (for retrieval agents)
+    demo_library_path = getattr(args, "demo_library", None)
+
     if agent_type == "mock":
         agent = SmartMockAgent()
     elif agent_type in ("api-claude", "claude", "anthropic"):
@@ -144,9 +147,35 @@ def cmd_live(args: argparse.Namespace) -> int:
         except RuntimeError as e:
             print(f"ERROR: {e}")
             return 1
+    elif agent_type in ("retrieval-claude", "retrieval-anthropic"):
+        if not demo_library_path:
+            print("ERROR: --demo-library required for retrieval agent")
+            return 1
+        try:
+            agent = RetrievalAugmentedAgent(
+                demo_library_path=demo_library_path,
+                provider="anthropic",
+            )
+            print(f"Using RetrievalAugmentedAgent with Claude (library={demo_library_path})")
+        except Exception as e:
+            print(f"ERROR: {e}")
+            return 1
+    elif agent_type in ("retrieval-openai", "retrieval-gpt"):
+        if not demo_library_path:
+            print("ERROR: --demo-library required for retrieval agent")
+            return 1
+        try:
+            agent = RetrievalAugmentedAgent(
+                demo_library_path=demo_library_path,
+                provider="openai",
+            )
+            print(f"Using RetrievalAugmentedAgent with GPT-5.1 (library={demo_library_path})")
+        except Exception as e:
+            print(f"ERROR: {e}")
+            return 1
     else:
         print(f"ERROR: Unknown agent type: {agent_type}")
-        print("Available: mock, api-claude, api-openai")
+        print("Available: mock, api-claude, api-openai, retrieval-claude, retrieval-openai")
         return 1
 
     # Create config for trace collection
@@ -377,8 +406,10 @@ def main() -> int:
     live_parser.add_argument("--server", type=str, default="http://localhost:5000",
                             help="WAA server URL")
     live_parser.add_argument("--agent", type=str, default="mock",
-                            help="Agent type: mock, api-claude, api-openai")
+                            help="Agent type: mock, api-claude, api-openai, retrieval-claude, retrieval-openai")
     live_parser.add_argument("--demo", type=str, help="Demo trajectory file for ApiAgent")
+    live_parser.add_argument("--demo-library", type=str,
+                            help="Path to demo library for retrieval agents")
     live_parser.add_argument("--task-ids", type=str, help="Comma-separated task IDs")
     live_parser.add_argument("--max-steps", type=int, default=15, help="Max steps per task")
     live_parser.add_argument("--output", type=str, help="Output directory for traces")

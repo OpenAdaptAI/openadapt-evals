@@ -10,13 +10,20 @@ Available agents:
     - SmartMockAgent: Designed to pass mock adapter tests
     - ApiAgent: Uses Claude/GPT APIs directly (for WAA)
     - PolicyAgent: Uses local trained policy model
+    - RetrievalAugmentedAgent: Automatically retrieves demos from a library
 
 Example:
     ```python
-    from openadapt_evals.agents import ApiAgent, ScriptedAgent
+    from openadapt_evals.agents import ApiAgent, ScriptedAgent, RetrievalAugmentedAgent
 
     # Use API agent with Claude
     agent = ApiAgent(provider="anthropic")
+
+    # Use retrieval-augmented agent with automatic demo selection
+    agent = RetrievalAugmentedAgent(
+        demo_library_path="/path/to/demo_library",
+        provider="anthropic",
+    )
 
     # Use scripted agent for replay
     agent = ScriptedAgent([
@@ -38,6 +45,7 @@ from openadapt_evals.agents.scripted_agent import (
     SmartMockAgent,
 )
 from openadapt_evals.agents.api_agent import ApiAgent
+from openadapt_evals.agents.retrieval_agent import RetrievalAugmentedAgent
 
 # Lazy import for PolicyAgent (requires openadapt-ml models)
 def __getattr__(name: str):
@@ -56,6 +64,7 @@ __all__ = [
     "SmartMockAgent",
     "ApiAgent",
     "PolicyAgent",
+    "RetrievalAugmentedAgent",
     # Utilities
     "action_to_string",
     "format_accessibility_tree",

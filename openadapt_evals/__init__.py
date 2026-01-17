@@ -70,6 +70,7 @@ from openadapt_evals.agents import (
     ScriptedAgent,
     SmartMockAgent,
     ApiAgent,
+    RetrievalAugmentedAgent,
     action_to_string,
     format_accessibility_tree,
     parse_action_response,
@@ -128,6 +129,7 @@ __all__ = [
     "SmartMockAgent",
     "ApiAgent",
     "PolicyAgent",
+    "RetrievalAugmentedAgent",
     # Evaluation
     "EvaluationConfig",
     "evaluate_agent_on_benchmark",

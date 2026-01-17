@@ -48,8 +48,12 @@ azure = [
     "azure-ai-ml>=1.12.0",
     "azure-identity>=1.15.0",
 ]
+retrieval = [
+    # For RetrievalAugmentedAgent with automatic demo selection
+    "openadapt-retrieval>=0.1.0",
+]
 all = [
-    "openadapt-evals[dev,waa,azure]",
+    "openadapt-evals[dev,waa,azure,retrieval]",
 ]
 
 [project.scripts]

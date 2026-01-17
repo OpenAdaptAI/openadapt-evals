@@ -24,6 +24,9 @@ uv run python -m openadapt_evals.benchmarks.cli live --agent api-openai --server
 # Include demo trajectory (P0 fix: demo persists across ALL steps)
 uv run python -m openadapt_evals.benchmarks.cli live --agent api-claude --demo demo.txt --server http://vm-ip:5000 --task-ids notepad_1
 
+# Run with automatic demo retrieval (requires openadapt-retrieval)
+uv run python -m openadapt_evals.benchmarks.cli live --agent retrieval-claude --demo-library ./demo_library --server http://vm-ip:5000 --task-ids notepad_1
+
 # Azure parallel evaluation
 uv run python -m openadapt_evals.benchmarks.cli azure --workers 10 --waa-path /path/to/WAA
 
@@ -39,7 +42,7 @@ uv run python -m openadapt_evals.benchmarks.cli view --run-name my_eval
 | Command | Description |
 |---------|-------------|
 | `mock` | Run with mock adapter (testing, no VM) |
-| `live` | Run against live WAA server (supports --agent api-claude, api-openai) |
+| `live` | Run against live WAA server (supports --agent api-claude, api-openai, retrieval-claude, retrieval-openai) |
 | `azure` | Run parallel evaluation on Azure |
 | `probe` | Check if WAA server is ready |
 | `view` | Generate HTML viewer for results |
@@ -53,6 +56,7 @@ openadapt_evals/
 │   ├── __init__.py
 │   ├── base.py               # BenchmarkAgent ABC
 │   ├── api_agent.py          # ApiAgent (Claude/GPT-5.1, P0 demo fix!)
+│   ├── retrieval_agent.py    # RetrievalAugmentedAgent (auto demo selection)
 │   ├── policy_agent.py       # PolicyAgent (wraps openadapt-ml models)
 │   └── scripted_agent.py     # ScriptedAgent, RandomAgent, SmartMockAgent
 ├── adapters/                  # Benchmark adapters
@@ -94,12 +98,57 @@ agent = ApiAgent(
 | File | Description |
 |------|-------------|
 | `agents/api_agent.py` | ApiAgent with P0 demo persistence fix |
+| `agents/retrieval_agent.py` | RetrievalAugmentedAgent with automatic demo selection |
 | `agents/base.py` | BenchmarkAgent ABC, parse_action_response() |
 | `adapters/base.py` | BenchmarkAdapter ABC, BenchmarkTask, BenchmarkAction |
 | `adapters/waa.py` | WAAAdapter (full WAA integration), WAAMockAdapter |
 | `adapters/waa_live.py` | WAALiveAdapter (HTTP to remote WAA server) |
 | `benchmarks/runner.py` | evaluate_agent_on_benchmark(), compute_metrics() |
 | `benchmarks/cli.py` | CLI entry point |
+
+## Retrieval-Augmented Agent (Automatic Demo Selection)
+
+The `RetrievalAugmentedAgent` automatically retrieves the most relevant demo from a library based on the current task and screenshot. This enables automatic demo selection without manual specification.
+
+```python
+from openadapt_evals import RetrievalAugmentedAgent
+
+# Initialize with demo library
+agent = RetrievalAugmentedAgent(
+    demo_library_path="/path/to/demo_library",
+    provider="anthropic",  # or "openai"
+    embedding_dim=512,     # embedding dimension for retrieval
+    top_k=3,               # number of demos to consider
+)
+
+# The agent automatically retrieves the best demo for each task
+action = agent.act(observation, task)
+
+# Get retrieval statistics
+stats = agent.get_retrieval_stats()
+print(f"Used demos: {stats['demos_used']}")
+```
+
+**Requirements:**
+- Install with: `uv sync --extra retrieval` (adds openadapt-retrieval dependency)
+- Demo library structure: directory with `.txt` files containing `TASK:` and `DOMAIN:` headers
+
+**CLI Usage:**
+```bash
+# With Claude
+uv run python -m openadapt_evals.benchmarks.cli live \
+    --agent retrieval-claude \
+    --demo-library ./demo_library \
+    --server http://vm:5000 \
+    --task-ids notepad_1
+
+# With GPT-5.1
+uv run python -m openadapt_evals.benchmarks.cli live \
+    --agent retrieval-openai \
+    --demo-library ./demo_library \
+    --server http://vm:5000 \
+    --task-ids notepad_1
+```
 
 ## Integration with openadapt-ml
 
