@@ -36,17 +36,18 @@ logger = logging.getLogger(__name__)
 
 # WAA domain mapping (11 domains, 154 tasks)
 WAA_DOMAINS = [
-    "browser",
-    "office",
-    "coding",
-    "media",
-    "notepad",
-    "paint",
-    "file_explorer",
+    "chrome",
     "clock",
+    "file_explorer",
+    "libreoffice_calc",
+    "libreoffice_writer",
+    "microsoft_paint",
+    "msedge",
+    "notepad",
     "settings",
-    "edge",
-    "vscode",
+    "vlc",
+    "vs_code",
+    "windows_calc",
 ]
 
 
@@ -636,15 +637,23 @@ class WAAMockAdapter(BenchmarkAdapter):
 
         This provides deterministic evaluation based on actual agent behavior,
         not random chance. The mock UI has:
-        - ID 1: OK button
-        - ID 2: Text input field
-        - ID 3: Cancel button
-        - ID 4: Submit button
+        - ID 1: OK button at (100, 100)-(200, 140)
+        - ID 2: Text input field at (100, 160)-(500, 200)
+        - ID 3: Cancel button at (220, 100)-(320, 140)
+        - ID 4: Submit button (logical, no visual but accepted at approx 400, 120)
         """
         # Check what actions were taken
         clicked_ids = set()
         typed_text = False
         called_done = False
+
+        # Button bounds for coordinate-based detection (pixel coordinates)
+        button_bounds = {
+            "1": (100, 100, 200, 140),   # OK button
+            "2": (100, 160, 500, 200),   # Text field
+            "3": (220, 100, 320, 140),   # Cancel button
+            "4": (350, 80, 450, 160),    # Submit button (logical area)
+        }
 
         for action in self._actions:
             if action.type == "click":
@@ -652,6 +661,21 @@ class WAAMockAdapter(BenchmarkAdapter):
                 target_id = getattr(action, "target_node_id", None)
                 if target_id:
                     clicked_ids.add(str(target_id))
+                # Also check coordinate-based clicks (for API agents)
+                elif action.x is not None and action.y is not None:
+                    # Convert normalized coords to pixels if needed
+                    x, y = action.x, action.y
+                    if 0 <= x <= 1 and 0 <= y <= 1:
+                        x = int(x * 1920)
+                        y = int(y * 1200)
+                    else:
+                        x, y = int(x), int(y)
+
+                    # Check which button was clicked based on coordinates
+                    for btn_id, (x1, y1, x2, y2) in button_bounds.items():
+                        if x1 <= x <= x2 and y1 <= y <= y2:
+                            clicked_ids.add(btn_id)
+                            break
             elif action.type == "type" and action.text:
                 typed_text = True
             elif action.type == "done":
@@ -732,6 +756,9 @@ class WAAMockAdapter(BenchmarkAdapter):
 
             draw.rectangle([220, 100, 320, 140], fill=(200, 200, 200))
             draw.text((240, 110), "Cancel", fill=(0, 0, 0))
+
+            draw.rectangle([350, 100, 450, 140], fill=(0, 180, 0))
+            draw.text((370, 110), "Submit", fill=(255, 255, 255))
 
             # Draw a text field
             draw.rectangle([100, 160, 500, 200], outline=(100, 100, 100))
