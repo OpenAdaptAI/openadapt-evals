@@ -19,3 +19,6 @@ demo_library/index.json
 
 # Environment files
 .env
+
+# Live benchmark state (changes during execution)
+benchmark_live.json
