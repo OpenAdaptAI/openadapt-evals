@@ -11,6 +11,7 @@ Available agents:
     - ApiAgent: Uses Claude/GPT APIs directly (for WAA)
     - PolicyAgent: Uses local trained policy model
     - RetrievalAugmentedAgent: Automatically retrieves demos from a library
+    - BaselineAgent: Unified baselines using openadapt-ml (Claude/GPT/Gemini)
 
 Example:
     ```python
@@ -30,6 +31,10 @@ Example:
         BenchmarkAction(type="click", x=0.5, y=0.5),
         BenchmarkAction(type="done"),
     ])
+
+    # Use unified baseline agent (requires openadapt-ml)
+    from openadapt_evals.agents import BaselineAgent
+    agent = BaselineAgent.from_alias("gemini-3-pro")
     ```
 """
 
@@ -47,12 +52,15 @@ from openadapt_evals.agents.scripted_agent import (
 from openadapt_evals.agents.api_agent import ApiAgent
 from openadapt_evals.agents.retrieval_agent import RetrievalAugmentedAgent
 
-# Lazy import for PolicyAgent (requires openadapt-ml models)
+# Lazy imports for agents requiring additional dependencies
 def __getattr__(name: str):
-    """Lazy import for PolicyAgent to avoid circular dependencies."""
+    """Lazy import for agents requiring additional dependencies."""
     if name == "PolicyAgent":
         from openadapt_evals.agents.policy_agent import PolicyAgent
         return PolicyAgent
+    if name == "BaselineAgent":
+        from openadapt_evals.agents.baseline_agent import BaselineAgent
+        return BaselineAgent
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
@@ -65,6 +73,7 @@ __all__ = [
     "ApiAgent",
     "PolicyAgent",
     "RetrievalAugmentedAgent",
+    "BaselineAgent",
     # Utilities
     "action_to_string",
     "format_accessibility_tree",
