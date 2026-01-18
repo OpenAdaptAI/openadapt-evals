@@ -31,8 +31,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import signal
+import subprocess
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -43,6 +46,87 @@ from openadapt_evals.agents import BenchmarkAgent
 from openadapt_evals.adapters import BenchmarkResult, BenchmarkTask
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class AzureJobLogParser:
+    """Parses Azure ML job logs to extract task progress.
+
+    Looks for patterns like:
+    - "Task 1/10: {task_id}"
+    - "Step {step_idx}: {action_type}"
+    - "Task {task_id}: SUCCESS/FAIL"
+    - Error messages
+    """
+
+    # Regex patterns for log parsing
+    TASK_START_PATTERN = re.compile(r"Task (\d+)/(\d+):\s+(\S+)")
+    STEP_PATTERN = re.compile(r"Step (\d+):\s+(\w+)")
+    TASK_RESULT_PATTERN = re.compile(r"Task (\S+):\s+(SUCCESS|FAIL)")
+    ERROR_PATTERN = re.compile(r"ERROR|Error|error|Exception|Traceback")
+
+    def __init__(self):
+        self.current_task: str | None = None
+        self.current_task_idx: int = 0
+        self.total_tasks: int = 0
+        self.current_step: int = 0
+        self.errors: list[str] = []
+
+    def parse_line(self, line: str) -> dict[str, Any] | None:
+        """Parse a log line and return extracted information.
+
+        Args:
+            line: Log line to parse.
+
+        Returns:
+            Dict with parsed data or None if no match.
+        """
+        # Check for task start
+        match = self.TASK_START_PATTERN.search(line)
+        if match:
+            self.current_task_idx = int(match.group(1))
+            self.total_tasks = int(match.group(2))
+            self.current_task = match.group(3)
+            self.current_step = 0
+            return {
+                "type": "task_start",
+                "task_idx": self.current_task_idx,
+                "total_tasks": self.total_tasks,
+                "task_id": self.current_task,
+            }
+
+        # Check for step
+        match = self.STEP_PATTERN.search(line)
+        if match:
+            self.current_step = int(match.group(1))
+            action_type = match.group(2)
+            return {
+                "type": "step",
+                "step_idx": self.current_step,
+                "action_type": action_type,
+                "task_id": self.current_task,
+            }
+
+        # Check for task result
+        match = self.TASK_RESULT_PATTERN.search(line)
+        if match:
+            task_id = match.group(1)
+            result = match.group(2)
+            return {
+                "type": "task_result",
+                "task_id": task_id,
+                "success": result == "SUCCESS",
+            }
+
+        # Check for errors
+        if self.ERROR_PATTERN.search(line):
+            self.errors.append(line)
+            return {
+                "type": "error",
+                "message": line,
+            }
+
+        return None
 
 
 @dataclass
@@ -425,6 +509,59 @@ class AzureMLClient:
             time.sleep(10)
 
         raise TimeoutError(f"Job {job_name} did not complete within {timeout_seconds}s")
+
+    def stream_job_logs(
+        self,
+        job_name: str,
+        on_log_line: Callable[[str], None] | None = None,
+    ) -> subprocess.Popen:
+        """Stream Azure ML job logs in real-time via az ml job stream.
+
+        Args:
+            job_name: Job name/ID.
+            on_log_line: Optional callback for each log line.
+
+        Returns:
+            Subprocess handle (caller should call .wait() or .terminate()).
+        """
+        cmd = [
+            "az",
+            "ml",
+            "job",
+            "stream",
+            "--name",
+            job_name,
+            "--workspace-name",
+            self.config.workspace_name,
+            "--resource-group",
+            self.config.resource_group,
+        ]
+
+        logger.info(f"Starting log stream for job: {job_name}")
+
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,  # Line buffered
+        )
+
+        # Start background thread to read logs
+        def _read_logs():
+            try:
+                for line in process.stdout:
+                    line = line.rstrip()
+                    if on_log_line:
+                        on_log_line(line)
+                    logger.debug(f"[Azure ML] {line}")
+            except Exception as e:
+                logger.error(f"Error reading job logs: {e}")
+
+        thread = threading.Thread(target=_read_logs, daemon=True)
+        thread.start()
+
+        return process
 
 
 class AzureWAAOrchestrator:
@@ -837,6 +974,119 @@ class AzureWAAOrchestrator:
         self._cleanup_workers(self._current_run.workers)
         self._current_run.status = "canceled"
         self._current_run.end_time = time.time()
+
+    def monitor_job(
+        self,
+        job_name: str,
+        live_tracking_file: str = "benchmark_live.json",
+    ) -> None:
+        """Monitor an existing Azure ML job with live tracking.
+
+        This connects to a running job and streams its logs, updating
+        the live tracking file in real-time for viewer integration.
+
+        Args:
+            job_name: Azure ML job name to monitor.
+            live_tracking_file: Path to write live tracking data.
+        """
+        from openadapt_evals.benchmarks.live_tracker import LiveEvaluationTracker
+
+        # Initialize live tracker
+        tracker = LiveEvaluationTracker(
+            output_file=live_tracking_file,
+            total_tasks=0,  # Will be updated from logs
+        )
+
+        # Initialize log parser
+        parser = AzureJobLogParser()
+
+        # Create a mock task for current progress
+        current_task = None
+
+        def on_log_line(line: str):
+            nonlocal current_task
+
+            # Parse the log line
+            parsed = parser.parse_line(line)
+
+            if parsed is None:
+                return
+
+            # Handle different event types
+            if parsed["type"] == "task_start":
+                # Update total tasks if we learned it
+                if parsed["total_tasks"] > tracker.total_tasks:
+                    tracker.total_tasks = parsed["total_tasks"]
+
+                # Start tracking this task
+                from openadapt_evals.adapters import BenchmarkTask
+
+                current_task = BenchmarkTask(
+                    task_id=parsed["task_id"],
+                    instruction=f"Azure ML Task {parsed['task_id']}",
+                    domain="azure",
+                )
+                tracker.start_task(current_task)
+                logger.info(
+                    f"Task {parsed['task_idx']}/{parsed['total_tasks']}: {parsed['task_id']}"
+                )
+
+            elif parsed["type"] == "step" and current_task:
+                # Record step
+                from openadapt_evals.adapters import BenchmarkObservation, BenchmarkAction
+
+                obs = BenchmarkObservation(screenshot=None)
+                action = BenchmarkAction(type=parsed["action_type"].lower())
+
+                tracker.record_step(
+                    step_idx=parsed["step_idx"],
+                    observation=obs,
+                    action=action,
+                    reasoning=None,
+                )
+                logger.info(f"  Step {parsed['step_idx']}: {parsed['action_type']}")
+
+            elif parsed["type"] == "task_result" and current_task:
+                # Finish tracking this task
+                from openadapt_evals.adapters import BenchmarkResult
+
+                result = BenchmarkResult(
+                    task_id=parsed["task_id"],
+                    success=parsed["success"],
+                    score=1.0 if parsed["success"] else 0.0,
+                    num_steps=parser.current_step,
+                )
+                tracker.finish_task(result)
+                status = "SUCCESS" if parsed["success"] else "FAIL"
+                logger.info(f"Task {parsed['task_id']}: {status}")
+                current_task = None
+
+            elif parsed["type"] == "error":
+                logger.warning(f"Error in job: {parsed['message']}")
+
+        # Start streaming logs
+        logger.info(f"Monitoring Azure ML job: {job_name}")
+        logger.info(f"Live tracking file: {live_tracking_file}")
+
+        stream_process = self.ml_client.stream_job_logs(
+            job_name=job_name,
+            on_log_line=on_log_line,
+        )
+
+        try:
+            # Wait for job to complete or user interrupt
+            stream_process.wait()
+            logger.info("Job monitoring complete")
+            tracker.finish()
+        except KeyboardInterrupt:
+            logger.info("Monitoring interrupted by user")
+            stream_process.terminate()
+            tracker.finish()
+        except Exception as e:
+            logger.error(f"Error monitoring job: {e}")
+            stream_process.terminate()
+            tracker.finish()
+            raise
 
 
 def estimate_cost(

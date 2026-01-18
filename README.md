@@ -101,6 +101,65 @@ The viewer provides:
 - Step-by-step replay with screenshots
 - Action and reasoning display
 - Playback controls (play/pause, speed, seek)
+- Execution logs with filtering and search
+
+### Viewer Screenshots
+
+**Overview Panel**
+
+Desktop view showing summary statistics and domain breakdown:
+
+![Benchmark Viewer Overview](./screenshots/desktop_overview.png)
+
+**Task Detail View**
+
+Step-by-step task execution with screenshot replay:
+
+![Task Detail View](./screenshots/desktop_task_detail.png)
+
+**Execution Logs**
+
+Detailed execution logs with filtering and search capabilities:
+
+![Execution Logs](./screenshots/desktop_log_expanded.png)
+
+**Responsive Design**
+
+The viewer works on all devices:
+
+| Desktop (1920x1080) | Tablet (768x1024) | Mobile (375x667) |
+|---------------------|-------------------|------------------|
+| ![Desktop](./screenshots/desktop_overview.png) | ![Tablet](./screenshots/tablet_overview.png) | ![Mobile](./screenshots/mobile_overview.png) |
+
+### Generating Viewer Screenshots
+
+Automatically capture screenshots of the viewer in multiple viewports:
+
+```bash
+# Install Playwright (required for screenshots)
+pip install playwright
+playwright install chromium
+
+# Generate screenshots
+python -m openadapt_evals.benchmarks.auto_screenshot \
+    --html-path benchmark_results/my_eval_run/viewer.html \
+    --output-dir screenshots \
+    --viewports desktop tablet mobile \
+    --states overview task_detail log_expanded log_collapsed
+```
+
+Or programmatically:
+
+```python
+from openadapt_evals.benchmarks.auto_screenshot import generate_screenshots
+
+screenshots = generate_screenshots(
+    html_path="benchmark_results/my_eval_run/viewer.html",
+    output_dir="screenshots",
+    viewports=["desktop", "tablet", "mobile"],
+    states=["overview", "task_detail", "log_expanded", "log_collapsed"],
+)
+```
 
 ## Custom Agents
 
@@ -222,6 +281,41 @@ results = orchestrator.run_evaluation(
     cleanup_on_complete=True,
 )
 ```
+
+### Live Monitoring
+
+Monitor Azure ML jobs in real-time with auto-refreshing viewer:
+
+```bash
+# Install viewer dependencies
+pip install openadapt-evals[viewer]
+
+# Start an Azure evaluation (in terminal 1)
+python -m openadapt_evals.benchmarks.cli azure \
+    --workers 1 \
+    --task-ids notepad_1,browser_1 \
+    --waa-path /path/to/WAA
+
+# Monitor job logs in real-time (in terminal 2)
+python -m openadapt_evals.benchmarks.cli azure-monitor \
+    --job-name waa-waa3718w0-1768743963-20a88242 \
+    --output benchmark_live.json
+
+# Start live viewer API (in terminal 3)
+python -m openadapt_evals.benchmarks.live_api \
+    --live-file benchmark_live.json \
+    --port 5001
+
+# Open http://localhost:5001 in browser to see live progress!
+```
+
+Features:
+- Real-time log streaming from Azure ML jobs
+- Auto-refreshing viewer with "LIVE" indicator
+- Task/step progress tracking
+- No need to wait for job completion
+
+See [LIVE_MONITORING.md](./LIVE_MONITORING.md) for full documentation.
 
 ## API Reference
 

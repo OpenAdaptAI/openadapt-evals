@@ -37,6 +37,11 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from openadapt_evals.shared_ui import (
+    get_keyboard_shortcuts_css,
+    get_keyboard_shortcuts_js,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -325,6 +330,10 @@ def _generate_benchmark_viewer_html(
     shared_header_css = _get_shared_header_css()
     shared_header_html = _generate_shared_header_html("benchmarks")
 
+    # Get keyboard shortcuts components
+    keyboard_shortcuts_css = get_keyboard_shortcuts_css()
+    keyboard_shortcuts_js = get_keyboard_shortcuts_js()
+
     # Serialize data for JavaScript
     metadata_json = json.dumps(metadata)
     summary_json = json.dumps(summary)
@@ -508,6 +517,45 @@ def _generate_benchmark_viewer_html(
             font-size: 0.8rem;
             color: var(--text-secondary);
             margin-left: auto;
+        }}
+        .search-container {{
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex: 1;
+            max-width: 400px;
+        }}
+        .search-input {{
+            flex: 1;
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            transition: all 0.2s;
+        }}
+        .search-input:focus {{
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 2px rgba(0, 212, 170, 0.15);
+        }}
+        .search-input::placeholder {{
+            color: var(--text-muted);
+        }}
+        .search-clear-btn {{
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            background: var(--bg-tertiary);
+            color: var(--text-secondary);
+            border: 1px solid var(--border-color);
+            cursor: pointer;
+            transition: all 0.2s;
+        }}
+        .search-clear-btn:hover {{
+            border-color: var(--accent);
+            color: var(--text-primary);
         }}
 
         /* Main Content Layout */
@@ -819,6 +867,134 @@ def _generate_benchmark_viewer_html(
         .no-task-selected p {{
             font-size: 0.9rem;
         }}
+
+        /* Log Panel */
+        .log-panel {{
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            margin-top: 16px;
+            overflow: hidden;
+        }}
+        .log-panel-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 16px;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            cursor: pointer;
+            user-select: none;
+        }}
+        .log-panel-header:hover {{
+            background: var(--bg-tertiary);
+        }}
+        .log-panel-header h4 {{
+            font-size: 0.85rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }}
+        .log-panel-header .expand-icon {{
+            transition: transform 0.2s;
+        }}
+        .log-panel-header .expand-icon.collapsed {{
+            transform: rotate(-90deg);
+        }}
+        .log-controls {{
+            display: flex;
+            gap: 8px;
+            padding: 8px 16px;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+        }}
+        .log-controls.collapsed {{
+            display: none;
+        }}
+        .log-search {{
+            flex: 1;
+            padding: 6px 10px;
+            border-radius: 6px;
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            font-size: 0.8rem;
+            font-family: "SF Mono", Monaco, monospace;
+        }}
+        .log-filter-btn {{
+            padding: 6px 12px;
+            border-radius: 6px;
+            background: var(--bg-tertiary);
+            color: var(--text-secondary);
+            border: 1px solid var(--border-color);
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }}
+        .log-filter-btn:hover {{
+            border-color: var(--accent);
+        }}
+        .log-filter-btn.active {{
+            background: var(--accent-dim);
+            border-color: var(--accent);
+            color: var(--accent);
+        }}
+        .log-container {{
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: "SF Mono", Monaco, monospace;
+            font-size: 0.75rem;
+        }}
+        .log-container.collapsed {{
+            display: none;
+        }}
+        .log-entry {{
+            padding: 6px 16px;
+            border-bottom: 1px solid var(--border-color);
+            display: grid;
+            grid-template-columns: 60px 70px 1fr;
+            gap: 12px;
+            align-items: start;
+        }}
+        .log-entry.hidden {{
+            display: none;
+        }}
+        .log-entry:hover {{
+            background: var(--bg-secondary);
+        }}
+        .log-timestamp {{
+            color: var(--text-muted);
+            white-space: nowrap;
+        }}
+        .log-level {{
+            font-weight: 600;
+            white-space: nowrap;
+        }}
+        .log-level.INFO {{
+            color: var(--text-primary);
+        }}
+        .log-level.WARNING {{
+            color: var(--warning);
+        }}
+        .log-level.ERROR {{
+            color: var(--error);
+        }}
+        .log-level.SUCCESS {{
+            color: var(--success);
+        }}
+        .log-message {{
+            color: var(--text-primary);
+            word-break: break-word;
+        }}
+        .log-empty {{
+            padding: 24px;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.8rem;
+        }}
+
+        /* Keyboard Shortcuts */
+        {keyboard_shortcuts_css}
     </style>
 </head>
 <body>
@@ -858,6 +1034,16 @@ def _generate_benchmark_viewer_html(
 
         <!-- Filters -->
         <div class="filter-bar">
+            <div class="search-container">
+                <input
+                    type="text"
+                    id="search-input"
+                    class="search-input"
+                    placeholder="Search tasks... (Ctrl+F / Cmd+F)"
+                    title="Search by task ID, instruction, or action type"
+                />
+                <button class="search-clear-btn" id="search-clear-btn" title="Clear search">Clear</button>
+            </div>
             <div class="filter-group">
                 <span class="filter-label">Domain:</span>
                 <select class="filter-select" id="domain-filter">
@@ -893,6 +1079,10 @@ def _generate_benchmark_viewer_html(
                 </div>
                 <div id="task-detail-content" style="display:none;"></div>
             </div>
+        </div>
+
+        <div class="keyboard-hint">
+            Keyboard: Space (play/pause) | ← → (prev/next) | Home/End (first/last) | 1-5 (speed) | <a onclick="KeyboardShortcuts.showShortcutsOverlay()">? (show all shortcuts)</a>
         </div>
     </div>
 
@@ -1070,9 +1260,28 @@ def _generate_benchmark_viewer_html(
                     </div>
                 </div>
             </div>
+            <div class="log-panel">
+                <div class="log-panel-header" onclick="toggleLogPanel()">
+                    <h4>
+                        <span class="expand-icon" id="log-expand-icon">▼</span>
+                        Execution Logs
+                        <span id="log-count" style="color: var(--text-muted); font-weight: normal;">(${{(exec.logs || []).length}} entries)</span>
+                    </h4>
+                </div>
+                <div class="log-controls" id="log-controls">
+                    <input type="text" class="log-search" id="log-search" placeholder="Search logs..." oninput="filterLogs()">
+                    <button class="log-filter-btn active" data-level="all" onclick="setLogLevel('all')">All</button>
+                    <button class="log-filter-btn" data-level="INFO" onclick="setLogLevel('INFO')">Info</button>
+                    <button class="log-filter-btn" data-level="WARNING" onclick="setLogLevel('WARNING')">Warning</button>
+                    <button class="log-filter-btn" data-level="ERROR" onclick="setLogLevel('ERROR')">Error</button>
+                    <button class="log-filter-btn" data-level="SUCCESS" onclick="setLogLevel('SUCCESS')">Success</button>
+                </div>
+                <div class="log-container" id="log-container"></div>
+            </div>
         `;
 
         renderStepList();
+        renderLogs();
         if (steps.length > 0) {{
             updateStep();
         }}
@@ -1243,33 +1452,235 @@ def _generate_benchmark_viewer_html(
         }}
     }}
 
-    // Keyboard shortcuts
-    document.addEventListener('keydown', (e) => {{
-        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    // Unified keyboard shortcuts
+    {keyboard_shortcuts_js}
 
-        switch (e.key) {{
-            case ' ':
-                e.preventDefault();
-                togglePlay();
-                break;
-            case 'ArrowLeft':
-                e.preventDefault();
-                prevStep();
-                break;
-            case 'ArrowRight':
-                e.preventDefault();
-                nextStep();
-                break;
-            case 'Home':
-                e.preventDefault();
-                goToStep(0);
-                break;
-            case 'End':
-                e.preventDefault();
-                const task = tasks[currentTaskIndex];
-                const steps = task?.execution?.steps || [];
-                goToStep(steps.length - 1);
-                break;
+    // Initialize keyboard shortcuts with viewer-specific actions
+    KeyboardShortcuts.init({{
+        togglePlay: togglePlay,
+        prevStep: prevStep,
+        nextStep: nextStep,
+        firstStep: () => goToStep(0),
+        lastStep: () => {{
+            const task = tasks[currentTaskIndex];
+            const steps = task?.execution?.steps || [];
+            goToStep(steps.length - 1);
+        }},
+        setSpeed: (speed) => changeSpeed(speed),
+        closeModals: () => {{
+            // Close any open modals (log panel, search, etc.)
+            const logPanel = document.getElementById('log-container');
+            const logControls = document.getElementById('log-controls');
+            const logExpandIcon = document.getElementById('log-expand-icon');
+            if (logPanel && !logPanel.classList.contains('collapsed')) {{
+                toggleLogPanel();
+            }}
+        }},
+        showShortcutsOverlay: () => KeyboardShortcuts.showShortcutsOverlay(),
+        focusSearch: () => {{
+            const searchInput = document.getElementById('log-search');
+            if (searchInput) {{
+                searchInput.focus();
+            }}
+        }}
+    }});
+
+    // Log panel state
+    let currentLogLevel = 'all';
+    let logPanelCollapsed = false;
+
+    function renderLogs() {{
+        if (currentTaskIndex < 0) return;
+
+        const task = tasks[currentTaskIndex];
+        const logs = task.execution?.logs || [];
+        const container = document.getElementById('log-container');
+
+        if (logs.length === 0) {{
+            container.innerHTML = '<div class="log-empty">No logs available for this task</div>';
+            return;
+        }}
+
+        let html = '';
+        logs.forEach((log, idx) => {{
+            const timestamp = log.timestamp.toFixed(2);
+            html += `
+                <div class="log-entry" data-level="${{log.level}}" data-message="${{log.message.toLowerCase()}}">
+                    <div class="log-timestamp">${{timestamp}}s</div>
+                    <div class="log-level ${{log.level}}">${{log.level}}</div>
+                    <div class="log-message">${{escapeHtml(log.message)}}</div>
+                </div>
+            `;
+        }});
+        container.innerHTML = html;
+
+        // Auto-scroll to bottom
+        container.scrollTop = container.scrollHeight;
+    }}
+
+    function toggleLogPanel() {{
+        logPanelCollapsed = !logPanelCollapsed;
+        const container = document.getElementById('log-container');
+        const controls = document.getElementById('log-controls');
+        const icon = document.getElementById('log-expand-icon');
+
+        if (logPanelCollapsed) {{
+            container.classList.add('collapsed');
+            controls.classList.add('collapsed');
+            icon.classList.add('collapsed');
+        }} else {{
+            container.classList.remove('collapsed');
+            controls.classList.remove('collapsed');
+            icon.classList.remove('collapsed');
+        }}
+    }}
+
+    function setLogLevel(level) {{
+        currentLogLevel = level;
+
+        // Update button states
+        document.querySelectorAll('.log-filter-btn').forEach(btn => {{
+            if (btn.dataset.level === level) {{
+                btn.classList.add('active');
+            }} else {{
+                btn.classList.remove('active');
+            }}
+        }});
+
+        filterLogs();
+    }}
+
+    function filterLogs() {{
+        const searchTerm = document.getElementById('log-search').value.toLowerCase();
+        const entries = document.querySelectorAll('.log-entry');
+
+        entries.forEach(entry => {{
+            const level = entry.dataset.level;
+            const message = entry.dataset.message;
+
+            const levelMatch = currentLogLevel === 'all' || level === currentLogLevel;
+            const searchMatch = !searchTerm || message.includes(searchTerm);
+
+            if (levelMatch && searchMatch) {{
+                entry.classList.remove('hidden');
+            }} else {{
+                entry.classList.add('hidden');
+            }}
+        }});
+    }}
+
+    function escapeHtml(text) {{
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }}
+
+    // Live monitoring support
+    let liveMonitoringEnabled = false;
+    let liveMonitoringInterval = null;
+
+    function enableLiveMonitoring() {{
+        liveMonitoringEnabled = true;
+        startLivePolling();
+    }}
+
+    function startLivePolling() {{
+        if (!liveMonitoringEnabled) return;
+
+        // Poll /api/benchmark-live every 2 seconds
+        liveMonitoringInterval = setInterval(async () => {{
+            try {{
+                const response = await fetch('/api/benchmark-live');
+                if (response.ok) {{
+                    const liveData = await response.json();
+                    updateLiveData(liveData);
+                }}
+            }} catch (error) {{
+                console.error('Error fetching live data:', error);
+                // Don't stop polling on error - server might be starting
+            }}
+        }}, 2000);
+    }}
+
+    function stopLivePolling() {{
+        liveMonitoringEnabled = false;
+        if (liveMonitoringInterval) {{
+            clearInterval(liveMonitoringInterval);
+            liveMonitoringInterval = null;
+        }}
+    }}
+
+    function updateLiveData(liveData) {{
+        if (!liveData || liveData.status === 'no_data') return;
+
+        if (liveData.status === 'complete') {{
+            stopLivePolling();
+            console.log('Live monitoring complete');
+            return;
+        }}
+
+        if (liveData.status === 'running' && liveData.current_task) {{
+            // Show live progress in UI
+            const currentTask = liveData.current_task;
+
+            // Update summary stats
+            if (liveData.total_tasks) {{
+                document.querySelector('.stat-card:nth-child(1) .stat-value').textContent = liveData.total_tasks;
+            }}
+            if (liveData.tasks_completed !== undefined) {{
+                document.querySelector('.stat-card:nth-child(2) .stat-value').textContent = liveData.tasks_completed;
+                const failed = liveData.total_tasks - liveData.tasks_completed;
+                document.querySelector('.stat-card:nth-child(3) .stat-value').textContent = failed;
+            }}
+
+            // Show live indicator
+            let liveIndicator = document.getElementById('live-indicator');
+            if (!liveIndicator) {{
+                liveIndicator = document.createElement('div');
+                liveIndicator.id = 'live-indicator';
+                liveIndicator.style.cssText = `
+                    position: fixed;
+                    top: 20px;
+                    right: 20px;
+                    padding: 8px 16px;
+                    background: var(--accent);
+                    color: var(--bg-primary);
+                    border-radius: 20px;
+                    font-size: 0.8rem;
+                    font-weight: 600;
+                    z-index: 1000;
+                    animation: pulse 2s infinite;
+                `;
+                liveIndicator.innerHTML = `
+                    <style>
+                    @keyframes pulse {{
+                        0%, 100% {{ opacity: 1; }}
+                        50% {{ opacity: 0.7; }}
+                    }}
+                    </style>
+                    LIVE
+                `;
+                document.body.appendChild(liveIndicator);
+            }}
+
+            console.log('Live update:', currentTask.task_id, 'steps:', currentTask.steps.length);
+        }}
+    }}
+
+    // Try to enable live monitoring if /api/benchmark-live is available
+    window.addEventListener('load', async () => {{
+        try {{
+            const response = await fetch('/api/benchmark-live');
+            if (response.ok) {{
+                const data = await response.json();
+                if (data.status === 'running' || data.status === 'idle') {{
+                    console.log('Live monitoring available - enabling auto-refresh');
+                    enableLiveMonitoring();
+                }}
+            }}
+        }} catch (error) {{
+            // API not available - viewer is in static mode
+            console.log('Live monitoring not available (static viewer mode)');
         }}
     }});
 
