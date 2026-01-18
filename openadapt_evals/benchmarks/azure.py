@@ -31,6 +31,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import signal
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -317,20 +319,26 @@ class AzureMLClient:
         except Exception as e:
             logger.warning(f"Failed to delete compute instance {name}: {e}")
 
-    def list_compute_instances(self, prefix: str | None = None) -> list[str]:
+    def list_compute_instances(self, prefix: str | None = None) -> list[dict]:
         """List compute instances.
 
         Args:
             prefix: Optional name prefix filter.
 
         Returns:
-            List of compute instance names.
+            List of dicts with compute instance info (name, state, created_on).
         """
         computes = self.client.compute.list()
-        names = [c.name for c in computes if c.type == "ComputeInstance"]
-        if prefix:
-            names = [n for n in names if n.startswith(prefix)]
-        return names
+        instances = []
+        for c in computes:
+            if c.type == "ComputeInstance":
+                if prefix is None or c.name.startswith(prefix):
+                    instances.append({
+                        "name": c.name,
+                        "state": c.state,
+                        "created_on": c.created_on if hasattr(c, "created_on") else None,
+                    })
+        return instances
 
     def get_compute_status(self, name: str) -> str:
         """Get compute instance status.
@@ -457,6 +465,71 @@ class AzureWAAOrchestrator:
         self.experiment_name = experiment_name
         self.ml_client = AzureMLClient(config)
         self._current_run: EvaluationRun | None = None
+        self._cleanup_registered = False
+        self._interrupted = False
+
+    def _setup_signal_handlers(self) -> None:
+        """Setup signal handlers for graceful cleanup on interruption."""
+        if self._cleanup_registered:
+            return
+
+        def signal_handler(sig, frame):
+            logger.warning("\n⚠️  Interrupted! Cleaning up compute instances...")
+            self._interrupted = True
+            if self._current_run and self._current_run.workers:
+                self._cleanup_workers(self._current_run.workers)
+            sys.exit(1)
+
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+        self._cleanup_registered = True
+        logger.info("Signal handlers registered for graceful cleanup")
+
+    def cleanup_stale_instances(self, prefix: str = "waa", dry_run: bool = False) -> int:
+        """Delete compute instances from previous runs.
+
+        This prevents quota exhaustion from stale instances that weren't
+        properly cleaned up after failures or interruptions.
+
+        Args:
+            prefix: Name prefix filter (default: "waa").
+            dry_run: If True, only list instances without deleting.
+
+        Returns:
+            Number of instances cleaned up (or found if dry_run=True).
+        """
+        logger.info(f"Scanning for stale compute instances with prefix '{prefix}'...")
+        instances = self.ml_client.list_compute_instances(prefix=prefix)
+
+        if not instances:
+            logger.info("No stale instances found.")
+            return 0
+
+        logger.info(f"Found {len(instances)} stale instance(s):")
+        for inst in instances:
+            state = inst.get("state", "unknown")
+            created = inst.get("created_on", "unknown")
+            logger.info(f"  - {inst['name']}: {state} (created: {created})")
+
+        if dry_run:
+            logger.info("Dry-run mode: no instances deleted.")
+            return len(instances)
+
+        # Delete all stale instances in parallel
+        logger.info(f"Deleting {len(instances)} stale instance(s)...")
+        with ThreadPoolExecutor(max_workers=min(len(instances), 10)) as executor:
+            futures = [
+                executor.submit(self.ml_client.delete_compute_instance, inst["name"])
+                for inst in instances
+            ]
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception as e:
+                    logger.warning(f"Cleanup error: {e}")
+
+        logger.info(f"Cleanup complete: {len(instances)} instance(s) deleted.")
+        return len(instances)
 
     def run_evaluation(
         self,
@@ -466,6 +539,7 @@ class AzureWAAOrchestrator:
         max_steps_per_task: int = 15,
         on_worker_complete: Callable[[WorkerState], None] | None = None,
         cleanup_on_complete: bool = True,
+        cleanup_stale_on_start: bool = True,
         timeout_hours: float = 4.0,
     ) -> list[BenchmarkResult]:
         """Run evaluation across multiple Azure VMs.
@@ -477,12 +551,25 @@ class AzureWAAOrchestrator:
             max_steps_per_task: Maximum steps per task.
             on_worker_complete: Callback when a worker finishes.
             cleanup_on_complete: Whether to delete VMs after completion.
+            cleanup_stale_on_start: Whether to cleanup stale instances before starting.
             timeout_hours: Maximum job duration in hours (default: 4). Jobs are
                 auto-canceled after this duration to prevent runaway costs.
 
         Returns:
             List of BenchmarkResult for all tasks.
         """
+        # Setup signal handlers for graceful cleanup on Ctrl+C
+        self._setup_signal_handlers()
+
+        # Cleanup stale instances from previous runs to prevent quota exhaustion
+        if cleanup_stale_on_start:
+            print("[0/5] Cleaning up stale compute instances from previous runs...")
+            stale_count = self.cleanup_stale_instances(prefix="waa")
+            if stale_count > 0:
+                print(f"      Cleaned up {stale_count} stale instance(s).")
+            else:
+                print("      No stale instances found.")
+
         # Load tasks
         from openadapt_evals.benchmarks.waa import WAAAdapter
 
@@ -492,7 +579,7 @@ class AzureWAAOrchestrator:
         else:
             tasks = adapter.list_tasks()
 
-        print(f"[1/4] Loaded {len(tasks)} tasks for {num_workers} worker(s)")
+        print(f"[1/5] Loaded {len(tasks)} tasks for {num_workers} worker(s)")
 
         # Create evaluation run
         run_id = f"{self.experiment_name}-{int(time.time())}"
@@ -522,17 +609,17 @@ class AzureWAAOrchestrator:
 
         try:
             # Provision VMs in parallel
-            print(f"[2/4] Provisioning {num_workers} Azure VM(s)... (this takes 3-5 minutes)")
+            print(f"[2/5] Provisioning {num_workers} Azure VM(s)... (this takes 3-5 minutes)")
             self._provision_workers(workers)
             print(f"      VM(s) ready")
 
             # Submit jobs to workers
-            print(f"[3/4] Submitting evaluation jobs...")
+            print(f"[3/5] Submitting evaluation jobs...")
             self._submit_worker_jobs(workers, task_batches, agent, max_steps_per_task, timeout_hours)
             print(f"      Jobs submitted")
 
             # Wait for completion and collect results
-            print(f"[4/4] Waiting for workers to complete...")
+            print(f"[4/5] Waiting for workers to complete...")
             results = self._wait_and_collect_results(workers, on_worker_complete)
 
             self._current_run.status = "completed"
@@ -540,14 +627,22 @@ class AzureWAAOrchestrator:
 
             return results
 
+        except KeyboardInterrupt:
+            logger.warning("Evaluation interrupted by user")
+            self._current_run.status = "interrupted"
+            raise
+
         except Exception as e:
             logger.error(f"Evaluation failed: {e}")
             self._current_run.status = "failed"
             raise
 
         finally:
+            # ALWAYS cleanup, even on error or interruption
             if cleanup_on_complete:
+                print(f"[5/5] Cleaning up compute instances...")
                 self._cleanup_workers(workers)
+                print(f"      Cleanup complete.")
 
     def _distribute_tasks(
         self, tasks: list[BenchmarkTask], num_workers: int
