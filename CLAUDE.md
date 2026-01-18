@@ -38,8 +38,11 @@ uv run python -m openadapt_evals.benchmarks.cli live --agent api-claude --demo d
 # Run with automatic demo retrieval (requires openadapt-retrieval)
 uv run python -m openadapt_evals.benchmarks.cli live --agent retrieval-claude --demo-library ./demo_library --server http://vm-ip:5000 --task-ids notepad_1
 
-# Azure parallel evaluation
+# Azure parallel evaluation (auto-cleanup enabled)
 uv run python -m openadapt_evals.benchmarks.cli azure --workers 10 --waa-path /path/to/WAA
+
+# Cleanup stale Azure ML compute instances (prevents quota exhaustion)
+uv run python -m openadapt_evals.benchmarks.cli azure --cleanup-only
 
 # Check server status
 uv run python -m openadapt_evals.benchmarks.cli probe --server http://vm-ip:5000
@@ -425,6 +428,83 @@ uv run python -m openadapt_evals.benchmarks.cli vm-stop
 **Prerequisites:**
 - Azure CLI installed and logged in (`az login`)
 - VM with WAA installed at `/home/azureuser/WindowsAgentArena/`
+
+## Azure Quota Management and Cleanup
+
+**CRITICAL**: Azure ML compute instances consume vCPU quota even when stopped/deallocated. Stale instances from failed or interrupted evaluations can exhaust your quota and prevent new evaluations from starting.
+
+### Automatic Cleanup (Recommended)
+
+By default, the Azure orchestrator now automatically:
+
+1. **Cleans up stale instances before starting** - Deletes any compute instances from previous runs (prefix: "waa")
+2. **Cleans up on completion** - Always deletes instances after evaluation, even on error
+3. **Handles interruption gracefully** - Ctrl+C triggers cleanup before exit
+
+### Manual Cleanup Commands
+
+**List stale instances (dry-run):**
+```bash
+uv run python -m openadapt_evals.benchmarks.cli azure --cleanup-only --dry-run
+```
+
+**Delete all stale instances:**
+```bash
+uv run python -m openadapt_evals.benchmarks.cli azure --cleanup-only
+```
+
+**Delete instances with custom prefix:**
+```bash
+uv run python -m openadapt_evals.benchmarks.cli azure --cleanup-only --cleanup-prefix myprefix
+```
+
+### Quota Monitoring
+
+**Check quota usage via Azure CLI:**
+```bash
+# List all compute instances
+az ml compute list --workspace-name openadapt-ml --resource-group openadapt-agents
+
+# Check vCPU quota
+az vm list-usage --location eastus --query "[?name.value=='standardDv3Family']" -o table
+```
+
+### Troubleshooting Quota Exhaustion
+
+**Problem**: "Quota exceeded" error when starting evaluation
+
+**Solution**:
+```bash
+# 1. List stale instances
+uv run python -m openadapt_evals.benchmarks.cli azure --cleanup-only --dry-run
+
+# 2. Delete them
+uv run python -m openadapt_evals.benchmarks.cli azure --cleanup-only
+
+# 3. Verify cleanup
+az ml compute list --workspace-name openadapt-ml --resource-group openadapt-agents
+```
+
+### Cost Management Tips
+
+1. **Always use cleanup** - Never use `--no-cleanup` in production
+2. **Monitor quota** - Run `--dry-run` periodically to check for leaks
+3. **Use timeouts** - Default 4-hour timeout prevents runaway jobs
+4. **Deallocate VMs** - Azure ML auto-deallocates after idle timeout (default: 60 min)
+
+### Disabling Auto-Cleanup (Debugging Only)
+
+If you need to inspect compute instances after evaluation:
+
+```bash
+# Skip cleanup after completion (instances remain)
+uv run python -m openadapt_evals.benchmarks.cli azure --no-cleanup --waa-path /path/to/WAA
+
+# Skip cleanup of stale instances (not recommended - quota risk!)
+uv run python -m openadapt_evals.benchmarks.cli azure --skip-cleanup-stale --waa-path /path/to/WAA
+```
+
+**Warning**: Only use these flags for debugging. Always cleanup manually afterward.
 
 ## Azure ML Docker Image Configuration
 
