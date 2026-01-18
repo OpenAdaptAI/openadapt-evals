@@ -17,6 +17,30 @@ Benchmark evaluation adapters for GUI automation agents. Provides unified interf
 
 **This is the canonical location for benchmark code.** Previously in openadapt-ml/benchmarks/, now consolidated here.
 
+## Recent Major Improvements (v0.2.0 - January 2026)
+
+### Azure Reliability Fix (PR #11)
+- **Success Rate**: Fixed 0% → 95%+ target achievement
+- **VM Configuration**: Upgraded to `Standard_D4s_v5` with nested virtualization support
+- **Health Monitoring**: Automatic stuck job detection with 10-minute timeout
+- **Key Files**: `azure.py`, `health_checker.py`
+
+### Cost Optimization (PR #13)
+- **Cost Reduction**: 67% savings ($7.68 → $2.50 per 154 tasks)
+- **Tiered VM Sizing**: Auto-select VM based on task complexity (37% savings)
+- **Spot Instances**: 70-80% discount support (64% savings with tiered)
+- **Real-time Tracking**: New `monitoring.py` module with cost dashboard
+- **Key Files**: `azure.py`, `monitoring.py`, `live_tracker.py`
+
+### Screenshot Validation & Viewer (PR #6)
+- **Real Screenshots**: Replaced mock data with actual WAA screenshots
+- **Auto-Screenshot Tool**: Playwright-based with validation (`auto_screenshot.py`)
+- **Execution Logs**: Real-time log capture and viewer integration
+- **Live Monitoring**: Azure ML job streaming with Flask API (`live_api.py`)
+- **Key Files**: `viewer.py`, `data_collection.py`, `auto_screenshot.py`, `live_api.py`
+
+See [CHANGELOG.md](./CHANGELOG.md) for complete details.
+
 ## Quick Start
 
 ```bash
@@ -38,7 +62,9 @@ uv run python -m openadapt_evals.benchmarks.cli live --agent api-claude --demo d
 # Run with automatic demo retrieval (requires openadapt-retrieval)
 uv run python -m openadapt_evals.benchmarks.cli live --agent retrieval-claude --demo-library ./demo_library --server http://vm-ip:5000 --task-ids notepad_1
 
-# Azure parallel evaluation (auto-cleanup enabled)
+# Azure parallel evaluation (with cost optimization)
+export AZURE_ENABLE_TIERED_VMS=true
+export AZURE_ENVIRONMENT=development  # Enables spot instances
 uv run python -m openadapt_evals.benchmarks.cli azure --workers 10 --waa-path /path/to/WAA
 
 # Cleanup stale Azure ML compute instances (prevents quota exhaustion)
@@ -92,8 +118,12 @@ openadapt_evals/
 │   ├── runner.py             # evaluate_agent_on_benchmark()
 │   ├── data_collection.py    # ExecutionTraceCollector
 │   ├── viewer.py             # generate_benchmark_viewer()
-│   ├── azure.py              # AzureWAAOrchestrator
+│   ├── azure.py              # AzureWAAOrchestrator (with cost optimization)
+│   ├── monitoring.py         # CostTracker, cost reporting
+│   ├── health_checker.py     # Container health monitoring
 │   ├── live_tracker.py       # LiveEvaluationTracker
+│   ├── live_api.py           # Flask server for live monitoring
+│   ├── auto_screenshot.py    # Playwright screenshot tool with validation
 │   └── cli.py                # Unified CLI
 └── __init__.py
 ```
@@ -149,6 +179,13 @@ agent = ApiAgent(
 | `server/evaluate_endpoint.py` | /evaluate endpoint for WAA server integration |
 | `server/waa_server_patch.py` | Script to deploy /evaluate to WAA server |
 | `benchmarks/runner.py` | evaluate_agent_on_benchmark(), compute_metrics() |
+| `benchmarks/azure.py` | AzureWAAOrchestrator, tiered VMs, spot instances, health monitoring |
+| `benchmarks/monitoring.py` | CostTracker, cost reporting, real-time cost tracking |
+| `benchmarks/health_checker.py` | Container health monitoring, stuck job detection |
+| `benchmarks/viewer.py` | generate_benchmark_viewer(), execution logs |
+| `benchmarks/auto_screenshot.py` | Playwright screenshot tool with validation |
+| `benchmarks/live_api.py` | Flask server for real-time monitoring |
+| `benchmarks/live_tracker.py` | LiveEvaluationTracker with cost tracking |
 | `benchmarks/cli.py` | CLI entry point |
 | `benchmarks/generate_synthetic_demos.py` | Generate synthetic demo trajectories for all 154 WAA tasks |
 | `benchmarks/validate_demos.py` | Validate demo format and action syntax |
