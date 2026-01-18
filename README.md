@@ -138,19 +138,19 @@ The viewer provides:
 
 Desktop view showing summary statistics and domain breakdown:
 
-![Benchmark Viewer Overview](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/feature/benchmark-viewer-screenshots/screenshots/desktop_overview.png)
+![Benchmark Viewer Overview](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/main/screenshots/desktop_overview.png)
 
 **Task Detail View**
 
 Step-by-step task execution with screenshot replay:
 
-![Task Detail View](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/feature/benchmark-viewer-screenshots/screenshots/desktop_task_detail.png)
+![Task Detail View](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/main/screenshots/desktop_task_detail.png)
 
 **Execution Logs**
 
 Detailed execution logs with filtering and search capabilities:
 
-![Execution Logs](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/feature/benchmark-viewer-screenshots/screenshots/desktop_log_expanded.png)
+![Execution Logs](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/main/screenshots/desktop_log_expanded.png)
 
 **Responsive Design**
 
@@ -158,7 +158,7 @@ The viewer works on all devices:
 
 | Desktop (1920x1080) | Tablet (768x1024) | Mobile (375x667) |
 |---------------------|-------------------|------------------|
-| ![Desktop](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/feature/benchmark-viewer-screenshots/screenshots/desktop_overview.png) | ![Tablet](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/feature/benchmark-viewer-screenshots/screenshots/tablet_overview.png) | ![Mobile](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/feature/benchmark-viewer-screenshots/screenshots/mobile_overview.png) |
+| ![Desktop](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/main/screenshots/desktop_overview.png) | ![Tablet](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/main/screenshots/tablet_overview.png) | ![Mobile](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/main/screenshots/mobile_overview.png) |
 
 ### Generating Viewer Screenshots
 
