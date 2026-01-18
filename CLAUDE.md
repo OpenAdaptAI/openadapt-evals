@@ -206,7 +206,50 @@ Synthetic demos provide:
 2. Rapid regeneration as prompts improve
 3. Scalable evaluation without manual recording
 
-### Generating Demos
+## Data Usage Guidelines
+
+**CRITICAL PRINCIPLE:** Always use real data for demos, examples, and documentation unless specifically testing mock functionality.
+
+### Real vs Mock Data
+
+| Use Case | Use Real Data | Use Mock Data |
+|----------|--------------|---------------|
+| Documentation examples | ✅ Always | ❌ Never |
+| README quick start | ✅ Always | ❌ Never (mention as testing option only) |
+| Animations/GIFs | ✅ Always | ❌ Never |
+| Default CLI behavior | ✅ Live/Azure | ❌ Never default to mock |
+| Unit tests | ❌ Not needed | ✅ Infrastructure testing only |
+| Integration tests | ✅ Preferred | ⚠️ Only if VM unavailable |
+
+### Why Real Data Matters
+
+**Problem with synthetic/mock demos:**
+- Creates misleading impression of capabilities
+- Users expect real performance, get disappointed
+- Undermines trust in the project
+- Makes debugging harder (hides real issues)
+
+**Benefits of real data:**
+- Honest representation of current capabilities
+- Users see actual performance
+- Builds trust through transparency
+- Exposes real issues early
+
+### Guidelines for New Features
+
+When adding new features:
+
+1. **Never create mock data by default** - Start with real data
+2. **Document with real examples** - Use actual WAA evaluation results
+3. **Mark mock data clearly** - If mock data is needed for testing, label it prominently
+4. **Default to real** - CLI commands should default to live/Azure, not mock
+5. **Warn on mock usage** - Display warnings when using mock mode
+
+### Synthetic Demo Generation
+
+**Purpose:** Generate demonstration trajectories for demo-conditioned prompting (research/training use).
+
+**Important:** Synthetic demos are for training agents, NOT for misleading users about capabilities.
 
 ```bash
 # Generate all 154 demos
