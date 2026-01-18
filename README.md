@@ -54,27 +54,54 @@ uv add openadapt-evals
 
 ## Quick Start
 
+**Note:** Examples use real WAA evaluation data. For testing without a Windows VM, see the Mock Adapter section below.
+
 ```python
 from openadapt_evals import (
-    WAAMockAdapter,
-    SmartMockAgent,
+    WAALiveAdapter,
+    WAALiveConfig,
+    ApiAgent,
     evaluate_agent_on_benchmark,
     compute_metrics,
 )
 
-# Create mock adapter for testing (no Windows VM required)
-adapter = WAAMockAdapter(num_tasks=10)
+# Configure connection to WAA server (real Windows VM)
+config = WAALiveConfig(
+    server_url="http://vm-ip:5000",
+    a11y_backend="uia",
+    max_steps=15,
+)
 
-# Create agent
-agent = SmartMockAgent()
+# Create adapter for live WAA evaluation
+adapter = WAALiveAdapter(config)
+
+# Create API-based agent (Claude or GPT)
+agent = ApiAgent(provider="anthropic")  # or "openai" for GPT-5.1
 
 # Run evaluation
-results = evaluate_agent_on_benchmark(agent, adapter, max_steps=15)
+results = evaluate_agent_on_benchmark(agent, adapter, task_ids=["notepad_1"])
 
 # Compute metrics
 metrics = compute_metrics(results)
 print(f"Success rate: {metrics['success_rate']:.1%}")
 ```
+
+### Mock Adapter for Testing
+
+For testing without a Windows VM, use the mock adapter:
+
+```python
+from openadapt_evals import WAAMockAdapter, SmartMockAgent
+
+# Create mock adapter (testing only, not for production use)
+adapter = WAAMockAdapter(num_tasks=10)
+agent = SmartMockAgent()
+
+# Run mock evaluation
+results = evaluate_agent_on_benchmark(agent, adapter, max_steps=15)
+```
+
+**Warning:** Mock adapter uses synthetic data and is only for testing infrastructure. Always use real WAA data for actual evaluations.
 
 ## Core Concepts
 
@@ -123,6 +150,12 @@ generate_benchmark_viewer(
     output_path=Path("benchmark_results/my_eval_run/viewer.html"),
 )
 ```
+
+### Demo: Benchmark Viewer in Action
+
+![Benchmark Viewer Animation](animations/benchmark-viewer.gif)
+
+*Animation shows real WAA evaluation results from `waa-live_eval_20260116_200004`*
 
 The viewer provides:
 - Summary statistics (success rate, per-domain breakdown)
@@ -225,9 +258,6 @@ class MyAgent(BenchmarkAgent):
 The package provides a CLI for running WAA evaluations:
 
 ```bash
-# Run mock evaluation (no Windows VM required)
-python -m openadapt_evals.benchmarks.cli mock --tasks 10
-
 # Check if WAA server is ready
 python -m openadapt_evals.benchmarks.cli probe --server http://vm-ip:5000
 
@@ -239,7 +269,12 @@ python -m openadapt_evals.benchmarks.cli view --run-name my_eval_run
 
 # Estimate Azure costs (with optimization options)
 python -m openadapt_evals.benchmarks.cli estimate --tasks 154 --workers 10 --enable-tiered-vms --use-spot
+
+# Run mock evaluation for testing (no Windows VM required - testing only!)
+python -m openadapt_evals.benchmarks.cli mock --tasks 10
 ```
+
+**Note:** Mock mode is for testing infrastructure only. Always use live or Azure mode for actual evaluations.
 
 ### Live WAA Adapter
 
