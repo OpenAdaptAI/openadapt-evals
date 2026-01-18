@@ -1162,21 +1162,91 @@ def _generate_benchmark_viewer_html(
     function setupFilters() {{
         document.getElementById('domain-filter').addEventListener('change', filterTasks);
         document.getElementById('status-filter').addEventListener('change', filterTasks);
+        document.getElementById('search-input').addEventListener('input', filterTasks);
+        document.getElementById('search-clear-btn').addEventListener('click', clearSearch);
+    }}
+
+    function advancedSearch(items, query, fields = ['task_id', 'instruction']) {{
+        if (!query || query.trim() === '') {{
+            return items.map((_, i) => i);
+        }}
+
+        // Tokenize query
+        const queryTokens = query
+            .toLowerCase()
+            .replace(/[^a-z0-9\\s]/g, ' ')
+            .replace(/\\s+/g, ' ')
+            .trim()
+            .split(' ')
+            .filter(t => t.length > 0);
+
+        if (queryTokens.length === 0) {{
+            return items.map((_, i) => i);
+        }}
+
+        const results = [];
+
+        items.forEach((task, idx) => {{
+            // Build searchable text
+            const searchParts = [];
+
+            // Add task ID
+            searchParts.push(task.task_id);
+
+            // Add instruction
+            if (task.definition && task.definition.instruction) {{
+                searchParts.push(task.definition.instruction);
+            }}
+
+            // Add domain
+            if (task.definition && task.definition.domain) {{
+                searchParts.push(task.definition.domain);
+            }}
+
+            // Add action types from steps
+            if (task.execution && task.execution.steps) {{
+                task.execution.steps.forEach(step => {{
+                    if (step.action && step.action.type) {{
+                        searchParts.push(step.action.type);
+                    }}
+                }});
+            }}
+
+            const searchText = searchParts
+                .join(' ')
+                .toLowerCase()
+                .replace(/[^a-z0-9\\s]/g, ' ')
+                .replace(/\\s+/g, ' ');
+
+            // All query tokens must match
+            const matches = queryTokens.every(token => searchText.includes(token));
+            if (matches) {{
+                results.push(idx);
+            }}
+        }});
+
+        return results;
     }}
 
     function filterTasks() {{
         const domainFilter = document.getElementById('domain-filter').value;
         const statusFilter = document.getElementById('status-filter').value;
+        const searchQuery = document.getElementById('search-input').value;
+
+        // Get search matches
+        const searchMatches = advancedSearch(tasks, searchQuery);
 
         let visibleCount = 0;
         document.querySelectorAll('.task-item').forEach(item => {{
+            const idx = parseInt(item.dataset.idx);
             const domain = item.dataset.domain;
             const status = item.dataset.status;
 
             const matchDomain = domainFilter === 'all' || domain === domainFilter;
             const matchStatus = statusFilter === 'all' || status === statusFilter;
+            const matchSearch = !searchQuery || searchMatches.includes(idx);
 
-            if (matchDomain && matchStatus) {{
+            if (matchDomain && matchStatus && matchSearch) {{
                 item.classList.remove('hidden');
                 visibleCount++;
             }} else {{
@@ -1186,6 +1256,25 @@ def _generate_benchmark_viewer_html(
 
         document.getElementById('filter-count').textContent = `${{visibleCount}} tasks`;
     }}
+
+    function clearSearch() {{
+        document.getElementById('search-input').value = '';
+        filterTasks();
+    }}
+
+    // Keyboard shortcuts for search
+    document.addEventListener('keydown', (e) => {{
+        // Ctrl+F / Cmd+F to focus search
+        if ((e.ctrlKey || e.metaKey) && e.key === 'f' && !e.shiftKey) {{
+            e.preventDefault();
+            document.getElementById('search-input').focus();
+        }}
+        // Escape to clear search when focused
+        if (e.key === 'Escape' && document.activeElement === document.getElementById('search-input')) {{
+            clearSearch();
+            document.getElementById('search-input').blur();
+        }}
+    }});
 
     function selectTask(idx) {{
         currentTaskIndex = idx;
