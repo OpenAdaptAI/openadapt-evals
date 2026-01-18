@@ -1,0 +1,49 @@
+TASK: Open InPrivate window
+DOMAIN: edge
+
+STEPS:
+1. Click on the Start menu button
+   REASONING: Need to access the Windows Start menu to launch Microsoft Edge browser
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for Start menu to appear
+   REASONING: Allow time for the Start menu interface to fully render
+   ACTION: WAIT(1.0)
+
+3. Type "Microsoft Edge" to search for the application
+   REASONING: Using search is the fastest way to locate and launch Microsoft Edge
+   ACTION: TYPE("Microsoft Edge")
+
+4. Wait for search results to populate
+   REASONING: Allow time for Windows Search to find and display Microsoft Edge
+   ACTION: WAIT(1.0)
+
+5. Click on Microsoft Edge in search results
+   REASONING: Launch the Microsoft Edge browser application
+   ACTION: CLICK(x=0.25, y=0.35)
+
+6. Wait for Microsoft Edge to fully load
+   REASONING: Browser needs time to initialize and display the main window
+   ACTION: WAIT(2.0)
+
+7. Click on the Settings and more menu (three dots icon)
+   REASONING: The InPrivate window option is accessed through the main menu in Edge
+   ACTION: CLICK(x=0.95, y=0.08)
+
+8. Wait for menu to expand
+   REASONING: Allow the dropdown menu to fully appear with all options visible
+   ACTION: WAIT(0.5)
+
+9. Click on "New InPrivate window" option
+   REASONING: This option opens a new InPrivate browsing window for private browsing
+   ACTION: CLICK(x=0.85, y=0.15)
+
+10. Wait for InPrivate window to open
+    REASONING: Allow time for the new InPrivate window to launch and display
+    ACTION: WAIT(1.5)
+
+11. Task completed
+    REASONING: InPrivate window is now open and ready for private browsing
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: A new Microsoft Edge InPrivate window should be open, displaying the InPrivate browsing splash screen with the distinctive InPrivate icon and information about private browsing. The window will have a dark theme indicator or "InPrivate" label in the top corner, confirming that browsing activity in this window will not be saved to browser history.

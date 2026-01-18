@@ -1,0 +1,69 @@
+TASK: Install an extension
+DOMAIN: coding
+
+STEPS:
+1. Open the Start menu to access applications
+   REASONING: We need to launch Visual Studio Code to install an extension
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for Start menu to appear
+   REASONING: Allow the system time to render the Start menu interface
+   ACTION: WAIT(0.5)
+
+3. Type "Visual Studio Code" in the search box
+   REASONING: Quickly locate the VS Code application through search
+   ACTION: TYPE("Visual Studio Code")
+
+4. Wait for search results to populate
+   REASONING: Give the system time to filter and display matching applications
+   ACTION: WAIT(1.0)
+
+5. Click on Visual Studio Code from search results
+   REASONING: Launch the application to access the extensions marketplace
+   ACTION: CLICK(x=0.15, y=0.35)
+
+6. Wait for Visual Studio Code to fully load
+   REASONING: Ensure the application window and all UI elements are ready for interaction
+   ACTION: WAIT(2.0)
+
+7. Click on the Extensions icon in the Activity Bar
+   REASONING: Access the Extensions view to browse and install extensions
+   ACTION: CLICK(x=0.025, y=0.25)
+
+8. Wait for Extensions panel to open
+   REASONING: Allow time for the extensions marketplace to load
+   ACTION: WAIT(1.0)
+
+9. Click in the search box at the top of Extensions panel
+   REASONING: Prepare to search for a specific extension to install
+   ACTION: CLICK(x=0.25, y=0.08)
+
+10. Type the extension name
+    REASONING: Search for a popular extension like "Python" to demonstrate installation
+    ACTION: TYPE("Python")
+
+11. Wait for search results to display
+    REASONING: Allow the marketplace to query and return matching extensions
+    ACTION: WAIT(1.5)
+
+12. Click on the desired extension from search results
+    REASONING: Select the official Python extension (typically the first result) to view details
+    ACTION: CLICK(x=0.25, y=0.18)
+
+13. Wait for extension details to load
+    REASONING: Ensure the extension information page is fully rendered
+    ACTION: WAIT(1.0)
+
+14. Click the Install button
+    REASONING: Initiate the installation process for the selected extension
+    ACTION: CLICK(x=0.35, y=0.13)
+
+15. Wait for installation to complete
+    REASONING: Allow time for VS Code to download and install the extension and its dependencies
+    ACTION: WAIT(3.0)
+
+16. Verify installation completed
+    REASONING: Confirm the Install button has changed to show extension is now installed (displays "Uninstall" or settings icon)
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: Visual Studio Code should have the Python extension successfully installed, with the Install button replaced by management options (Uninstall/Disable buttons), and the extension now appearing in the installed extensions list. The extension's features should be active and ready to use within VS Code.

@@ -1,0 +1,73 @@
+TASK: Create a new project
+DOMAIN: coding
+
+STEPS:
+1. Open the Start menu to access applications
+   REASONING: Need to launch a development environment to create a new project
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for Start menu to appear
+   REASONING: Allow the UI to render before proceeding
+   ACTION: WAIT(0.5)
+
+3. Type "Visual Studio Code" to search for the IDE
+   REASONING: Visual Studio Code is a common IDE for creating projects and needs to be launched
+   ACTION: TYPE("Visual Studio Code")
+
+4. Wait for search results to populate
+   REASONING: Allow time for the search to complete and display results
+   ACTION: WAIT(1.0)
+
+5. Click on Visual Studio Code application in search results
+   REASONING: Launch the IDE where the new project will be created
+   ACTION: CLICK(x=0.15, y=0.35)
+
+6. Wait for Visual Studio Code to fully load
+   REASONING: The application needs time to initialize before accepting commands
+   ACTION: WAIT(2.0)
+
+7. Open the File menu
+   REASONING: Access the project creation options through the File menu
+   ACTION: CLICK(x=0.05, y=0.03)
+
+8. Wait for File menu to expand
+   REASONING: Allow the dropdown menu to fully appear
+   ACTION: WAIT(0.5)
+
+9. Click on "New Folder" or "Open Folder" option
+   REASONING: Creating a new project typically starts with establishing a project folder
+   ACTION: CLICK(x=0.10, y=0.10)
+
+10. Wait for folder dialog to open
+    REASONING: Allow the file explorer dialog to appear
+    ACTION: WAIT(1.0)
+
+11. Click on "New Folder" button in the dialog
+    REASONING: Need to create a dedicated folder for the new project
+    ACTION: CLICK(x=0.15, y=0.08)
+
+12. Type the project name
+    REASONING: Give the project a meaningful identifier
+    ACTION: TYPE("MyNewProject")
+
+13. Press Enter to confirm folder creation
+    REASONING: Finalize the folder name and create it
+    ACTION: HOTKEY("return")
+
+14. Wait for folder to be created
+    REASONING: Allow the system to create the folder
+    ACTION: WAIT(0.5)
+
+15. Click "Select Folder" button to open the project
+    REASONING: Set this folder as the active workspace in VS Code
+    ACTION: CLICK(x=0.85, y=0.92)
+
+16. Wait for VS Code to load the project workspace
+    REASONING: Allow the IDE to initialize the project folder and display the explorer
+    ACTION: WAIT(1.5)
+
+17. Task completed successfully
+    REASONING: The new project folder has been created and opened in Visual Studio Code, ready for development
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: A new project folder named "MyNewProject" is created and opened in Visual Studio Code, with the explorer panel showing the empty project structure ready for adding files and beginning development work.

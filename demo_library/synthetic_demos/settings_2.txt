@@ -1,0 +1,73 @@
+TASK: Connect to WiFi network
+DOMAIN: settings
+
+STEPS:
+1. Click on the Start button to open the Start menu
+   REASONING: The Start menu provides access to the Settings application which is needed to configure WiFi connections
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for the Start menu to open
+   REASONING: Allow time for the Start menu animation and rendering to complete
+   ACTION: WAIT(1.0)
+
+3. Click on the Settings icon in the Start menu
+   REASONING: The Settings app contains the Network & Internet section where WiFi connections are managed
+   ACTION: CLICK(x=0.08, y=0.85)
+
+4. Wait for the Settings application to launch
+   REASONING: Allow time for the Settings window to fully load and display its main interface
+   ACTION: WAIT(1.5)
+
+5. Click on "Network & Internet" option
+   REASONING: This section contains all network-related settings including WiFi configuration
+   ACTION: CLICK(x=0.15, y=0.25)
+
+6. Wait for Network & Internet settings to load
+   REASONING: Allow the network settings page to render completely
+   ACTION: WAIT(1.0)
+
+7. Click on "Wi-Fi" in the left sidebar
+   REASONING: Access the WiFi-specific settings and available networks list
+   ACTION: CLICK(x=0.15, y=0.20)
+
+8. Wait for WiFi page to display
+   REASONING: Allow time for the WiFi interface to load and scan for available networks
+   ACTION: WAIT(1.0)
+
+9. Click on "Show available networks" button
+   REASONING: Display the list of WiFi networks within range that can be connected to
+   ACTION: CLICK(x=0.6, y=0.35)
+
+10. Wait for available networks list to appear
+    REASONING: Allow the system to populate the network list in the flyout panel
+    ACTION: WAIT(1.0)
+
+11. Click on the desired WiFi network from the list
+    REASONING: Select the target network to initiate the connection process
+    ACTION: CLICK(x=0.85, y=0.40)
+
+12. Click the "Connect" button
+    REASONING: Initiate the connection to the selected WiFi network
+    ACTION: CLICK(x=0.85, y=0.55)
+
+13. Wait for password entry field to appear
+    REASONING: Allow time for the authentication dialog to display if the network is secured
+    ACTION: WAIT(1.0)
+
+14. Type the WiFi password
+    REASONING: Provide authentication credentials required to connect to the secured network
+    ACTION: TYPE("networkpassword123")
+
+15. Click the "Next" or "Connect" button to confirm
+    REASONING: Submit the password and complete the connection process
+    ACTION: CLICK(x=0.85, y=0.65)
+
+16. Wait for connection to establish
+    REASONING: Allow time for the system to authenticate and establish the WiFi connection
+    ACTION: WAIT(2.0)
+
+17. Mark task as complete
+    REASONING: WiFi network connection has been successfully established
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: The system should be successfully connected to the selected WiFi network, with the connection status showing "Connected" in the Network & Internet settings. The WiFi icon in the system tray should display full signal strength, and internet connectivity should be available.

@@ -1,0 +1,65 @@
+TASK: Manage passwords
+DOMAIN: edge
+
+STEPS:
+1. Open Microsoft Edge browser
+   REASONING: Edge needs to be running to access password management features
+   ACTION: CLICK(x=0.5, y=0.98)
+
+2. Wait for taskbar search to appear
+   REASONING: Need to allow time for the search interface to become available
+   ACTION: WAIT(1.0)
+
+3. Type "Microsoft Edge" in search
+   REASONING: Locate the Edge browser application to launch it
+   ACTION: TYPE("Microsoft Edge")
+
+4. Wait for search results to populate
+   REASONING: Allow time for search results to display the Edge application
+   ACTION: WAIT(1.0)
+
+5. Click on Microsoft Edge in search results
+   REASONING: Launch the browser application
+   ACTION: CLICK(x=0.5, y=0.3)
+
+6. Wait for Edge to fully load
+   REASONING: Browser needs time to initialize and display its interface
+   ACTION: WAIT(2.0)
+
+7. Click on Settings and more menu (three dots icon)
+   REASONING: Access the main menu to navigate to settings
+   ACTION: CLICK(x=0.95, y=0.08)
+
+8. Wait for menu to expand
+   REASONING: Allow the dropdown menu to fully appear
+   ACTION: WAIT(0.5)
+
+9. Click on Settings option
+   REASONING: Navigate to Edge settings where password management is located
+   ACTION: CLICK(x=0.88, y=0.45)
+
+10. Wait for Settings page to load
+    REASONING: Settings page needs time to render completely
+    ACTION: WAIT(1.5)
+
+11. Click on Profiles in the left sidebar
+    REASONING: Password management is located within the Profiles section
+    ACTION: CLICK(x=0.15, y=0.25)
+
+12. Wait for Profiles section to load
+    REASONING: Allow the profiles page content to display
+    ACTION: WAIT(1.0)
+
+13. Click on Passwords option
+    REASONING: Access the password management interface where saved passwords can be viewed, edited, or deleted
+    ACTION: CLICK(x=0.5, y=0.35)
+
+14. Wait for Password Manager to load
+    REASONING: Password manager interface needs time to display all saved passwords and management options
+    ACTION: WAIT(1.5)
+
+15. Task completed - Password Manager is now accessible
+    REASONING: User can now view, edit, delete, or export saved passwords as needed
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: Microsoft Edge's Password Manager interface should be displayed, showing all saved passwords with options to view, edit, delete, or export them. The user can now manage their stored credentials, enable/disable password saving, check for compromised passwords, and configure password-related settings.

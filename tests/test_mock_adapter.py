@@ -2,13 +2,14 @@
 
 import pytest
 
-from openadapt_evals.benchmarks.base import (
+from openadapt_evals.adapters import (
     BenchmarkAction,
     BenchmarkObservation,
     BenchmarkResult,
     BenchmarkTask,
+    WAAMockAdapter,
 )
-from openadapt_evals.benchmarks.waa import WAAMockAdapter, WAA_DOMAINS
+from openadapt_evals.adapters.waa import WAA_DOMAINS
 
 
 class TestWAAMockAdapterInit:
@@ -339,23 +340,24 @@ class TestWAADomains:
     def test_waa_domains_list(self):
         """Test that WAA_DOMAINS contains expected domains."""
         expected_domains = [
-            "browser",
-            "office",
-            "coding",
-            "media",
-            "notepad",
-            "paint",
-            "file_explorer",
+            "chrome",
             "clock",
+            "file_explorer",
+            "libreoffice_calc",
+            "libreoffice_writer",
+            "microsoft_paint",
+            "msedge",
+            "notepad",
             "settings",
-            "edge",
-            "vscode",
+            "vlc",
+            "vs_code",
+            "windows_calc",
         ]
         assert WAA_DOMAINS == expected_domains
 
     def test_waa_domains_count(self):
-        """Test that WAA_DOMAINS has 11 domains."""
-        assert len(WAA_DOMAINS) == 11
+        """Test that WAA_DOMAINS has 12 domains."""
+        assert len(WAA_DOMAINS) == 12
 
 
 class TestWAAMockAdapterContextManager:

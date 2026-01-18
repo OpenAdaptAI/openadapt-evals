@@ -1,0 +1,45 @@
+TASK: Enable word wrap
+DOMAIN: notepad
+
+STEPS:
+1. Open Notepad application
+   REASONING: We need to launch Notepad first to access its word wrap settings
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for Start menu to appear
+   REASONING: Allow time for the Start menu interface to fully render before proceeding
+   ACTION: WAIT(1.0)
+
+3. Type "Notepad" to search for the application
+   REASONING: Using search is the fastest way to locate and launch Notepad in Windows
+   ACTION: TYPE("notepad")
+
+4. Wait for search results to populate
+   REASONING: Give the system time to find and display Notepad in the search results
+   ACTION: WAIT(0.5)
+
+5. Press Enter to launch Notepad
+   REASONING: Execute the top search result which should be the Notepad application
+   ACTION: HOTKEY("return")
+
+6. Wait for Notepad to open
+   REASONING: Allow Notepad window to fully load before interacting with its menu system
+   ACTION: WAIT(1.5)
+
+7. Click on the Format menu
+   REASONING: Word wrap settings are located in the Format menu of Notepad
+   ACTION: CLICK(x=0.12, y=0.06)
+
+8. Wait for Format menu to expand
+   REASONING: Allow time for the dropdown menu to fully display all available options
+   ACTION: WAIT(0.5)
+
+9. Click on "Word Wrap" option
+   REASONING: This toggles the word wrap feature on, which will wrap long lines of text to fit the window width
+   ACTION: CLICK(x=0.12, y=0.10)
+
+10. Verify word wrap is enabled
+    REASONING: Task is complete - word wrap should now be active in Notepad, indicated by a checkmark next to the Word Wrap option in the Format menu
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: Word wrap is successfully enabled in Notepad. Long lines of text will now automatically wrap to fit within the window width instead of extending beyond the visible area. A checkmark should appear next to "Word Wrap" in the Format menu when checked again.

@@ -1,0 +1,65 @@
+TASK: Open a Python file
+DOMAIN: coding
+
+STEPS:
+1. Click on the Start menu to access applications
+   REASONING: Need to open the Start menu to search for and launch a text editor or IDE suitable for opening Python files
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for the Start menu to open
+   REASONING: Allow time for the Start menu interface to fully render before proceeding
+   ACTION: WAIT(1.0)
+
+3. Type "Visual Studio Code" to search for the application
+   REASONING: Visual Studio Code is a popular IDE for Python development and provides syntax highlighting and debugging features
+   ACTION: TYPE("Visual Studio Code")
+
+4. Wait for search results to appear
+   REASONING: Allow the search indexer to find and display matching applications
+   ACTION: WAIT(0.5)
+
+5. Click on Visual Studio Code from the search results
+   REASONING: Launch the IDE to access file opening capabilities
+   ACTION: CLICK(x=0.15, y=0.35)
+
+6. Wait for Visual Studio Code to launch
+   REASONING: The application needs time to initialize and display its main window
+   ACTION: WAIT(2.0)
+
+7. Open the File menu
+   REASONING: Access the file operations menu to open an existing Python file
+   ACTION: CLICK(x=0.05, y=0.02)
+
+8. Wait for the File menu to expand
+   REASONING: Allow the dropdown menu to fully display all options
+   ACTION: WAIT(0.5)
+
+9. Click on "Open File" option
+   REASONING: This will launch the file browser dialog to navigate to and select a Python file
+   ACTION: CLICK(x=0.08, y=0.08)
+
+10. Wait for the file explorer dialog to open
+    REASONING: The system file browser needs time to initialize and display the file system
+    ACTION: WAIT(1.0)
+
+11. Navigate to the location containing Python files and type the filename or path
+    REASONING: Need to locate the specific Python file to open; typing allows quick navigation
+    ACTION: TYPE("example.py")
+
+12. Wait for the file to be located in the dialog
+    REASONING: Allow the file explorer to search and highlight the specified file
+    ACTION: WAIT(0.5)
+
+13. Click the "Open" button to open the selected Python file
+    REASONING: Confirm the file selection and load it into the editor
+    ACTION: CLICK(x=0.85, y=0.92)
+
+14. Wait for the file to load in the editor
+    REASONING: The file content needs to be read from disk and rendered in the editor with syntax highlighting
+    ACTION: WAIT(1.0)
+
+15. Task completed successfully
+    REASONING: The Python file is now open in Visual Studio Code and ready for viewing or editing
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: A Python file (.py) should be successfully opened in Visual Studio Code, displaying the file content with proper syntax highlighting, line numbers, and the filename visible in the editor tab. The user can now view, edit, run, or debug the Python code.

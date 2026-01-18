@@ -1,0 +1,41 @@
+TASK: Format document
+DOMAIN: vscode
+
+STEPS:
+1. Verify Visual Studio Code is open with a document
+   REASONING: Need to ensure VS Code is running and has an active document to format. If not open, we need to launch it first.
+   ACTION: CLICK(x=0.5, y=0.1)
+
+2. Click in the editor area to ensure document has focus
+   REASONING: The editor must be focused for formatting commands to work properly on the active document.
+   ACTION: CLICK(x=0.5, y=0.4)
+
+3. Open the Command Palette using keyboard shortcut
+   REASONING: The Command Palette provides quick access to the "Format Document" command, which is the most reliable way to format in VS Code.
+   ACTION: HOTKEY("ctrl", "shift", "p")
+
+4. Wait for Command Palette to appear
+   REASONING: Need to ensure the Command Palette UI is fully loaded before typing commands.
+   ACTION: WAIT(0.5)
+
+5. Type "Format Document" in the Command Palette
+   REASONING: This searches for and filters to the format document command among all available commands.
+   ACTION: TYPE("Format Document")
+
+6. Wait for search results to filter
+   REASONING: Allow time for the command palette to filter and display matching commands.
+   ACTION: WAIT(0.3)
+
+7. Press Enter to execute the Format Document command
+   REASONING: Selecting the "Format Document" command will apply the configured formatter to the entire document, fixing indentation, spacing, and code style according to the language-specific formatter settings.
+   ACTION: HOTKEY("return")
+
+8. Wait for formatting to complete
+   REASONING: Formatting may take a moment depending on document size and complexity. This ensures the operation completes before proceeding.
+   ACTION: WAIT(1.0)
+
+9. Verify formatting has been applied
+   REASONING: Confirm that the document has been properly formatted with consistent indentation and spacing throughout.
+   ACTION: DONE()
+
+EXPECTED_OUTCOME: The document in Visual Studio Code should be properly formatted with consistent indentation, spacing, and code style according to the configured formatter for that file type. All code should follow the language-specific formatting rules, with improved readability and standardized structure.

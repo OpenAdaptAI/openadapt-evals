@@ -1,0 +1,25 @@
+TASK: Navigate to Documents
+DOMAIN: file_explorer
+
+STEPS:
+1. Open File Explorer from the taskbar
+   REASONING: File Explorer needs to be launched to navigate to any folder location. The File Explorer icon is typically pinned to the taskbar for quick access.
+   ACTION: CLICK(x=0.1, y=0.98)
+
+2. Wait for File Explorer window to open
+   REASONING: Allow time for the File Explorer application to launch and render its interface before proceeding with navigation.
+   ACTION: WAIT(1.5)
+
+3. Click on the Documents link in the navigation pane
+   REASONING: The Documents folder is accessible through the quick access navigation pane on the left side of File Explorer, which provides direct access to common user folders.
+   ACTION: CLICK(x=0.15, y=0.25)
+
+4. Wait for Documents folder to load
+   REASONING: Allow time for the Documents folder contents to populate and display in the main viewing area of File Explorer.
+   ACTION: WAIT(1.0)
+
+5. Verify navigation is complete
+   REASONING: Confirm that the Documents folder is now the active directory by checking the address bar and folder contents are displayed.
+   ACTION: DONE()
+
+EXPECTED_OUTCOME: File Explorer should be open and displaying the contents of the Documents folder. The address bar should show "Documents" or the full path to the user's Documents folder (typically C:\Users\[Username]\Documents). The navigation pane should highlight the Documents entry, and any files or subfolders within Documents should be visible in the main viewing area.

@@ -1,0 +1,33 @@
+TASK: Open File Explorer
+DOMAIN: file_explorer
+
+STEPS:
+1. Click on the Start button in the taskbar
+   REASONING: The Start button provides access to system applications and is the primary entry point for launching File Explorer through multiple methods
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for the Start menu to appear
+   REASONING: A brief pause is necessary to allow the Start menu UI to fully render before proceeding with the next action
+   ACTION: WAIT(1.0)
+
+3. Type "File Explorer" in the search box
+   REASONING: Searching for File Explorer by name is a direct and reliable method to locate and launch the application
+   ACTION: TYPE("File Explorer")
+
+4. Wait for search results to populate
+   REASONING: The system needs time to process the search query and display matching results in the Start menu
+   ACTION: WAIT(1.0)
+
+5. Click on the File Explorer application from search results
+   REASONING: Selecting the File Explorer result from the search list will launch the application
+   ACTION: CLICK(x=0.15, y=0.35)
+
+6. Wait for File Explorer window to open
+   REASONING: The application needs time to initialize and display its main window interface
+   ACTION: WAIT(1.5)
+
+7. Task completion verification
+   REASONING: File Explorer window is now open and ready for use, confirming successful completion of the task
+   ACTION: DONE()
+
+EXPECTED_OUTCOME: File Explorer window should be open and visible on the screen, displaying the default view (typically Quick Access or This PC), with the navigation pane on the left and the main content area showing folders and files. The window should be active and ready for file management operations.

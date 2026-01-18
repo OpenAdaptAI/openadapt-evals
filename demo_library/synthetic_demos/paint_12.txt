@@ -1,0 +1,45 @@
+TASK: Fill region with color
+DOMAIN: paint
+
+STEPS:
+1. Open the Start menu to access Paint application
+   REASONING: We need to launch Paint to perform the fill operation
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for Start menu to appear
+   REASONING: The Start menu needs time to render before we can interact with it
+   ACTION: WAIT(1.0)
+
+3. Type "paint" to search for Paint application
+   REASONING: Searching is the quickest way to find and launch Paint
+   ACTION: TYPE("paint")
+
+4. Wait for search results to populate
+   REASONING: The search needs time to find and display Paint in the results
+   ACTION: WAIT(1.0)
+
+5. Click on Paint application from search results
+   REASONING: This launches the Paint application
+   ACTION: CLICK(x=0.15, y=0.25)
+
+6. Wait for Paint to fully load
+   REASONING: Paint needs time to initialize its interface and tools before use
+   ACTION: WAIT(2.0)
+
+7. Click on the Fill with color tool (paint bucket) in the toolbar
+   REASONING: The fill tool must be selected to perform a region fill operation
+   ACTION: CLICK(x=0.15, y=0.15)
+
+8. Click on a color from the color palette
+   REASONING: We need to select the color we want to use for filling the region
+   ACTION: CLICK(x=0.85, y=0.12)
+
+9. Click on the canvas area to fill a region with the selected color
+   REASONING: Clicking with the fill tool active applies the selected color to the connected region under the cursor
+   ACTION: CLICK(x=0.5, y=0.5)
+
+10. Verify the fill operation completed successfully
+    REASONING: The task is complete when the region has been filled with the chosen color
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: A region in the Paint canvas should be filled with the selected color. The fill tool spreads color to all connected pixels of the same color within a bounded area, effectively changing the color of an entire enclosed region with a single click.

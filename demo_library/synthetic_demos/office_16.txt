@@ -1,0 +1,77 @@
+TASK: Set page margins
+DOMAIN: office
+
+STEPS:
+1. Open the Format menu to access page layout options
+   REASONING: Page margin settings are typically located in the Format menu in office applications like LibreOffice Writer or Microsoft Word
+   ACTION: CLICK(x=0.12, y=0.05)
+
+2. Wait for the Format menu to expand
+   REASONING: Allow time for the menu dropdown to fully render before proceeding
+   ACTION: WAIT(0.5)
+
+3. Click on "Page" or "Page Setup" option in the Format menu
+   REASONING: Page margins are configured through the page setup dialog, which contains all page layout settings including margins, orientation, and size
+   ACTION: CLICK(x=0.12, y=0.15)
+
+4. Wait for the Page Setup dialog to open
+   REASONING: The dialog window needs time to load and display all margin configuration options
+   ACTION: WAIT(1.0)
+
+5. Click on the "Margins" or "Page" tab if not already selected
+   REASONING: Ensure we're on the correct tab where margin settings are located, as the dialog may have multiple tabs for different page properties
+   ACTION: CLICK(x=0.15, y=0.12)
+
+6. Click on the top margin input field
+   REASONING: Begin configuring margins by setting the top margin value first
+   ACTION: CLICK(x=0.45, y=0.25)
+
+7. Clear existing value and enter desired top margin
+   REASONING: Replace the current margin value with the desired measurement (e.g., 1 inch or 2.54 cm)
+   ACTION: HOTKEY("ctrl", "a")
+
+8. Type the new top margin value
+   REASONING: Input the specific margin measurement for the top of the page
+   ACTION: TYPE("1.0")
+
+9. Click on the bottom margin input field
+   REASONING: Set the bottom margin to ensure consistent page layout
+   ACTION: CLICK(x=0.45, y=0.35)
+
+10. Enter desired bottom margin value
+    REASONING: Clear and set the bottom margin measurement
+    ACTION: HOTKEY("ctrl", "a")
+
+11. Type the new bottom margin value
+    REASONING: Input the specific bottom margin measurement
+    ACTION: TYPE("1.0")
+
+12. Click on the left margin input field
+    REASONING: Configure the left margin for proper text alignment and binding space
+    ACTION: CLICK(x=0.45, y=0.45)
+
+13. Enter desired left margin value
+    REASONING: Set the left margin measurement after clearing the existing value
+    ACTION: TYPE("1.25")
+
+14. Click on the right margin input field
+    REASONING: Complete the margin configuration by setting the right margin
+    ACTION: CLICK(x=0.45, y=0.55)
+
+15. Enter desired right margin value
+    REASONING: Input the final margin measurement for the right side of the page
+    ACTION: TYPE("1.25")
+
+16. Click the OK or Apply button to save changes
+    REASONING: Confirm and apply the new margin settings to the document
+    ACTION: CLICK(x=0.65, y=0.85)
+
+17. Wait for the dialog to close and margins to be applied
+    REASONING: Allow the application to process the changes and update the document layout
+    ACTION: WAIT(1.0)
+
+18. Task completed successfully
+    REASONING: All page margins have been configured and applied to the document
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: The document's page margins should be updated with the specified values (top: 1.0", bottom: 1.0", left: 1.25", right: 1.25"). The document layout will reflect these new margins, with text and content repositioned accordingly. The page setup dialog will be closed, and the changes will be visible in the document's page view.

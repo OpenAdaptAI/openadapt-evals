@@ -1,0 +1,45 @@
+TASK: Enable/disable extensions
+DOMAIN: browser
+
+STEPS:
+1. Open the browser's menu to access settings
+   REASONING: To manage extensions, we need to access the browser's main menu where the extensions option is located
+   ACTION: CLICK(x=0.95, y=0.06)
+
+2. Wait for the menu to appear
+   REASONING: Allow time for the dropdown menu to fully render before interacting with it
+   ACTION: WAIT(0.5)
+
+3. Navigate to Extensions option in the menu
+   REASONING: The Extensions submenu contains options to manage browser extensions
+   ACTION: CLICK(x=0.85, y=0.25)
+
+4. Wait for the Extensions submenu to expand
+   REASONING: Allow the submenu to appear showing extension management options
+   ACTION: WAIT(0.3)
+
+5. Click on "Manage Extensions" option
+   REASONING: This opens the full extensions management page where we can view all installed extensions and toggle them on/off
+   ACTION: CLICK(x=0.82, y=0.28)
+
+6. Wait for the Extensions page to load
+   REASONING: The extensions management page needs time to load and display all installed extensions with their toggle switches
+   ACTION: WAIT(1.5)
+
+7. Locate the toggle switch for the desired extension
+   REASONING: Each extension has a toggle switch that enables or disables it; we need to identify the specific extension to modify
+   ACTION: CLICK(x=0.85, y=0.35)
+
+8. Wait for the toggle action to complete
+   REASONING: The browser needs time to process the enable/disable action and update the extension's state
+   ACTION: WAIT(0.8)
+
+9. Verify the extension status has changed
+   REASONING: Visual confirmation that the toggle switch has moved to the opposite position (blue/on or gray/off) ensures the action was successful
+   ACTION: WAIT(0.5)
+
+10. Close the extensions tab or return to browsing
+    REASONING: The task is complete; we can now close the extensions management page
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: The selected browser extension should be successfully enabled (active and functional) or disabled (inactive and not running) based on the toggle action performed. The extension's toggle switch should visually reflect its new state, and the extension's functionality should be available or unavailable accordingly.

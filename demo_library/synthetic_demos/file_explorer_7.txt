@@ -1,0 +1,41 @@
+TASK: Search for files containing 'sample query'
+DOMAIN: file_explorer
+
+STEPS:
+1. Open File Explorer using the taskbar icon
+   REASONING: File Explorer must be opened first to access the search functionality for finding files
+   ACTION: CLICK(x=0.1, y=0.98)
+
+2. Wait for File Explorer window to fully load
+   REASONING: Allow time for the application to launch and render its interface properly
+   ACTION: WAIT(1.5)
+
+3. Click on the search box in the top-right corner of File Explorer
+   REASONING: The search box needs to be activated to enter the search query for finding files
+   ACTION: CLICK(x=0.8, y=0.08)
+
+4. Wait for search box to become active
+   REASONING: Ensure the search box is ready to receive text input
+   ACTION: WAIT(0.5)
+
+5. Type the search query 'sample query'
+   REASONING: Enter the specific text to search for files containing this phrase
+   ACTION: TYPE("sample query")
+
+6. Wait for search suggestion dropdown to appear
+   REASONING: File Explorer typically shows search suggestions as you type, allow time for the dropdown to render
+   ACTION: WAIT(0.5)
+
+7. Press Enter to execute the search
+   REASONING: Initiate the file search across the current directory and subdirectories
+   ACTION: HOTKEY("return")
+
+8. Wait for search results to load
+   REASONING: Allow File Explorer to scan the file system and display matching results
+   ACTION: WAIT(2.0)
+
+9. Mark task as complete
+   REASONING: The search has been executed and results are displayed, completing the requested task
+   ACTION: DONE()
+
+EXPECTED_OUTCOME: File Explorer displays a list of all files and folders containing 'sample query' in their names or contents, with the search query visible in the search box and the results pane showing matching items with their locations, modification dates, and other relevant metadata.

@@ -1,0 +1,65 @@
+TASK: Enable/disable extensions
+DOMAIN: browser
+
+STEPS:
+1. Open Google Chrome browser
+   REASONING: We need to launch the browser to access the extensions management interface
+   ACTION: CLICK(x=0.5, y=0.98)
+
+2. Wait for taskbar search to appear
+   REASONING: Allow the start menu or search interface to fully load before typing
+   ACTION: WAIT(1.0)
+
+3. Type "Chrome" to search for the browser
+   REASONING: Search for Google Chrome application to launch it
+   ACTION: TYPE("Chrome")
+
+4. Wait for search results to populate
+   REASONING: Give the system time to display Chrome in search results
+   ACTION: WAIT(0.5)
+
+5. Click on Google Chrome in search results
+   REASONING: Launch the browser application
+   ACTION: CLICK(x=0.5, y=0.3)
+
+6. Wait for Chrome to fully load
+   REASONING: Ensure the browser window is completely ready before proceeding
+   ACTION: WAIT(2.0)
+
+7. Click on the three-dot menu icon in the top-right corner
+   REASONING: Access the Chrome menu to navigate to extensions settings
+   ACTION: CLICK(x=0.95, y=0.08)
+
+8. Wait for menu to expand
+   REASONING: Allow the dropdown menu to fully appear
+   ACTION: WAIT(0.5)
+
+9. Hover over "Extensions" menu item
+   REASONING: Need to access the Extensions submenu
+   ACTION: CLICK(x=0.85, y=0.35)
+
+10. Wait for Extensions submenu to appear
+    REASONING: Allow the submenu to expand showing extension options
+    ACTION: WAIT(0.5)
+
+11. Click on "Manage Extensions"
+    REASONING: Open the extensions management page where we can enable/disable extensions
+    ACTION: CLICK(x=0.88, y=0.38)
+
+12. Wait for Extensions page to load
+    REASONING: Allow the chrome://extensions page to fully render with all installed extensions
+    ACTION: WAIT(1.5)
+
+13. Locate and click the toggle switch for a specific extension
+    REASONING: Toggle switches control whether extensions are enabled or disabled; clicking one will change its state
+    ACTION: CLICK(x=0.9, y=0.25)
+
+14. Wait for the extension state to update
+    REASONING: Allow the browser to process the enable/disable action and update the UI accordingly
+    ACTION: WAIT(0.5)
+
+15. Verify the extension status has changed
+    REASONING: Confirm that the toggle switch has moved to the opposite position, indicating the extension has been enabled or disabled successfully
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: The Chrome extensions management page should be open, displaying all installed extensions with toggle switches. At least one extension's state should be changed (either enabled or disabled), indicated by the toggle switch position and potentially a color change (blue for enabled, gray for disabled). The extension will be immediately activated or deactivated without requiring a browser restart.
