@@ -762,20 +762,46 @@ def cmd_azure(args: argparse.Namespace) -> int:
         print("  AZURE_ML_WORKSPACE_NAME")
         return 1
 
-    if not args.waa_path:
-        print("ERROR: --waa-path required (path to WAA repository)")
-        return 1
-
-    waa_path = Path(args.waa_path)
-    if not waa_path.exists():
-        print(f"ERROR: WAA repository not found at: {waa_path}")
-        return 1
+    # Determine WAA path (required unless cleanup-only)
+    waa_path = None
+    if args.cleanup_only:
+        # For cleanup-only, we don't need WAA repo
+        # Just use a dummy path
+        waa_path = Path("/tmp/dummy")
+    else:
+        if not args.waa_path:
+            print("ERROR: --waa-path required (path to WAA repository)")
+            return 1
+        waa_path = Path(args.waa_path)
+        if not waa_path.exists():
+            print(f"ERROR: WAA repository not found at: {waa_path}")
+            return 1
 
     orchestrator = AzureWAAOrchestrator(
         config=config,
         waa_repo_path=waa_path,
         experiment_name=args.experiment_name,
     )
+
+    # Handle cleanup-only mode
+    if args.cleanup_only:
+        print("Cleanup-only mode: scanning for stale compute instances...")
+        prefix = getattr(args, "cleanup_prefix", "waa")
+        dry_run = getattr(args, "dry_run", False)
+
+        if dry_run:
+            print("DRY-RUN MODE: Will list instances without deleting.")
+
+        stale_count = orchestrator.cleanup_stale_instances(prefix=prefix, dry_run=dry_run)
+
+        if stale_count == 0:
+            print("\nNo stale instances found.")
+        elif dry_run:
+            print(f"\nFound {stale_count} stale instance(s). Run without --dry-run to delete.")
+        else:
+            print(f"\nSuccessfully cleaned up {stale_count} stale instance(s).")
+
+        return 0
 
     # Create agent
     agent = SmartMockAgent()
@@ -794,6 +820,7 @@ def cmd_azure(args: argparse.Namespace) -> int:
             task_ids=task_ids,
             max_steps_per_task=args.max_steps,
             cleanup_on_complete=not args.no_cleanup,
+            cleanup_stale_on_start=not args.skip_cleanup_stale,
             timeout_hours=args.timeout_hours,
         )
 
@@ -806,6 +833,10 @@ def cmd_azure(args: argparse.Namespace) -> int:
         print(f"Success rate: {success_count / len(results):.1%}")
 
         return 0
+
+    except KeyboardInterrupt:
+        print("\n\nEvaluation interrupted by user.")
+        return 130  # Standard exit code for SIGINT
 
     except Exception as e:
         print(f"ERROR: Evaluation failed: {e}")
@@ -877,8 +908,8 @@ def main() -> int:
 
     # Azure evaluation
     azure_parser = subparsers.add_parser("azure", help="Run Azure-based parallel evaluation")
-    azure_parser.add_argument("--waa-path", type=str, required=True,
-                             help="Path to WAA repository")
+    azure_parser.add_argument("--waa-path", type=str,
+                             help="Path to WAA repository (not needed for --cleanup-only)")
     azure_parser.add_argument("--workers", type=int, default=1,
                              help="Number of parallel workers")
     azure_parser.add_argument("--task-ids", type=str, help="Comma-separated task IDs")
@@ -889,6 +920,14 @@ def main() -> int:
                              help="Job timeout in hours")
     azure_parser.add_argument("--no-cleanup", action="store_true",
                              help="Don't delete VMs after completion")
+    azure_parser.add_argument("--skip-cleanup-stale", action="store_true",
+                             help="Skip cleanup of stale instances before starting (not recommended)")
+    azure_parser.add_argument("--cleanup-only", action="store_true",
+                             help="Only cleanup stale instances, don't run evaluation")
+    azure_parser.add_argument("--cleanup-prefix", type=str, default="waa",
+                             help="Prefix filter for cleanup (default: 'waa')")
+    azure_parser.add_argument("--dry-run", action="store_true",
+                             help="List instances without deleting (for --cleanup-only)")
 
     # VM management commands
     vm_start_parser = subparsers.add_parser("vm-start", help="Start an Azure VM")
