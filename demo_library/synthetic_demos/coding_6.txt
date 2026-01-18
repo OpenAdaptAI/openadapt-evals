@@ -1,0 +1,93 @@
+TASK: Create a new project
+DOMAIN: coding
+
+STEPS:
+1. Open the Start menu to access applications
+   REASONING: Need to launch a development environment to create a new project
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for Start menu to appear
+   REASONING: Allow the system time to display the Start menu interface
+   ACTION: WAIT(1.0)
+
+3. Search for Visual Studio Code
+   REASONING: Visual Studio Code is a common IDE for creating new projects across multiple programming languages
+   ACTION: TYPE("Visual Studio Code")
+
+4. Wait for search results to populate
+   REASONING: Allow time for the search to complete and display results
+   ACTION: WAIT(1.0)
+
+5. Click on Visual Studio Code application
+   REASONING: Launch the IDE to begin creating a new project
+   ACTION: CLICK(x=0.15, y=0.35)
+
+6. Wait for Visual Studio Code to fully load
+   REASONING: Application needs time to initialize before accepting input
+   ACTION: WAIT(2.5)
+
+7. Open the File menu
+   REASONING: The File menu contains options for creating new projects and folders
+   ACTION: CLICK(x=0.05, y=0.03)
+
+8. Wait for File menu to expand
+   REASONING: Allow menu to fully display options
+   ACTION: WAIT(0.5)
+
+9. Click on "New Folder" or "Open Folder" option
+   REASONING: Need to select or create a folder location for the new project
+   ACTION: CLICK(x=0.10, y=0.12)
+
+10. Wait for folder dialog to open
+    REASONING: System needs time to display the folder selection dialog
+    ACTION: WAIT(1.0)
+
+11. Navigate to desired location and create new folder
+    REASONING: Projects should be organized in a dedicated directory
+    ACTION: CLICK(x=0.15, y=0.85)
+
+12. Type the project name
+    REASONING: Give the project a descriptive name for identification
+    ACTION: TYPE("MyNewProject")
+
+13. Confirm folder creation and selection
+    REASONING: Finalize the project location and open it in VS Code
+    ACTION: CLICK(x=0.75, y=0.90)
+
+14. Wait for folder to open in workspace
+    REASONING: VS Code needs time to load the folder and set up the workspace
+    ACTION: WAIT(1.5)
+
+15. Create a new file to initialize the project
+    REASONING: Add an initial file to start working on the project
+    ACTION: HOTKEY("ctrl", "n")
+
+16. Wait for new file tab to appear
+    REASONING: Allow the editor to create and display the new file
+    ACTION: WAIT(0.5)
+
+17. Save the file to establish project structure
+    REASONING: Saving a file in the project folder formally establishes the project structure
+    ACTION: HOTKEY("ctrl", "s")
+
+18. Wait for save dialog
+    REASONING: Allow system to display the save file dialog
+    ACTION: WAIT(0.5)
+
+19. Type initial filename
+    REASONING: Give the file an appropriate name for the project type (e.g., index.html, main.py, README.md)
+    ACTION: TYPE("README.md")
+
+20. Confirm file save
+    REASONING: Complete the file creation within the project
+    ACTION: CLICK(x=0.75, y=0.90)
+
+21. Wait for file to be saved and displayed
+    REASONING: Confirm the project structure is established
+    ACTION: WAIT(1.0)
+
+22. Mark task as complete
+    REASONING: New project has been successfully created with initial structure
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: A new project folder should be created and opened in Visual Studio Code with an initial README.md file. The project is now ready for development work, with the workspace configured and the file explorer showing the project structure.

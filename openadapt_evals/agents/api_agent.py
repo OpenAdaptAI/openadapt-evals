@@ -28,6 +28,7 @@ import logging
 import os
 import re
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 
 from PIL import Image
@@ -40,6 +41,20 @@ from openadapt_evals.adapters.base import (
 )
 
 logger = logging.getLogger("openadapt_evals.agents.api")
+
+# Load .env file if it exists
+try:
+    from dotenv import load_dotenv
+    # Try to find .env in current directory or parent directories
+    current_dir = Path.cwd()
+    for path in [current_dir] + list(current_dir.parents):
+        env_file = path / ".env"
+        if env_file.exists():
+            load_dotenv(env_file)
+            logger.debug(f"Loaded .env from {env_file}")
+            break
+except ImportError:
+    pass  # python-dotenv not installed, will rely on environment variables
 
 # Clarification prompt for retry on parse failure
 CLARIFICATION_PROMPT = """Your previous response could not be parsed. Please respond with EXACTLY this format:

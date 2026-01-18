@@ -1,0 +1,45 @@
+TASK: Erase area
+DOMAIN: paint
+
+STEPS:
+1. Open Paint application from Start menu
+   REASONING: Need to launch Paint to access the eraser tool and drawing canvas
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for Start menu to appear
+   REASONING: Allow the Start menu interface to fully load before proceeding
+   ACTION: WAIT(1.0)
+
+3. Type "paint" to search for Paint application
+   REASONING: Quickly locate Paint application through search functionality
+   ACTION: TYPE("paint")
+
+4. Wait for search results to populate
+   REASONING: Give the system time to display Paint in search results
+   ACTION: WAIT(0.5)
+
+5. Click on Paint application from search results
+   REASONING: Launch the Paint application
+   ACTION: CLICK(x=0.1, y=0.15)
+
+6. Wait for Paint to open
+   REASONING: Allow Paint application window to fully load and display the canvas
+   ACTION: WAIT(2.0)
+
+7. Click on the Eraser tool in the Tools section
+   REASONING: Select the eraser tool which is needed to erase areas on the canvas
+   ACTION: CLICK(x=0.15, y=0.12)
+
+8. Click on the canvas area where erasing should begin
+   REASONING: Position the eraser at the starting point of the area to be erased
+   ACTION: CLICK(x=0.5, y=0.5)
+
+9. Drag the eraser across the area to erase content
+   REASONING: Perform the actual erasing action by dragging the eraser tool over the desired region
+   ACTION: DRAG(start_x=0.4, start_y=0.4, end_x=0.6, end_y=0.6)
+
+10. Release and verify the erased area
+    REASONING: Task is complete - the specified area has been erased from the canvas
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: Paint application is open with the eraser tool selected and an area on the canvas has been successfully erased, showing a blank white space where content previously existed.

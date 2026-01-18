@@ -1,0 +1,49 @@
+TASK: Sort files by date
+DOMAIN: file_explorer
+
+STEPS:
+1. Open File Explorer from the taskbar
+   REASONING: Need to access File Explorer to navigate to files that need to be sorted by date
+   ACTION: CLICK(x=0.1, y=0.98)
+
+2. Wait for File Explorer window to open
+   REASONING: Allow time for the application to fully load before proceeding with further actions
+   ACTION: WAIT(1.0)
+
+3. Navigate to a folder containing files (e.g., Documents or Downloads)
+   REASONING: Need to be in a folder with files to demonstrate the sorting functionality
+   ACTION: CLICK(x=0.15, y=0.3)
+
+4. Wait for folder contents to load
+   REASONING: Ensure all files are displayed before attempting to sort them
+   ACTION: WAIT(0.5)
+
+5. Click on the "View" tab in the ribbon menu
+   REASONING: The View tab contains options for changing how files are displayed and sorted
+   ACTION: CLICK(x=0.25, y=0.08)
+
+6. Wait for View ribbon options to appear
+   REASONING: Allow the ribbon menu to expand and display all available view options
+   ACTION: WAIT(0.3)
+
+7. Click on "Sort by" option in the View ribbon
+   REASONING: This opens the sorting menu where we can select the date sorting option
+   ACTION: CLICK(x=0.35, y=0.12)
+
+8. Wait for sort menu to appear
+   REASONING: Allow the dropdown menu with sorting options to fully display
+   ACTION: WAIT(0.3)
+
+9. Select "Date modified" from the sort options
+   REASONING: This will sort all files in the current folder by their modification date, with newest or oldest first depending on current order
+   ACTION: CLICK(x=0.35, y=0.18)
+
+10. Wait for files to be sorted
+    REASONING: Allow File Explorer to reorder the files according to the date modified criterion
+    ACTION: WAIT(0.5)
+
+11. Verify the sorting is applied
+    REASONING: Confirm that files are now arranged chronologically by date, completing the task successfully
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: Files in the File Explorer window should now be sorted by date (Date Modified), displaying files in chronological order. The column header for "Date modified" may show an arrow indicator showing the sort direction (ascending or descending). Users can now easily find files based on when they were last modified.

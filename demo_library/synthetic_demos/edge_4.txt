@@ -1,0 +1,81 @@
+TASK: Clear cache and cookies
+DOMAIN: edge
+
+STEPS:
+1. Open Microsoft Edge browser
+   REASONING: Need to launch the application to access browser settings for clearing cache and cookies
+   ACTION: CLICK(x=0.5, y=0.98)
+
+2. Wait for taskbar search to appear
+   REASONING: Allow the start menu or taskbar search interface to fully load
+   ACTION: WAIT(1.0)
+
+3. Type "Edge" to search for Microsoft Edge
+   REASONING: Locate the Microsoft Edge browser application through search
+   ACTION: TYPE("Edge")
+
+4. Wait for search results
+   REASONING: Give the system time to display search results for Edge
+   ACTION: WAIT(0.5)
+
+5. Click on Microsoft Edge in search results
+   REASONING: Launch the Microsoft Edge browser application
+   ACTION: CLICK(x=0.5, y=0.3)
+
+6. Wait for Edge to fully load
+   REASONING: Ensure the browser window is completely opened and ready for interaction
+   ACTION: WAIT(2.0)
+
+7. Open Edge settings menu
+   REASONING: Access the settings menu where privacy and data clearing options are located
+   ACTION: CLICK(x=0.95, y=0.08)
+
+8. Wait for menu to expand
+   REASONING: Allow the dropdown menu to fully display all options
+   ACTION: WAIT(0.5)
+
+9. Click on "Settings" option
+   REASONING: Navigate to the main settings page where cache and cookie options can be found
+   ACTION: CLICK(x=0.9, y=0.45)
+
+10. Wait for Settings page to load
+    REASONING: Ensure the settings interface is fully rendered before proceeding
+    ACTION: WAIT(1.5)
+
+11. Click on "Privacy, search, and services" in the left sidebar
+    REASONING: This section contains the options for clearing browsing data including cache and cookies
+    ACTION: CLICK(x=0.15, y=0.25)
+
+12. Wait for privacy settings to load
+    REASONING: Allow the privacy settings panel to display completely
+    ACTION: WAIT(1.0)
+
+13. Click on "Choose what to clear" button under "Clear browsing data"
+    REASONING: Access the dialog that allows selection of specific data types to clear
+    ACTION: CLICK(x=0.6, y=0.35)
+
+14. Wait for clear browsing data dialog
+    REASONING: Allow the popup dialog with data clearing options to appear
+    ACTION: WAIT(1.0)
+
+15. Ensure "Cookies and other site data" checkbox is selected
+    REASONING: Need to verify or select cookies for deletion as required by the task
+    ACTION: CLICK(x=0.35, y=0.45)
+
+16. Ensure "Cached images and files" checkbox is selected
+    REASONING: Need to verify or select cache for deletion as required by the task
+    ACTION: CLICK(x=0.35, y=0.5)
+
+17. Click "Clear now" button
+    REASONING: Execute the clearing of selected cache and cookies data
+    ACTION: CLICK(x=0.6, y=0.7)
+
+18. Wait for clearing process to complete
+    REASONING: Allow Edge to process and remove the selected data
+    ACTION: WAIT(2.0)
+
+19. Task completion
+    REASONING: Cache and cookies have been successfully cleared from Microsoft Edge
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: Microsoft Edge's cache and cookies should be completely cleared. The browser may reload current pages or show a confirmation that browsing data has been cleared. Users will be logged out of websites and cached content will need to be reloaded on next visit.

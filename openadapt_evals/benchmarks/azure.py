@@ -64,7 +64,7 @@ class AzureConfig:
     workspace_name: str
     vm_size: str = "Standard_D2_v3"  # 2 vCPUs (fits free trial with existing usage)
     idle_timeout_minutes: int = 60
-    docker_image: str = "ghcr.io/microsoft/windowsagentarena:latest"
+    docker_image: str = "windowsarena/winarena:latest"  # Public Docker Hub image
     storage_account: str | None = None
     use_managed_identity: bool = False
     managed_identity_name: str | None = None
@@ -80,7 +80,7 @@ class AzureConfig:
 
         Optional env vars:
             AZURE_VM_SIZE (default: Standard_D4_v3)
-            AZURE_DOCKER_IMAGE (default: ghcr.io/microsoft/windowsagentarena:latest)
+            AZURE_DOCKER_IMAGE (default: windowsarena/winarena:latest)
 
         Authentication (one of):
             - AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID (service principal)
@@ -118,7 +118,7 @@ class AzureConfig:
             vm_size=os.getenv("AZURE_VM_SIZE", "Standard_D4_v3"),
             docker_image=os.getenv(
                 "AZURE_DOCKER_IMAGE",
-                "ghcr.io/microsoft/windowsagentarena:latest"
+                "windowsarena/winarena:latest"
             ),
         )
 
@@ -366,7 +366,7 @@ class AzureMLClient:
             Job name/ID.
         """
         from azure.ai.ml import command as ml_command
-        from azure.ai.ml.entities import Environment
+        from azure.ai.ml.entities import Environment, CommandJobLimits
 
         # Create environment with Docker image
         env = Environment(
@@ -389,7 +389,7 @@ class AzureMLClient:
             name=job_name,
             display_name=display_name or f"waa-job-{compute_name}",
             environment_variables=environment_variables or {},
-            limits={"timeout": timeout_seconds},
+            limits=CommandJobLimits(timeout=timeout_seconds),
         )
 
         submitted = self.client.jobs.create_or_update(job)

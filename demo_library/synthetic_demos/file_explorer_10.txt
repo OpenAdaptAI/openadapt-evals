@@ -1,0 +1,41 @@
+TASK: Show hidden files
+DOMAIN: file_explorer
+
+STEPS:
+1. Open File Explorer
+   REASONING: File Explorer must be opened to access the settings for showing hidden files
+   ACTION: CLICK(x=0.1, y=0.99)
+
+2. Wait for File Explorer to launch
+   REASONING: Allow time for the application window to fully load before proceeding
+   ACTION: WAIT(1.0)
+
+3. Click on the "View" tab in the ribbon
+   REASONING: The options for showing hidden files are located in the View tab of the ribbon menu
+   ACTION: CLICK(x=0.15, y=0.05)
+
+4. Wait for View tab options to display
+   REASONING: Allow time for the ribbon menu to expand and show all View options
+   ACTION: WAIT(0.5)
+
+5. Click on "Show" button in the ribbon
+   REASONING: The "Show" menu contains options for displaying hidden items in File Explorer
+   ACTION: CLICK(x=0.75, y=0.08)
+
+6. Wait for dropdown menu to appear
+   REASONING: Allow time for the Show dropdown menu to fully expand
+   ACTION: WAIT(0.3)
+
+7. Click on "Hidden items" checkbox
+   REASONING: Checking this option will make hidden files and folders visible in File Explorer
+   ACTION: CLICK(x=0.75, y=0.12)
+
+8. Wait for setting to apply
+   REASONING: Allow time for the system to apply the visibility setting change
+   ACTION: WAIT(0.5)
+
+9. Verify hidden files are now visible
+   REASONING: Confirm that the setting has been successfully applied and hidden files are now displayed with dimmed icons
+   ACTION: DONE()
+
+EXPECTED_OUTCOME: Hidden files and folders should now be visible in File Explorer, typically displayed with slightly dimmed or translucent icons to distinguish them from regular files. The "Hidden items" checkbox in the View > Show menu should be checked, indicating that the setting is active.

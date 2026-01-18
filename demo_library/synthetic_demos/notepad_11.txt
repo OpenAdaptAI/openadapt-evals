@@ -1,0 +1,33 @@
+TASK: Open Notepad
+DOMAIN: notepad
+
+STEPS:
+1. Click on the Start menu button
+   REASONING: The Start menu provides access to all installed applications and is the standard entry point for launching programs in Windows
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for the Start menu to open
+   REASONING: The Start menu needs time to fully render before we can interact with its search functionality
+   ACTION: WAIT(1.0)
+
+3. Type "notepad" in the search box
+   REASONING: Searching for Notepad by name is the quickest way to locate and launch the application rather than browsing through folders
+   ACTION: TYPE("notepad")
+
+4. Wait for search results to appear
+   REASONING: The system needs time to process the search query and display matching applications
+   ACTION: WAIT(0.5)
+
+5. Click on the Notepad application in the search results
+   REASONING: Clicking on the Notepad entry will launch the application
+   ACTION: CLICK(x=0.15, y=0.35)
+
+6. Wait for Notepad to launch
+   REASONING: The application needs time to initialize and display its main window
+   ACTION: WAIT(1.5)
+
+7. Verify Notepad is open and ready
+   REASONING: Confirming that Notepad has successfully opened with a blank document ensures the task is complete
+   ACTION: DONE()
+
+EXPECTED_OUTCOME: Notepad application is successfully launched and displays an empty text document window with a menu bar containing File, Edit, Format, View, and Help options. The window is ready for text input.

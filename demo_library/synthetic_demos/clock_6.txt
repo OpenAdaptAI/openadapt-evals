@@ -1,0 +1,73 @@
+TASK: Edit timer duration
+DOMAIN: clock
+
+STEPS:
+1. Open the Start menu to access applications
+   REASONING: Need to access the Windows Clock application to edit a timer
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for Start menu to open
+   REASONING: Allow time for the Start menu animation and rendering to complete
+   ACTION: WAIT(1.0)
+
+3. Type "Clock" to search for the Clock application
+   REASONING: Quickly locate the Windows Clock application through search
+   ACTION: TYPE("Clock")
+
+4. Wait for search results to appear
+   REASONING: Allow time for the search to process and display results
+   ACTION: WAIT(1.0)
+
+5. Click on the Clock application in search results
+   REASONING: Launch the Windows Clock application
+   ACTION: CLICK(x=0.5, y=0.3)
+
+6. Wait for Clock application to open
+   REASONING: Allow time for the application to fully load and display its interface
+   ACTION: WAIT(2.0)
+
+7. Click on the Timer tab
+   REASONING: Navigate to the Timer section where existing timers can be edited
+   ACTION: CLICK(x=0.3, y=0.08)
+
+8. Wait for Timer section to load
+   REASONING: Ensure the timer interface is fully rendered before interacting
+   ACTION: WAIT(0.5)
+
+9. Click on an existing timer to select it for editing
+   REASONING: Select the timer that needs duration modification
+   ACTION: CLICK(x=0.5, y=0.35)
+
+10. Click the Edit button (pencil icon) for the selected timer
+    REASONING: Enter edit mode to modify the timer's duration settings
+    ACTION: CLICK(x=0.85, y=0.35)
+
+11. Wait for edit interface to appear
+    REASONING: Allow the timer edit controls to display
+    ACTION: WAIT(0.5)
+
+12. Click on the minutes field to modify duration
+    REASONING: Focus on the time input field to change the timer duration
+    ACTION: CLICK(x=0.5, y=0.4)
+
+13. Clear existing time value and enter new duration
+    REASONING: Replace the current timer duration with the desired new value
+    ACTION: HOTKEY("ctrl", "a")
+
+14. Type the new timer duration
+    REASONING: Input the updated minutes value for the timer
+    ACTION: TYPE("15")
+
+15. Click the Save button to confirm changes
+    REASONING: Apply and save the edited timer duration
+    ACTION: CLICK(x=0.6, y=0.65)
+
+16. Wait for changes to be saved
+    REASONING: Ensure the updated timer duration is committed to the application
+    ACTION: WAIT(0.5)
+
+17. Task completion
+    REASONING: Timer duration has been successfully edited and saved
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: The timer duration should be successfully modified to the new value (15 minutes in this example). The updated timer will be displayed in the Timer section of the Clock application with the new duration, ready to be started when needed.

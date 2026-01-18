@@ -1,0 +1,65 @@
+TASK: Insert an image
+DOMAIN: office
+
+STEPS:
+1. Open the Start menu to access applications
+   REASONING: Need to launch a word processing application (LibreOffice Writer or Microsoft Word) to insert an image
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for Start menu to appear
+   REASONING: Allow time for the Start menu animation and rendering to complete
+   ACTION: WAIT(1.0)
+
+3. Type to search for LibreOffice Writer
+   REASONING: Searching is the fastest way to locate and launch the word processing application
+   ACTION: TYPE("libreoffice writer")
+
+4. Wait for search results to populate
+   REASONING: Allow time for the search index to return matching applications
+   ACTION: WAIT(1.0)
+
+5. Click on LibreOffice Writer in search results
+   REASONING: Launch the application to begin working with documents
+   ACTION: CLICK(x=0.15, y=0.25)
+
+6. Wait for LibreOffice Writer to fully load
+   REASONING: Application needs time to initialize and display the main document window
+   ACTION: WAIT(2.0)
+
+7. Click on the Insert menu in the menu bar
+   REASONING: The Insert menu contains options for adding various elements including images
+   ACTION: CLICK(x=0.12, y=0.05)
+
+8. Wait for Insert menu to expand
+   REASONING: Allow time for the dropdown menu to render completely
+   ACTION: WAIT(0.5)
+
+9. Click on "Image" option in the Insert menu
+   REASONING: This opens the file browser dialog to select an image file to insert
+   ACTION: CLICK(x=0.12, y=0.12)
+
+10. Wait for file browser dialog to open
+    REASONING: The file selection dialog needs time to load and display available files
+    ACTION: WAIT(1.5)
+
+11. Navigate to Pictures folder or select an image file
+    REASONING: Need to locate and select an image file to insert into the document
+    ACTION: CLICK(x=0.5, y=0.4)
+
+12. Wait briefly for file selection
+    REASONING: Allow time for the file to be highlighted/selected in the dialog
+    ACTION: WAIT(0.5)
+
+13. Click the "Open" or "Insert" button to confirm selection
+    REASONING: This action confirms the image selection and inserts it into the document
+    ACTION: CLICK(x=0.85, y=0.92)
+
+14. Wait for image to be inserted and rendered
+    REASONING: The application needs time to load the image file and display it in the document
+    ACTION: WAIT(1.0)
+
+15. Task completion
+    REASONING: The image has been successfully inserted into the document
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: An image file should be successfully inserted into the LibreOffice Writer document at the cursor position. The image will be visible in the document and can be resized, repositioned, or formatted as needed. The document is ready for further editing or saving.

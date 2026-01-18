@@ -1,0 +1,77 @@
+TASK: Change homepage settings
+DOMAIN: browser
+
+STEPS:
+1. Open Google Chrome browser
+   REASONING: Need to launch the browser application to access its settings
+   ACTION: CLICK(x=0.5, y=0.98)
+   
+2. Type "Chrome" to search for the application
+   REASONING: Search for Chrome in the Windows search bar to locate and launch it
+   ACTION: TYPE("Chrome")
+   
+3. Wait for search results to appear
+   REASONING: Allow time for Windows to display search results
+   ACTION: WAIT(1.0)
+   
+4. Click on Google Chrome in search results
+   REASONING: Launch the Chrome browser application
+   ACTION: CLICK(x=0.5, y=0.4)
+   
+5. Wait for browser to fully load
+   REASONING: Ensure Chrome is completely loaded before proceeding
+   ACTION: WAIT(2.0)
+   
+6. Click on the three-dot menu icon in top-right corner
+   REASONING: Access the Chrome menu to navigate to settings
+   ACTION: CLICK(x=0.95, y=0.08)
+   
+7. Wait for menu to expand
+   REASONING: Allow the dropdown menu to fully appear
+   ACTION: WAIT(0.5)
+   
+8. Click on "Settings" option in the menu
+   REASONING: Navigate to Chrome's settings page where homepage options are located
+   ACTION: CLICK(x=0.85, y=0.35)
+   
+9. Wait for Settings page to load
+   REASONING: Allow time for the settings interface to render completely
+   ACTION: WAIT(1.5)
+   
+10. Scroll down to find "On startup" section
+    REASONING: Homepage settings are typically located in the startup section
+    ACTION: SCROLL(direction="down")
+    
+11. Wait after scrolling
+    REASONING: Ensure the page has settled after scrolling
+    ACTION: WAIT(0.5)
+    
+12. Click on "Open a specific page or set of pages" radio button
+    REASONING: Select the option to set a custom homepage
+    ACTION: CLICK(x=0.15, y=0.45)
+    
+13. Click on "Add a new page" button
+    REASONING: Begin the process of adding a custom homepage URL
+    ACTION: CLICK(x=0.35, y=0.52)
+    
+14. Wait for URL input dialog to appear
+    REASONING: Allow the popup dialog for entering URL to display
+    ACTION: WAIT(0.5)
+    
+15. Type the desired homepage URL
+    REASONING: Enter the specific website address to set as homepage
+    ACTION: TYPE("https://www.google.com")
+    
+16. Click "Add" button to confirm
+    REASONING: Save the homepage URL setting
+    ACTION: CLICK(x=0.6, y=0.65)
+    
+17. Wait for confirmation
+    REASONING: Allow Chrome to save the new homepage setting
+    ACTION: WAIT(1.0)
+    
+18. Task complete
+    REASONING: Homepage has been successfully configured with the specified URL
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: The browser's homepage settings will be successfully changed to open a specific page (Google.com) on startup. The new setting will be saved and visible in the "On startup" section of Chrome settings, and the browser will now open to the specified page whenever it starts.

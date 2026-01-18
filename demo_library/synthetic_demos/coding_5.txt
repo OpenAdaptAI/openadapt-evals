@@ -1,0 +1,45 @@
+TASK: Use terminal to run 'python script.py'
+DOMAIN: coding
+
+STEPS:
+1. Open the Start menu to access applications
+   REASONING: Need to launch the terminal application to execute the Python script
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for Start menu to appear
+   REASONING: Allow the system UI to render the Start menu before proceeding
+   ACTION: WAIT(0.5)
+
+3. Type "terminal" to search for the terminal application
+   REASONING: Searching is the fastest way to locate and launch the terminal on Windows
+   ACTION: TYPE("terminal")
+
+4. Wait for search results to populate
+   REASONING: Give the system time to display matching applications
+   ACTION: WAIT(0.8)
+
+5. Click on Terminal application in search results
+   REASONING: Launch the terminal application to access the command line interface
+   ACTION: CLICK(x=0.15, y=0.35)
+
+6. Wait for terminal window to open
+   REASONING: Allow the terminal application to fully initialize before entering commands
+   ACTION: WAIT(1.5)
+
+7. Type the Python command to execute the script
+   REASONING: Enter the exact command needed to run the Python script file
+   ACTION: TYPE("python script.py")
+
+8. Press Enter to execute the command
+   REASONING: Submit the command to the terminal for execution
+   ACTION: HOTKEY("return")
+
+9. Wait for script execution to complete
+   REASONING: Allow time for Python to interpret and run the script, displaying any output
+   ACTION: WAIT(2.0)
+
+10. Verify script execution completed
+    REASONING: Task is complete once the Python script has been successfully run and control returns to the command prompt
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: The terminal window should display the output from running 'python script.py', with any print statements or results from the script visible in the console. The command prompt should return, indicating the script has finished executing.

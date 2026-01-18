@@ -1,0 +1,65 @@
+TASK: Change font size
+DOMAIN: notepad
+
+STEPS:
+1. Open Notepad application
+   REASONING: We need to launch Notepad to access its font settings
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for Start menu to appear
+   REASONING: Allow time for the Start menu to render before proceeding
+   ACTION: WAIT(1.0)
+
+3. Type "Notepad" in search
+   REASONING: Search for Notepad application in the Start menu
+   ACTION: TYPE("notepad")
+
+4. Wait for search results
+   REASONING: Allow time for search results to populate
+   ACTION: WAIT(0.5)
+
+5. Click on Notepad application
+   REASONING: Launch Notepad from the search results
+   ACTION: CLICK(x=0.15, y=0.25)
+
+6. Wait for Notepad to open
+   REASONING: Allow time for Notepad window to fully load
+   ACTION: WAIT(1.5)
+
+7. Click on Format menu
+   REASONING: The font size option is located within the Format menu
+   ACTION: CLICK(x=0.08, y=0.04)
+
+8. Wait for Format menu to expand
+   REASONING: Allow time for the dropdown menu to appear
+   ACTION: WAIT(0.5)
+
+9. Click on Font option
+   REASONING: Access the Font dialog where font size can be changed
+   ACTION: CLICK(x=0.08, y=0.08)
+
+10. Wait for Font dialog to open
+    REASONING: Allow time for the Font dialog window to fully render
+    ACTION: WAIT(1.0)
+
+11. Click on the Size list
+    REASONING: Select the font size field to change the current size
+    ACTION: CLICK(x=0.75, y=0.3)
+
+12. Select a new font size (e.g., 14)
+    REASONING: Choose a different size from the available options
+    ACTION: CLICK(x=0.75, y=0.35)
+
+13. Click OK button to apply changes
+    REASONING: Confirm and apply the new font size setting
+    ACTION: CLICK(x=0.7, y=0.85)
+
+14. Wait for changes to apply
+    REASONING: Allow Notepad to update with the new font size
+    ACTION: WAIT(0.5)
+
+15. Task completion
+    REASONING: Font size has been successfully changed in Notepad
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: The font size in Notepad should be changed to the selected size (e.g., 14pt), and any text typed in the editor will display in the new font size. The change will persist for the current Notepad session and affect all text in the document.

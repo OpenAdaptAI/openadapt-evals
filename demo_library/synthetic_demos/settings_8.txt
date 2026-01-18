@@ -1,0 +1,61 @@
+TASK: Change power settings
+DOMAIN: settings
+
+STEPS:
+1. Open the Start menu
+   REASONING: Need to access the Start menu to navigate to Windows Settings
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for Start menu to appear
+   REASONING: Allow the Start menu animation to complete before proceeding
+   ACTION: WAIT(1.0)
+
+3. Click on Settings icon
+   REASONING: Windows Settings app is required to access power settings
+   ACTION: CLICK(x=0.08, y=0.88)
+
+4. Wait for Settings app to load
+   REASONING: Allow the Settings application window to fully open and render
+   ACTION: WAIT(1.5)
+
+5. Click on System category
+   REASONING: Power settings are located within the System category in Windows Settings
+   ACTION: CLICK(x=0.15, y=0.15)
+
+6. Wait for System settings to load
+   REASONING: Allow the System settings page to display its options
+   ACTION: WAIT(1.0)
+
+7. Click on Power & battery option
+   REASONING: This section contains all power-related settings including sleep, screen timeout, and power plans
+   ACTION: CLICK(x=0.15, y=0.35)
+
+8. Wait for Power & battery settings to load
+   REASONING: Allow the power settings page to fully render with all available options
+   ACTION: WAIT(1.0)
+
+9. Scroll down to view additional power options
+   REASONING: Some power settings may be below the fold and require scrolling to access
+   ACTION: SCROLL(direction="down")
+
+10. Click on Screen and sleep settings dropdown
+    REASONING: Need to expand this section to modify when the screen turns off and when the device goes to sleep
+    ACTION: CLICK(x=0.50, y=0.45)
+
+11. Wait for dropdown options to appear
+    REASONING: Allow the expanded settings options to display
+    ACTION: WAIT(0.5)
+
+12. Click on "When plugged in, turn off my screen after" dropdown
+    REASONING: To modify the screen timeout setting when the device is plugged in
+    ACTION: CLICK(x=0.70, y=0.50)
+
+13. Select desired timeout value (e.g., 15 minutes)
+    REASONING: Set the screen timeout to the preferred duration
+    ACTION: CLICK(x=0.70, y=0.56)
+
+14. Task completed
+    REASONING: Power settings have been successfully changed as requested
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: The Windows Settings app should be open to the Power & battery section, with the power settings modified according to user preferences. The screen timeout setting will be updated to the selected value, and the changes will be automatically saved.

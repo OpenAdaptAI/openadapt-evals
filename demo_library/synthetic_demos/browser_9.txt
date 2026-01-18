@@ -1,0 +1,25 @@
+TASK: Open developer tools
+DOMAIN: browser
+
+STEPS:
+1. Ensure a web browser (Chrome/Edge) is open and active
+   REASONING: Developer tools can only be opened within an active browser window. We need to verify or establish that a browser window is in focus before attempting to access developer tools.
+   ACTION: CLICK(x=0.5, y=0.5)
+
+2. Wait for browser window to be ready
+   REASONING: Allow time for the browser to respond to the click and ensure it's in an active, ready state before executing keyboard commands.
+   ACTION: WAIT(0.5)
+
+3. Press F12 to open developer tools
+   REASONING: F12 is the universal keyboard shortcut across Chrome and Edge browsers to toggle developer tools. This is the fastest and most reliable method to open the developer tools panel.
+   ACTION: HOTKEY("F12")
+
+4. Wait for developer tools panel to load
+   REASONING: The developer tools panel needs time to initialize and render, especially on first opening. This ensures the panel is fully loaded before proceeding.
+   ACTION: WAIT(1.5)
+
+5. Verify developer tools are visible
+   REASONING: Confirm that the developer tools panel has successfully opened, typically appearing as a docked panel at the bottom or side of the browser window, showing tabs like Elements, Console, Sources, etc.
+   ACTION: DONE()
+
+EXPECTED_OUTCOME: The browser's developer tools panel should be visible and fully loaded, displaying various tabs (Elements, Console, Sources, Network, etc.) either docked to the bottom, right side of the browser window, or in a separate window. The panel should be interactive and ready for development and debugging tasks.

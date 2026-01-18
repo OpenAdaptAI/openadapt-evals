@@ -1,0 +1,33 @@
+TASK: Bookmark the current page
+DOMAIN: browser
+
+STEPS:
+1. Verify browser is open and active with a page loaded
+   REASONING: Need to ensure we have a browser window open with content to bookmark before proceeding with the bookmarking action
+   ACTION: WAIT(0.5)
+
+2. Press Ctrl+D to open the bookmark dialog
+   REASONING: This is the universal keyboard shortcut in both Chrome and Edge to create a bookmark for the current page, which is faster and more reliable than clicking the star icon
+   ACTION: HOTKEY("ctrl", "d")
+
+3. Wait for the bookmark dialog to appear
+   REASONING: The bookmark/favorites dialog needs time to render on screen before we can interact with it
+   ACTION: WAIT(1.0)
+
+4. Verify the bookmark name field is populated
+   REASONING: The browser automatically fills in the page title as the bookmark name, which we can accept as default or modify if needed
+   ACTION: WAIT(0.5)
+
+5. Press Enter to save the bookmark with default settings
+   REASONING: Pressing Enter confirms and saves the bookmark to the default location (usually the Bookmarks Bar or Favorites folder), completing the bookmarking action
+   ACTION: HOTKEY("return")
+
+6. Wait for confirmation
+   REASONING: Allow time for the bookmark to be saved and the dialog to close, confirming the operation completed successfully
+   ACTION: WAIT(0.5)
+
+7. Task completion
+   REASONING: The current page has been successfully bookmarked and can now be accessed from the bookmarks/favorites menu
+   ACTION: DONE()
+
+EXPECTED_OUTCOME: The current webpage is successfully added to the browser's bookmarks/favorites with the page title as the bookmark name, stored in the default bookmark location. The bookmark dialog closes automatically, and the page remains visible. Users can now access this page quickly from the bookmarks bar or favorites menu in future browsing sessions.

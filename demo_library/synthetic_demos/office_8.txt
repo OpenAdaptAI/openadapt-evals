@@ -1,0 +1,41 @@
+TASK: Create a spreadsheet
+DOMAIN: office
+
+STEPS:
+1. Click on the Start menu to access applications
+   REASONING: Need to open the Start menu to locate and launch a spreadsheet application like LibreOffice Calc or Microsoft Excel
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for Start menu to open
+   REASONING: Allow time for the Start menu interface to fully render before proceeding
+   ACTION: WAIT(1.0)
+
+3. Type to search for spreadsheet application
+   REASONING: Searching for "calc" or "excel" is the fastest way to locate the spreadsheet application among installed programs
+   ACTION: TYPE("calc")
+
+4. Wait for search results to appear
+   REASONING: Give the system time to process the search query and display matching applications
+   ACTION: WAIT(1.0)
+
+5. Click on LibreOffice Calc (or Excel) from search results
+   REASONING: Select the spreadsheet application to launch it and begin creating a new spreadsheet
+   ACTION: CLICK(x=0.15, y=0.25)
+
+6. Wait for LibreOffice Calc to launch
+   REASONING: The application needs time to initialize and open, typically showing a blank spreadsheet by default
+   ACTION: WAIT(2.0)
+
+7. Verify the spreadsheet is ready
+   REASONING: Ensure the application has fully loaded with a blank spreadsheet workspace containing cells, columns (A, B, C...), and rows (1, 2, 3...)
+   ACTION: WAIT(0.5)
+
+8. Click on cell A1 to ensure it's active
+   REASONING: Confirm the spreadsheet is interactive and ready for data entry by selecting the first cell
+   ACTION: CLICK(x=0.15, y=0.20)
+
+9. Task completed - spreadsheet created
+   REASONING: A new blank spreadsheet has been successfully created and is ready for use
+   ACTION: DONE()
+
+EXPECTED_OUTCOME: A spreadsheet application (LibreOffice Calc or Microsoft Excel) is open with a new blank spreadsheet displayed, showing the standard grid of cells with column headers (A, B, C, etc.) and row numbers (1, 2, 3, etc.), ready for data entry and manipulation.

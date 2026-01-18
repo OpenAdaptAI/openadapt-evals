@@ -1,0 +1,57 @@
+TASK: Open recent file
+DOMAIN: notepad
+
+STEPS:
+1. Click on the Start menu button
+   REASONING: Need to access the Windows Start menu to launch Notepad application
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for Start menu to open
+   REASONING: Allow time for the Start menu animation and rendering to complete
+   ACTION: WAIT(1.0)
+
+3. Type "notepad" to search for the application
+   REASONING: Quickly locate Notepad through the Start menu search functionality
+   ACTION: TYPE("notepad")
+
+4. Wait for search results to appear
+   REASONING: Allow the search indexer to find and display Notepad in results
+   ACTION: WAIT(0.5)
+
+5. Click on Notepad application in search results
+   REASONING: Launch the Notepad text editor application
+   ACTION: CLICK(x=0.15, y=0.25)
+
+6. Wait for Notepad to open
+   REASONING: Allow time for Notepad window to initialize and render completely
+   ACTION: WAIT(1.5)
+
+7. Click on the File menu
+   REASONING: Access the File menu to find recent file options
+   ACTION: CLICK(x=0.05, y=0.03)
+
+8. Wait for File menu to expand
+   REASONING: Allow the dropdown menu to fully display all options
+   ACTION: WAIT(0.5)
+
+9. Hover over or click "Open recent" option
+   REASONING: Access the submenu showing recently opened files in Notepad
+   ACTION: CLICK(x=0.12, y=0.18)
+
+10. Wait for recent files list to appear
+    REASONING: Allow the recent files submenu to populate and display
+    ACTION: WAIT(0.5)
+
+11. Click on the first/desired recent file from the list
+    REASONING: Select and open the target file from recent documents history
+    ACTION: CLICK(x=0.20, y=0.22)
+
+12. Wait for file to load
+    REASONING: Allow time for Notepad to read and display the file contents
+    ACTION: WAIT(1.0)
+
+13. Task completion
+    REASONING: Recent file has been successfully opened in Notepad
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: A recently accessed file should be opened in Notepad, displaying its contents in the editor window. The file name should appear in the Notepad title bar, and any previously saved content should be visible and ready for viewing or editing.

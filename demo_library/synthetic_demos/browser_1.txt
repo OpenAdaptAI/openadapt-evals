@@ -1,0 +1,49 @@
+TASK: Navigate to example.com
+DOMAIN: browser
+
+STEPS:
+1. Open the Start menu
+   REASONING: Need to access the application launcher to open a web browser
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for Start menu to appear
+   REASONING: Allow time for the Start menu animation and rendering to complete
+   ACTION: WAIT(0.5)
+
+3. Type browser name to search
+   REASONING: Quickly locate the web browser application (Chrome or Edge) through search
+   ACTION: TYPE("chrome")
+
+4. Wait for search results to populate
+   REASONING: Allow the Start menu search to find and display matching applications
+   ACTION: WAIT(0.5)
+
+5. Click on the browser application
+   REASONING: Launch the web browser to begin navigation task
+   ACTION: CLICK(x=0.15, y=0.25)
+
+6. Wait for browser to open
+   REASONING: Allow sufficient time for the browser application to fully load and initialize
+   ACTION: WAIT(2.0)
+
+7. Click on the address bar
+   REASONING: Focus the address bar to enable URL input
+   ACTION: CLICK(x=0.5, y=0.05)
+
+8. Type the target URL
+   REASONING: Enter the destination website address that needs to be navigated to
+   ACTION: TYPE("example.com")
+
+9. Press Enter to navigate
+   REASONING: Submit the URL and initiate navigation to the specified website
+   ACTION: HOTKEY("return")
+
+10. Wait for page to load
+    REASONING: Allow time for the browser to navigate to example.com and render the page content
+    ACTION: WAIT(2.0)
+
+11. Task completion
+    REASONING: The browser has successfully navigated to example.com and the page is now displayed
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: The web browser should be open and displaying the example.com website, with the URL "example.com" visible in the address bar and the Example Domain page content rendered in the browser window.

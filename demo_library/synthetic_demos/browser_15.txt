@@ -1,0 +1,73 @@
+TASK: Clear browsing history
+DOMAIN: browser
+
+STEPS:
+1. Open Google Chrome browser
+   REASONING: Need to launch the browser application to access browsing history settings
+   ACTION: CLICK(x=0.5, y=0.98)
+
+2. Wait for Windows Start menu to appear
+   REASONING: Allow time for the Start menu to fully render before typing
+   ACTION: WAIT(0.5)
+
+3. Type "Chrome" to search for the browser
+   REASONING: Quickly locate Google Chrome in the Start menu search
+   ACTION: TYPE("Chrome")
+
+4. Wait for search results to populate
+   REASONING: Allow time for search results to display
+   ACTION: WAIT(0.5)
+
+5. Click on Google Chrome from search results
+   REASONING: Launch the browser application
+   ACTION: CLICK(x=0.5, y=0.3)
+
+6. Wait for Chrome to fully load
+   REASONING: Ensure the browser window is completely loaded before proceeding
+   ACTION: WAIT(2.0)
+
+7. Open Chrome menu using keyboard shortcut
+   REASONING: Access the browser settings menu efficiently to navigate to history options
+   ACTION: HOTKEY("ctrl", "h")
+
+8. Wait for History panel to open
+   REASONING: Allow time for the history sidebar or tab to appear
+   ACTION: WAIT(1.0)
+
+9. Click on "Clear browsing data" button
+   REASONING: Access the dialog where browsing data can be deleted
+   ACTION: CLICK(x=0.2, y=0.25)
+
+10. Wait for Clear browsing data dialog to appear
+    REASONING: Allow the settings dialog to fully render with all options
+    ACTION: WAIT(1.0)
+
+11. Ensure "Browsing history" checkbox is selected
+    REASONING: Confirm that browsing history will be included in the data to be cleared
+    ACTION: CLICK(x=0.15, y=0.35)
+
+12. Select time range from dropdown
+    REASONING: Choose the appropriate time period for clearing history (default is often "Last hour" but user may want "All time")
+    ACTION: CLICK(x=0.5, y=0.25)
+
+13. Wait for dropdown menu to expand
+    REASONING: Allow time for time range options to display
+    ACTION: WAIT(0.5)
+
+14. Select "All time" option
+    REASONING: Clear all browsing history from the beginning (most common use case for this task)
+    ACTION: CLICK(x=0.5, y=0.45)
+
+15. Click "Clear data" button to confirm
+    REASONING: Execute the clearing of browsing history
+    ACTION: CLICK(x=0.7, y=0.8)
+
+16. Wait for data clearing process to complete
+    REASONING: Allow Chrome to process and clear the browsing history
+    ACTION: WAIT(2.0)
+
+17. Task completed successfully
+    REASONING: Browsing history has been cleared from the browser
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: All browsing history for the selected time range (All time) should be permanently deleted from Google Chrome. The history page should now show no entries, and previously visited sites will no longer appear in the browser's history. A confirmation message may briefly appear indicating the data has been cleared.

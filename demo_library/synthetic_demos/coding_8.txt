@@ -1,0 +1,77 @@
+TASK: Search for text in files
+DOMAIN: coding
+
+STEPS:
+1. Open the Start menu to access applications
+   REASONING: Need to launch Visual Studio Code which is the primary tool for searching text in files efficiently
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for Start menu to appear
+   REASONING: Allow the system time to render the Start menu before interacting with it
+   ACTION: WAIT(1.0)
+
+3. Type "Visual Studio Code" to search for the application
+   REASONING: Quickly locate Visual Studio Code instead of manually browsing through the application list
+   ACTION: TYPE("Visual Studio Code")
+
+4. Wait for search results to populate
+   REASONING: Give the system time to filter and display matching applications
+   ACTION: WAIT(0.5)
+
+5. Click on Visual Studio Code from the search results
+   REASONING: Launch the application to access its file search capabilities
+   ACTION: CLICK(x=0.15, y=0.35)
+
+6. Wait for Visual Studio Code to fully load
+   REASONING: Ensure the application interface is completely rendered before attempting to interact with it
+   ACTION: WAIT(2.0)
+
+7. Open a folder to search within
+   REASONING: Need to specify the directory scope where the text search will be performed
+   ACTION: HOTKEY("ctrl", "k", "ctrl", "o")
+
+8. Wait for folder selection dialog to appear
+   REASONING: Allow the file explorer dialog to open before selecting a folder
+   ACTION: WAIT(1.0)
+
+9. Navigate to and select the target folder (e.g., Documents)
+   REASONING: Choose the directory containing the files to be searched
+   ACTION: CLICK(x=0.3, y=0.4)
+
+10. Confirm folder selection
+    REASONING: Load the selected folder into VS Code's workspace for searching
+    ACTION: CLICK(x=0.7, y=0.85)
+
+11. Wait for folder to load in workspace
+    REASONING: Allow VS Code to index and display the folder structure
+    ACTION: WAIT(1.5)
+
+12. Open the Search panel using keyboard shortcut
+    REASONING: Access the search-in-files functionality which allows searching across multiple files simultaneously
+    ACTION: HOTKEY("ctrl", "shift", "f")
+
+13. Wait for Search panel to appear
+    REASONING: Ensure the search interface is ready for input
+    ACTION: WAIT(0.5)
+
+14. Type the search term in the search box
+    REASONING: Specify the text pattern to find across all files in the workspace
+    ACTION: TYPE("function calculateTotal")
+
+15. Press Enter to execute the search
+    REASONING: Initiate the search operation to find all occurrences of the specified text
+    ACTION: HOTKEY("Return")
+
+16. Wait for search results to populate
+    REASONING: Allow VS Code to scan through files and compile matching results
+    ACTION: WAIT(1.5)
+
+17. Review the search results displayed in the panel
+    REASONING: Verify that the search has been executed and results are visible, showing file names, line numbers, and context
+    ACTION: CLICK(x=0.15, y=0.35)
+
+18. Mark task as complete
+    REASONING: The text search across files has been successfully performed and results are displayed
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: Visual Studio Code is open with a folder loaded, and the Search panel displays all occurrences of the searched text "function calculateTotal" across multiple files, showing file names, line numbers, and code context for each match. The user can now navigate through results and view each occurrence in detail.

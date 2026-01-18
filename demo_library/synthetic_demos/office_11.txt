@@ -1,0 +1,41 @@
+TASK: Create a new document
+DOMAIN: office
+
+STEPS:
+1. Click on the Start menu to access applications
+   REASONING: Need to open the Start menu to locate and launch a word processing application
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for the Start menu to fully appear
+   REASONING: Allow time for the UI to render before proceeding with the next action
+   ACTION: WAIT(1.0)
+
+3. Type "word" to search for a word processing application
+   REASONING: Search for Microsoft Word or LibreOffice Writer to create a text document
+   ACTION: TYPE("word")
+
+4. Wait for search results to populate
+   REASONING: Allow the system to find and display matching applications
+   ACTION: WAIT(1.0)
+
+5. Click on the word processing application from search results
+   REASONING: Launch the application (Microsoft Word, LibreOffice Writer, or similar) to begin creating a document
+   ACTION: CLICK(x=0.15, y=0.35)
+
+6. Wait for the application to fully load
+   REASONING: Word processing applications may take several seconds to initialize and display the interface
+   ACTION: WAIT(3.0)
+
+7. Click on "Blank document" or "New Document" option
+   REASONING: Most word processors open with a start screen offering template choices; selecting blank document creates an empty new document
+   ACTION: CLICK(x=0.25, y=0.35)
+
+8. Wait for the new document to open
+   REASONING: Allow time for the blank document workspace to load and become ready for input
+   ACTION: WAIT(1.5)
+
+9. Verify the document is ready by checking for a blinking cursor
+   REASONING: A blinking cursor in the document area confirms that a new blank document has been successfully created and is ready for editing
+   ACTION: DONE()
+
+EXPECTED_OUTCOME: A word processing application (Microsoft Word or LibreOffice Writer) should be open with a new blank document displayed, showing an empty white page with a blinking text cursor, ready for the user to begin typing content.

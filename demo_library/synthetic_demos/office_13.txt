@@ -1,0 +1,57 @@
+TASK: Format text as bold/italic
+DOMAIN: office
+
+STEPS:
+1. Open LibreOffice Writer application
+   REASONING: Need to launch a word processing application to perform text formatting tasks
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for Start menu to appear
+   REASONING: Allow time for the Start menu interface to fully render
+   ACTION: WAIT(1.0)
+
+3. Type application name to search
+   REASONING: Quickly locate LibreOffice Writer through search functionality
+   ACTION: TYPE("libreoffice writer")
+
+4. Wait for search results
+   REASONING: Allow the search to complete and display results
+   ACTION: WAIT(1.0)
+
+5. Click on LibreOffice Writer from search results
+   REASONING: Launch the application from the search results
+   ACTION: CLICK(x=0.15, y=0.35)
+
+6. Wait for LibreOffice Writer to fully load
+   REASONING: Ensure the application interface is completely ready for interaction
+   ACTION: WAIT(2.0)
+
+7. Type sample text in the document
+   REASONING: Need text content to apply bold and italic formatting to
+   ACTION: TYPE("This text will be formatted as bold and italic.")
+
+8. Select all the typed text
+   REASONING: Must select the text before applying formatting; using Ctrl+A to select all
+   ACTION: HOTKEY("ctrl", "a")
+
+9. Apply bold formatting to selected text
+   REASONING: Use keyboard shortcut Ctrl+B to make the selected text bold
+   ACTION: HOTKEY("ctrl", "b")
+
+10. Wait briefly for formatting to apply
+    REASONING: Allow the application to process the bold formatting command
+    ACTION: WAIT(0.5)
+
+11. Apply italic formatting to the same text
+    REASONING: Use keyboard shortcut Ctrl+I to make the already-bold text also italic
+    ACTION: HOTKEY("ctrl", "i")
+
+12. Click elsewhere in document to deselect text
+    REASONING: Deselect the text to clearly see the applied bold and italic formatting
+    ACTION: CLICK(x=0.5, y=0.6)
+
+13. Task complete
+    REASONING: Text has been successfully formatted with both bold and italic styles applied
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: The text "This text will be formatted as bold and italic." should appear in the LibreOffice Writer document with both bold and italic formatting applied simultaneously, making it appear heavy-weighted and slanted.

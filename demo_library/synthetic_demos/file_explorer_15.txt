@@ -1,0 +1,49 @@
+TASK: Copy file to Desktop
+DOMAIN: file_explorer
+
+STEPS:
+1. Open File Explorer
+   REASONING: Need to access the file system to locate the file that needs to be copied to Desktop
+   ACTION: CLICK(x=0.5, y=0.98)
+
+2. Wait for File Explorer to open
+   REASONING: Allow time for the application window to fully load before proceeding
+   ACTION: WAIT(1.5)
+
+3. Navigate to the location containing the file
+   REASONING: Need to access the source directory where the file is currently stored. Assuming the file is in Documents folder as a common scenario
+   ACTION: CLICK(x=0.15, y=0.25)
+
+4. Wait for folder contents to load
+   REASONING: Allow time for the folder navigation and file list to populate
+   ACTION: WAIT(1.0)
+
+5. Locate and select the target file
+   REASONING: Need to identify and select the specific file to be copied. Clicking on a file in the middle area of the file list
+   ACTION: CLICK(x=0.5, y=0.4)
+
+6. Copy the selected file
+   REASONING: Use the standard Windows copy command to copy the file to clipboard
+   ACTION: HOTKEY("ctrl", "c")
+
+7. Navigate to Desktop in the navigation pane
+   REASONING: Desktop is the destination location where the file needs to be pasted
+   ACTION: CLICK(x=0.15, y=0.15)
+
+8. Wait for Desktop folder to load
+   REASONING: Allow time for the Desktop folder contents to display in File Explorer
+   ACTION: WAIT(1.0)
+
+9. Paste the file to Desktop
+   REASONING: Execute the paste command to complete the copy operation and place the file on Desktop
+   ACTION: HOTKEY("ctrl", "v")
+
+10. Wait for the file to be copied
+    REASONING: Allow time for the file copy operation to complete and the file to appear in the Desktop folder view
+    ACTION: WAIT(1.0)
+
+11. Verify the file appears on Desktop
+    REASONING: Confirm the copy operation was successful by observing the file in the Desktop folder listing
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: The selected file should now exist in both its original location and on the Desktop. The Desktop folder in File Explorer should display the newly copied file, confirming a successful copy operation.

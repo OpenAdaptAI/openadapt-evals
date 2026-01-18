@@ -1,0 +1,21 @@
+TASK: Undo last action
+DOMAIN: paint
+
+STEPS:
+1. Verify Paint application is open and active
+   REASONING: Need to ensure we're working in the Paint application before attempting to undo an action
+   ACTION: CLICK(x=0.5, y=0.1)
+
+2. Press Ctrl+Z keyboard shortcut to undo the last action
+   REASONING: This is the standard Windows keyboard shortcut for undoing the most recent action in Paint, which is the quickest and most direct method
+   ACTION: HOTKEY("ctrl", "z")
+
+3. Wait for the undo action to complete
+   REASONING: Allow time for Paint to process the undo operation and update the canvas accordingly
+   ACTION: WAIT(0.5)
+
+4. Task completion
+   REASONING: The undo operation has been successfully executed using the keyboard shortcut
+   ACTION: DONE()
+
+EXPECTED_OUTCOME: The last action performed in Paint (such as a brush stroke, shape insertion, text addition, or color fill) should be reversed, returning the canvas to its previous state before that action was taken. The undo operation should be reflected immediately on the canvas.

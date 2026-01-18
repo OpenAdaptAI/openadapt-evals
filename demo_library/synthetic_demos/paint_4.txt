@@ -1,0 +1,45 @@
+TASK: Use pencil tool
+DOMAIN: paint
+
+STEPS:
+1. Open the Start menu to access applications
+   REASONING: Need to launch Windows Paint application to use the pencil tool
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for Start menu to appear
+   REASONING: Allow time for the Start menu animation and rendering to complete
+   ACTION: WAIT(1.0)
+
+3. Type "paint" to search for the Paint application
+   REASONING: Quickly locate Paint by using the search functionality in the Start menu
+   ACTION: TYPE("paint")
+
+4. Wait for search results to populate
+   REASONING: Give the system time to find and display Paint in search results
+   ACTION: WAIT(1.0)
+
+5. Click on Paint application from search results
+   REASONING: Launch the Paint application to access drawing tools
+   ACTION: CLICK(x=0.08, y=0.35)
+
+6. Wait for Paint to fully load
+   REASONING: Ensure the Paint application window is completely rendered with all tools visible
+   ACTION: WAIT(2.0)
+
+7. Click on the "Pencil" tool in the Tools section
+   REASONING: Select the pencil tool from the ribbon interface, typically located in the Home tab under Tools group (usually near the top-left of the toolbar area)
+   ACTION: CLICK(x=0.15, y=0.08)
+
+8. Wait for tool selection to register
+   REASONING: Allow Paint to update the cursor and activate the pencil drawing mode
+   ACTION: WAIT(0.5)
+
+9. Test the pencil tool by drawing on the canvas
+   REASONING: Verify the pencil tool is working correctly by making a simple stroke on the drawing canvas
+   ACTION: DRAG(start_x=0.3, start_y=0.4, end_x=0.5, end_y=0.5)
+
+10. Task completed successfully
+    REASONING: The pencil tool has been selected and tested, confirming it is active and functional
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: The Paint application should be open with the pencil tool selected and active. A pencil stroke should be visible on the canvas, confirming the tool is working. The cursor should display as a pencil icon when hovering over the drawing area, and the pencil tool button should appear highlighted/selected in the Tools section of the ribbon.

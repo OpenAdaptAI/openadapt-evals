@@ -1,0 +1,49 @@
+TASK: Search for 'sample query' on Google
+DOMAIN: browser
+
+STEPS:
+1. Open the Start menu to access applications
+   REASONING: Need to launch a web browser to perform the Google search
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for Start menu to appear
+   REASONING: The Start menu needs time to fully render before interaction
+   ACTION: WAIT(0.5)
+
+3. Type browser name to search for it
+   REASONING: Typing "chrome" or "edge" will quickly locate the browser in the Start menu
+   ACTION: TYPE("chrome")
+
+4. Wait for search results to populate
+   REASONING: Allow the Start menu search to find and display the browser application
+   ACTION: WAIT(0.5)
+
+5. Click on the browser application in search results
+   REASONING: Launch the browser to begin the web search task
+   ACTION: CLICK(x=0.5, y=0.3)
+
+6. Wait for browser to fully load
+   REASONING: Browser needs time to initialize and display the interface
+   ACTION: WAIT(2.0)
+
+7. Click on the address bar
+   REASONING: Need to focus the address bar to enter the search query or navigate to Google
+   ACTION: CLICK(x=0.5, y=0.05)
+
+8. Type the search query with Google search syntax
+   REASONING: Typing the query directly in the address bar will initiate a Google search (Chrome/Edge default behavior)
+   ACTION: TYPE("sample query")
+
+9. Press Enter to execute the search
+   REASONING: Submitting the query will navigate to Google search results page
+   ACTION: HOTKEY("enter")
+
+10. Wait for Google search results to load
+    REASONING: Allow time for the page to load and display search results
+    ACTION: WAIT(2.0)
+
+11. Verify search results are displayed
+    REASONING: Confirm that the search has completed successfully and results are visible
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: The browser should be open with Google search results displaying entries related to 'sample query'. The search term should be visible in the Google search box, and the page should show various search results, links, and snippets matching the query.

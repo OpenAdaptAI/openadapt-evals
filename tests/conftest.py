@@ -2,15 +2,15 @@
 
 import pytest
 
-from openadapt_evals.benchmarks.base import (
+from openadapt_evals.adapters import (
     BenchmarkAction,
     BenchmarkObservation,
     BenchmarkResult,
     BenchmarkTask,
     UIElement,
+    WAAMockAdapter,
 )
-from openadapt_evals.benchmarks.waa import WAAMockAdapter
-from openadapt_evals.benchmarks.agent import (
+from openadapt_evals.agents import (
     BenchmarkAgent,
     ScriptedAgent,
     SmartMockAgent,

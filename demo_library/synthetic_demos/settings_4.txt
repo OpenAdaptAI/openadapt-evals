@@ -1,0 +1,61 @@
+TASK: Change desktop background
+DOMAIN: settings
+
+STEPS:
+1. Click on the Start menu button
+   REASONING: Need to access the Start menu to navigate to Windows Settings
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for Start menu to open
+   REASONING: Allow time for the Start menu animation and content to fully load
+   ACTION: WAIT(1.0)
+
+3. Click on the Settings icon
+   REASONING: Open Windows Settings app where personalization options are located
+   ACTION: CLICK(x=0.05, y=0.88)
+
+4. Wait for Settings window to open
+   REASONING: Allow time for the Settings application to launch and display
+   ACTION: WAIT(1.5)
+
+5. Click on "Personalization" category
+   REASONING: The Personalization section contains desktop background customization options
+   ACTION: CLICK(x=0.3, y=0.25)
+
+6. Wait for Personalization settings to load
+   REASONING: Allow the personalization page to fully render with all options
+   ACTION: WAIT(1.0)
+
+7. Click on "Background" option in the left sidebar
+   REASONING: This is the specific section for changing desktop background settings
+   ACTION: CLICK(x=0.15, y=0.20)
+
+8. Wait for Background settings to display
+   REASONING: Allow the background customization panel to load with all available options
+   ACTION: WAIT(0.5)
+
+9. Click on the background dropdown menu
+   REASONING: Need to select the type of background (Picture, Solid color, or Slideshow)
+   ACTION: CLICK(x=0.6, y=0.25)
+
+10. Select "Picture" option from dropdown
+    REASONING: Choose to set a static image as the desktop background
+    ACTION: CLICK(x=0.6, y=0.30)
+
+11. Wait for picture options to appear
+    REASONING: Allow the interface to update and show available background images
+    ACTION: WAIT(0.5)
+
+12. Click on a desired background image thumbnail
+    REASONING: Select the specific image to apply as the new desktop background
+    ACTION: CLICK(x=0.5, y=0.45)
+
+13. Wait for background to apply
+    REASONING: Allow the system to process and apply the new background setting
+    ACTION: WAIT(1.0)
+
+14. Task completed successfully
+    REASONING: The desktop background has been changed to the selected image
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: The desktop background should be changed to the newly selected image. The change should be immediately visible on the desktop, and the Settings window will show the selected background as the current choice with a checkmark or highlight indicator.

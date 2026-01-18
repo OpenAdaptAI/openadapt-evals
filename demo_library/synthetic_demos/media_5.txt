@@ -1,0 +1,21 @@
+TASK: Skip forward 10 seconds
+DOMAIN: media
+
+STEPS:
+1. Verify media player application is open and playing content
+   REASONING: Before skipping forward, we need to ensure a media player is active with content currently playing or paused
+   ACTION: WAIT(0.5)
+
+2. Press the right arrow key to skip forward 10 seconds
+   REASONING: In most media players (VLC, Windows Media Player), the right arrow key is the standard keyboard shortcut to skip forward 10 seconds during playback
+   ACTION: HOTKEY("right")
+
+3. Verify the skip forward action was successful
+   REASONING: Allow time for the media player to process the skip command and update the playback position
+   ACTION: WAIT(0.5)
+
+4. Task completion
+   REASONING: The media has been skipped forward by 10 seconds using the keyboard shortcut
+   ACTION: DONE()
+
+EXPECTED_OUTCOME: The media playback position should advance by 10 seconds from its current position. The time indicator in the media player should reflect the new position (e.g., if it was at 1:30, it should now show approximately 1:40). The video or audio content should continue playing from the new position.

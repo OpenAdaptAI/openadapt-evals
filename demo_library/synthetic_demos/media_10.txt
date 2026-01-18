@@ -1,0 +1,101 @@
+TASK: Adjust audio settings
+DOMAIN: media
+
+STEPS:
+1. Open the Start menu to access applications
+   REASONING: Need to launch a media player application to adjust audio settings
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for Start menu to appear
+   REASONING: Allow the UI to fully render before interacting with it
+   ACTION: WAIT(1.0)
+
+3. Type to search for VLC Media Player
+   REASONING: VLC is a common media player with comprehensive audio settings
+   ACTION: TYPE("VLC Media Player")
+
+4. Wait for search results to populate
+   REASONING: Allow time for the search to complete and display results
+   ACTION: WAIT(0.8)
+
+5. Click on VLC Media Player from search results
+   REASONING: Launch the application to access its audio settings
+   ACTION: CLICK(x=0.5, y=0.3)
+
+6. Wait for VLC Media Player to open
+   REASONING: Allow the application to fully load before accessing menus
+   ACTION: WAIT(2.0)
+
+7. Open the Audio menu in the menu bar
+   REASONING: Audio settings are typically found in the Audio menu
+   ACTION: CLICK(x=0.15, y=0.05)
+
+8. Wait for menu dropdown to appear
+   REASONING: Allow the menu to expand and display options
+   ACTION: WAIT(0.5)
+
+9. Click on "Audio Device" option
+   REASONING: Access audio device selection to configure output settings
+   ACTION: CLICK(x=0.15, y=0.12)
+
+10. Wait for submenu to appear
+    REASONING: Allow the submenu with available audio devices to display
+    ACTION: WAIT(0.5)
+
+11. Select the desired audio output device
+    REASONING: Choose the appropriate audio device for playback
+    ACTION: CLICK(x=0.25, y=0.18)
+
+12. Open the Audio menu again
+    REASONING: Need to access additional audio settings like volume control
+    ACTION: CLICK(x=0.15, y=0.05)
+
+13. Wait for menu to open
+    REASONING: Allow menu to fully expand
+    ACTION: WAIT(0.5)
+
+14. Hover over "Stereo Mode" option
+    REASONING: Access stereo audio configuration settings
+    ACTION: CLICK(x=0.15, y=0.15)
+
+15. Wait for stereo mode submenu
+    REASONING: Allow submenu options to display
+    ACTION: WAIT(0.5)
+
+16. Select stereo mode preference
+    REASONING: Configure the audio channel output format
+    ACTION: CLICK(x=0.25, y=0.22)
+
+17. Use keyboard shortcut to open full audio settings
+    REASONING: Access comprehensive audio configuration through Tools > Preferences
+    ACTION: HOTKEY("ctrl", "p")
+
+18. Wait for preferences window to open
+    REASONING: Allow the preferences dialog to fully load
+    ACTION: WAIT(1.5)
+
+19. Click on "Audio" section in the left sidebar
+    REASONING: Navigate to the audio-specific settings panel
+    ACTION: CLICK(x=0.15, y=0.35)
+
+20. Wait for audio settings panel to load
+    REASONING: Allow the settings to populate in the main area
+    ACTION: WAIT(0.5)
+
+21. Adjust the volume slider to desired level
+    REASONING: Set the default volume level for playback
+    ACTION: DRAG(start_x=0.5, start_y=0.4, end_x=0.65, end_y=0.4)
+
+22. Click "Save" button to apply changes
+    REASONING: Persist the audio configuration changes
+    ACTION: CLICK(x=0.5, y=0.9)
+
+23. Wait for settings to be saved
+    REASONING: Allow the application to apply and save the new settings
+    ACTION: WAIT(0.5)
+
+24. Task completion
+    REASONING: Audio settings have been successfully adjusted
+    ACTION: DONE()
+
+EXPECTED_OUTCOME: VLC Media Player's audio settings have been successfully adjusted, including audio device selection, stereo mode configuration, and volume level. The changes are saved and will be applied to media playback. The user now has customized audio output settings configured according to their preferences.

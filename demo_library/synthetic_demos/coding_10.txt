@@ -1,0 +1,33 @@
+TASK: Open settings
+DOMAIN: coding
+
+STEPS:
+1. Click on the Start menu button to access Windows applications
+   REASONING: Need to access the Windows Start menu to find and open Settings application, which is the standard entry point for system configuration
+   ACTION: CLICK(x=0.02, y=0.98)
+
+2. Wait for Start menu to fully expand and render
+   REASONING: The Start menu needs time to load and display all available options and search functionality before interaction
+   ACTION: WAIT(1.0)
+
+3. Type "settings" in the Start menu search box
+   REASONING: Typing in the Start menu search is the fastest way to locate the Windows Settings application without navigating through menus
+   ACTION: TYPE("settings")
+
+4. Wait for search results to populate
+   REASONING: The system needs time to process the search query and display matching results, including the Settings application
+   ACTION: WAIT(0.8)
+
+5. Click on the "Settings" application in the search results
+   REASONING: This will launch the Windows Settings application, which is typically the first result shown for the "settings" query
+   ACTION: CLICK(x=0.15, y=0.35)
+
+6. Wait for Settings application to open and load its interface
+   REASONING: The Settings application needs time to initialize and display its main interface with all configuration categories
+   ACTION: WAIT(1.5)
+
+7. Mark task as complete
+   REASONING: The Settings application is now open and ready for configuration tasks, completing the objective
+   ACTION: DONE()
+
+EXPECTED_OUTCOME: The Windows Settings application should be open and displaying the main settings dashboard with various categories like System, Bluetooth & devices, Network & internet, Personalization, Apps, Accounts, Time & language, Gaming, Accessibility, Privacy & security, and Windows Update. The user can now navigate to any specific setting they need to modify.
