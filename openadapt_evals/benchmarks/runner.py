@@ -285,22 +285,33 @@ def _run_single_task(
 
     try:
         # Reset agent and environment
+        logger.info(f"Resetting environment for task {task.task_id}")
         agent.reset()
         obs = adapter.reset(task)
+        logger.info("Environment reset complete, starting task execution")
 
         done = False
         steps = 0
         max_steps = task.time_limit_steps or config.max_steps
 
         while not done and steps < max_steps:
+            logger.info(f"Step {steps}: Getting action from agent")
+
             # Get action from agent
-            action = agent.act(obs, task, history if config.save_trajectories else None)
+            try:
+                action = agent.act(obs, task, history if config.save_trajectories else None)
+                logger.info(f"Step {steps}: Agent chose action: {action.type}")
+            except Exception as e:
+                logger.error(f"Step {steps}: Failed to get action from agent: {e}")
+                raise
 
             # Extract reasoning if available from PolicyAgent
             reasoning = None
             if hasattr(action, "raw_action") and action.raw_action:
                 if isinstance(action.raw_action, dict):
                     reasoning = action.raw_action.get("thought")
+                    if reasoning:
+                        logger.info(f"Step {steps}: Agent reasoning: {reasoning[:100]}...")
 
             # Record step in trace collector
             if trace_collector is not None:
@@ -319,20 +330,41 @@ def _run_single_task(
 
             # Check for terminal action
             if action.type == "done":
+                logger.info(f"Step {steps}: Agent signaled task completion")
                 done = True
                 break
 
             # Execute action
-            obs, done, info = adapter.step(action)
+            try:
+                logger.info(f"Step {steps}: Executing action in environment")
+                obs, done, info = adapter.step(action)
+                if done:
+                    logger.info(f"Step {steps}: Environment signaled task completion")
+            except Exception as e:
+                logger.error(f"Step {steps}: Failed to execute action: {e}")
+                raise
+
             steps += 1
 
+        if steps >= max_steps:
+            logger.warning(f"Task reached maximum steps ({max_steps})")
+
         # Evaluate result
+        logger.info("Evaluating task result")
         result = adapter.evaluate(task)
 
         # Update result with trajectory info
         result.steps = history if config.save_trajectories else []
         result.num_steps = steps
         result.total_time_seconds = time.perf_counter() - start_time
+
+        # Log final result
+        if result.success:
+            logger.info(f"[SUCCESS] Task {task.task_id} completed successfully (score: {result.score:.2f})")
+        else:
+            logger.error(f"Task {task.task_id} failed (score: {result.score:.2f})")
+            if result.error:
+                logger.error(f"Error reason: {result.error}")
 
         # Finish trace collection if enabled
         if trace_collector is not None:

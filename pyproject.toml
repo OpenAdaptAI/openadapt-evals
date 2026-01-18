@@ -34,6 +34,7 @@ dependencies = [
     "open-clip-torch>=2.20.0",
     "pillow>=10.0.0",
     "python-dotenv>=1.2.1",
+    "tenacity>=8.2.0",
 ]
 
 [project.optional-dependencies]
@@ -54,8 +55,13 @@ retrieval = [
     # For RetrievalAugmentedAgent with automatic demo selection
     "openadapt-retrieval>=0.1.0",
 ]
+viewer = [
+    # For live benchmark viewer API server
+    "flask>=3.0.0",
+    "flask-cors>=4.0.0",
+]
 all = [
-    "openadapt-evals[dev,waa,azure,retrieval]",
+    "openadapt-evals[dev,waa,azure,retrieval,viewer]",
 ]
 test = [
     "anthropic>=0.76.0",

@@ -56,6 +56,71 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class LogEntry:
+    """Single log entry during execution.
+
+    Attributes:
+        timestamp: Timestamp of the log entry (seconds since task start).
+        level: Log level (INFO, WARNING, ERROR, SUCCESS).
+        message: Log message.
+    """
+
+    timestamp: float
+    level: str
+    message: str
+
+
+class TaskLogHandler(logging.Handler):
+    """Custom log handler that captures logs for the current task."""
+
+    def __init__(self):
+        super().__init__()
+        self.logs: list[LogEntry] = []
+        self.task_start_time: float | None = None
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Capture a log record."""
+        if self.task_start_time is None:
+            return
+
+        # Calculate relative timestamp
+        timestamp = record.created - self.task_start_time
+
+        # Map logging levels to our format
+        level_map = {
+            logging.DEBUG: "INFO",
+            logging.INFO: "INFO",
+            logging.WARNING: "WARNING",
+            logging.ERROR: "ERROR",
+            logging.CRITICAL: "ERROR",
+        }
+        level = level_map.get(record.levelno, "INFO")
+
+        # Check for SUCCESS marker in message
+        if "[SUCCESS]" in record.getMessage():
+            level = "SUCCESS"
+
+        log_entry = LogEntry(
+            timestamp=timestamp,
+            level=level,
+            message=record.getMessage(),
+        )
+        self.logs.append(log_entry)
+
+    def start_task(self) -> None:
+        """Start capturing logs for a new task."""
+        self.logs = []
+        self.task_start_time = datetime.now().timestamp()
+
+    def finish_task(self) -> list[dict[str, Any]]:
+        """Finish task and return captured logs."""
+        log_dicts = [asdict(log) for log in self.logs]
+        self.logs = []
+        self.task_start_time = None
+        return log_dicts
+
+
+@dataclass
 class ExecutionStep:
     """Single step in execution trace.
 
@@ -82,12 +147,14 @@ class ExecutionTraceCollector:
     - Saving screenshots at each step
     - Recording actions and reasoning
     - Saving task results and metadata
+    - Capturing detailed execution logs
 
     Args:
         benchmark_name: Name of the benchmark (e.g., "waa", "webarena").
         run_name: Unique name for this evaluation run (e.g., "waa_eval_20241214").
         model_id: Identifier for the model being evaluated.
         output_dir: Base directory for benchmark results (default: "./benchmark_results").
+        capture_logs: Whether to capture execution logs (default: True).
     """
 
     def __init__(
@@ -96,9 +163,11 @@ class ExecutionTraceCollector:
         run_name: str | None = None,
         model_id: str = "unknown",
         output_dir: str | Path = "benchmark_results",
+        capture_logs: bool = True,
     ):
         self.benchmark_name = benchmark_name
         self.model_id = model_id
+        self.capture_logs = capture_logs
 
         # Auto-generate run_name if not provided
         if run_name is None:
@@ -116,6 +185,13 @@ class ExecutionTraceCollector:
         self._current_task_dir: Path | None = None
         self._current_screenshots_dir: Path | None = None
         self._current_steps: list[ExecutionStep] = []
+
+        # Log handler for capturing execution logs
+        self._log_handler: TaskLogHandler | None = None
+        if self.capture_logs:
+            self._log_handler = TaskLogHandler()
+            # Attach to root logger to capture all logs
+            logging.getLogger().addHandler(self._log_handler)
 
         # Initialize run
         self._initialize_run()
@@ -152,6 +228,10 @@ class ExecutionTraceCollector:
 
         self._current_task = task
         self._current_steps = []
+
+        # Start log capture
+        if self._log_handler is not None:
+            self._log_handler.start_task()
 
         # Create task directory
         task_dir_name = self._sanitize_task_id(task.task_id)
@@ -225,6 +305,11 @@ class ExecutionTraceCollector:
         if self._current_task is None:
             raise RuntimeError("No task started. Call start_task() first.")
 
+        # Get captured logs
+        logs = []
+        if self._log_handler is not None:
+            logs = self._log_handler.finish_task()
+
         # Save execution trace
         execution_data = {
             "task_id": result.task_id,
@@ -236,6 +321,7 @@ class ExecutionTraceCollector:
             "error": result.error,
             "reason": result.reason,
             "steps": [asdict(step) for step in self._current_steps],
+            "logs": logs,
         }
 
         execution_path = self._current_task_dir / "execution.json"
@@ -244,7 +330,7 @@ class ExecutionTraceCollector:
 
         logger.info(
             f"Saved execution trace for task {result.task_id}: "
-            f"{'SUCCESS' if result.success else 'FAIL'} ({result.num_steps} steps)"
+            f"{'SUCCESS' if result.success else 'FAIL'} ({result.num_steps} steps, {len(logs)} log entries)"
         )
 
         # Clear current task

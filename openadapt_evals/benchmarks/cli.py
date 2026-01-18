@@ -745,6 +745,46 @@ docker ps -f name=winarena --format "Container: {{.Names}}, Status: {{.Status}}"
     return 1
 
 
+def cmd_azure_monitor(args: argparse.Namespace) -> int:
+    """Monitor an existing Azure ML job with live tracking."""
+    from openadapt_evals.benchmarks.azure import AzureConfig, AzureWAAOrchestrator
+
+    print(f"Monitoring Azure ML job: {args.job_name}")
+
+    try:
+        config = AzureConfig.from_env()
+    except ValueError as e:
+        print(f"ERROR: {e}")
+        print("\nSet these environment variables:")
+        print("  AZURE_SUBSCRIPTION_ID")
+        print("  AZURE_ML_RESOURCE_GROUP")
+        print("  AZURE_ML_WORKSPACE_NAME")
+        return 1
+
+    # Use a dummy WAA path since we're not running evaluation
+    orchestrator = AzureWAAOrchestrator(
+        config=config,
+        waa_repo_path=Path("/tmp/dummy"),
+        experiment_name="monitor",
+    )
+
+    try:
+        orchestrator.monitor_job(
+            job_name=args.job_name,
+            live_tracking_file=args.output,
+        )
+        print(f"\nMonitoring complete. Live data written to: {args.output}")
+        return 0
+    except KeyboardInterrupt:
+        print("\n\nMonitoring interrupted by user.")
+        return 130
+    except Exception as e:
+        print(f"ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
 def cmd_azure(args: argparse.Namespace) -> int:
     """Run Azure-based parallel evaluation."""
     from openadapt_evals.benchmarks.azure import AzureConfig, AzureWAAOrchestrator
@@ -982,6 +1022,13 @@ def main() -> int:
     dashboard_parser.add_argument("--open", action="store_true",
                                  help="Open dashboard in browser")
 
+    # Azure job monitoring
+    monitor_parser = subparsers.add_parser("azure-monitor", help="Monitor Azure ML job with live tracking")
+    monitor_parser.add_argument("--job-name", type=str, required=True,
+                               help="Azure ML job name to monitor")
+    monitor_parser.add_argument("--output", type=str, default="benchmark_live.json",
+                               help="Output file for live tracking data")
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -996,6 +1043,7 @@ def main() -> int:
         "view": cmd_view,
         "estimate": cmd_estimate,
         "azure": cmd_azure,
+        "azure-monitor": cmd_azure_monitor,
         "vm-start": cmd_vm_start,
         "vm-stop": cmd_vm_stop,
         "vm-status": cmd_vm_status,
