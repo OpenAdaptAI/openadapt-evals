@@ -231,33 +231,72 @@ class WAALiveAdapter(BenchmarkAdapter):
 
         base = Path(base_path)
 
-        # Parse task_id to get domain and task file name
-        # Format: domain_taskname or domain_uuid
-        parts = task_id.split("_", 1)
+        # Parse task_id to get domain and identifier
+        # Handle cases like "file_explorer_1" where domain has underscore
+        # Strategy: Split from right, check if last part is numeric
+        parts = task_id.rsplit("_", 1)
         if len(parts) < 2:
             return None
 
-        domain = parts[0]
-        task_name = parts[1]
+        # If last part is numeric, it's domain_N format
+        if parts[1].isdigit():
+            domain = parts[0]
+            task_num = int(parts[1])
 
-        # Try different file locations
-        candidates = [
-            base / "examples" / domain / f"{task_name}.json",
-            base / domain / f"{task_name}.json",
-            base / "examples" / domain / f"{task_id}.json",
-        ]
+            # Numeric format: load Nth file from domain directory
+            examples_dir = base / "examples" / domain
 
-        for task_file in candidates:
-            if task_file.exists():
-                try:
-                    with open(task_file, encoding="utf-8") as f:
-                        config = json.load(f)
-                    logger.info(f"Loaded task config from {task_file}")
-                    return self._create_task_from_config(task_id, config)
-                except Exception as e:
-                    logger.warning(f"Failed to load {task_file}: {e}")
+            if not examples_dir.exists():
+                logger.warning(f"Domain directory not found: {examples_dir}")
+                return None
 
-        return None
+            # Get all JSON files in domain directory (sorted for consistency)
+            json_files = sorted(examples_dir.glob("*.json"))
+
+            if not json_files:
+                logger.warning(f"No JSON files found in {examples_dir}")
+                return None
+
+            # task_N means the Nth file (1-indexed)
+            if task_num < 1 or task_num > len(json_files):
+                logger.warning(
+                    f"Invalid task number {task_num} for domain {domain}. "
+                    f"Valid range: 1-{len(json_files)}"
+                )
+                return None
+
+            task_file = json_files[task_num - 1]  # Convert to 0-indexed
+
+        else:
+            # UUID format or direct filename - try different file locations
+            domain = parts[0]
+            task_identifier = parts[1]
+
+            candidates = [
+                base / "examples" / domain / f"{task_identifier}.json",
+                base / domain / f"{task_identifier}.json",
+                base / "examples" / domain / f"{task_id}.json",
+            ]
+
+            task_file = None
+            for candidate in candidates:
+                if candidate.exists():
+                    task_file = candidate
+                    break
+
+            if task_file is None:
+                logger.warning(f"Task file not found for {task_id}. Tried: {candidates}")
+                return None
+
+        # Load and parse the JSON file
+        try:
+            with open(task_file, encoding="utf-8") as f:
+                config = json.load(f)
+            logger.info(f"Loaded task config from {task_file}")
+            return self._create_task_from_config(task_id, config)
+        except Exception as e:
+            logger.warning(f"Failed to load {task_file}: {e}")
+            return None
 
     def reset(self, task: BenchmarkTask) -> BenchmarkObservation:
         """Reset environment to task's initial state.

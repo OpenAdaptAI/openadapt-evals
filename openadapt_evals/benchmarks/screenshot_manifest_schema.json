@@ -1,0 +1,129 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://openadapt.ai/schemas/screenshot-manifest.json",
+  "title": "Screenshot Manifest",
+  "description": "Schema for screenshot validation manifest defining expected properties and metadata",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Schema version",
+      "default": "1.0"
+    },
+    "project": {
+      "type": "string",
+      "description": "Project name or identifier"
+    },
+    "description": {
+      "type": "string",
+      "description": "Description of this screenshot collection"
+    },
+    "screenshots": {
+      "type": "array",
+      "description": "List of screenshot definitions",
+      "items": {
+        "$ref": "#/definitions/screenshot"
+      }
+    }
+  },
+  "required": ["screenshots"],
+  "definitions": {
+    "screenshot": {
+      "type": "object",
+      "description": "Definition of a single screenshot with validation expectations",
+      "properties": {
+        "filename": {
+          "type": "string",
+          "description": "Screenshot filename (e.g., 'desktop_overview.png')",
+          "pattern": "^[a-zA-Z0-9_-]+\\.(png|jpg|jpeg|gif|bmp)$"
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description of what this screenshot shows"
+        },
+        "expected_dimensions": {
+          "type": "array",
+          "description": "Expected [width, height] in pixels",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "expected_keywords": {
+          "type": "array",
+          "description": "Keywords that should be visible in the screenshot (for OCR validation)",
+          "items": {
+            "type": "string"
+          }
+        },
+        "viewport": {
+          "type": "string",
+          "description": "Viewport type",
+          "enum": ["desktop", "tablet", "mobile", "custom"]
+        },
+        "state": {
+          "type": "string",
+          "description": "UI state captured in the screenshot",
+          "examples": ["overview", "task_detail", "log_expanded", "log_collapsed", "error", "loading"]
+        },
+        "tags": {
+          "type": "array",
+          "description": "Optional tags for categorization",
+          "items": {
+            "type": "string"
+          }
+        },
+        "generated_by": {
+          "type": "string",
+          "description": "Tool or process that generated this screenshot",
+          "examples": ["auto_screenshot.py", "manual", "playwright", "selenium"]
+        },
+        "generated_at": {
+          "type": "string",
+          "description": "ISO 8601 timestamp when screenshot was generated",
+          "format": "date-time"
+        },
+        "source_url": {
+          "type": "string",
+          "description": "URL of the page that was screenshotted",
+          "format": "uri"
+        },
+        "validation_rules": {
+          "type": "object",
+          "description": "Custom validation rules for this screenshot",
+          "properties": {
+            "allow_dimension_tolerance": {
+              "type": "integer",
+              "description": "Allowed pixel difference for dimensions",
+              "minimum": 0,
+              "default": 10
+            },
+            "min_file_size": {
+              "type": "integer",
+              "description": "Minimum file size in bytes",
+              "minimum": 0
+            },
+            "max_file_size": {
+              "type": "integer",
+              "description": "Maximum file size in bytes",
+              "minimum": 0
+            },
+            "require_ocr": {
+              "type": "boolean",
+              "description": "Whether OCR validation is required",
+              "default": false
+            }
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "description": "Additional custom metadata",
+          "additionalProperties": true
+        }
+      },
+      "required": ["filename", "description"]
+    }
+  }
+}

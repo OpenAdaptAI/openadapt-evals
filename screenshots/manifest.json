@@ -1,0 +1,157 @@
+{
+  "version": "1.0",
+  "generated_by": "screenshot validation test setup",
+  "screenshots": [
+    {
+      "filename": "desktop_log_collapsed.png",
+      "description": "Desktop view with collapsed log entries",
+      "viewport": "desktop",
+      "expected_dimensions": [
+        1920,
+        1205
+      ],
+      "state": "generated",
+      "expected_keywords": []
+    },
+    {
+      "filename": "desktop_log_expanded.png",
+      "description": "Desktop view with expanded log details",
+      "viewport": "desktop",
+      "expected_dimensions": [
+        1920,
+        1321
+      ],
+      "state": "generated",
+      "expected_keywords": []
+    },
+    {
+      "filename": "desktop_overview.png",
+      "description": "Desktop overview showing task list and status",
+      "viewport": "desktop",
+      "expected_dimensions": [
+        1920,
+        1080
+      ],
+      "state": "generated",
+      "expected_keywords": []
+    },
+    {
+      "filename": "desktop_task_detail.png",
+      "description": "Desktop detailed task view",
+      "viewport": "desktop",
+      "expected_dimensions": [
+        1920,
+        1321
+      ],
+      "state": "generated",
+      "expected_keywords": []
+    },
+    {
+      "filename": "live_monitoring.png",
+      "description": "Live monitoring dashboard",
+      "viewport": "desktop",
+      "expected_dimensions": [
+        1920,
+        1080
+      ],
+      "state": "generated",
+      "expected_keywords": []
+    },
+    {
+      "filename": "mobile_log_collapsed.png",
+      "description": "Mobile view with collapsed log entries",
+      "viewport": "mobile",
+      "expected_dimensions": [
+        396,
+        2199
+      ],
+      "state": "generated",
+      "expected_keywords": []
+    },
+    {
+      "filename": "mobile_log_expanded.png",
+      "description": "Mobile view with expanded log details",
+      "viewport": "mobile",
+      "expected_dimensions": [
+        396,
+        2314
+      ],
+      "state": "generated",
+      "expected_keywords": []
+    },
+    {
+      "filename": "mobile_overview.png",
+      "description": "Mobile overview showing task list and status",
+      "viewport": "mobile",
+      "expected_dimensions": [
+        396,
+        1557
+      ],
+      "state": "generated",
+      "expected_keywords": []
+    },
+    {
+      "filename": "mobile_task_detail.png",
+      "description": "Mobile detailed task view",
+      "viewport": "mobile",
+      "expected_dimensions": [
+        396,
+        2314
+      ],
+      "state": "generated",
+      "expected_keywords": []
+    },
+    {
+      "filename": "tablet_log_collapsed.png",
+      "description": "Tablet view with collapsed log entries",
+      "viewport": "tablet",
+      "expected_dimensions": [
+        768,
+        1688
+      ],
+      "state": "generated",
+      "expected_keywords": []
+    },
+    {
+      "filename": "tablet_log_expanded.png",
+      "description": "Tablet view with expanded log details",
+      "viewport": "tablet",
+      "expected_dimensions": [
+        768,
+        1804
+      ],
+      "state": "generated",
+      "expected_keywords": []
+    },
+    {
+      "filename": "tablet_overview.png",
+      "description": "Tablet overview showing task list and status",
+      "viewport": "tablet",
+      "expected_dimensions": [
+        768,
+        1081
+      ],
+      "state": "generated",
+      "expected_keywords": []
+    },
+    {
+      "filename": "tablet_task_detail.png",
+      "description": "Tablet detailed task view",
+      "viewport": "tablet",
+      "expected_dimensions": [
+        768,
+        1804
+      ],
+      "state": "generated",
+      "expected_keywords": []
+    },
+    {
+      "filename": "cost_dashboard.html",
+      "description": "Cost tracking dashboard - interactive HTML demonstration of monitoring.py functionality",
+      "viewport": "desktop",
+      "type": "html",
+      "state": "generated",
+      "expected_keywords": ["cost", "savings", "spot", "tiered", "workers"]
+    }
+  ]
+}

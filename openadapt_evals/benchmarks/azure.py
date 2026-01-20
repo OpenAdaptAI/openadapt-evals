@@ -90,28 +90,29 @@ def classify_task_complexity(task: BenchmarkTask) -> str:
     instruction = task.instruction.lower()
     domain = (task.domain or "").lower()
 
-    # Simple tasks: Notepad, File Explorer, basic Windows operations
-    simple_indicators = [
-        "notepad", "file explorer", "calculator", "paint",
-        "open", "close", "minimize", "maximize",
-        "create file", "delete file", "rename file",
-    ]
-
     # Complex tasks: Coding, debugging, multi-app workflows, data analysis
     complex_indicators = [
         "code", "debug", "compile", "ide", "visual studio",
         "git", "terminal", "powershell", "cmd",
         "excel formula", "pivot table", "macro",
-        "multiple applications", "switch between",
+        "multiple applications", "switch between", "multitasking",
         "data analysis", "chart", "graph",
     ]
 
-    # Medium tasks: Browser, Office apps, email (everything else)
+    # Medium tasks: Browser, Office apps, email
     medium_indicators = [
-        "browser", "chrome", "edge", "firefox",
+        "browser", "chrome", "edge", "firefox", "navigate",
         "word", "excel", "powerpoint", "office",
-        "email", "outlook", "calendar",
+        "email", "outlook", "calendar", "send",
         "pdf", "acrobat",
+    ]
+
+    # Simple tasks: Notepad, File Explorer, basic Windows operations
+    simple_indicators = [
+        "notepad", "file explorer", "calculator", "paint",
+        "open", "close", "minimize", "maximize",
+        "new file", "create file", "delete file", "rename file",
+        "file_", "calc_", "paint_",  # task ID patterns
     ]
 
     # Check for complex indicators first
@@ -119,15 +120,15 @@ def classify_task_complexity(task: BenchmarkTask) -> str:
         if indicator in task_id or indicator in instruction or indicator in domain:
             return "complex"
 
-    # Check for simple indicators
-    for indicator in simple_indicators:
-        if indicator in task_id or indicator in instruction or indicator in domain:
-            return "simple"
-
-    # Check for medium indicators
+    # Check for medium indicators BEFORE simple (to prevent "open" from overriding browser tasks)
     for indicator in medium_indicators:
         if indicator in task_id or indicator in instruction or indicator in domain:
             return "medium"
+
+    # Check for simple indicators last
+    for indicator in simple_indicators:
+        if indicator in task_id or indicator in instruction or indicator in domain:
+            return "simple"
 
     # Default to medium for unknown tasks
     return "medium"
@@ -1371,6 +1372,10 @@ def estimate_cost(
     num_workers: int = 1,
     avg_task_duration_minutes: float = 1.0,
     vm_hourly_cost: float = 0.19,  # Standard_D4_v3 in East US (free trial compatible)
+    enable_tiered_vms: bool = False,
+    use_spot_instances: bool = False,
+    use_acr: bool = False,
+    task_complexity_distribution: dict[str, float] | None = None,
 ) -> dict:
     """Estimate Azure costs for a WAA evaluation run.
 
@@ -1379,19 +1384,84 @@ def estimate_cost(
         num_workers: Number of parallel VMs (default: 1 for free trial).
         avg_task_duration_minutes: Average time per task.
         vm_hourly_cost: Hourly cost per VM (D4_v3 = $0.19/hr, D8_v3 = $0.38/hr).
+        enable_tiered_vms: Use different VM sizes based on task complexity.
+        use_spot_instances: Use Azure Spot instances (70-80% discount).
+        use_acr: Use Azure Container Registry (faster image pulls).
+        task_complexity_distribution: Dict of tier -> fraction (e.g., {"simple": 0.3, "medium": 0.5, "complex": 0.2}).
 
     Returns:
-        Dict with cost estimates.
+        Dict with cost estimates including baseline and optimized costs.
     """
     tasks_per_worker = num_tasks / num_workers
     total_minutes = tasks_per_worker * avg_task_duration_minutes
     total_hours = total_minutes / 60
 
-    # Add overhead for provisioning/cleanup
-    overhead_hours = 0.25  # ~15 minutes
+    # Add overhead for WAA evaluation per worker:
+    # - VM provisioning: ~15 minutes
+    # - Docker image pull (without ACR): ~45 minutes (ACR saves ~30 min)
+    # - Windows boot + OOBE: ~30 minutes
+    # - WAA agent setup: ~30 minutes
+    # - Reliability buffer (restarts, retries): ~60 minutes
+    # Total: ~3 hours per worker
+    base_overhead_hours = 3.0
 
+    # ACR reduces image pull time significantly
+    acr_savings_hours = 0.5 if use_acr else 0
+
+    overhead_hours = base_overhead_hours - acr_savings_hours
     vm_hours = (total_hours + overhead_hours) * num_workers
-    total_cost = vm_hours * vm_hourly_cost
+
+    # Calculate baseline cost (no optimizations, using medium tier)
+    baseline_hourly_cost = VM_TIER_COSTS["medium"]  # $0.192/hour
+    baseline_cost = vm_hours * baseline_hourly_cost
+
+    # Calculate optimized cost based on enabled features
+    optimized_cost = baseline_cost
+    spot_savings = 0.0
+    tiered_savings = 0.0
+    acr_time_savings = 0.0
+
+    # Default distribution if not provided
+    if task_complexity_distribution is None:
+        task_complexity_distribution = {"simple": 0.0, "medium": 1.0, "complex": 0.0}
+
+    if enable_tiered_vms:
+        # Calculate weighted average cost based on task complexity
+        tiered_cost = 0.0
+        cost_table = VM_TIER_SPOT_COSTS if use_spot_instances else VM_TIER_COSTS
+        for tier, fraction in task_complexity_distribution.items():
+            tier_hours = vm_hours * fraction
+            tiered_cost += tier_hours * cost_table.get(tier, cost_table["medium"])
+
+        if not use_spot_instances:
+            tiered_savings = baseline_cost - tiered_cost
+            optimized_cost = tiered_cost
+    elif use_spot_instances:
+        # Spot instances only (no tiered VMs)
+        spot_cost = vm_hours * VM_TIER_SPOT_COSTS["medium"]
+        spot_savings = baseline_cost - spot_cost
+        optimized_cost = spot_cost
+
+    if enable_tiered_vms and use_spot_instances:
+        # Combined tiered + spot
+        tiered_spot_cost = 0.0
+        for tier, fraction in task_complexity_distribution.items():
+            tier_hours = vm_hours * fraction
+            tiered_spot_cost += tier_hours * VM_TIER_SPOT_COSTS.get(tier, VM_TIER_SPOT_COSTS["medium"])
+
+        tiered_baseline = sum(
+            vm_hours * fraction * VM_TIER_COSTS.get(tier, VM_TIER_COSTS["medium"])
+            for tier, fraction in task_complexity_distribution.items()
+        )
+        tiered_savings = baseline_cost - tiered_baseline
+        spot_savings = tiered_baseline - tiered_spot_cost
+        optimized_cost = tiered_spot_cost
+
+    if use_acr:
+        # ACR saves ~30 minutes per worker on image pull time
+        acr_time_savings = 30.0 * num_workers  # minutes saved
+
+    savings_percentage = ((baseline_cost - optimized_cost) / baseline_cost * 100) if baseline_cost > 0 else 0
 
     return {
         "num_tasks": num_tasks,
@@ -1399,6 +1469,12 @@ def estimate_cost(
         "tasks_per_worker": tasks_per_worker,
         "estimated_duration_minutes": total_minutes + (overhead_hours * 60),
         "total_vm_hours": vm_hours,
-        "estimated_cost_usd": total_cost,
-        "cost_per_task_usd": total_cost / num_tasks,
+        "baseline_cost_usd": baseline_cost,
+        "optimized_cost_usd": optimized_cost,
+        "estimated_cost_usd": optimized_cost,  # backwards compatibility
+        "cost_per_task_usd": optimized_cost / num_tasks,
+        "savings_percentage": savings_percentage,
+        "spot_savings_usd": spot_savings,
+        "tiered_savings_usd": tiered_savings,
+        "acr_time_savings_minutes": acr_time_savings,
     }

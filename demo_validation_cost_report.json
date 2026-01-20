@@ -1,0 +1,134 @@
+{
+  "metadata": {
+    "total_demos": 154,
+    "avg_steps_per_demo": 12.7,
+    "total_steps": 1955,
+    "current_status": "100% format-validated, 0% execution-validated",
+    "generation_date": "2026-01-18"
+  },
+  "approaches": {
+    "path_1_llm_judge": {
+      "approach": "LLM-as-Judge on All Demos",
+      "api_model_claude": "$1.16",
+      "api_model_gpt5": "$0.66",
+      "human_validation": "$20.00 - $50.00",
+      "total_low": 21.161006,
+      "total_high": 50.6570025,
+      "time_estimate_days": 1,
+      "expected_accuracy": "80% agreement with human judgment",
+      "sources": [
+        "G-Eval: 0.514 Spearman correlation",
+        "GPT-4 80% human agreement rate",
+        "Claude Sonnet 4.5 pricing: $3/$15 per 1M tokens"
+      ]
+    },
+    "path_2_stratified_sample": {
+      "approach": "Stratified Sample (20%)",
+      "sample_size": 30,
+      "total_cost_low": 40.0,
+      "total_cost_mid": 60.0,
+      "total_cost_high": 100.0,
+      "time_estimate_days": 1,
+      "unvalidated_demos": 124,
+      "expected_errors_undetected": "22.4",
+      "risk_level": "Medium - 80% unvalidated",
+      "sources": [
+        "AQL sampling standards (MIL-STD 105E)",
+        "Statistical tolerance interval methods"
+      ]
+    },
+    "path_3_full_human": {
+      "approach": "Full Human Validation",
+      "demos_validated": 154,
+      "total_hours": "20.5",
+      "offshore_basic": "$41.07 - $164.27",
+      "mid_tier": "$205.33 - $513.33",
+      "us_specialist": "$821.33 - $2053.33",
+      "time_estimate_days": 2,
+      "expected_accuracy": "95-100% (gold standard)",
+      "sources": [
+        "Mind2Web: 1000+ hours for expert annotation",
+        "OSWorld: 1800 person-hours for 369 tasks",
+        "Upwork/ZipRecruiter 2026 rates"
+      ]
+    },
+    "path_4_automated_execution": {
+      "approach": "Automated Execution Testing",
+      "vm_hours": "38.5",
+      "vm_cost": "$7.39",
+      "api_cost_claude": "$12.32",
+      "api_cost_gpt5": "$7.70",
+      "human_review": "$76.67 - $191.67",
+      "total_low": 91.75647916666668,
+      "total_high": 211.3751666666667,
+      "time_estimate_days": 2,
+      "expected_detection_rate": "70-90% of errors",
+      "sources": [
+        "Azure D4s_v3: $0.192/hour",
+        "WAA paper: 20 min parallel evaluation",
+        "PC Agent-E: 141% improvement with validation"
+      ]
+    },
+    "path_5_hybrid_recommended": {
+      "approach": "Hybrid (LLM + Human + Execution)",
+      "stage_1_llm": "$0.91",
+      "stage_2_human": "$30.67 - $76.67",
+      "stage_3_execution": "$0.88",
+      "total_low": 32.456716666666665,
+      "total_high": 78.45671666666667,
+      "time_estimate_days": 2,
+      "coverage": "100% LLM reviewed, 15% human validated, 10 execution tested",
+      "expected_quality": "90-95% confidence",
+      "sources": [
+        "Hybrid approaches: 80% cost reduction vs full human",
+        "Sample-based validation with high confidence",
+        "Execution testing for high-risk cases"
+      ]
+    }
+  },
+  "research_findings": {
+    "synthetic_demo_quality": {
+      "success_rate": "81.9%",
+      "source": "Diffusion RL study - synthetic data outperforming human",
+      "url": "https://arxiv.org/html/2509.19752v1"
+    },
+    "llm_judge_effectiveness": {
+      "agreement_rate": "80%",
+      "cost_savings": "500x-5000x vs human",
+      "source": "LLM-as-a-Judge research 2025",
+      "url": "https://cameronrwolfe.substack.com/p/llm-as-a-judge"
+    },
+    "pc_agent_e_efficiency": {
+      "trajectories": "312 human demonstrations",
+      "improvement": "141% relative improvement",
+      "source": "PC Agent-E paper",
+      "url": "https://arxiv.org/html/2505.13909v1"
+    },
+    "annotation_time_estimates": {
+      "simple_tasks": "2-5 minutes",
+      "complex_tasks": "5-12 minutes",
+      "expert_validation": "10-25 minutes",
+      "sources": [
+        "METR: 50-200+ minute horizons for complex tasks",
+        "Mind2Web: 1000+ hours for benchmark construction",
+        "OSWorld: 1800 person-hours for 369 tasks"
+      ]
+    }
+  },
+  "pricing_references": {
+    "api_costs": {
+      "claude_sonnet_45": "$3 input / $15 output per 1M tokens",
+      "gpt_5": "$1.25 input / $10 output per 1M tokens",
+      "batch_discount": "50% off for async processing"
+    },
+    "human_annotation": {
+      "offshore_basic": "$2-8/hour (Africa, Asia)",
+      "mid_tier": "$10-25/hour (Upwork median)",
+      "us_specialist": "$40-100/hour (domain experts)"
+    },
+    "infrastructure": {
+      "azure_d4s_v3": "$0.192/hour (4 vCPU, 16 GB)",
+      "storage": "Negligible for demo artifacts"
+    }
+  }
+}

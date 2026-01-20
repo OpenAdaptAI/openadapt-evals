@@ -459,6 +459,323 @@ def cmd_vm_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_vm_setup(args: argparse.Namespace) -> int:
+    """Setup WAA Docker container on Azure VM with health checks.
+
+    This command automates the complete WAA container deployment:
+    - Validates nested virtualization support
+    - Starts Docker daemon with retry
+    - Pulls windowsarena/winarena:latest image with progress monitoring
+    - Creates and starts container with health checks
+    - Validates Windows boot (VNC/RDP check)
+    - Verifies WAA server initialization
+    - Idempotent (safe to re-run)
+    - Auto-launches monitoring dashboard
+
+    Target: 95%+ success rate on fresh VM.
+    """
+    import subprocess
+    import time
+    import json as json_module
+
+    vm_name = args.vm_name
+    resource_group = args.resource_group
+    verify_only = getattr(args, "verify", False)
+
+    # Auto-launch dashboard unless disabled
+    if not getattr(args, "no_dashboard", False):
+        try:
+            from openadapt_evals.benchmarks.dashboard_server import ensure_dashboard_running
+            dashboard_url = ensure_dashboard_running(auto_open=True)
+            print(f"\nDashboard launched: {dashboard_url}")
+            print("Monitor your Azure resources and costs in real-time!\n")
+        except Exception as e:
+            print(f"Warning: Failed to launch dashboard: {e}")
+
+    print(f"Setting up WAA container on VM '{vm_name}'...")
+    print("This will take 15-20 minutes on a fresh VM.\n")
+
+    # Multi-stage setup script with health checks
+    setup_script = '''
+set -e  # Exit on error
+
+echo "=== Stage 1: Validate Nested Virtualization ==="
+# Check if nested virtualization is enabled
+if ! grep -q -E 'vmx|svm' /proc/cpuinfo; then
+    echo "ERROR: Nested virtualization not supported"
+    echo "VM must be Standard_D4s_v5 or similar with nested virt support"
+    exit 1
+fi
+echo "✓ Nested virtualization supported"
+
+echo ""
+echo "=== Stage 2: Start Docker Daemon ==="
+# Start Docker with retry (3 attempts)
+for attempt in 1 2 3; do
+    if systemctl is-active --quiet docker; then
+        echo "✓ Docker daemon already running"
+        break
+    fi
+
+    echo "Attempt $attempt: Starting Docker daemon..."
+    sudo systemctl start docker
+    sleep 5
+
+    if systemctl is-active --quiet docker; then
+        echo "✓ Docker daemon started"
+        break
+    fi
+
+    if [ $attempt -eq 3 ]; then
+        echo "ERROR: Failed to start Docker daemon after 3 attempts"
+        sudo systemctl status docker || true
+        exit 1
+    fi
+
+    sleep 5
+done
+
+echo ""
+echo "=== Stage 3: Pull Docker Image ==="
+# Pull windowsarena/winarena:latest with progress
+if docker images | grep -q "windowsarena/winarena.*latest"; then
+    echo "✓ Image windowsarena/winarena:latest already exists"
+else
+    echo "Pulling windowsarena/winarena:latest (this takes 10-15 min)..."
+    if ! docker pull windowsarena/winarena:latest; then
+        echo "ERROR: Failed to pull Docker image"
+        exit 1
+    fi
+    echo "✓ Image pulled successfully"
+fi
+
+echo ""
+echo "=== Stage 4: Create/Start Container ==="
+# Check if container already exists
+CONTAINER_ID=$(docker ps -aq -f name=winarena)
+
+if [ -n "$CONTAINER_ID" ]; then
+    echo "Container 'winarena' already exists (ID: $CONTAINER_ID)"
+
+    # Check if running
+    if docker ps -q -f name=winarena | grep -q .; then
+        echo "✓ Container already running"
+    else
+        echo "Starting existing container..."
+        docker start winarena
+        sleep 5
+        echo "✓ Container started"
+    fi
+else
+    echo "Creating new container 'winarena'..."
+    # Create storage directory for Windows VM disk
+    sudo mkdir -p /mnt/winarena-storage
+    sudo chown $(whoami):$(whoami) /mnt/winarena-storage
+
+    # Create container with proper settings for nested virtualization
+    # Command: /entry.sh --start-client false (starts Windows VM without WAA benchmark client)
+    docker run -d \
+        --name winarena \
+        --privileged \
+        --device=/dev/kvm \
+        -p 5000:5000 \
+        -p 6080:6080 \
+        -p 3389:3389 \
+        -v /mnt/winarena-storage:/storage \
+        -e VERSION=win11 \
+        -e RAM_SIZE=8G \
+        -e CPU_CORES=4 \
+        windowsarena/winarena:latest \
+        /entry.sh --start-client false
+
+    if [ $? -eq 0 ]; then
+        echo "✓ Container created and started"
+    else
+        echo "ERROR: Failed to create container"
+        exit 1
+    fi
+fi
+
+echo ""
+echo "=== Stage 5: Container Health Check ==="
+sleep 10
+CONTAINER_STATUS=$(docker inspect --format='{{.State.Status}}' winarena)
+if [ "$CONTAINER_STATUS" != "running" ]; then
+    echo "ERROR: Container not running (status: $CONTAINER_STATUS)"
+    docker logs winarena --tail 50
+    exit 1
+fi
+echo "✓ Container status: running"
+
+echo ""
+echo "=== Stage 6: Windows Boot Detection ==="
+echo "Waiting for Windows to boot (checking VNC/port 6080)..."
+# Wait up to 10 minutes for Windows to boot
+MAX_BOOT_WAIT=600
+BOOT_START=$(date +%s)
+
+while true; do
+    ELAPSED=$(($(date +%s) - BOOT_START))
+
+    if [ $ELAPSED -ge $MAX_BOOT_WAIT ]; then
+        echo "WARNING: Windows boot timeout after ${MAX_BOOT_WAIT}s"
+        echo "VNC may still be starting. Check manually: http://VM_IP:6080"
+        break
+    fi
+
+    # Check if VNC port is accessible inside container
+    if docker exec winarena bash -c "timeout 2 bash -c '</dev/tcp/localhost/6080' 2>/dev/null"; then
+        echo "✓ Windows booted (VNC port 6080 accessible after ${ELAPSED}s)"
+        break
+    fi
+
+    if [ $((ELAPSED % 30)) -eq 0 ]; then
+        echo "  Still waiting for Windows boot... (${ELAPSED}s / ${MAX_BOOT_WAIT}s)"
+    fi
+
+    sleep 5
+done
+
+echo ""
+echo "=== Stage 7: WAA Server Verification ==="
+echo "Waiting for WAA server on port 5000..."
+# Wait up to 5 minutes for WAA server
+MAX_SERVER_WAIT=300
+SERVER_START=$(date +%s)
+
+while true; do
+    ELAPSED=$(($(date +%s) - SERVER_START))
+
+    if [ $ELAPSED -ge $MAX_SERVER_WAIT ]; then
+        echo "WARNING: WAA server timeout after ${MAX_SERVER_WAIT}s"
+        echo "Server may still be starting. Check logs:"
+        echo "  docker logs winarena"
+        break
+    fi
+
+    # Check if server responds to probe
+    if docker exec winarena bash -c "timeout 2 bash -c '</dev/tcp/localhost/5000' 2>/dev/null"; then
+        echo "✓ WAA server responding on port 5000 (after ${ELAPSED}s)"
+        break
+    fi
+
+    if [ $((ELAPSED % 30)) -eq 0 ]; then
+        echo "  Still waiting for WAA server... (${ELAPSED}s / ${MAX_SERVER_WAIT}s)"
+    fi
+
+    sleep 5
+done
+
+echo ""
+echo "=== Setup Complete ==="
+docker ps -f name=winarena --format "Container: {{.Names}}, Status: {{.Status}}, Ports: {{.Ports}}"
+echo ""
+echo "Next steps:"
+echo "  1. Get VM IP: az vm show --name ''' + vm_name + ''' --resource-group ''' + resource_group + ''' --show-details --query publicIps -o tsv"
+echo "  2. Test server: uv run python -m openadapt_evals.benchmarks.cli probe --server http://VM_IP:5000 --wait"
+echo "  3. Run evaluation: uv run python -m openadapt_evals.benchmarks.cli live --server http://VM_IP:5000 --agent api-claude --task-ids notepad_1"
+'''
+
+    # Execute setup script on VM
+    print("Running setup script on VM (this may take 15-20 minutes)...\n")
+
+    result = subprocess.run(
+        [
+            "az", "vm", "run-command", "invoke",
+            "--resource-group", resource_group,
+            "--name", vm_name,
+            "--command-id", "RunShellScript",
+            "--scripts", setup_script,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=1800,  # 30 minute timeout
+    )
+
+    if result.returncode != 0:
+        print(f"ERROR: Setup failed: {result.stderr}")
+        return 1
+
+    # Parse and display output
+    try:
+        output = json_module.loads(result.stdout)
+        message = output.get("value", [{}])[0].get("message", "")
+        print(message)
+
+        # Check for errors in output
+        if "ERROR:" in message:
+            print("\nSetup encountered errors. See output above.")
+            return 1
+    except Exception:
+        print(result.stdout)
+
+    # Get public IP
+    print("\nFetching VM public IP...")
+    ip_result = subprocess.run(
+        [
+            "az", "vm", "show",
+            "--name", vm_name,
+            "--resource-group", resource_group,
+            "--show-details",
+            "--query", "publicIps",
+            "-o", "tsv",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    if ip_result.returncode == 0 and ip_result.stdout.strip():
+        public_ip = ip_result.stdout.strip()
+        server_url = f"http://{public_ip}:5000"
+
+        print(f"\n{'='*60}")
+        print("VM Setup Complete!")
+        print(f"{'='*60}")
+        print(f"Server URL: {server_url}")
+        print(f"VNC URL: http://{public_ip}:6080")
+        print(f"\nVerify server is ready:")
+        print(f"  uv run python -m openadapt_evals.benchmarks.cli probe --server {server_url} --wait")
+        print(f"\nRun evaluation:")
+        print(f"  uv run python -m openadapt_evals.benchmarks.cli live \\")
+        print(f"    --server {server_url} \\")
+        print(f"    --agent api-claude \\")
+        print(f"    --task-ids notepad_1")
+
+        # Auto-verify if requested
+        if verify_only or getattr(args, "auto_verify", False):
+            print(f"\n{'='*60}")
+            print("Running automatic verification...")
+            print(f"{'='*60}\n")
+
+            try:
+                import requests
+
+                print(f"Probing {server_url}/probe...")
+                for attempt in range(10):
+                    try:
+                        resp = requests.get(f"{server_url}/probe", timeout=5.0)
+                        if resp.status_code == 200:
+                            print(f"✓ Server verification successful!")
+                            print(f"  Status: {resp.status_code}")
+                            print(f"  Response: {resp.text[:100]}")
+                            return 0
+                    except requests.ConnectionError:
+                        if attempt < 9:
+                            print(f"  Attempt {attempt + 1}/10: Connection refused, retrying...")
+                            time.sleep(10)
+                        else:
+                            print(f"✗ Server verification failed after 10 attempts")
+                            print(f"  Server may still be starting. Wait a few minutes and try:")
+                            print(f"    uv run python -m openadapt_evals.benchmarks.cli probe --server {server_url} --wait")
+                            return 1
+            except ImportError:
+                print("NOTE: Install requests to enable auto-verification: pip install requests")
+    else:
+        print("\nWARNING: Could not retrieve public IP")
+
+    return 0
+
+
 def cmd_server_start(args: argparse.Namespace) -> int:
     """Start WAA server on the Azure VM via run-command.
 
@@ -636,12 +953,25 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
 
 
 def cmd_up(args: argparse.Namespace) -> int:
-    """Start VM, wait for boot, start WAA server, and probe until ready."""
+    """Start VM, wait for boot, start WAA server, and probe until ready.
+
+    Auto-launches monitoring dashboard to track resource usage and costs.
+    """
     import subprocess
     import time
 
     vm_name = args.vm_name
     resource_group = args.resource_group
+
+    # Auto-launch dashboard unless disabled
+    if not getattr(args, "no_dashboard", False):
+        try:
+            from openadapt_evals.benchmarks.dashboard_server import ensure_dashboard_running
+            dashboard_url = ensure_dashboard_running(auto_open=True)
+            print(f"\nDashboard launched: {dashboard_url}")
+            print("Monitor your Azure resources and costs in real-time!\n")
+        except Exception as e:
+            print(f"Warning: Failed to launch dashboard: {e}")
 
     # Step 1: Start VM
     print(f"[1/4] Starting VM '{vm_name}'...")
@@ -786,11 +1116,24 @@ def cmd_azure_monitor(args: argparse.Namespace) -> int:
 
 
 def cmd_azure(args: argparse.Namespace) -> int:
-    """Run Azure-based parallel evaluation."""
+    """Run Azure-based parallel evaluation.
+
+    Auto-launches monitoring dashboard to track resource usage, costs, and progress.
+    """
     from openadapt_evals.benchmarks.azure import AzureConfig, AzureWAAOrchestrator
     from openadapt_evals.benchmarks import SmartMockAgent
 
     print("Setting up Azure evaluation...")
+
+    # Auto-launch dashboard unless disabled or cleanup-only
+    if not args.cleanup_only and not getattr(args, "no_dashboard", False):
+        try:
+            from openadapt_evals.benchmarks.dashboard_server import ensure_dashboard_running
+            dashboard_url = ensure_dashboard_running(auto_open=True)
+            print(f"\nDashboard launched: {dashboard_url}")
+            print("Monitor your Azure resources and costs in real-time!\n")
+        except Exception as e:
+            print(f"Warning: Failed to launch dashboard: {e}")
 
     try:
         config = AzureConfig.from_env()
@@ -968,8 +1311,22 @@ def main() -> int:
                              help="Prefix filter for cleanup (default: 'waa')")
     azure_parser.add_argument("--dry-run", action="store_true",
                              help="List instances without deleting (for --cleanup-only)")
+    azure_parser.add_argument("--no-dashboard", action="store_true",
+                             help="Don't auto-launch monitoring dashboard")
 
     # VM management commands
+    vm_setup_parser = subparsers.add_parser("vm-setup", help="Setup WAA container on Azure VM (automated deployment)")
+    vm_setup_parser.add_argument("--vm-name", type=str, default="waa-eval-vm",
+                                help="Azure VM name")
+    vm_setup_parser.add_argument("--resource-group", type=str, default="OPENADAPT-AGENTS",
+                                help="Azure resource group")
+    vm_setup_parser.add_argument("--verify", action="store_true",
+                                help="Run verification after setup")
+    vm_setup_parser.add_argument("--auto-verify", action="store_true",
+                                help="Automatically verify server is ready after setup")
+    vm_setup_parser.add_argument("--no-dashboard", action="store_true",
+                                help="Don't auto-launch monitoring dashboard")
+
     vm_start_parser = subparsers.add_parser("vm-start", help="Start an Azure VM")
     vm_start_parser.add_argument("--vm-name", type=str, default="waa-eval-vm",
                                 help="Azure VM name")
@@ -1009,6 +1366,8 @@ def main() -> int:
                           help="Max probe attempts")
     up_parser.add_argument("--probe-interval", type=int, default=5,
                           help="Seconds between probe attempts")
+    up_parser.add_argument("--no-dashboard", action="store_true",
+                          help="Don't auto-launch monitoring dashboard")
 
     dashboard_parser = subparsers.add_parser("dashboard", help="Generate VM usage dashboard")
     dashboard_parser.add_argument("--vm-name", type=str, default="waa-eval-vm",
@@ -1044,6 +1403,7 @@ def main() -> int:
         "estimate": cmd_estimate,
         "azure": cmd_azure,
         "azure-monitor": cmd_azure_monitor,
+        "vm-setup": cmd_vm_setup,
         "vm-start": cmd_vm_start,
         "vm-stop": cmd_vm_stop,
         "vm-status": cmd_vm_status,

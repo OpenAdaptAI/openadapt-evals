@@ -585,6 +585,47 @@ class StandaloneMetrics:
             return 1.0
         return 0.0
 
+    @staticmethod
+    def compare_text_file(result: Any, expected: Any, **options) -> float:
+        """Compare text file contents.
+
+        Args:
+            result: Actual file content from VM
+            expected: Expected file content (or path to reference file)
+            **options: Additional comparison options (e.g., ignore_whitespace)
+
+        Returns:
+            1.0 if files match exactly, 0.0-1.0 for partial matches
+        """
+        if result is None or expected is None:
+            return 0.0
+
+        # Convert to strings
+        result_text = str(result).strip()
+        expected_text = str(expected).strip()
+
+        # Exact match
+        if result_text == expected_text:
+            return 1.0
+
+        # Ignore whitespace differences if option enabled
+        if options.get("ignore_whitespace", False):
+            result_normalized = " ".join(result_text.split())
+            expected_normalized = " ".join(expected_text.split())
+            if result_normalized == expected_normalized:
+                return 1.0
+
+        # Fuzzy match as fallback
+        try:
+            from rapidfuzz import fuzz
+            score = fuzz.ratio(result_text, expected_text) / 100.0
+            return score
+        except ImportError:
+            # Simple containment check
+            if expected_text in result_text or result_text in expected_text:
+                return 0.7
+            return 0.0
+
 
 class StandaloneGetters:
     """Standalone getter implementations for basic evaluation.
@@ -604,7 +645,7 @@ class StandaloneGetters:
         try:
             resp = requests.post(
                 f"{self.server_url}/execute_windows",
-                json={"command": f"Get-Content -Path '{path}'", "shell": "powershell"},
+                json={"command": f"Get-Content -Path '{path}' -Raw", "shell": "powershell"},
                 timeout=30.0,
             )
             if resp.status_code == 200:
@@ -612,6 +653,49 @@ class StandaloneGetters:
         except Exception as e:
             logger.error(f"Failed to get file {path}: {e}")
         return None
+
+    def get_vm_file_exists_in_vm_folder(self, env: MockEnv, config: dict) -> float:
+        """Check if a file exists in a specific folder on the VM.
+
+        Args:
+            env: Mock environment with VM connection info
+            config: Dict with 'folder_name' and 'file_name' keys
+
+        Returns:
+            1.0 if file exists, 0.0 otherwise
+        """
+        import requests
+
+        folder = config.get("folder_name", "")
+        filename = config.get("file_name", "")
+
+        if not folder or not filename:
+            logger.error(f"Missing folder_name or file_name in config: {config}")
+            return 0.0
+
+        # Construct full path
+        if not folder.endswith("\\"):
+            folder = folder + "\\"
+        full_path = folder + filename
+
+        try:
+            # Use PowerShell Test-Path to check file existence
+            resp = requests.post(
+                f"{self.server_url}/execute_windows",
+                json={
+                    "command": f"Test-Path -Path '{full_path}' -PathType Leaf",
+                    "shell": "powershell"
+                },
+                timeout=30.0,
+            )
+            if resp.status_code == 200:
+                output = resp.json().get("output", "").strip().lower()
+                # PowerShell Test-Path returns "True" or "False"
+                return 1.0 if output == "true" else 0.0
+        except Exception as e:
+            logger.error(f"Failed to check file existence {full_path}: {e}")
+
+        return 0.0
 
     def get_vm_command_line(self, env: MockEnv, config: dict) -> str | None:
         """Execute command on VM and return output."""

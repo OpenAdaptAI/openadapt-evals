@@ -60,8 +60,14 @@ viewer = [
     "flask>=3.0.0",
     "flask-cors>=4.0.0",
 ]
+dashboard = [
+    # For auto-launching Azure resource monitoring dashboard
+    "flask>=3.0.0",
+    "flask-cors>=4.0.0",
+    "requests>=2.28.0",
+]
 all = [
-    "openadapt-evals[dev,waa,azure,retrieval,viewer]",
+    "openadapt-evals[dev,waa,azure,retrieval,viewer,dashboard]",
 ]
 test = [
     "anthropic>=0.76.0",

@@ -39,6 +39,7 @@ We've made significant improvements to reliability, cost-efficiency, and observa
 - **Screenshot Validation**: Manifest-based validation ensuring correctness
 - **Execution Logs**: Step-by-step logs with search and filtering
 - **Live Monitoring**: Real-time Azure ML job monitoring with auto-refresh
+- **CRITICAL**: Screenshots must show REAL ACTIONS (not idle desktop) - see [SCREENSHOT_REQUIREMENTS.md](./SCREENSHOT_REQUIREMENTS.md)
 - See [PR #6](https://github.com/OpenAdaptAI/openadapt-evals/pull/6) for details
 
 ## Installation

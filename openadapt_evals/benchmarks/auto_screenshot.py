@@ -4,6 +4,10 @@ This module provides functionality to automatically capture screenshots of the
 benchmark viewer HTML in different viewport sizes (desktop, tablet, mobile) and
 different states (overview, details panel, log panel, etc.).
 
+CRITICAL: Screenshots MUST show real actions being performed, not idle desktop.
+This tool captures screenshots of the viewer displaying real WAA evaluation results.
+The underlying evaluation screenshots must show actual task execution.
+
 Usage:
     from openadapt_evals.benchmarks.auto_screenshot import generate_screenshots
 
@@ -16,6 +20,20 @@ Usage:
 Requirements:
     pip install playwright
     playwright install chromium
+
+Screenshot Requirements:
+    The viewer HTML being captured must contain screenshots showing REAL ACTIONS:
+    - GUI elements being interacted with (buttons, text fields, menus)
+    - Mouse cursor visible near interactive elements
+    - Text being typed, state changes visible
+    - NOT idle Windows desktop with no windows open
+
+    Before using this tool, verify the viewer shows real evaluation results:
+    1. Load viewer in browser manually
+    2. Click through tasks to verify screenshots show actions
+    3. If screenshots show idle desktop, regenerate with real WAA evaluation
+
+    See SCREENSHOT_REQUIREMENTS.md for complete validation requirements.
 """
 
 from __future__ import annotations

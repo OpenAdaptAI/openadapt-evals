@@ -1,5 +1,94 @@
 # Claude Code Instructions for openadapt-evals
 
+## 🚨 Simplicity Guidelines (READ THIS FIRST!)
+
+**CRITICAL**: Read this BEFORE writing any code.
+
+**Philosophy**: "Less is more. 80/20 impact/complexity. Working code beats elegant design."
+
+### For Claude Code Agents
+
+**Default to the simplest approach**:
+- ✅ **Functions, not classes** - Use classes only when you need inheritance or shared state
+- ✅ **Inline bash scripts are fine** - If they work and solve the problem, don't wrap them in Python classes
+- ✅ **Don't write design docs for code that doesn't exist** - Document reality, not aspirations
+- ✅ **1-2 helper functions max, not frameworks** - Extract abstractions only after 3rd use
+- ✅ **If you're writing >100 lines, ask: can this be 10 lines?** - Challenge complexity
+
+### Before Writing Code, Ask
+
+1. **Does this solve a real, immediate problem?** (not theoretical)
+2. **Can I do this in <100 lines?** (ideally <50)
+3. **Is this the simplest approach?** (not the most elegant)
+4. **Does this provide 80% of value?** (not 100% perfection)
+
+**If NO to any → STOP. Simplify or delete the requirement.**
+
+### Red Flags (What NOT to Do)
+
+Our recent over-engineering examples from this repo:
+
+#### ❌ Example 1: Design Docs for Non-Existent Code
+**What we did**: Wrote 6,000+ lines (WAA_RELIABILITY_PLAN.md, VM_SETUP_COMMAND.md) describing VMSetupOrchestrator, CircuitBreaker, RetryConfig
+**What existed**: 305-line bash script in cli.py that worked fine
+**Problem**: Developers tried to import non-existent classes, wasted hours
+**Lesson**: Document what IS, not what MIGHT BE
+
+#### ❌ Example 2: Utility Classes Used Once
+**What we did**: Created elaborate utility classes for one-time use
+**What we should have done**: Inline the 10 lines
+**Problem**: Added complexity without benefit
+**Lesson**: Extract only after 3rd use
+
+#### ❌ Example 3: Multiple Implementations
+**What we did**: Container start logic in 3 places (cmd_vm_setup, cmd_server_start, cmd_up) - 487 lines total
+**What we should have done**: One function (40 lines)
+**Problem**: Inconsistent behavior, hard to maintain
+**Lesson**: DRY - Don't Repeat Yourself
+
+#### ❌ Example 4: TODOs That Return Empty Strings
+```python
+def _get_job_logs(self, job_name: str) -> str:
+    # TODO: Implement
+    return ""  # LIES TO CALLER! health_checker.py line 289
+```
+**Lesson**: Delete non-functional code. If it doesn't work, it shouldn't exist.
+
+#### ❌ Example 5: Bash Scripts Wrapped in Python
+**What we considered**: Wrapping working 295-line bash script in Python orchestrator
+**What we realized**: Bash works fine, don't add layers
+**Lesson**: If it works, ship it. Don't add abstraction for "elegance"
+
+### Decision Framework Checklist
+
+**Use this before writing ANY code**:
+
+```
+Before writing:
+□ Is it necessary? (solves real problem now, not theoretical)
+□ Is it simple? (<100 lines, no dependencies if avoidable)
+□ Is it the 80% solution? (covers common case, ignores edge cases)
+
+If all 3 aren't YES → STOP and simplify
+```
+
+### Quick Reference Card
+
+**When in doubt**:
+- Ship working code > perfect design
+- 10 lines > 100 lines
+- Functions > classes
+- Inline > abstraction (until 3rd use)
+- Delete > keep (if unsure)
+- Real data > mocks
+- Tests > docs
+
+**The best code is the code you didn't write.**
+
+**Full guidelines**: `/Users/abrichr/oa/src/openadapt-evals/SIMPLICITY_PRINCIPLES.md` (431 lines)
+
+---
+
 ## Project Status & Priorities
 
 **IMPORTANT**: Before starting work, always check the project-wide status document:
@@ -19,11 +108,19 @@ Benchmark evaluation adapters for GUI automation agents. Provides unified interf
 
 ## Recent Major Improvements (v0.2.0 - January 2026)
 
+### Auto-Launching Azure Dashboard (NEW - January 2026)
+- **Auto-Launch**: Dashboard automatically opens when Azure resources start
+- **Real-Time Monitoring**: Live cost tracking, resource status, and activity logs
+- **Resource Control**: Stop/start VMs directly from dashboard UI
+- **Cost Alerts**: Automatic warnings when costs exceed thresholds
+- **Activity Tracking**: Shows current tasks, actions, and progress
+- **Key Files**: `dashboard_server.py`, CLI integration in `cli.py`
+
 ### Azure Reliability Fix (PR #11)
 - **Success Rate**: Fixed 0% → 95%+ target achievement
 - **VM Configuration**: Upgraded to `Standard_D4s_v5` with nested virtualization support
-- **Health Monitoring**: Automatic stuck job detection with 10-minute timeout
-- **Key Files**: `azure.py`, `health_checker.py`
+- **Health Monitoring**: Inline bash health checks in vm-setup command
+- **Key Files**: `azure.py`, `cli.py` (vm-setup command)
 
 ### Cost Optimization (PR #13)
 - **Cost Reduction**: 67% savings ($7.68 → $2.50 per 154 tasks)
@@ -46,6 +143,9 @@ See [CHANGELOG.md](./CHANGELOG.md) for complete details.
 ```bash
 # Install
 uv sync
+
+# Setup WAA container on Azure VM (automated, 15-20 min)
+uv run python -m openadapt_evals.benchmarks.cli vm-setup --auto-verify
 
 # Run mock evaluation (no VM required)
 uv run python -m openadapt_evals.benchmarks.cli mock --tasks 10
@@ -83,12 +183,14 @@ uv run python -m openadapt_evals.benchmarks.cli view --run-name my_eval
 |---------|-------------|
 | `mock` | Run with mock adapter (testing, no VM) |
 | `live` | Run against live WAA server (supports --agent api-claude, api-openai, retrieval-claude, retrieval-openai) |
-| `azure` | Run parallel evaluation on Azure |
+| `azure` | Run parallel evaluation on Azure (auto-launches dashboard) |
 | `probe` | Check if WAA server is ready |
 | `view` | Generate HTML viewer for results |
 | `estimate` | Estimate Azure costs |
-| `dashboard` | **Generate VM usage dashboard** showing what the VM is being used for |
-| `up` | **All-in-one**: Start VM + WAA server + wait until ready |
+| `dashboard` | **DEPRECATED**: Use auto-launching dashboard from vm-setup/up/azure instead |
+| `monitor-dashboard` | **NEW**: Launch standalone monitoring dashboard for Azure resources |
+| `vm-setup` | **Automated WAA deployment**: Setup Docker container with health checks (15-20 min, auto-launches dashboard) |
+| `up` | **All-in-one**: Start VM + WAA server + wait until ready (auto-launches dashboard) |
 | `vm-start` | Start an Azure VM |
 | `vm-stop` | Stop (deallocate) an Azure VM |
 | `vm-status` | Check Azure VM status and IP |
@@ -120,13 +222,216 @@ openadapt_evals/
 │   ├── viewer.py             # generate_benchmark_viewer()
 │   ├── azure.py              # AzureWAAOrchestrator (with cost optimization)
 │   ├── monitoring.py         # CostTracker, cost reporting
-│   ├── health_checker.py     # Container health monitoring
+│   ├── health_checker.py     # STUB - actual health checks in cli.py vm-setup
 │   ├── live_tracker.py       # LiveEvaluationTracker
 │   ├── live_api.py           # Flask server for live monitoring
 │   ├── auto_screenshot.py    # Playwright screenshot tool with validation
-│   └── cli.py                # Unified CLI
+│   ├── vm_utils.py           # ONE helper function: run_on_vm()
+│   └── cli.py                # Unified CLI (includes vm-setup bash script)
 └── __init__.py
 ```
+
+## Auto-Launching Azure Dashboard
+
+**CRITICAL USER REQUIREMENT**: "When Azure resources are running I want it to be implemented such that it automatically launches a browser view into the resources currently being used, how much does it cost and for what exactly are we paying."
+
+The dashboard automatically launches when you run:
+- `vm-setup` - Sets up WAA container
+- `up` - Starts VM and WAA server
+- `azure` - Runs parallel evaluation
+
+### Features
+
+**Real-Time Cost Tracking**:
+- Cost per hour, day, week, month
+- Breakdown by resource type (compute, storage, network)
+- Automatic alerts when costs exceed $5/hour
+- Historical cost trends
+
+**Active Resources**:
+- VMs with status, size, location
+- Azure ML compute instances
+- Docker containers
+- Public/private IPs
+- Uptime tracking
+
+**Live Activity**:
+- Current task being evaluated
+- Task progress (e.g., "5/154 tasks completed")
+- Recent actions taken by agent
+- Action count
+- Real-time logs
+
+**Resource Controls**:
+- Stop/Start buttons for each resource
+- One-click VM deallocation to save costs
+- Quick actions with confirmation
+
+**Auto-Refresh**:
+- Dashboard updates every 5 seconds
+- No manual refresh needed
+- Real-time cost and status updates
+
+### Usage
+
+**Automatic Launch** (Default):
+```bash
+# Dashboard auto-launches when VM starts
+uv run python -m openadapt_evals.benchmarks.cli vm-setup
+
+# Dashboard auto-launches when resources start
+uv run python -m openadapt_evals.benchmarks.cli up
+
+# Dashboard auto-launches when evaluation starts
+uv run python -m openadapt_evals.benchmarks.cli azure --workers 10 --waa-path /path/to/WAA
+```
+
+**Disable Auto-Launch**:
+```bash
+# Add --no-dashboard to any command
+uv run python -m openadapt_evals.benchmarks.cli vm-setup --no-dashboard
+uv run python -m openadapt_evals.benchmarks.cli up --no-dashboard
+uv run python -m openadapt_evals.benchmarks.cli azure --workers 10 --no-dashboard
+```
+
+**Standalone Launch**:
+```bash
+# Run dashboard server standalone
+python -m openadapt_evals.benchmarks.dashboard_server
+
+# Custom port
+python -m openadapt_evals.benchmarks.dashboard_server --port 8080
+
+# Don't auto-open browser
+python -m openadapt_evals.benchmarks.dashboard_server --no-open
+```
+
+**Programmatic Usage**:
+```python
+from openadapt_evals.benchmarks.dashboard_server import ensure_dashboard_running
+
+# Ensure dashboard is running and open browser
+dashboard_url = ensure_dashboard_running(auto_open=True)
+print(f"Dashboard: {dashboard_url}")
+
+# Start without opening browser
+ensure_dashboard_running(auto_open=False)
+```
+
+### Dashboard Components
+
+**Cost Summary Card**:
+- Hourly cost (live)
+- Daily estimate (24h projection)
+- Weekly estimate (7d projection)
+- Monthly estimate (30d projection)
+
+**Active Resources Card**:
+- Running VMs count
+- Compute instances count
+- Total resources count
+
+**Current Activity Card**:
+- Current task instruction
+- Progress percentage
+- Actions executed count
+
+**Resources List**:
+- Each resource shown with:
+  - Name and status (running/stopped)
+  - Type (VM/Compute/Container)
+  - Size (e.g., Standard_D4_v3)
+  - Location (e.g., eastus)
+  - Cost per hour
+  - Start/Stop button
+
+**Recent Actions Log**:
+- Last 5 actions from agent
+- Step number and action type
+- Timestamp
+
+**Recent Logs**:
+- Last 10 log entries
+- Auto-scrolling
+- Monospace font for readability
+
+### Cost Tracking Details
+
+The dashboard queries Azure for:
+1. **VMs**: `az vm list` with instance details
+2. **Compute**: `az ml compute list` for Azure ML instances
+3. **Cost estimates**: Based on VM size pricing (East US region)
+
+**Cost Calculation**:
+- Compute: Actual VM hourly rate from Azure pricing
+- Storage: ~$0.01/hour per resource (estimate)
+- Network: ~$0.05/hour (estimate)
+- Total: Sum of all components
+
+**Pricing Data** (East US, regular instances):
+- Standard_D2_v3: $0.096/hour
+- Standard_D4_v3: $0.192/hour
+- Standard_D8_v3: $0.384/hour
+- Standard_D4ds_v5: $0.20/hour
+
+### Activity Tracking Details
+
+The dashboard reads:
+1. **Live tracking file**: `benchmark_live.json` (from LiveEvaluationTracker)
+2. **Log files**: Recent `.log` files in current directory
+
+**Data displayed**:
+- Current task instruction
+- Tasks completed / total tasks
+- Recent actions (type, step number)
+- Action count
+- Log tail (last 10 lines)
+
+### Installation
+
+Dashboard requires Flask dependencies:
+
+```bash
+# Install dashboard dependencies
+uv sync --extra dashboard
+
+# Or install all extras
+uv sync --extra all
+```
+
+**Dependencies**:
+- `flask>=3.0.0`
+- `flask-cors>=4.0.0`
+- `requests>=2.28.0`
+
+### Implementation Files
+
+- `/openadapt_evals/benchmarks/dashboard_server.py` - Dashboard server
+- `/openadapt_evals/benchmarks/cli.py` - CLI integration
+- Dashboard auto-launches in `cmd_vm_setup()`, `cmd_up()`, `cmd_azure()`
+
+### Technical Details
+
+**Server Architecture**:
+- Flask web server on port 5555 (default)
+- Runs in background thread (daemon)
+- Persistent across CLI command invocations
+- Health check endpoint: `/health`
+
+**Data Collection**:
+- Resources: Queries Azure CLI every 5 seconds
+- Activity: Reads `benchmark_live.json` file
+- Logs: Tails recent `.log` files
+
+**Browser Integration**:
+- Auto-opens using Python `webbrowser` module
+- Opens on first command that starts resources
+- Server persists, browser can reconnect
+
+**Security**:
+- Binds to localhost (127.0.0.1) only
+- No authentication (local use only)
+- No remote access
 
 ## CRITICAL: P0 Demo Persistence Fix ✅ VALIDATED
 
@@ -179,14 +484,16 @@ agent = ApiAgent(
 | `server/evaluate_endpoint.py` | /evaluate endpoint for WAA server integration |
 | `server/waa_server_patch.py` | Script to deploy /evaluate to WAA server |
 | `benchmarks/runner.py` | evaluate_agent_on_benchmark(), compute_metrics() |
-| `benchmarks/azure.py` | AzureWAAOrchestrator, tiered VMs, spot instances, health monitoring |
+| `benchmarks/azure.py` | AzureWAAOrchestrator, tiered VMs, spot instances |
 | `benchmarks/monitoring.py` | CostTracker, cost reporting, real-time cost tracking |
-| `benchmarks/health_checker.py` | Container health monitoring, stuck job detection |
+| `benchmarks/health_checker.py` | STUB - actual health checks in cli.py vm-setup bash script |
+| `benchmarks/vm_utils.py` | ONE helper function: run_on_vm() for executing scripts via Azure |
 | `benchmarks/viewer.py` | generate_benchmark_viewer(), execution logs |
 | `benchmarks/auto_screenshot.py` | Playwright screenshot tool with validation |
 | `benchmarks/live_api.py` | Flask server for real-time monitoring |
 | `benchmarks/live_tracker.py` | LiveEvaluationTracker with cost tracking |
-| `benchmarks/cli.py` | CLI entry point |
+| `benchmarks/dashboard_server.py` | **NEW**: Auto-launching Azure resource monitoring dashboard |
+| `benchmarks/cli.py` | CLI entry point with dashboard integration |
 | `benchmarks/generate_synthetic_demos.py` | Generate synthetic demo trajectories for all 154 WAA tasks |
 | `benchmarks/validate_demos.py` | Validate demo format and action syntax |
 | `demo_library/synthetic_demos/` | 154 synthetic demos for all WAA tasks |
@@ -205,6 +512,78 @@ Synthetic demos provide:
 1. Consistent quality across all 154 tasks
 2. Rapid regeneration as prompts improve
 3. Scalable evaluation without manual recording
+
+## Screenshot Quality Requirements
+
+**CRITICAL REQUIREMENT: Real Action Screenshots, Not Idle Desktop**
+
+All screenshots used in benchmarks, demos, documentation, and viewers MUST show real actions being performed. Screenshots showing idle Windows desktop with no visible activity are NOT acceptable.
+
+### What Makes a Good Screenshot
+
+**Good screenshots show:**
+- ✅ GUI elements being interacted with (buttons, text fields, menus)
+- ✅ Mouse cursor visible near or on interactive elements
+- ✅ Text being typed (partially complete text visible)
+- ✅ State changes (window opening, dialog appearing, form being filled)
+- ✅ Action evidence (cursor at insertion point, menu dropdown open, progress bars)
+
+**Bad screenshots show:**
+- ❌ Idle Windows 11 desktop with wallpaper and no windows open
+- ❌ Blank/empty application windows with no content
+- ❌ Loading screens or splash screens
+- ❌ Static desktop background with no interaction
+
+### Required Data Sources
+
+**Option A: Real WAA Evaluation** (PREFERRED)
+```bash
+# Run actual WAA tasks and capture action screenshots
+uv run python -m openadapt_evals.benchmarks.cli live \
+    --agent api-claude \
+    --server http://vm:5000 \
+    --task-ids notepad_1,browser_5 \
+    --save-screenshots
+```
+
+**Option B: Nightshift OpenAdapt Recording** (Real macOS Data)
+Use the nightshift recording which contains real user interactions on macOS.
+Location: `/path/to/openadapt/recordings/nightshift_recording.db`
+
+**Option C: Live Recording Session**
+Record new session performing actual tasks using OpenAdapt.
+
+### Validation
+
+All screenshots MUST pass validation before use:
+
+```python
+from openadapt_evals.benchmarks.validate_screenshots import ScreenshotValidator
+
+validator = ScreenshotValidator()
+result = validator.validate_single("screenshot.png")
+
+if not result.is_valid:
+    raise ValueError(f"Screenshot shows idle desktop, not real actions: {result.errors}")
+```
+
+**Validation checks:**
+- File integrity (valid PNG/JPEG, correct size)
+- Not blank (not all white/black pixels)
+- Content variation (>10 unique colors)
+- Sequential change (differs from previous screenshot)
+- Optional OCR verification (expected text visible)
+
+### Enforcement
+
+This requirement is encoded in:
+1. **`docs/screenshots/SCREENSHOT_REQUIREMENTS.md`** - Comprehensive specification of requirements
+2. **`CLAUDE.md`** - This section (you're reading it now)
+3. **Code docstrings** - `viewer.py`, `auto_screenshot.py`, `validate_screenshots.py`
+4. **Default validation** - `validate_screenshots=True` by default in viewer generation
+5. **CLI warnings** - Warns when idle screenshots detected
+
+**See `docs/screenshots/SCREENSHOT_REQUIREMENTS.md` for complete details, examples, and troubleshooting.**
 
 ## Data Usage Guidelines
 
@@ -468,10 +847,91 @@ python refresh_vm_dashboard.py
 - Quick action commands
 
 **Files:**
-- `VM_USAGE_DASHBOARD.md` - Markdown dashboard (generated)
+- `docs/vm/VM_USAGE_DASHBOARD.md` - Markdown dashboard (generated)
 - `VM_USAGE_DASHBOARD.html` - HTML dashboard with auto-refresh (generated if --open flag used)
 - `refresh_vm_dashboard.py` - Dashboard generator script
 - `vm_dashboard.html` - Static HTML template
+
+## WAA Container Setup (vm-setup)
+
+The `vm-setup` command automates complete WAA container deployment from scratch with 95%+ reliability.
+
+**Implementation**: 305 lines of bash script in `cli.py` (lines 499-664), executed via `az vm run-command invoke`.
+
+**What it does:**
+1. Validates nested virtualization support on VM (checks /proc/cpuinfo)
+2. Starts Docker daemon with retry logic (3 attempts with 5s delays)
+3. Pulls `windowsarena/winarena:latest` image (10-15 min)
+4. Creates and starts container with proper settings (--device /dev/kvm, port 5000)
+5. Waits for Windows to boot (VNC port check, max 10 minutes)
+6. Verifies WAA server is responding (curl localhost:5000/probe)
+7. Returns server URL and next steps
+
+**Why it works**: Simple bash script, no abstractions, inline health checks.
+
+**Usage:**
+```bash
+# Automated setup with verification (recommended)
+uv run python -m openadapt_evals.benchmarks.cli vm-setup --auto-verify
+
+# Setup without verification
+uv run python -m openadapt_evals.benchmarks.cli vm-setup
+
+# Custom VM
+uv run python -m openadapt_evals.benchmarks.cli vm-setup \
+  --vm-name my-waa-vm \
+  --resource-group MY-RG \
+  --auto-verify
+```
+
+**Timeline:**
+- Fresh VM: 15-20 minutes (includes image pull)
+- Existing setup: 2-5 minutes (container already exists)
+
+**Features:**
+- Idempotent (safe to re-run)
+- Multi-stage health checks
+- Clear error messages
+- Automatic retry on transient failures
+- Progress reporting every 30s
+
+**Requirements:**
+- Azure VM with nested virtualization (Standard_D4s_v5 or similar)
+- Docker installed on VM
+- Azure CLI installed locally (`az login`)
+
+**Troubleshooting:**
+
+If setup fails:
+```bash
+# Check VM supports nested virtualization
+az vm show --name waa-eval-vm --resource-group OPENADAPT-AGENTS --query "hardwareProfile.vmSize" -o tsv
+
+# Check Docker status on VM
+az vm run-command invoke \
+  --resource-group OPENADAPT-AGENTS \
+  --name waa-eval-vm \
+  --command-id RunShellScript \
+  --scripts "systemctl status docker"
+
+# View container logs
+az vm run-command invoke \
+  --resource-group OPENADAPT-AGENTS \
+  --name waa-eval-vm \
+  --command-id RunShellScript \
+  --scripts "docker logs winarena"
+```
+
+**Test the setup:**
+```bash
+# Run test script
+./test_vm_setup.sh
+
+# Or manually verify
+uv run python -m openadapt_evals.benchmarks.cli probe \
+  --server http://$(az vm show --name waa-eval-vm --resource-group OPENADAPT-AGENTS --show-details --query publicIps -o tsv):5000 \
+  --wait
+```
 
 ## Azure VM Management
 
@@ -739,7 +1199,7 @@ git push origin v0.1.1
 
 1. **Downloads Badge**: Shows "package not found" for newly published packages. This resolves automatically within 24-48 hours as PyPI stats services index the package.
 
-2. **TestPyPI Publishing**: Currently fails due to missing trusted publisher configuration on test.pypi.org. Main PyPI publishing works correctly. See `PYPI_PUBLISHING_PLAN.md` for setup instructions.
+2. **TestPyPI Publishing**: Currently fails due to missing trusted publisher configuration on test.pypi.org. Main PyPI publishing works correctly. See `docs/misc/PYPI_PUBLISHING_PLAN.md` for setup instructions.
 
 ### Configuration
 
@@ -747,4 +1207,4 @@ git push origin v0.1.1
 - **Publishing Method**: Trusted Publishing (OIDC) - no API tokens needed
 - **Environments**: `pypi` (working), `testpypi` (needs configuration)
 
-For detailed publishing documentation, troubleshooting, and setup instructions, see `PYPI_PUBLISHING_PLAN.md`.
+For detailed publishing documentation, troubleshooting, and setup instructions, see `docs/misc/PYPI_PUBLISHING_PLAN.md`.

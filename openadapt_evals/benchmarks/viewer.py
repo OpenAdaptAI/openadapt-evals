@@ -1,8 +1,18 @@
 """Benchmark viewer HTML generation.
 
+.. deprecated::
+    This module is deprecated. Use ``openadapt_viewer`` instead::
+
+        from openadapt_viewer import generate_benchmark_viewer
+
+    The openadapt-viewer package is the canonical location for viewer code.
+
 This module generates a standalone HTML viewer for benchmark results,
 showing task list with pass/fail status, step-by-step replay of
 benchmark executions, screenshots, actions, and reasoning at each step.
+
+IMPORTANT: Screenshots must show REAL ACTIONS being performed, not idle desktop.
+See SCREENSHOT_REQUIREMENTS.md for validation requirements.
 
 Usage:
     from openadapt_evals.benchmarks.viewer import generate_benchmark_viewer
@@ -21,15 +31,33 @@ Directory structure expected:
     |   |-- task_001/
     |   |   |-- task.json      # Task definition
     |   |   |-- execution.json # Execution trace with steps
-    |   |   |-- screenshots/   # Step screenshots
+    |   |   |-- screenshots/   # Step screenshots (MUST show real actions!)
     |   |       |-- step_000.png
     |   |       |-- step_001.png
     |   |       |-- ...
     |   |-- task_002/
     |   |   |-- ...
+
+Screenshot Requirements:
+    Screenshots MUST show real actions being performed:
+    - GUI elements being interacted with (buttons, text fields, menus)
+    - Mouse cursor visible near interactive elements
+    - Text being typed, state changes occurring
+    - NOT idle desktop, blank windows, or loading screens
+
+    See SCREENSHOT_REQUIREMENTS.md for complete details.
 """
 
 from __future__ import annotations
+
+import warnings
+
+warnings.warn(
+    "openadapt_evals.benchmarks.viewer is deprecated. "
+    "Use openadapt_viewer instead: from openadapt_viewer import generate_benchmark_viewer",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import base64
 import json
