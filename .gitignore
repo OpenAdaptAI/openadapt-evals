@@ -22,3 +22,26 @@ demo_library/index.json
 
 # Live benchmark state (changes during execution)
 benchmark_live.json
+
+# Vim/Editor temp files
+*.swp
+*.swo
+*~
+.*.swp
+
+# Generated HTML dashboards (keep source templates)
+vm_dashboard.html
+*_dashboard.html
+live_viewer.html
+
+# Screenshot directories (documentation screenshots stay in docs/screenshots/)
+screenshots/
+screenshots_live/
+screenshots_real/
+
+# Cost reports (generated)
+cost_report.json
+*_cost_report.json
+
+# Manifest files (generated)
+screenshots/manifest.json
