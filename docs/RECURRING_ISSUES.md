@@ -10,26 +10,36 @@
 
 **Symptom**: Windows installer shows "Select operating system" or asks for product key instead of auto-installing.
 
-**Root Cause**: Multiple factors can cause this:
-1. `VERSION=11e` (Enterprise Evaluation) shows edition picker - use `VERSION=11` (Pro) instead
-2. Missing `InstallFrom/MetaData` element in autounattend.xml
-3. Cached Windows storage at `/mnt/waa-storage/` has old broken install
-4. Using `dockurr/windows` directly instead of `waa-auto` image
-5. Docker image not rebuilt after Dockerfile changes
+**Root Cause** (RCA completed 2026-01-20):
 
-**Fix Checklist**:
-- [ ] Dockerfile uses `VERSION=11` (not `11e`)
-- [ ] Dockerfile patches autounattend.xml with InstallFrom/MetaData for index 1
-- [ ] Delete cached storage: `rm -rf /mnt/waa-storage/*`
-- [ ] Rebuild image: `docker build --no-cache -t waa-auto .`
-- [ ] Verify container uses `waa-auto:latest` not `dockurr/windows`
+**VERSION MISMATCH between Dockerfile and CLI:**
+- Dockerfile (line 275): `VERSION="11e"`
+- CLI (lines 3273, 6110, 6180): `VERSION=11`
+
+Dockerfile patches XML for 11e, but runtime uses 11's XML (unpatched).
+
+**Correct understanding:**
+- `VERSION=11e` (Enterprise Eval) = Has built-in GVLK key, **NEVER prompts**
+- `VERSION=11` (Pro) = May prompt for product key if XML incorrect
+
+**NOTE**: Earlier working versions used volume licensing - check git history and README screenshots for working Azure instances.
+
+**Fix Checklist** (VERIFIED):
+- [ ] CLI uses `VERSION=11e` in ALL 3 places (cli.py lines 3273, 6110, 6180)
+- [ ] Dockerfile uses `VERSION=11e` (already correct)
+- [ ] CLAUDE.md documentation is correct (was backwards)
+- [ ] Delete cached storage: `rm -f /data/waa-storage/data.img`
+- [ ] Rebuild if Dockerfile changed: `docker build --no-cache -t waa-auto .`
 
 **Prior Fix Attempts**:
-| Date | Commit | What was tried | Result |
-|------|--------|----------------|--------|
-| 2026-01-XX | ??? | Added VERSION=11 | Partial - still saw prompts |
-| 2026-01-XX | ??? | Added InstallFrom sed patch | Unknown |
-| 2026-01-20 | ??? | Reset storage + fresh install | Still showing prompt |
+| Date | Commit | What was tried | Result | Why it failed |
+|------|--------|----------------|--------|---------------|
+| ~Jan 15 | ??? | Added InstallFrom to XML | Partial | Only patched one XML file |
+| ~Jan 17 | ??? | Used VERSION=11 | Broke it | Introduced mismatch with Dockerfile |
+| ~Jan 18 | ??? | Patched BOTH XML files | Should work | But CLI still passes VERSION=11 |
+| Jan 20 | ??? | Reset storage + fresh install | Still broken | Didn't fix VERSION mismatch |
+
+**Full RCA**: `/Users/abrichr/oa/src/openadapt-ml/docs/WINDOWS_PRODUCT_KEY_RCA.md`
 
 **Beads Tasks**: `bd list --labels=windows,product-key`
 
