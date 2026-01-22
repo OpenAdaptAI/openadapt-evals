@@ -60,8 +60,12 @@ viewer = [
     "flask>=3.0.0",
     "flask-cors>=4.0.0",
 ]
+wandb = [
+    # Weights & Biases for experiment tracking
+    "wandb>=0.16.0",
+]
 all = [
-    "openadapt-evals[dev,waa,azure,retrieval,viewer]",
+    "openadapt-evals[dev,waa,azure,retrieval,viewer,wandb]",
 ]
 test = [
     "anthropic>=0.76.0",

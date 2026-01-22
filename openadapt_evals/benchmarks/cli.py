@@ -24,6 +24,8 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -33,6 +35,111 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
+
+def _resolve_vm_context(args: argparse.Namespace) -> tuple[str, str] | None:
+    """Resolve VM name/resource group from args, env, or Azure CLI tags.
+
+    Resolution order:
+    1) CLI args
+    2) Environment variables
+    3) Azure CLI: running VM tagged openadapt-role=waa
+    """
+    vm_name = (
+        getattr(args, "vm_name", None)
+        or os.getenv("AZURE_WAA_VM_NAME")
+        or os.getenv("AZURE_VM_NAME")
+    )
+    resource_group = (
+        getattr(args, "resource_group", None)
+        or os.getenv("AZURE_ML_RESOURCE_GROUP")
+        or os.getenv("AZURE_RESOURCE_GROUP")
+    )
+
+    if vm_name and resource_group:
+        return vm_name, resource_group
+
+    # If only vm name is provided, try to resolve resource group.
+    if vm_name and not resource_group:
+        try:
+            result = subprocess.run(
+                [
+                    "az",
+                    "vm",
+                    "list",
+                    "--query",
+                    f"[?name=='{vm_name}'].resourceGroup | [0]",
+                    "-o",
+                    "tsv",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return vm_name, result.stdout.strip()
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return None
+
+    # Prefer tagged running VM, but fall back to any tagged VM.
+    queries = [
+        (
+            "[?tags.\"openadapt-role\"=='waa' && powerState=='VM running']."
+            "{name:name, rg:resourceGroup, tags:tags, status:powerState}"
+        ),
+        (
+            "[?tags.\"openadapt-role\"=='waa']."
+            "{name:name, rg:resourceGroup, tags:tags, status:powerState}"
+        ),
+    ]
+
+    vms = []
+    for query in queries:
+        try:
+            result = subprocess.run(
+                [
+                    "az",
+                    "vm",
+                    "list",
+                    "--show-details",
+                    "--query",
+                    query,
+                    "-o",
+                    "json",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return None
+
+        if result.returncode != 0:
+            continue
+
+        try:
+            vms = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            continue
+
+        if vms:
+            break
+
+    if not vms:
+        return None
+
+    if len(vms) > 1:
+        print("WARNING: Multiple tagged WAA VMs found. Using the first:")
+        for vm in vms:
+            status = vm.get("status") or "unknown"
+            print(f"  - {vm.get('name')} ({vm.get('rg')}) [{status}]")
+
+    vm = vms[0]
+    name = vm.get("name")
+    rg = vm.get("rg")
+    if not name or not rg:
+        return None
+    return name, rg
 
 
 def cmd_mock(args: argparse.Namespace) -> int:
@@ -125,6 +232,8 @@ def cmd_live(args: argparse.Namespace) -> int:
     """Run live evaluation against a WAA server."""
     from openadapt_evals.adapters import WAALiveAdapter, WAALiveConfig
     from openadapt_evals.agents import SmartMockAgent, ApiAgent, RetrievalAugmentedAgent
+    from openadapt_evals.agents.scripted_agent import ScriptedAgent
+    from openadapt_evals.adapters.base import BenchmarkAction
     from openadapt_evals.benchmarks import (
         EvaluationConfig,
         evaluate_agent_on_benchmark,
@@ -167,6 +276,12 @@ def cmd_live(args: argparse.Namespace) -> int:
 
     if agent_type == "mock":
         agent = SmartMockAgent()
+    elif agent_type in ("noop", "done"):
+        # Minimal smoke-test agent: immediately returns DONE.
+        # This is useful for validating end-to-end connectivity + /evaluate plumbing
+        # without requiring API keys.
+        agent = ScriptedAgent([BenchmarkAction(type="done")])
+        print("Using ScriptedAgent (noop): immediate DONE")
     elif agent_type in ("api-claude", "claude", "anthropic"):
         try:
             agent = ApiAgent(provider="anthropic", demo=demo_text)
@@ -209,7 +324,9 @@ def cmd_live(args: argparse.Namespace) -> int:
             return 1
     else:
         print(f"ERROR: Unknown agent type: {agent_type}")
-        print("Available: mock, api-claude, api-openai, retrieval-claude, retrieval-openai")
+        print(
+            "Available: mock, noop, api-claude, api-openai, retrieval-claude, retrieval-openai"
+        )
         return 1
 
     # Create config for trace collection
@@ -254,6 +371,269 @@ def cmd_live(args: argparse.Namespace) -> int:
         print(f"\nResults saved to: {eval_config.output_dir}/{eval_config.run_name}")
 
     return 0
+
+
+def cmd_smoke_live(args: argparse.Namespace) -> int:
+    """One-command live smoke test.
+
+    Starts the tagged WAA VM (or specified vm-name/resource-group), starts the
+    existing 'winarena' container, patches /evaluate, probes until ready, runs a
+    single live task, then deallocates the VM by default.
+
+    This is intended to validate "end-to-end" wiring (VM -> server -> adapter ->
+    runner -> /evaluate) without requiring any API keys.
+    """
+    import base64
+    import time
+    from pathlib import Path
+
+    from openadapt_evals.adapters import WAALiveAdapter, WAALiveConfig
+    from openadapt_evals.adapters.base import BenchmarkAction
+    from openadapt_evals.agents.scripted_agent import ScriptedAgent
+    from openadapt_evals.benchmarks import EvaluationConfig, compute_metrics, evaluate_agent_on_benchmark
+
+    vm_context = _resolve_vm_context(args)
+    if not vm_context:
+        print("ERROR: Unable to resolve VM name/resource group.")
+        print("Set --vm-name/--resource-group or tag VM with openadapt-role=waa.")
+        print("Example: az vm update -g <rg> -n <vm> --set tags.openadapt-role=waa")
+        return 1
+    vm_name, resource_group = vm_context
+
+    def _run(cmd: list[str], *, timeout: int | None = None) -> subprocess.CompletedProcess:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+
+    def patch_evaluate_endpoint() -> bool:
+        eval_path = Path(__file__).resolve().parents[1] / "server" / "evaluate_endpoint.py"
+        if not eval_path.exists():
+            print(f"WARNING: evaluate_endpoint.py not found at {eval_path}")
+            return False
+
+        payload = base64.b64encode(eval_path.read_bytes()).decode("ascii")
+        patch_script = f'''
+set -e
+CONTAINER_ID=$(docker ps -aq -f name=winarena)
+if [ -z "$CONTAINER_ID" ]; then
+    echo "ERROR: No winarena container found"
+    exit 1
+fi
+
+TMPFILE=$(mktemp)
+echo "{payload}" | base64 -d > "$TMPFILE"
+
+docker cp "$TMPFILE" winarena:/home/azureuser/WindowsAgentArena/src/win-arena-container/vm/setup/server/evaluate_endpoint.py
+rm -f "$TMPFILE"
+
+docker exec winarena python - <<'PY'
+from pathlib import Path
+
+main_path = Path("/home/azureuser/WindowsAgentArena/src/win-arena-container/vm/setup/server/main.py")
+marker = "# openadapt-evals: /evaluate endpoint"
+content = main_path.read_text()
+
+if marker not in content:
+    patch_block = (
+        "\n\n"
+        "# openadapt-evals: /evaluate endpoint\n"
+        "try:\n"
+        "    from evaluate_endpoint import create_evaluate_blueprint\n"
+        "    evaluate_bp = create_evaluate_blueprint()\n"
+        "    app.register_blueprint(evaluate_bp)\n"
+        "except Exception as exc:\n"
+        "    print(f\"WAA /evaluate endpoint disabled: {{exc}}\")\n"
+    )
+    if "if __name__ == \"__main__\":" in content:
+        parts = content.split("if __name__ == \"__main__\":", 1)
+        content = parts[0] + patch_block + "\nif __name__ == \"__main__\":" + parts[1]
+    else:
+        content += patch_block
+    main_path.write_text(content)
+
+print("/evaluate endpoint patched")
+PY
+'''
+
+        try:
+            result = _run(
+            [
+                "az",
+                "vm",
+                "run-command",
+                "invoke",
+                "--resource-group",
+                resource_group,
+                "--name",
+                vm_name,
+                "--command-id",
+                "RunShellScript",
+                "--scripts",
+                patch_script,
+            ],
+            timeout=900,
+            )
+        except subprocess.TimeoutExpired:
+            print("WARNING: /evaluate patch timed out (az vm run-command).")
+            return False
+
+        if result.returncode != 0:
+            print(f"WARNING: /evaluate patch failed: {result.stderr.strip()}")
+            return False
+        return True
+
+    server_url: str | None = None
+    try:
+        print(f"[1/6] Starting VM '{vm_name}'...")
+        result = _run(["az", "vm", "start", "--name", vm_name, "--resource-group", resource_group])
+        if result.returncode != 0:
+            print(f"ERROR: Failed to start VM: {result.stderr.strip()}")
+            return 1
+
+        print("[2/6] Getting public IP...")
+        result = _run(
+            [
+                "az",
+                "vm",
+                "show",
+                "--name",
+                vm_name,
+                "--resource-group",
+                resource_group,
+                "--show-details",
+                "--query",
+                "publicIps",
+                "-o",
+                "tsv",
+            ]
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            print("ERROR: Could not get public IP")
+            return 1
+
+        public_ip = result.stdout.strip()
+        server_url = f"http://{public_ip}:5000"
+        print(f"      Server URL: {server_url}")
+
+        print(f"[3/6] Waiting {args.boot_wait}s then starting winarena container...")
+        time.sleep(args.boot_wait)
+
+        start_script = '''
+set -e
+CONTAINER_ID=$(docker ps -aq -f name=winarena)
+if [ -z "$CONTAINER_ID" ]; then
+    echo "ERROR: No winarena container found"
+    exit 1
+fi
+
+RUNNING=$(docker ps -q -f name=winarena)
+if [ -z "$RUNNING" ]; then
+    echo "Starting winarena container (async)..."
+    nohup docker start winarena >/tmp/winarena_start.log 2>&1 &
+    disown || true
+    echo "Started docker start in background; see /tmp/winarena_start.log"
+fi
+
+sleep 3
+docker ps -f name=winarena --format "Container: {{.Names}}, Status: {{.Status}}"
+'''
+
+        try:
+            result = _run(
+            [
+                "az",
+                "vm",
+                "run-command",
+                "invoke",
+                "--resource-group",
+                resource_group,
+                "--name",
+                vm_name,
+                "--command-id",
+                "RunShellScript",
+                "--scripts",
+                start_script,
+            ],
+            timeout=900,
+            )
+        except subprocess.TimeoutExpired:
+            print("ERROR: Timed out while starting winarena container (az vm run-command).")
+            return 1
+        if result.returncode != 0:
+            print(f"ERROR: Failed to start container: {result.stderr.strip()}")
+            return 1
+
+        print("[4/6] Patching /evaluate endpoint...")
+        patch_evaluate_endpoint()
+
+        print(f"[5/6] Probing server at {server_url}...")
+        try:
+            import requests
+        except ImportError:
+            print("ERROR: requests package required")
+            return 1
+
+        ready = False
+        for attempt in range(args.probe_attempts):
+            try:
+                resp = requests.get(f"{server_url}/probe", timeout=5.0)
+                if resp.status_code == 200:
+                    ready = True
+                    break
+            except Exception:
+                pass
+            time.sleep(args.probe_interval)
+            print(f"      Attempt {attempt + 1}/{args.probe_attempts}: waiting...")
+
+        if not ready:
+            print("ERROR: WAA server not reachable after probing")
+            return 1
+
+        # Optional /evaluate health check
+        try:
+            eval_resp = requests.get(f"{server_url}/evaluate/health", timeout=5.0)
+            if eval_resp.status_code == 200:
+                print("      /evaluate endpoint: ready")
+            else:
+                print(f"      WARNING: /evaluate endpoint health returned {eval_resp.status_code}")
+        except Exception:
+            print("      WARNING: /evaluate endpoint health check failed")
+
+        print("[6/6] Running single-task live evaluation...")
+
+        agent = ScriptedAgent([BenchmarkAction(type="done")])
+        adapter = WAALiveAdapter(WAALiveConfig(server_url=server_url, max_steps=args.max_steps))
+
+        eval_config = EvaluationConfig(
+            max_steps=args.max_steps,
+            save_execution_traces=args.save_traces,
+            enable_live_tracking=False,
+            output_dir=args.output,
+            run_name=args.run_name,
+            model_id="noop",
+        )
+        results = evaluate_agent_on_benchmark(
+            agent=agent,
+            adapter=adapter,
+            task_ids=[args.task_id],
+            max_steps=args.max_steps,
+            config=eval_config,
+        )
+
+        metrics = compute_metrics(results)
+        print("\n" + "=" * 50)
+        print("Smoke Live Results")
+        print("=" * 50)
+        print(f"Tasks:        {metrics['num_tasks']}")
+        print(f"Success rate: {metrics['success_rate']:.1%}")
+        print(f"Avg score:    {metrics['avg_score']:.3f}")
+        print(f"Avg steps:    {metrics['avg_steps']:.1f}")
+
+        return 0
+
+    finally:
+        if args.stop_vm:
+            print(f"\nStopping VM '{vm_name}' (deallocate)...")
+            _run(["az", "vm", "deallocate", "--name", vm_name, "--resource-group", resource_group])
+            print("VM deallocate requested.")
 
 
 def cmd_probe(args: argparse.Namespace) -> int:
@@ -355,10 +735,13 @@ def cmd_estimate(args: argparse.Namespace) -> int:
 
 def cmd_vm_start(args: argparse.Namespace) -> int:
     """Start an Azure VM."""
-    import subprocess
-
-    vm_name = args.vm_name
-    resource_group = args.resource_group
+    vm_context = _resolve_vm_context(args)
+    if not vm_context:
+        print("ERROR: Unable to resolve VM name/resource group.")
+        print("Set --vm-name/--resource-group or tag VM with openadapt-role=waa.")
+        print("Example: az vm update -g <rg> -n <vm> --set tags.openadapt-role=waa")
+        return 1
+    vm_name, resource_group = vm_context
 
     print(f"Starting VM '{vm_name}' in resource group '{resource_group}'...")
 
@@ -396,10 +779,13 @@ def cmd_vm_start(args: argparse.Namespace) -> int:
 
 def cmd_vm_stop(args: argparse.Namespace) -> int:
     """Stop an Azure VM."""
-    import subprocess
-
-    vm_name = args.vm_name
-    resource_group = args.resource_group
+    vm_context = _resolve_vm_context(args)
+    if not vm_context:
+        print("ERROR: Unable to resolve VM name/resource group.")
+        print("Set --vm-name/--resource-group or tag VM with openadapt-role=waa.")
+        print("Example: az vm update -g <rg> -n <vm> --set tags.openadapt-role=waa")
+        return 1
+    vm_name, resource_group = vm_context
 
     print(f"Stopping VM '{vm_name}' in resource group '{resource_group}'...")
 
@@ -419,11 +805,15 @@ def cmd_vm_stop(args: argparse.Namespace) -> int:
 
 def cmd_vm_status(args: argparse.Namespace) -> int:
     """Check Azure VM status."""
-    import subprocess
     import json as json_module
 
-    vm_name = args.vm_name
-    resource_group = args.resource_group
+    vm_context = _resolve_vm_context(args)
+    if not vm_context:
+        print("ERROR: Unable to resolve VM name/resource group.")
+        print("Set --vm-name/--resource-group or tag VM with openadapt-role=waa.")
+        print("Example: az vm update -g <rg> -n <vm> --set tags.openadapt-role=waa")
+        return 1
+    vm_name, resource_group = vm_context
 
     result = subprocess.run(
         [
@@ -459,45 +849,130 @@ def cmd_vm_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_vm_debug(args: argparse.Namespace) -> int:
+    """Run non-blocking diagnostics on the Azure VM.
+
+    This is designed to be safe to run even when docker is wedged: each command
+    is wrapped with a short timeout so `az vm run-command` returns.
+    """
+    vm_context = _resolve_vm_context(args)
+    if not vm_context:
+        print("ERROR: Unable to resolve VM name/resource group.")
+        print("Set --vm-name/--resource-group or tag VM with openadapt-role=waa.")
+        return 1
+    vm_name, resource_group = vm_context
+
+    print(f"Running VM diagnostics on '{vm_name}'...")
+
+    diag_script = r'''
+set -u
+
+run() {
+  title="$1"
+  shift
+  echo ""
+  echo "===== ${title} ====="
+  # Ensure we never hang.
+  timeout 20 bash -lc "$*" 2>&1 || echo "(command failed or timed out: $*)"
+}
+
+run "TIME" "date"
+run "KERNEL" "uname -a"
+run "UPTIME" "uptime || true"
+run "DISK" "df -h || true"
+run "MEM" "free -h || true"
+run "DOCKER VERSION" "docker --version || true"
+run "DOCKER INFO" "docker info --format '{{json .}}' | head -c 4000 || docker info || true"
+run "DOCKER PS" "docker ps -a --no-trunc || true"
+run "DOCKER IMAGES" "docker images --digests | head -n 50 || true"
+run "WINARENA INSPECT" "docker inspect winarena --format '{{.Name}} {{.State.Status}} {{.State.Running}} {{.State.Error}}' || true"
+run "WINARENA LOGS" "docker logs --tail 200 winarena || true"
+run "DOCKER SERVICE" "systemctl status docker --no-pager || true"
+run "DOCKER JOURNAL" "journalctl -u docker -n 200 --no-pager || true"
+run "WINARENA START LOG" "tail -n 200 /tmp/winarena_start.log 2>/dev/null || true"
+'''
+
+    try:
+        result = subprocess.run(
+            [
+                "az",
+                "vm",
+                "run-command",
+                "invoke",
+                "--resource-group",
+                resource_group,
+                "--name",
+                vm_name,
+                "--command-id",
+                "RunShellScript",
+                "--scripts",
+                diag_script,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=900,
+        )
+    except subprocess.TimeoutExpired:
+        print("ERROR: vm-debug timed out (az vm run-command).")
+        return 1
+
+    if result.returncode != 0:
+        print(f"ERROR: vm-debug failed: {result.stderr.strip()}")
+        return 1
+
+    # Azure returns JSON; print raw output for now.
+    print(result.stdout)
+    return 0
+
+
 def cmd_server_start(args: argparse.Namespace) -> int:
     """Start WAA server on the Azure VM via run-command.
 
     WAA runs inside a Docker container with Windows nested virtualization.
     This command starts the existing 'winarena' container.
     """
-    import subprocess
     import time
 
-    vm_name = args.vm_name
-    resource_group = args.resource_group
+    vm_context = _resolve_vm_context(args)
+    if not vm_context:
+        print("ERROR: Unable to resolve VM name/resource group.")
+        print("Set --vm-name/--resource-group or tag VM with openadapt-role=waa.")
+        print("Example: az vm update -g <rg> -n <vm> --set tags.openadapt-role=waa")
+        return 1
+    vm_name, resource_group = vm_context
 
     print(f"Starting WAA Docker container on VM '{vm_name}'...")
 
-    # Script to start the WAA Docker container
-    # The winarena container runs Windows 11 via QEMU with WAA server inside
+    # Script to start the WAA Docker container.
+    # IMPORTANT: do not block on `docker start` inside run-command.
+    # If docker/image is unhealthy, it can hang and the run-command call will time out.
     start_script = '''
-# Check if container exists
-CONTAINER_ID=$(docker ps -aq -f name=winarena)
-if [ -z "$CONTAINER_ID" ]; then
-    echo "ERROR: No 'winarena' container found. Run setup-waa first."
-    exit 1
-fi
-
-# Check if already running
-RUNNING=$(docker ps -q -f name=winarena)
-if [ -n "$RUNNING" ]; then
-    echo "Container already running"
-else
-    echo "Starting container..."
-    docker start winarena
-fi
-
-# Wait a moment and show status
-sleep 3
-docker ps -f name=winarena --format "ID: {{.ID}}, Status: {{.Status}}"
-echo "Container started. Windows VM booting..."
-echo "WAA server will be available once Windows boots (~5-10 min first time, ~2 min after)"
-'''
+ set -e
+ 
+ # Check if container exists
+ CONTAINER_ID=$(docker ps -aq -f name=winarena)
+ if [ -z "$CONTAINER_ID" ]; then
+     echo "ERROR: No 'winarena' container found. Run setup-waa first."
+     exit 1
+ fi
+ 
+ # Check if already running
+ RUNNING=$(docker ps -q -f name=winarena)
+ if [ -n "$RUNNING" ]; then
+     echo "Container already running"
+ else
+     echo "Starting container (async)..."
+     nohup docker start winarena >/tmp/winarena_start.log 2>&1 &
+     disown || true
+     echo "Started docker start in background; see /tmp/winarena_start.log"
+ fi
+ 
+ # Wait a moment and show status
+ sleep 3
+ docker ps -f name=winarena --format "ID: {{.ID}}, Status: {{.Status}}"
+ echo "Container started. Windows VM booting..."
+ echo "WAA server will be available once Windows boots (~5-10 min first time, ~2 min after)"
+ '''
 
     result = subprocess.run(
         [
@@ -509,7 +984,7 @@ echo "WAA server will be available once Windows boots (~5-10 min first time, ~2 
         ],
         capture_output=True,
         text=True,
-        timeout=180,
+        timeout=900,
     )
 
     if result.returncode != 0:
@@ -544,6 +1019,72 @@ echo "WAA server will be available once Windows boots (~5-10 min first time, ~2 
         print(f"\nServer URL: http://{public_ip}:5000")
         print(f"Probe with: uv run python -m openadapt_evals.benchmarks.cli probe --server http://{public_ip}:5000 --wait")
 
+    return 0
+
+
+def cmd_vnc(args: argparse.Namespace) -> int:
+    """Start an SSH tunnel for VNC access."""
+    import socket
+
+    vm_context = _resolve_vm_context(args)
+    if not vm_context:
+        print("ERROR: Unable to resolve VM name/resource group.")
+        print("Set --vm-name/--resource-group or tag VM with openadapt-role=waa.")
+        print("Example: az vm update -g <rg> -n <vm> --set tags.openadapt-role=waa")
+        return 1
+    vm_name, resource_group = vm_context
+
+    ip_result = subprocess.run(
+        [
+            "az",
+            "vm",
+            "show",
+            "--name",
+            vm_name,
+            "--resource-group",
+            resource_group,
+            "--show-details",
+            "--query",
+            "publicIps",
+            "-o",
+            "tsv",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if ip_result.returncode != 0 or not ip_result.stdout.strip():
+        print("ERROR: Could not get VM public IP")
+        return 1
+    public_ip = ip_result.stdout.strip()
+
+    tunnel_cmd = [
+        "ssh",
+        "-f",
+        "-N",
+        "-L",
+        f"{args.local_port}:127.0.0.1:{args.remote_port}",
+        f"azureuser@{public_ip}",
+        "-o",
+        "ExitOnForwardFailure=yes",
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "UserKnownHostsFile=/dev/null",
+    ]
+
+    result = subprocess.run(tunnel_cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"ERROR: SSH tunnel failed: {result.stderr.strip()}")
+        return 1
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(2)
+        if sock.connect_ex(("localhost", args.local_port)) == 0:
+            print(f"VNC tunnel ready: http://localhost:{args.local_port}")
+            return 0
+
+    print("WARNING: Tunnel started but local port is not reachable yet.")
+    print(f"Try: http://localhost:{args.local_port}")
     return 0
 
 
@@ -637,11 +1178,92 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
 
 def cmd_up(args: argparse.Namespace) -> int:
     """Start VM, wait for boot, start WAA server, and probe until ready."""
-    import subprocess
     import time
+    import base64
+    from pathlib import Path
 
-    vm_name = args.vm_name
-    resource_group = args.resource_group
+    vm_context = _resolve_vm_context(args)
+    if not vm_context:
+        print("ERROR: Unable to resolve VM name/resource group.")
+        print("Set --vm-name/--resource-group or tag VM with openadapt-role=waa.")
+        print("Example: az vm update -g <rg> -n <vm> --set tags.openadapt-role=waa")
+        return 1
+    vm_name, resource_group = vm_context
+
+    def patch_evaluate_endpoint() -> bool:
+        """Patch WAA server to add /evaluate endpoint on VM."""
+        eval_path = Path(__file__).resolve().parents[1] / "server" / "evaluate_endpoint.py"
+        if not eval_path.exists():
+            print(f"WARNING: evaluate_endpoint.py not found at {eval_path}")
+            return False
+
+        payload = base64.b64encode(eval_path.read_bytes()).decode("ascii")
+        patch_script = f'''
+set -e
+CONTAINER_ID=$(docker ps -aq -f name=winarena)
+if [ -z "$CONTAINER_ID" ]; then
+    echo "ERROR: No winarena container found"
+    exit 1
+fi
+
+TMPFILE=$(mktemp)
+echo "{payload}" | base64 -d > "$TMPFILE"
+
+docker cp "$TMPFILE" winarena:/home/azureuser/WindowsAgentArena/src/win-arena-container/vm/setup/server/evaluate_endpoint.py
+rm -f "$TMPFILE"
+
+docker exec winarena python - <<'PY'
+from pathlib import Path
+
+main_path = Path("/home/azureuser/WindowsAgentArena/src/win-arena-container/vm/setup/server/main.py")
+marker = "# openadapt-evals: /evaluate endpoint"
+content = main_path.read_text()
+
+if marker not in content:
+    patch_block = (
+        "\n\n"
+        "# openadapt-evals: /evaluate endpoint\n"
+        "try:\n"
+        "    from evaluate_endpoint import create_evaluate_blueprint\n"
+        "    evaluate_bp = create_evaluate_blueprint()\n"
+        "    app.register_blueprint(evaluate_bp)\n"
+        "except Exception as exc:\n"
+        "    print(f\"WAA /evaluate endpoint disabled: {{exc}}\")\n"
+    )
+    if "if __name__ == \"__main__\":" in content:
+        parts = content.split("if __name__ == \"__main__\":", 1)
+        content = parts[0] + patch_block + "\nif __name__ == \"__main__\":" + parts[1]
+    else:
+        content += patch_block
+    main_path.write_text(content)
+
+print("/evaluate endpoint patched")
+PY
+'''
+
+        result = subprocess.run(
+            [
+                "az",
+                "vm",
+                "run-command",
+                "invoke",
+                "--resource-group",
+                resource_group,
+                "--name",
+                vm_name,
+                "--command-id",
+                "RunShellScript",
+                "--scripts",
+                patch_script,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=900,
+        )
+        if result.returncode != 0:
+            print(f"WARNING: /evaluate patch failed: {result.stderr}")
+            return False
+        return True
 
     # Step 1: Start VM
     print(f"[1/4] Starting VM '{vm_name}'...")
@@ -682,24 +1304,26 @@ def cmd_up(args: argparse.Namespace) -> int:
 
     # WAA runs inside a Docker container with Windows nested virtualization
     start_script = '''
-# Check if container exists
-CONTAINER_ID=$(docker ps -aq -f name=winarena)
-if [ -z "$CONTAINER_ID" ]; then
-    echo "ERROR: No winarena container found"
-    echo "This VM may need setup. See openadapt-ml vm setup-waa command."
-    exit 1
-fi
-
-# Start container if not running
-RUNNING=$(docker ps -q -f name=winarena)
-if [ -z "$RUNNING" ]; then
-    echo "Starting winarena container..."
-    docker start winarena
-fi
-
-sleep 3
-docker ps -f name=winarena --format "Container: {{.Names}}, Status: {{.Status}}"
-'''
+ # Check if container exists
+ CONTAINER_ID=$(docker ps -aq -f name=winarena)
+ if [ -z "$CONTAINER_ID" ]; then
+     echo "ERROR: No winarena container found"
+     echo "This VM may need setup. See openadapt-ml vm setup-waa command."
+     exit 1
+ fi
+ 
+ # Start container if not running
+ RUNNING=$(docker ps -q -f name=winarena)
+ if [ -z "$RUNNING" ]; then
+     echo "Starting winarena container (async)..."
+     nohup docker start winarena >/tmp/winarena_start.log 2>&1 &
+     disown || true
+     echo "Started docker start in background; see /tmp/winarena_start.log"
+ fi
+ 
+ sleep 3
+ docker ps -f name=winarena --format "Container: {{.Names}}, Status: {{.Status}}"
+ '''
 
     result = subprocess.run(
         [
@@ -711,15 +1335,18 @@ docker ps -f name=winarena --format "Container: {{.Names}}, Status: {{.Status}}"
         ],
         capture_output=True,
         text=True,
-        timeout=180,
+        timeout=900,
     )
     if result.returncode != 0:
         print(f"WARNING: Server start command may have failed: {result.stderr}")
     else:
         print("      Server start command sent.")
 
-    # Step 4: Probe until ready
-    print(f"[4/4] Probing server at {server_url}...")
+    print("[4/5] Patching WAA server to enable /evaluate endpoint...")
+    patch_evaluate_endpoint()
+
+    # Step 5: Probe until ready
+    print(f"[5/5] Probing server at {server_url}...")
 
     try:
         import requests
@@ -732,8 +1359,21 @@ docker ps -f name=winarena --format "Container: {{.Names}}, Status: {{.Status}}"
             resp = requests.get(f"{server_url}/probe", timeout=5.0)
             if resp.status_code == 200:
                 print(f"\nSUCCESS: WAA server ready at {server_url}")
-                print(f"\nRun evaluation with:")
-                print(f"  uv run python -m openadapt_evals.benchmarks.cli live --server {server_url} --agent api-claude --task-ids notepad_1")
+                try:
+                    eval_resp = requests.get(f"{server_url}/evaluate/health", timeout=5.0)
+                    if eval_resp.status_code == 200:
+                        print("      /evaluate endpoint: ready")
+                    else:
+                        print("      WARNING: /evaluate endpoint not available")
+                        print("      Run: python scripts/patch_waa_evaluate.py --waa-path /path/to/WindowsAgentArena")
+                except Exception:
+                    print("      WARNING: /evaluate endpoint health check failed")
+                print("\nRun a no-API-key smoke test with:")
+                print(
+                    f"  uv run python -m openadapt_evals.benchmarks.cli live --server {server_url} --agent noop --task-ids notepad_1"
+                )
+                print("\nOr fully automated (starts + tests + deallocates):")
+                print("  uv run python -m openadapt_evals.benchmarks.cli smoke-live --task-id notepad_1")
                 return 0
         except Exception:
             pass
@@ -743,6 +1383,168 @@ docker ps -f name=winarena --format "Container: {{.Names}}, Status: {{.Status}}"
     print(f"\nWARNING: Server not responding after {args.probe_attempts} attempts.")
     print(f"Check server logs: az vm run-command invoke --resource-group {resource_group} --name {vm_name} --command-id RunShellScript --scripts 'cat /tmp/waa_server.log'")
     return 1
+
+
+def cmd_wandb_demo(args: argparse.Namespace) -> int:
+    """Populate wandb with synthetic evaluation data for demo."""
+    try:
+        from openadapt_evals.integrations.demo_wandb import main as demo_main
+    except ImportError as e:
+        print(f"ERROR: wandb integration not available: {e}")
+        print("Install with: pip install openadapt-evals[wandb]")
+        return 1
+
+    # Override sys.argv to pass our args to the demo script
+    import sys
+    old_argv = sys.argv
+    new_argv = ["demo_wandb", "--project", args.project]
+
+    if args.entity:
+        new_argv.extend(["--entity", args.entity])
+    if args.scenarios:
+        new_argv.extend(["--scenarios"] + args.scenarios)
+    if args.num_tasks:
+        new_argv.extend(["--num-tasks", str(args.num_tasks)])
+    if args.seed:
+        new_argv.extend(["--seed", str(args.seed)])
+    if args.dry_run:
+        new_argv.append("--dry-run")
+
+    sys.argv = new_argv
+    try:
+        demo_main()
+        return 0
+    except SystemExit as e:
+        return e.code if isinstance(e.code, int) else 1
+    finally:
+        sys.argv = old_argv
+
+
+def cmd_wandb_report(args: argparse.Namespace) -> int:
+    """Generate a wandb report from benchmark results."""
+    try:
+        from openadapt_evals.integrations.wandb_reports import (
+            WandbReportGenerator,
+            generate_demo_report,
+        )
+    except ImportError as e:
+        print(f"ERROR: wandb reports API not available: {e}")
+        print("Install with: pip install openadapt-evals[wandb]")
+        return 1
+
+    try:
+        generator = WandbReportGenerator(
+            project=args.project,
+            entity=args.entity,
+        )
+    except ValueError as e:
+        print(f"ERROR: {e}")
+        return 1
+
+    try:
+        if args.demo:
+            # Generate demo report for synthetic scenarios
+            print("Generating demo report for synthetic scenarios...")
+            report_url = generator.create_scenario_report(
+                title="OpenAdapt Evals Demo - Synthetic Scenarios",
+            )
+        elif args.compare and args.model_ids:
+            # Generate model comparison report
+            model_ids = args.model_ids.split(",")
+            print(f"Generating comparison report for models: {model_ids}")
+            report_url = generator.create_comparison_report(
+                model_ids=model_ids,
+                title=args.title,
+            )
+        else:
+            # Generate standard benchmark report
+            run_ids = args.run_ids.split(",") if args.run_ids else None
+            include_charts = args.charts.split(",") if args.charts else None
+
+            print("Generating benchmark report...")
+            report_url = generator.create_benchmark_report(
+                run_ids=run_ids,
+                title=args.title,
+                description=args.description,
+                include_charts=include_charts,
+            )
+
+        print(f"\nReport created: {report_url}")
+        return 0
+
+    except Exception as e:
+        print(f"ERROR: Failed to create report: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
+def cmd_wandb_log(args: argparse.Namespace) -> int:
+    """Log existing benchmark results to wandb."""
+    from pathlib import Path
+
+    try:
+        from openadapt_evals.integrations.wandb_logger import WandbLogger, load_results_from_summary
+    except ImportError as e:
+        print(f"ERROR: wandb integration not available: {e}")
+        print("Install with: pip install openadapt-evals[wandb]")
+        return 1
+
+    benchmark_dir = Path(args.benchmark_dir or "benchmark_results") / args.run_name
+
+    if not benchmark_dir.exists():
+        print(f"ERROR: Benchmark directory not found: {benchmark_dir}")
+        return 1
+
+    summary_path = benchmark_dir / "summary.json"
+    if not summary_path.exists():
+        print(f"ERROR: summary.json not found in {benchmark_dir}")
+        return 1
+
+    print(f"Loading results from: {summary_path}")
+    results = load_results_from_summary(summary_path)
+    print(f"Loaded {len(results)} task results")
+
+    # Load metadata
+    metadata_path = benchmark_dir / "metadata.json"
+    config = {}
+    if metadata_path.exists():
+        import json
+        with open(metadata_path) as f:
+            config = json.load(f)
+
+    # Override with CLI args
+    if args.model_id:
+        config["model_id"] = args.model_id
+
+    wandb_logger = WandbLogger(
+        project=args.project,
+        entity=args.entity,
+        config=config,
+        tags=args.tags.split(",") if args.tags else None,
+        name=args.wandb_run_name or args.run_name,
+        mode="disabled" if args.dry_run else "online",
+    )
+
+    try:
+        wandb_logger.init()
+        wandb_logger.log_results(results)
+
+        # Upload artifacts if requested
+        if args.include_artifacts:
+            print("Uploading artifacts...")
+            wandb_logger.log_benchmark_dir(
+                benchmark_dir,
+                include_screenshots=not args.no_screenshots,
+            )
+
+        print(f"\nResults logged to: {wandb_logger._run.url}")
+        return 0
+    except Exception as e:
+        print(f"ERROR: {e}")
+        return 1
+    finally:
+        wandb_logger.finish()
 
 
 def cmd_azure_monitor(args: argparse.Namespace) -> int:
@@ -906,7 +1708,7 @@ def main() -> int:
     live_parser.add_argument("--server", type=str, default="http://localhost:5000",
                             help="WAA server URL")
     live_parser.add_argument("--agent", type=str, default="mock",
-                            help="Agent type: mock, api-claude, api-openai, retrieval-claude, retrieval-openai")
+                            help="Agent type: mock, noop, api-claude, api-openai, retrieval-claude, retrieval-openai")
     live_parser.add_argument("--demo", type=str, help="Demo trajectory file for ApiAgent")
     live_parser.add_argument("--demo-library", type=str,
                             help="Path to demo library for retrieval agents")
@@ -971,44 +1773,88 @@ def main() -> int:
 
     # VM management commands
     vm_start_parser = subparsers.add_parser("vm-start", help="Start an Azure VM")
-    vm_start_parser.add_argument("--vm-name", type=str, default="waa-eval-vm",
-                                help="Azure VM name")
-    vm_start_parser.add_argument("--resource-group", type=str, default="OPENADAPT-AGENTS",
-                                help="Azure resource group")
+    vm_start_parser.add_argument("--vm-name", type=str, default=None,
+                                help="Azure VM name (optional if tagged)")
+    vm_start_parser.add_argument("--resource-group", type=str, default=None,
+                                help="Azure resource group (optional if tagged)")
 
     vm_stop_parser = subparsers.add_parser("vm-stop", help="Stop (deallocate) an Azure VM")
-    vm_stop_parser.add_argument("--vm-name", type=str, default="waa-eval-vm",
-                               help="Azure VM name")
-    vm_stop_parser.add_argument("--resource-group", type=str, default="OPENADAPT-AGENTS",
-                               help="Azure resource group")
+    vm_stop_parser.add_argument("--vm-name", type=str, default=None,
+                               help="Azure VM name (optional if tagged)")
+    vm_stop_parser.add_argument("--resource-group", type=str, default=None,
+                               help="Azure resource group (optional if tagged)")
     vm_stop_parser.add_argument("--no-wait", action="store_true",
                                help="Don't wait for deallocation to complete")
 
     vm_status_parser = subparsers.add_parser("vm-status", help="Check Azure VM status")
-    vm_status_parser.add_argument("--vm-name", type=str, default="waa-eval-vm",
-                                 help="Azure VM name")
-    vm_status_parser.add_argument("--resource-group", type=str, default="OPENADAPT-AGENTS",
-                                 help="Azure resource group")
+    vm_status_parser.add_argument("--vm-name", type=str, default=None,
+                                 help="Azure VM name (optional if tagged)")
+    vm_status_parser.add_argument("--resource-group", type=str, default=None,
+                                 help="Azure resource group (optional if tagged)")
     vm_status_parser.add_argument("--json", action="store_true",
                                  help="Output raw JSON")
 
+    vm_debug_parser = subparsers.add_parser("vm-debug", help="Run diagnostic commands on Azure VM")
+    vm_debug_parser.add_argument("--vm-name", type=str, default=None,
+                                 help="Azure VM name (optional if tagged)")
+    vm_debug_parser.add_argument("--resource-group", type=str, default=None,
+                                 help="Azure resource group (optional if tagged)")
+
     server_start_parser = subparsers.add_parser("server-start", help="Start WAA server on VM")
-    server_start_parser.add_argument("--vm-name", type=str, default="waa-eval-vm",
-                                    help="Azure VM name")
-    server_start_parser.add_argument("--resource-group", type=str, default="OPENADAPT-AGENTS",
-                                    help="Azure resource group")
+    server_start_parser.add_argument("--vm-name", type=str, default=None,
+                                    help="Azure VM name (optional if tagged)")
+    server_start_parser.add_argument("--resource-group", type=str, default=None,
+                                    help="Azure resource group (optional if tagged)")
+
+    vnc_parser = subparsers.add_parser("vnc", help="Open VNC tunnel to WAA VM")
+    vnc_parser.add_argument("--vm-name", type=str, default=None,
+                           help="Azure VM name (optional if tagged)")
+    vnc_parser.add_argument("--resource-group", type=str, default=None,
+                           help="Azure resource group (optional if tagged)")
+    vnc_parser.add_argument("--local-port", type=int, default=8006,
+                           help="Local port for VNC tunnel")
+    vnc_parser.add_argument("--remote-port", type=int, default=8006,
+                           help="Remote VNC port on VM")
 
     up_parser = subparsers.add_parser("up", help="Start VM + WAA server (all-in-one)")
-    up_parser.add_argument("--vm-name", type=str, default="waa-eval-vm",
-                          help="Azure VM name")
-    up_parser.add_argument("--resource-group", type=str, default="OPENADAPT-AGENTS",
-                          help="Azure resource group")
+    up_parser.add_argument("--vm-name", type=str, default=None,
+                          help="Azure VM name (optional if tagged)")
+    up_parser.add_argument("--resource-group", type=str, default=None,
+                          help="Azure resource group (optional if tagged)")
     up_parser.add_argument("--boot-wait", type=int, default=30,
                           help="Seconds to wait for VM to boot")
     up_parser.add_argument("--probe-attempts", type=int, default=30,
                           help="Max probe attempts")
     up_parser.add_argument("--probe-interval", type=int, default=5,
                           help="Seconds between probe attempts")
+
+    smoke_live_parser = subparsers.add_parser(
+        "smoke-live",
+        help="End-to-end smoke test: VM + server + single live task (auto-deallocate)",
+    )
+    smoke_live_parser.add_argument("--vm-name", type=str, default=None,
+                                  help="Azure VM name (optional if tagged)")
+    smoke_live_parser.add_argument("--resource-group", type=str, default=None,
+                                  help="Azure resource group (optional if tagged)")
+    smoke_live_parser.add_argument("--task-id", type=str, default="notepad_1",
+                                  help="Single task ID to run")
+    smoke_live_parser.add_argument("--max-steps", type=int, default=15,
+                                  help="Max steps per task")
+    smoke_live_parser.add_argument("--boot-wait", type=int, default=30,
+                                  help="Seconds to wait for VM to boot")
+    smoke_live_parser.add_argument("--probe-attempts", type=int, default=60,
+                                  help="Max probe attempts")
+    smoke_live_parser.add_argument("--probe-interval", type=int, default=5,
+                                  help="Seconds between probe attempts")
+    smoke_live_parser.add_argument("--output", type=str, default="benchmark_results",
+                                  help="Output directory (only used if --save-traces)")
+    smoke_live_parser.add_argument("--run-name", type=str, default="smoke_live",
+                                  help="Run name (only used if --save-traces)")
+    smoke_live_parser.add_argument("--save-traces", action="store_true",
+                                  help="Save execution traces (viewer artifacts)")
+    smoke_live_parser.add_argument("--no-stop-vm", dest="stop_vm", action="store_false",
+                                  help="Do not deallocate VM after smoke test")
+    smoke_live_parser.set_defaults(stop_vm=True)
 
     dashboard_parser = subparsers.add_parser("dashboard", help="Generate VM usage dashboard")
     dashboard_parser.add_argument("--vm-name", type=str, default="waa-eval-vm",
@@ -1029,6 +1875,76 @@ def main() -> int:
     monitor_parser.add_argument("--output", type=str, default="benchmark_live.json",
                                help="Output file for live tracking data")
 
+    # Wandb demo command
+    wandb_demo_parser = subparsers.add_parser(
+        "wandb-demo",
+        help="Populate wandb with synthetic evaluation data for demo"
+    )
+    wandb_demo_parser.add_argument("--project", type=str, default="openadapt-evals-demo",
+                                   help="Wandb project name")
+    wandb_demo_parser.add_argument("--entity", type=str, default=None,
+                                   help="Wandb entity (team/org)")
+    wandb_demo_parser.add_argument("--scenarios", nargs="+",
+                                   choices=["noise", "best", "worst", "median", "comparison", "all"],
+                                   default=["all"],
+                                   help="Scenarios to generate")
+    wandb_demo_parser.add_argument("--num-tasks", type=int, default=154,
+                                   help="Number of tasks per scenario")
+    wandb_demo_parser.add_argument("--seed", type=int, default=None,
+                                   help="Random seed for reproducibility")
+    wandb_demo_parser.add_argument("--dry-run", action="store_true",
+                                   help="Generate data but don't upload")
+
+    # Wandb report command
+    wandb_report_parser = subparsers.add_parser(
+        "wandb-report",
+        help="Generate a wandb report from benchmark results"
+    )
+    wandb_report_parser.add_argument("--project", type=str, default="openadapt-evals",
+                                      help="Wandb project name")
+    wandb_report_parser.add_argument("--entity", type=str, default=None,
+                                      help="Wandb entity (team/org)")
+    wandb_report_parser.add_argument("--title", type=str,
+                                      help="Report title")
+    wandb_report_parser.add_argument("--description", type=str,
+                                      help="Report description")
+    wandb_report_parser.add_argument("--run-ids", type=str,
+                                      help="Comma-separated run IDs to include")
+    wandb_report_parser.add_argument("--charts", type=str,
+                                      help="Comma-separated chart types: success_rate,domain_breakdown,step_distribution,error_breakdown,cost_performance")
+    wandb_report_parser.add_argument("--demo", action="store_true",
+                                      help="Generate demo report for synthetic scenarios")
+    wandb_report_parser.add_argument("--compare", action="store_true",
+                                      help="Generate model comparison report")
+    wandb_report_parser.add_argument("--model-ids", type=str,
+                                      help="Comma-separated model IDs for comparison (requires --compare)")
+
+    # Wandb log command
+    wandb_log_parser = subparsers.add_parser(
+        "wandb-log",
+        help="Log existing benchmark results to wandb"
+    )
+    wandb_log_parser.add_argument("--run-name", type=str, required=True,
+                                  help="Name of evaluation run to log")
+    wandb_log_parser.add_argument("--benchmark-dir", type=str,
+                                  help="Benchmark results directory")
+    wandb_log_parser.add_argument("--project", type=str, default="openadapt-evals",
+                                  help="Wandb project name")
+    wandb_log_parser.add_argument("--entity", type=str, default=None,
+                                  help="Wandb entity (team/org)")
+    wandb_log_parser.add_argument("--model-id", type=str,
+                                  help="Model ID to override in config")
+    wandb_log_parser.add_argument("--wandb-run-name", type=str,
+                                  help="Custom wandb run name")
+    wandb_log_parser.add_argument("--tags", type=str,
+                                  help="Comma-separated tags")
+    wandb_log_parser.add_argument("--include-artifacts", action="store_true",
+                                  help="Upload execution traces and screenshots")
+    wandb_log_parser.add_argument("--no-screenshots", action="store_true",
+                                  help="Exclude screenshots from artifacts")
+    wandb_log_parser.add_argument("--dry-run", action="store_true",
+                                  help="Validate data but don't upload")
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -1039,6 +1955,7 @@ def main() -> int:
     handlers = {
         "mock": cmd_mock,
         "live": cmd_live,
+        "smoke-live": cmd_smoke_live,
         "probe": cmd_probe,
         "view": cmd_view,
         "estimate": cmd_estimate,
@@ -1047,9 +1964,14 @@ def main() -> int:
         "vm-start": cmd_vm_start,
         "vm-stop": cmd_vm_stop,
         "vm-status": cmd_vm_status,
+        "vm-debug": cmd_vm_debug,
         "server-start": cmd_server_start,
+        "vnc": cmd_vnc,
         "up": cmd_up,
         "dashboard": cmd_dashboard,
+        "wandb-demo": cmd_wandb_demo,
+        "wandb-report": cmd_wandb_report,
+        "wandb-log": cmd_wandb_log,
     }
 
     handler = handlers.get(args.command)
