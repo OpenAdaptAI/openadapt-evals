@@ -228,6 +228,130 @@ def cmd_mock(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run(args: argparse.Namespace) -> int:
+    """Simplified live evaluation with good defaults.
+
+    This is a convenience wrapper around 'live' that:
+    - Uses localhost:5001 by default (matches openadapt-ml SSH tunnel)
+    - Accepts --task (singular) or --tasks (comma-separated)
+    - Sets sensible defaults for output and run name
+    """
+    from openadapt_evals.adapters import WAALiveAdapter, WAALiveConfig
+    from openadapt_evals.agents import SmartMockAgent, ApiAgent, RetrievalAugmentedAgent
+    from openadapt_evals.agents.scripted_agent import ScriptedAgent
+    from openadapt_evals.adapters.base import BenchmarkAction
+    from openadapt_evals.benchmarks import (
+        EvaluationConfig,
+        evaluate_agent_on_benchmark,
+        compute_metrics,
+    )
+
+    server_url = args.server
+    print(f"Connecting to WAA server at {server_url}...")
+
+    # Create live adapter
+    config = WAALiveConfig(
+        server_url=server_url,
+        max_steps=args.max_steps,
+    )
+    adapter = WAALiveAdapter(config)
+
+    # Check connection
+    if not adapter.check_connection():
+        print(f"ERROR: Cannot connect to WAA server at {server_url}")
+        print()
+        print("Make sure:")
+        print("  1. Azure VM is running (openadapt-ml: vm status)")
+        print("  2. SSH tunnels are active (openadapt-ml: vm monitor)")
+        print("  3. WAA server is ready (openadapt-ml: vm probe)")
+        return 1
+
+    print("Connected!")
+
+    # Parse task IDs from --task or --tasks
+    task_ids = []
+    if args.task:
+        task_ids = [args.task]
+    elif args.tasks:
+        task_ids = [t.strip() for t in args.tasks.split(",")]
+    else:
+        print("ERROR: Specify --task or --tasks")
+        print("Example: --task notepad_1")
+        print("Example: --tasks notepad_1,notepad_2,browser_1")
+        return 1
+
+    # Create agent
+    agent_type = args.agent
+
+    # Load demo from file if provided
+    demo_text = None
+    if hasattr(args, "demo") and args.demo:
+        demo_path = Path(args.demo)
+        if demo_path.exists():
+            demo_text = demo_path.read_text()
+            print(f"Loaded demo from {demo_path} ({len(demo_text)} chars)")
+        else:
+            demo_text = args.demo
+
+    if agent_type in ("noop", "done"):
+        agent = ScriptedAgent([BenchmarkAction(type="done")])
+        print("Using ScriptedAgent (noop): immediate DONE")
+    elif agent_type == "mock":
+        agent = SmartMockAgent()
+        print("Using SmartMockAgent")
+    elif agent_type in ("api-claude", "claude", "anthropic"):
+        try:
+            agent = ApiAgent(provider="anthropic", demo=demo_text)
+            print(f"Using ApiAgent with Claude (demo={'yes' if agent.demo else 'no'})")
+        except RuntimeError as e:
+            print(f"ERROR: {e}")
+            return 1
+    elif agent_type in ("api-openai", "openai", "gpt"):
+        try:
+            agent = ApiAgent(provider="openai", demo=demo_text)
+            print(f"Using ApiAgent with GPT-5.1 (demo={'yes' if agent.demo else 'no'})")
+        except RuntimeError as e:
+            print(f"ERROR: {e}")
+            return 1
+    else:
+        print(f"ERROR: Unknown agent type: {agent_type}")
+        print("Available: noop, mock, api-claude, api-openai")
+        return 1
+
+    # Create config for trace collection
+    eval_config = EvaluationConfig(
+        save_execution_traces=True,
+        output_dir=args.output,
+        run_name=args.run_name,
+    )
+
+    print(f"Running {len(task_ids)} task(s): {', '.join(task_ids)}")
+
+    # Run evaluation
+    results = evaluate_agent_on_benchmark(
+        agent=agent,
+        adapter=adapter,
+        max_steps=args.max_steps,
+        task_ids=task_ids,
+        config=eval_config,
+    )
+
+    # Compute and display metrics
+    metrics = compute_metrics(results)
+
+    print("\n" + "=" * 50)
+    print("Evaluation Results")
+    print("=" * 50)
+    print(f"Tasks:        {metrics['num_tasks']}")
+    print(f"Success rate: {metrics['success_rate']:.1%}")
+    print(f"Avg score:    {metrics['avg_score']:.3f}")
+    print(f"Avg steps:    {metrics['avg_steps']:.1f}")
+    print(f"\nResults saved to: {eval_config.output_dir}/{eval_config.run_name}")
+    print(f"\nView results: uv run python -m openadapt_evals.benchmarks.cli view --run-name {eval_config.run_name}")
+
+    return 0
+
+
 def cmd_live(args: argparse.Namespace) -> int:
     """Run live evaluation against a WAA server."""
     from openadapt_evals.adapters import WAALiveAdapter, WAALiveConfig
@@ -1703,10 +1827,32 @@ def main() -> int:
     mock_parser.add_argument("--output", type=str, help="Output directory for traces")
     mock_parser.add_argument("--run-name", type=str, help="Name for this evaluation run")
 
-    # Live evaluation
-    live_parser = subparsers.add_parser("live", help="Run live evaluation against WAA server")
-    live_parser.add_argument("--server", type=str, default="http://localhost:5000",
-                            help="WAA server URL")
+    # Simplified run command (recommended for live evaluation)
+    run_parser = subparsers.add_parser(
+        "run",
+        help="Simplified live evaluation (uses localhost:5001 by default)"
+    )
+    run_parser.add_argument("--server", type=str, default="http://localhost:5001",
+                           help="WAA server URL (default: localhost:5001 for SSH tunnel)")
+    run_parser.add_argument("--agent", type=str, default="api-openai",
+                           help="Agent type: noop, mock, api-claude, api-openai")
+    run_parser.add_argument("--task", type=str,
+                           help="Single task ID (e.g., notepad_1)")
+    run_parser.add_argument("--tasks", type=str,
+                           help="Comma-separated task IDs (e.g., notepad_1,notepad_2)")
+    run_parser.add_argument("--demo", type=str,
+                           help="Demo trajectory file for ApiAgent")
+    run_parser.add_argument("--max-steps", type=int, default=15,
+                           help="Max steps per task")
+    run_parser.add_argument("--output", type=str, default="benchmark_results",
+                           help="Output directory for traces")
+    run_parser.add_argument("--run-name", type=str, default="live_eval",
+                           help="Name for this evaluation run")
+
+    # Live evaluation (full control)
+    live_parser = subparsers.add_parser("live", help="Run live evaluation against WAA server (full control)")
+    live_parser.add_argument("--server", type=str, default="http://localhost:5001",
+                            help="WAA server URL (default: localhost:5001 for SSH tunnel)")
     live_parser.add_argument("--agent", type=str, default="mock",
                             help="Agent type: mock, noop, api-claude, api-openai, retrieval-claude, retrieval-openai")
     live_parser.add_argument("--demo", type=str, help="Demo trajectory file for ApiAgent")
@@ -1719,8 +1865,8 @@ def main() -> int:
 
     # Probe server
     probe_parser = subparsers.add_parser("probe", help="Check if WAA server is reachable")
-    probe_parser.add_argument("--server", type=str, default="http://localhost:5000",
-                             help="WAA server URL")
+    probe_parser.add_argument("--server", type=str, default="http://localhost:5001",
+                             help="WAA server URL (default: localhost:5001 for SSH tunnel)")
     probe_parser.add_argument("--wait", action="store_true",
                              help="Wait for server to become ready")
     probe_parser.add_argument("--wait-attempts", type=int, default=60,
@@ -1954,6 +2100,7 @@ def main() -> int:
     # Dispatch to command handler
     handlers = {
         "mock": cmd_mock,
+        "run": cmd_run,
         "live": cmd_live,
         "smoke-live": cmd_smoke_live,
         "probe": cmd_probe,
