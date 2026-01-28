@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -39,6 +40,70 @@ from openadapt_evals.adapters.base import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# WAA task IDs are UUIDs with a domain suffix, e.g., "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx-WOS"
+# Common suffixes: WOS (Windows OS), CHR (Chrome), NTP (Notepad), etc.
+WAA_TASK_ID_PATTERN = re.compile(
+    r'^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}(-[A-Za-z0-9]+)?$'
+)
+
+# Synthetic task ID patterns (from mock adapter or testing)
+SYNTHETIC_TASK_PATTERNS = [
+    re.compile(r'^(mock_)?[a-z_]+_\d+$'),  # notepad_1, mock_chrome_001
+    re.compile(r'^mock_'),  # any mock_ prefix
+]
+
+
+def is_real_waa_task_id(task_id: str) -> bool:
+    """Check if a task ID matches the real WAA UUID format.
+
+    Real WAA task IDs are UUIDs from test_small.json or test_all.json, e.g.:
+    - "a1b2c3d4-e5f6-7890-abcd-ef1234567890-WOS"
+    - "12345678-1234-1234-1234-123456789012-CHR"
+
+    Synthetic task IDs are simple patterns like:
+    - "notepad_1", "chrome_2" (from mock adapter)
+    - "mock_notepad_001" (explicit mock prefix)
+
+    Args:
+        task_id: Task identifier to check.
+
+    Returns:
+        True if the task ID appears to be a real WAA UUID.
+    """
+    return bool(WAA_TASK_ID_PATTERN.match(task_id))
+
+
+def is_synthetic_task_id(task_id: str) -> bool:
+    """Check if a task ID appears to be synthetic (for testing).
+
+    Args:
+        task_id: Task identifier to check.
+
+    Returns:
+        True if the task ID matches synthetic patterns.
+    """
+    for pattern in SYNTHETIC_TASK_PATTERNS:
+        if pattern.match(task_id):
+            return True
+    return False
+
+
+class SyntheticTaskError(ValueError):
+    """Raised when a synthetic task ID is used with the live adapter."""
+
+    def __init__(self, task_id: str):
+        self.task_id = task_id
+        super().__init__(
+            f"Task ID '{task_id}' appears to be synthetic (for testing). "
+            f"The live adapter requires real WAA task IDs (UUIDs from test_small.json or test_all.json). "
+            f"\n\nTo fix this:"
+            f"\n  1. Use --mock flag for testing without a Windows VM"
+            f"\n  2. Or provide real WAA task IDs with --task-ids"
+            f"\n  3. Or use --tasks N to select N random real tasks"
+            f"\n\nExample real task ID: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890-WOS'"
+        )
 
 
 @dataclass
@@ -139,11 +204,20 @@ class WAALiveAdapter(BenchmarkAdapter):
         3. Creates minimal task as fallback
 
         Args:
-            task_id: Task identifier (e.g., "notepad_1", "browser_abc123").
+            task_id: Task identifier. Must be a real WAA UUID
+                (e.g., "a1b2c3d4-e5f6-7890-abcd-ef1234567890-WOS").
 
         Returns:
             BenchmarkTask object with evaluator config if available.
+
+        Raises:
+            SyntheticTaskError: If task_id appears to be synthetic (e.g., "notepad_1").
+                Use WAAMockAdapter for synthetic/testing tasks.
         """
+        # Validate that this is a real WAA task ID, not a synthetic one
+        if is_synthetic_task_id(task_id):
+            raise SyntheticTaskError(task_id)
+
         import requests
 
         # Try to load from server first
@@ -447,46 +521,45 @@ class WAALiveAdapter(BenchmarkAdapter):
             return self._evaluate_fallback(task)
 
     def _evaluate_fallback(self, task: BenchmarkTask) -> BenchmarkResult:
-        """Fallback evaluation when /evaluate endpoint is unavailable.
+        """Fallback when proper evaluation unavailable - returns failure.
 
-        Uses a simple heuristic based on:
-        - Whether the agent took any actions
-        - Whether the agent called DONE
-        - Whether the task has success criteria we can check locally
+        This method explicitly fails instead of providing fake heuristic scores.
+        Proper evaluation requires either:
+        1. WAA server with /evaluate endpoint deployed
+        2. Task configs with evaluator specs (set waa_examples_path)
+        3. Real WAA task IDs (UUIDs from test_small.json/test_all.json)
 
         Args:
             task: Task to evaluate.
 
         Returns:
-            BenchmarkResult with heuristic-based score.
+            BenchmarkResult with success=False and score=0.0.
         """
-        has_actions = len(self._actions) > 0
-        called_done = any(a.type == "done" for a in self._actions)
-        typed_text = any(a.type == "type" and a.text for a in self._actions)
+        # Check if task has evaluator config
+        has_evaluator = bool(
+            task.raw_config and task.raw_config.get("evaluator")
+        )
 
-        # Calculate heuristic score
-        score = 0.0
-        if has_actions:
-            score += 0.2
-        if called_done:
-            score += 0.2
-        if typed_text:
-            score += 0.1
-        if self._step_count >= 2:
-            score += 0.1
+        if has_evaluator:
+            reason = (
+                "Evaluation unavailable: WAA /evaluate endpoint not deployed. "
+                "Task has evaluator config but server cannot run it."
+            )
+        else:
+            reason = (
+                "Evaluation unavailable: task config missing evaluator spec. "
+                "Set waa_examples_path in config or use real WAA task IDs "
+                "(UUIDs from test_small.json/test_all.json, not synthetic IDs like 'notepad_1')."
+            )
 
-        # Cap at 0.5 since we can't truly verify success
-        score = min(score, 0.5)
+        logger.error(reason)
 
         return BenchmarkResult(
             task_id=task.task_id,
-            success=False,  # Can't determine without proper evaluation
-            score=score,
+            success=False,
+            score=0.0,
             num_steps=self._step_count,
-            reason=(
-                "Fallback evaluation (WAA /evaluate endpoint unavailable). "
-                f"Heuristic: actions={len(self._actions)}, done={called_done}, typed={typed_text}"
-            ),
+            reason=reason,
         )
 
     def close(self) -> None:
