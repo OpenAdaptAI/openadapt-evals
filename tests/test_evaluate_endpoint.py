@@ -229,7 +229,7 @@ class TestWAALiveAdapterEvaluate:
             assert result.task_id == "test_1"
 
     def test_evaluate_fallback_on_404(self):
-        """Test fallback evaluation when endpoint returns 404."""
+        """Test evaluation behavior when endpoint returns 404."""
         from openadapt_evals.adapters import WAALiveAdapter, WAALiveConfig
         from openadapt_evals.adapters.base import BenchmarkTask, BenchmarkAction
 
@@ -249,13 +249,13 @@ class TestWAALiveAdapterEvaluate:
 
             result = adapter.evaluate(task)
 
-            # Should use fallback evaluation
+            # Without evaluator spec, evaluation returns unavailable error
             assert result.success is False
-            assert result.score > 0  # Partial score for having actions
-            assert "Fallback" in result.reason
+            assert result.score == 0.0
+            assert "unavailable" in result.reason.lower() or "evaluator" in result.reason.lower()
 
     def test_evaluate_fallback_on_connection_error(self):
-        """Test fallback evaluation on connection error."""
+        """Test evaluation behavior on connection error."""
         import requests
         from openadapt_evals.adapters import WAALiveAdapter, WAALiveConfig
         from openadapt_evals.adapters.base import BenchmarkTask, BenchmarkAction
@@ -277,11 +277,10 @@ class TestWAALiveAdapterEvaluate:
 
             result = adapter.evaluate(task)
 
-            # Should use fallback evaluation
+            # Without evaluator spec, evaluation returns unavailable error
             assert result.success is False
-            assert "Fallback" in result.reason
-            # Should have partial score for actions
-            assert result.score > 0
+            assert "unavailable" in result.reason.lower() or "evaluator" in result.reason.lower()
+            assert result.score == 0.0
 
 
 class TestLoadTaskFromJson:
