@@ -15,7 +15,7 @@ Architecture:
     not pixel coordinates. WAA's Computer class handles the grounding.
 
 Example:
-    from openadapt_evals.benchmarks.waa_live import WAALiveAdapter, WAALiveConfig
+    from openadapt_evals.adapters.waa import WAALiveAdapter, WAALiveConfig
 
     adapter = WAALiveAdapter(WAALiveConfig(server_url="http://vm-ip:5000"))
     agent = DemoConditionedAgent(base_agent, retriever)

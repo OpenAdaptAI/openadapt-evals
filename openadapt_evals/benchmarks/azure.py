@@ -888,7 +888,7 @@ class AzureWAAOrchestrator:
                 print("      No stale instances found.")
 
         # Load tasks
-        from openadapt_evals.benchmarks.waa import WAAAdapter
+        from openadapt_evals.adapters.waa import WAAAdapter
 
         adapter = WAAAdapter(waa_repo_path=self.waa_repo_path)
         if task_ids:
