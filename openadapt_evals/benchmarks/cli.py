@@ -1711,6 +1711,174 @@ def cmd_azure_monitor(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_azure_setup(args: argparse.Namespace) -> int:
+    """Set up Azure resources for WAA benchmark evaluation.
+
+    This is a simplified setup that:
+    1. Checks Azure CLI is installed and user is logged in
+    2. Creates resource group if needed
+    3. Creates ML workspace if needed
+    4. Writes config to .env file
+    """
+    import shutil
+
+    def run_az(cmd: list[str], check: bool = True) -> tuple[int, str, str]:
+        """Run az command and return (returncode, stdout, stderr)."""
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        return result.returncode, result.stdout.strip(), result.stderr.strip()
+
+    print("\n" + "=" * 50)
+    print("Azure Setup for WAA Benchmark")
+    print("=" * 50)
+
+    # Step 1: Check Azure CLI
+    print("\n[1/5] Checking Azure CLI...")
+    if not shutil.which("az"):
+        print("  ERROR: Azure CLI not found!")
+        print("\n  Install Azure CLI:")
+        print("    macOS:   brew install azure-cli")
+        print("    Windows: winget install Microsoft.AzureCLI")
+        print("    Linux:   curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash")
+        return 1
+    print("  Azure CLI is installed")
+
+    # Step 2: Check login / login if needed
+    print("\n[2/5] Checking Azure login...")
+    rc, out, err = run_az(["az", "account", "show", "-o", "json"])
+    if rc != 0:
+        print("  Not logged in. Running 'az login'...")
+        rc, out, err = run_az(["az", "login"], check=False)
+        if rc != 0:
+            print(f"  ERROR: Login failed: {err}")
+            return 1
+        rc, out, err = run_az(["az", "account", "show", "-o", "json"])
+
+    account = json.loads(out)
+    subscription_id = account.get("id")
+    user_name = account.get("user", {}).get("name", "unknown")
+    print(f"  Logged in as: {user_name}")
+    print(f"  Subscription: {account.get('name')} ({subscription_id[:8]}...)")
+
+    resource_group = args.resource_group
+    workspace_name = args.workspace
+    location = args.location
+
+    # Step 3: Create resource group
+    print(f"\n[3/5] Creating resource group '{resource_group}'...")
+    rc, out, err = run_az(["az", "group", "show", "--name", resource_group])
+    if rc == 0:
+        print(f"  Resource group '{resource_group}' already exists")
+    else:
+        rc, out, err = run_az([
+            "az", "group", "create",
+            "--name", resource_group,
+            "--location", location
+        ])
+        if rc != 0:
+            print(f"  ERROR: Failed to create resource group: {err}")
+            return 1
+        print(f"  Resource group '{resource_group}' created")
+
+    # Step 4: Install ML extension if needed and create workspace
+    print(f"\n[4/5] Creating ML workspace '{workspace_name}'...")
+
+    # Check if ml extension is installed
+    rc, out, err = run_az(["az", "extension", "list", "-o", "json"])
+    if rc == 0:
+        extensions = json.loads(out) if out else []
+        has_ml = any(ext.get("name") == "ml" for ext in extensions)
+        if not has_ml:
+            print("  Installing Azure ML CLI extension...")
+            run_az(["az", "extension", "add", "--name", "ml", "--yes"])
+
+    # Check if workspace exists
+    rc, out, err = run_az([
+        "az", "ml", "workspace", "show",
+        "--name", workspace_name,
+        "--resource-group", resource_group
+    ])
+    if rc == 0:
+        print(f"  ML workspace '{workspace_name}' already exists")
+    else:
+        print(f"  Creating ML workspace (this takes 1-2 minutes)...")
+        rc, out, err = run_az([
+            "az", "ml", "workspace", "create",
+            "--name", workspace_name,
+            "--resource-group", resource_group,
+            "--location", location
+        ])
+        if rc != 0:
+            print(f"  ERROR: Failed to create workspace: {err}")
+            return 1
+        print(f"  ML workspace '{workspace_name}' created")
+
+    # Step 5: Write to .env file
+    print(f"\n[5/5] Writing config to .env...")
+    env_path = Path(args.env_file)
+
+    # Read existing content
+    existing_content = ""
+    if env_path.exists():
+        existing_content = env_path.read_text()
+
+    # Check if Azure section exists
+    azure_vars = {
+        "AZURE_SUBSCRIPTION_ID": subscription_id,
+        "AZURE_ML_RESOURCE_GROUP": resource_group,
+        "AZURE_ML_WORKSPACE_NAME": workspace_name,
+    }
+
+    if "AZURE_SUBSCRIPTION_ID=" in existing_content:
+        print("  Updating existing Azure config in .env")
+        lines = existing_content.split("\n")
+        new_lines = []
+        for line in lines:
+            updated = False
+            for var, value in azure_vars.items():
+                if line.startswith(f"{var}="):
+                    new_lines.append(f"{var}={value}")
+                    updated = True
+                    break
+            if not updated:
+                new_lines.append(line)
+        env_path.write_text("\n".join(new_lines))
+    else:
+        # Append Azure section
+        azure_section = f"""
+# =============================================================================
+# Azure Configuration (auto-generated by azure-setup)
+# =============================================================================
+AZURE_SUBSCRIPTION_ID={subscription_id}
+AZURE_ML_RESOURCE_GROUP={resource_group}
+AZURE_ML_WORKSPACE_NAME={workspace_name}
+"""
+        with open(env_path, "a") as f:
+            f.write(azure_section)
+
+    print(f"  Config written to {env_path}")
+
+    # Validation
+    print("\n" + "=" * 50)
+    print("Setup Complete!")
+    print("=" * 50)
+    print(f"""
+Resources:
+  - Subscription: {subscription_id[:8]}...
+  - Resource Group: {resource_group}
+  - ML Workspace: {workspace_name}
+  - Location: {location}
+
+Next steps:
+  1. Run evaluation:
+     uv run python -m openadapt_evals.benchmarks.cli azure --workers 2 --task-ids notepad_1,notepad_2
+
+  2. Estimate costs:
+     uv run python -m openadapt_evals.benchmarks.cli estimate --workers 2
+""")
+
+    return 0
+
+
 def cmd_azure(args: argparse.Namespace) -> int:
     """Run Azure-based parallel evaluation."""
     from openadapt_evals.benchmarks.azure import AzureConfig, AzureWAAOrchestrator
@@ -1722,7 +1890,9 @@ def cmd_azure(args: argparse.Namespace) -> int:
         config = AzureConfig.from_env()
     except ValueError as e:
         print(f"ERROR: {e}")
-        print("\nSet these environment variables:")
+        print("\nAzure is not configured. Run setup first:")
+        print("  uv run python -m openadapt_evals.benchmarks.cli azure-setup")
+        print("\nOr set these environment variables manually:")
         print("  AZURE_SUBSCRIPTION_ID")
         print("  AZURE_ML_RESOURCE_GROUP")
         print("  AZURE_ML_WORKSPACE_NAME")
@@ -1917,6 +2087,20 @@ def main() -> int:
     azure_parser.add_argument("--dry-run", action="store_true",
                              help="List instances without deleting (for --cleanup-only)")
 
+    # Azure setup command
+    azure_setup_parser = subparsers.add_parser(
+        "azure-setup",
+        help="Set up Azure resources for WAA benchmark (resource group, ML workspace)"
+    )
+    azure_setup_parser.add_argument("--resource-group", "-g", type=str, default="openadapt-agents",
+                                    help="Resource group name (default: openadapt-agents)")
+    azure_setup_parser.add_argument("--workspace", "-w", type=str, default="openadapt-ml",
+                                    help="ML workspace name (default: openadapt-ml)")
+    azure_setup_parser.add_argument("--location", "-l", type=str, default="eastus",
+                                    help="Azure region (default: eastus)")
+    azure_setup_parser.add_argument("--env-file", type=str, default=".env",
+                                    help="Path to .env file (default: .env)")
+
     # VM management commands
     vm_start_parser = subparsers.add_parser("vm-start", help="Start an Azure VM")
     vm_start_parser.add_argument("--vm-name", type=str, default=None,
@@ -2107,6 +2291,7 @@ def main() -> int:
         "view": cmd_view,
         "estimate": cmd_estimate,
         "azure": cmd_azure,
+        "azure-setup": cmd_azure_setup,
         "azure-monitor": cmd_azure_monitor,
         "vm-start": cmd_vm_start,
         "vm-stop": cmd_vm_stop,
