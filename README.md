@@ -5,7 +5,7 @@
 [![Downloads](https://img.shields.io/pypi/dm/openadapt-evals.svg)](https://pypi.org/project/openadapt-evals/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
-Evaluation infrastructure for GUI agent benchmarks. **First open-source WAA (Windows Agent Arena) reproduction.**
+Evaluation infrastructure for GUI agent benchmarks. **Simplified CLI toolkit for Windows Agent Arena.**
 
 ## Overview
 
@@ -15,10 +15,11 @@ Evaluation infrastructure for GUI agent benchmarks. **First open-source WAA (Win
 
 > **Status**: Actively running full 154-task evaluation. Results coming soon.
 
-This is the **first open-source reproduction** of the [Windows Agent Arena](https://github.com/microsoft/WindowsAgentArena) benchmark, enabling:
-- Reproducible baseline measurements for GUI agents
-- Side-by-side model comparison (GPT-4o, Claude, etc.)
-- Per-domain breakdown of agent capabilities
+A **simplified CLI toolkit** for the [Windows Agent Arena](https://github.com/microsoft/WindowsAgentArena) benchmark, providing:
+- Easy Azure VM setup and SSH tunnel management
+- Agent adapters for Claude, GPT-4o, and custom agents
+- Results viewer with per-domain breakdown
+- Parallelization support for faster evaluations
 
 See the [WAA Benchmark Results](#waa-benchmark-results) section below for current status.
 
