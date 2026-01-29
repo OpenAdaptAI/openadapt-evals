@@ -2009,9 +2009,11 @@ def cmd_waa_image(args: argparse.Namespace) -> int:
     if action == "build":
         print(f"Building WAA image: {local_tag}")
         print(f"Using Dockerfile: {dockerfile}")
+        print("Platform: linux/amd64 (required for windowsarena base image)")
         try:
             result = subprocess.run(
-                ["docker", "build", "-t", local_tag, str(waa_deploy_dir)],
+                ["docker", "build", "--platform", "linux/amd64",
+                 "-t", local_tag, str(waa_deploy_dir)],
                 check=True,
             )
             print(f"\nSuccessfully built: {local_tag}")
@@ -2167,9 +2169,11 @@ def cmd_waa_image(args: argparse.Namespace) -> int:
     elif action == "build-push":
         # Build first
         print(f"Building WAA image: {local_tag}")
+        print("Platform: linux/amd64 (required for windowsarena base image)")
         try:
             subprocess.run(
-                ["docker", "build", "-t", local_tag, str(waa_deploy_dir)],
+                ["docker", "build", "--platform", "linux/amd64",
+                 "-t", local_tag, str(waa_deploy_dir)],
                 check=True,
             )
             print(f"Successfully built: {local_tag}")
