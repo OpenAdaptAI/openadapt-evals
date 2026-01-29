@@ -544,14 +544,24 @@ class WAAAdapter(BenchmarkAdapter):
 class WAAMockAdapter(BenchmarkAdapter):
     """Mock WAA adapter for testing without Windows VM.
 
+    This adapter generates synthetic tasks for testing the benchmark infrastructure
+    without requiring a Windows VM or WAA server. Task IDs are prefixed with "mock_"
+    to clearly distinguish them from real WAA task IDs.
+
     Useful for:
     - Testing the benchmark integration without actual WAA
     - Development on non-Windows platforms
     - Unit tests
+    - Verifying agent behavior before running real evaluations
 
     Args:
         num_tasks: Number of mock tasks to generate.
         domains: Domains to include in mock tasks.
+
+    Note:
+        Mock task IDs use the format "mock_{domain}_{number}" (e.g., "mock_notepad_001").
+        These IDs are explicitly rejected by WAALiveAdapter to prevent confusion
+        between testing and real evaluation runs.
     """
 
     def __init__(
@@ -578,21 +588,27 @@ class WAAMockAdapter(BenchmarkAdapter):
         return "interactive"
 
     def _generate_mock_tasks(self) -> None:
-        """Generate mock tasks for testing."""
+        """Generate mock tasks for testing.
+
+        Task IDs use the format "mock_{domain}_{number}" (e.g., "mock_notepad_001")
+        to clearly distinguish them from real WAA UUIDs. This prevents accidental
+        use of synthetic tasks with the live adapter.
+        """
         tasks_per_domain = self._num_tasks // len(self._domains)
         extra = self._num_tasks % len(self._domains)
 
         for i, domain in enumerate(self._domains):
             count = tasks_per_domain + (1 if i < extra else 0)
             for j in range(count):
-                task_id = f"{domain}_{j + 1}"
+                # Use mock_ prefix to clearly indicate synthetic task
+                task_id = f"mock_{domain}_{j + 1:03d}"
                 self._tasks.append(
                     BenchmarkTask(
                         task_id=task_id,
                         instruction=f"Mock task {j + 1} in {domain} domain",
                         domain=domain,
                         time_limit_steps=15,
-                        raw_config={"mock": True},
+                        raw_config={"mock": True, "synthetic": True},
                     )
                 )
 

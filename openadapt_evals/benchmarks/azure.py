@@ -80,6 +80,8 @@ VM_TIER_SPOT_COSTS = {
 def classify_task_complexity(task: BenchmarkTask) -> str:
     """Classify task complexity to select appropriate VM tier.
 
+    Classification priority: complex > medium > simple > default(medium)
+
     Args:
         task: The benchmark task to classify.
 
@@ -90,13 +92,6 @@ def classify_task_complexity(task: BenchmarkTask) -> str:
     instruction = task.instruction.lower()
     domain = (task.domain or "").lower()
 
-    # Simple tasks: Notepad, File Explorer, basic Windows operations
-    simple_indicators = [
-        "notepad", "file explorer", "calculator", "paint",
-        "open", "close", "minimize", "maximize",
-        "create file", "delete file", "rename file",
-    ]
-
     # Complex tasks: Coding, debugging, multi-app workflows, data analysis
     complex_indicators = [
         "code", "debug", "compile", "ide", "visual studio",
@@ -104,9 +99,10 @@ def classify_task_complexity(task: BenchmarkTask) -> str:
         "excel formula", "pivot table", "macro",
         "multiple applications", "switch between",
         "data analysis", "chart", "graph",
+        "multitasking",
     ]
 
-    # Medium tasks: Browser, Office apps, email (everything else)
+    # Medium tasks: Browser, Office apps, email
     medium_indicators = [
         "browser", "chrome", "edge", "firefox",
         "word", "excel", "powerpoint", "office",
@@ -114,20 +110,33 @@ def classify_task_complexity(task: BenchmarkTask) -> str:
         "pdf", "acrobat",
     ]
 
+    # Simple tasks: Notepad, File Explorer, basic Windows operations
+    # Note: Check these AFTER medium to avoid "open" matching browser tasks
+    simple_indicators = [
+        "notepad", "file explorer", "file_explorer", "calculator", "paint",
+    ]
+
+    # Simple domains take precedence for direct domain matching
+    simple_domains = {"notepad", "calculator", "paint", "file_explorer"}
+
     # Check for complex indicators first
     for indicator in complex_indicators:
         if indicator in task_id or indicator in instruction or indicator in domain:
             return "complex"
 
-    # Check for simple indicators
-    for indicator in simple_indicators:
-        if indicator in task_id or indicator in instruction or indicator in domain:
-            return "simple"
-
-    # Check for medium indicators
+    # Check for medium indicators (browsers, office apps are more complex than notepad)
     for indicator in medium_indicators:
         if indicator in task_id or indicator in instruction or indicator in domain:
             return "medium"
+
+    # Check for simple domains (direct match)
+    if domain in simple_domains:
+        return "simple"
+
+    # Check for simple indicators in task_id or instruction
+    for indicator in simple_indicators:
+        if indicator in task_id or indicator in instruction:
+            return "simple"
 
     # Default to medium for unknown tasks
     return "medium"
@@ -879,7 +888,7 @@ class AzureWAAOrchestrator:
                 print("      No stale instances found.")
 
         # Load tasks
-        from openadapt_evals.benchmarks.waa import WAAAdapter
+        from openadapt_evals.adapters.waa import WAAAdapter
 
         adapter = WAAAdapter(waa_repo_path=self.waa_repo_path)
         if task_ids:
