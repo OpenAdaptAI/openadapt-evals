@@ -29,7 +29,7 @@ The following features are under active development:
 
 ### Azure Reliability (`[IN PROGRESS]`)
 - **Goal**: 95%+ task completion rate (vs. early issues with 0%)
-- **VM Configuration**: Using `Standard_D8ds_v5` with nested virtualization
+- **VM Configuration**: Using `Standard_D4s_v5` with nested virtualization (configurable)
 - **Health Monitoring**: Automatic detection and retry of stuck jobs
 
 ### Cost Optimization (`[IN PROGRESS]`)
@@ -322,8 +322,8 @@ results = evaluate_agent_on_benchmark(agent, adapter, task_ids=[t.task_id for t 
 Run WAA at scale using Azure ML compute with optimized costs:
 
 > **⚠️ Quota Requirements**: Parallel evaluation requires sufficient Azure vCPU quota.
-> - Each worker needs a `Standard_D8ds_v5` VM (8 vCPUs)
-> - 10 workers = 80 vCPUs required
+> - Default VM: `Standard_D4s_v5` (4 vCPUs per worker)
+> - 10 workers = 40 vCPUs required
 > - Default quota is typically 10 vCPUs - [request an increase](https://learn.microsoft.com/en-us/azure/quotas/quickstart-increase-quota-portal) before running parallel evaluations
 
 ```bash
@@ -366,7 +366,7 @@ results = orchestrator.run_evaluation(
 )
 ```
 
-**Azure Reliability**: The orchestrator uses `Standard_D8ds_v5` VMs with nested virtualization support and automatic health monitoring.
+**Azure Reliability**: The orchestrator uses `Standard_D4s_v5` VMs with nested virtualization support and automatic health monitoring.
 
 ### Live Monitoring
 
