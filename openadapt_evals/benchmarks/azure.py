@@ -359,6 +359,7 @@ class WorkerState:
     error: str | None = None
     start_time: float | None = None
     end_time: float | None = None
+    job_name: str | None = None  # Azure ML job name for this worker
     # Cost tracking
     vm_tier: str = "medium"  # simple, medium, or complex
     vm_size: str = "Standard_D4s_v5"  # Actual VM size used
@@ -689,6 +690,65 @@ class AzureMLClient:
             time.sleep(10)
 
         raise TimeoutError(f"Job {job_name} did not complete within {timeout_seconds}s")
+
+    def get_job_logs(self, job_name: str, tail: int | None = None) -> str:
+        """Fetch logs for a job (non-streaming).
+
+        Args:
+            job_name: Job name/ID.
+            tail: If specified, return only the last N lines.
+
+        Returns:
+            Log content as string.
+        """
+        try:
+            # Use az ml job download to get logs
+            import tempfile
+            with tempfile.TemporaryDirectory() as temp_dir:
+                result = subprocess.run(
+                    [
+                        "az",
+                        "ml",
+                        "job",
+                        "download",
+                        "--name",
+                        job_name,
+                        "--workspace-name",
+                        self.config.workspace_name,
+                        "--resource-group",
+                        self.config.resource_group,
+                        "--download-path",
+                        temp_dir,
+                        "--outputs",
+                        "logs",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+
+                if result.returncode != 0:
+                    logger.warning(f"Failed to download logs: {result.stderr}")
+                    return ""
+
+                # Find and read the user_logs/std_log.txt file
+                log_dir = Path(temp_dir)
+                log_files = list(log_dir.rglob("std_log.txt")) + list(log_dir.rglob("stdout.txt"))
+
+                if not log_files:
+                    return ""
+
+                logs = log_files[0].read_text()
+
+                if tail:
+                    lines = logs.split("\n")
+                    logs = "\n".join(lines[-tail:])
+
+                return logs
+
+        except Exception as e:
+            logger.warning(f"Error fetching logs for {job_name}: {e}")
+            return ""
 
     def stream_job_logs(
         self,
@@ -1043,29 +1103,41 @@ class AzureWAAOrchestrator:
             max_steps: Maximum steps per task.
             timeout_hours: Maximum job duration in hours.
         """
+        # Serialize agent config for remote workers
+        agent_config = self._serialize_agent_config(agent)
+
         for worker, tasks in zip(workers, task_batches):
             if worker.status == "failed":
                 continue
 
             try:
-                # Serialize task IDs for this worker
-                task_ids = [t.task_id for t in tasks]
-                task_ids_json = json.dumps(task_ids)
+                # Build command using vanilla WAA run.py
+                # Uses --worker_id and --num_workers for task distribution
+                command = self._build_worker_command(
+                    worker_id=worker.worker_id,
+                    num_workers=len(workers),
+                    max_steps=max_steps,
+                    agent_config=agent_config,
+                )
 
-                # Build command
-                command = self._build_worker_command(task_ids_json, max_steps, agent)
+                # Environment variables for WAA runner
+                # OPENAI_API_KEY is required by vanilla WAA
+                env_vars = {
+                    "WAA_WORKER_ID": str(worker.worker_id),
+                    "WAA_NUM_WORKERS": str(len(workers)),
+                    "WAA_MAX_STEPS": str(max_steps),
+                    **agent_config.get("env_vars", {}),
+                }
 
-                # Submit job with timeout
-                self.ml_client.submit_job(
+                # Submit job with timeout and capture job_name
+                job_name = self.ml_client.submit_job(
                     compute_name=worker.compute_name,
                     command=command,
-                    environment_variables={
-                        "WAA_TASK_IDS": task_ids_json,
-                        "WAA_MAX_STEPS": str(max_steps),
-                    },
+                    environment_variables=env_vars,
                     display_name=f"waa-worker-{worker.worker_id}",
                     timeout_hours=timeout_hours,
                 )
+                worker.job_name = job_name
                 worker.status = "running"
                 worker.start_time = time.time()
 
@@ -1074,31 +1146,88 @@ class AzureWAAOrchestrator:
                 worker.error = str(e)
                 logger.error(f"Failed to submit job for worker {worker.worker_id}: {e}")
 
+    def _serialize_agent_config(self, agent: BenchmarkAgent) -> dict[str, Any]:
+        """Serialize agent configuration for remote execution.
+
+        Extracts API keys and model config that can be passed via environment
+        variables to remote workers running vanilla WAA.
+
+        Args:
+            agent: The agent to serialize.
+
+        Returns:
+            Dict with:
+                - agent_name: WAA agent name (e.g., "navi")
+                - model: Model name (e.g., "gpt-4o")
+                - env_vars: Dict of environment variables to set
+        """
+        config: dict[str, Any] = {
+            "agent_name": "navi",  # Default WAA agent
+            "model": "gpt-4o",  # Default model
+            "env_vars": {},
+        }
+
+        # Check if agent has provider/model info (ApiAgent pattern)
+        if hasattr(agent, "provider"):
+            if agent.provider == "openai":
+                config["model"] = getattr(agent, "model", "gpt-4o")
+                # Get API key from agent or environment
+                api_key = getattr(agent, "api_key", None) or os.getenv("OPENAI_API_KEY")
+                if api_key:
+                    config["env_vars"]["OPENAI_API_KEY"] = api_key
+            elif agent.provider == "anthropic":
+                # WAA's navi agent supports Azure OpenAI, but we can use direct OpenAI
+                # For Claude, we'd need custom agent code on the worker
+                config["model"] = getattr(agent, "model", "claude-sonnet-4-5-20250929")
+                api_key = getattr(agent, "api_key", None) or os.getenv("ANTHROPIC_API_KEY")
+                if api_key:
+                    config["env_vars"]["ANTHROPIC_API_KEY"] = api_key
+
+        # Check for OpenAI API key in environment as fallback
+        if "OPENAI_API_KEY" not in config["env_vars"]:
+            openai_key = os.getenv("OPENAI_API_KEY")
+            if openai_key:
+                config["env_vars"]["OPENAI_API_KEY"] = openai_key
+
+        return config
+
     def _build_worker_command(
         self,
-        task_ids_json: str,
+        worker_id: int,
+        num_workers: int,
         max_steps: int,
-        agent: BenchmarkAgent,
+        agent_config: dict[str, Any],
     ) -> str:
         """Build the command to run on a worker VM.
 
+        Uses vanilla WAA's run.py with --worker_id and --num_workers for
+        built-in task distribution. This matches Microsoft's official
+        Azure deployment pattern.
+
         Args:
-            task_ids_json: JSON string of task IDs for this worker.
+            worker_id: This worker's ID (0-indexed).
+            num_workers: Total number of workers.
             max_steps: Maximum steps per task.
-            agent: Agent to run (TODO: serialize agent config for remote execution).
+            agent_config: Serialized agent configuration.
+
+        Returns:
+            Shell command string to execute in the WAA container.
         """
-        # TODO: Serialize agent config and pass to remote worker
-        # For now, workers use a default agent configuration
-        _ = agent  # Reserved for agent serialization
+        agent_name = agent_config.get("agent_name", "navi")
+        model = agent_config.get("model", "gpt-4o")
+
         # WAA Docker image has client at /client (see Dockerfile-WinArena)
-        # The run.py script is at /client/run.py (not a module, so use python run.py)
+        # The run.py script uses --worker_id and --num_workers for task distribution
+        # Results are written to --result_dir
         return f"""
-        cd /client && \
-        python run.py \
-            --task_ids '{task_ids_json}' \
-            --max_steps {max_steps} \
-            --output_dir /outputs
-        """
+cd /client && python run.py \\
+    --agent_name {agent_name} \\
+    --model {model} \\
+    --worker_id {worker_id} \\
+    --num_workers {num_workers} \\
+    --max_steps {max_steps} \\
+    --result_dir /outputs
+"""
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=4, max=60),
@@ -1177,7 +1306,11 @@ class AzureWAAOrchestrator:
         workers: list[WorkerState],
         on_worker_complete: Callable[[WorkerState], None] | None,
     ) -> list[BenchmarkResult]:
-        """Wait for all workers and collect results."""
+        """Wait for all workers and collect results.
+
+        Polls Azure ML job status (not compute status) to determine completion.
+        Jobs can complete with status: Completed, Failed, Canceled.
+        """
         all_results: list[BenchmarkResult] = []
 
         # Poll workers for completion
@@ -1186,14 +1319,22 @@ class AzureWAAOrchestrator:
         while pending_workers:
             for worker in pending_workers[:]:
                 try:
-                    status = self.ml_client.get_compute_status(worker.compute_name)
+                    # Check job status (not compute status)
+                    if not worker.job_name:
+                        logger.warning(f"Worker {worker.worker_id} has no job_name")
+                        worker.status = "failed"
+                        worker.error = "No job submitted"
+                        pending_workers.remove(worker)
+                        continue
 
-                    # Check if job completed (simplified - real impl would check job status)
-                    if status in ["Stopped", "Deallocated"]:
+                    job = self.ml_client.client.jobs.get(worker.job_name)
+                    job_status = job.status
+
+                    if job_status in ["Completed", "Finished"]:
                         worker.status = "completed"
                         worker.end_time = time.time()
 
-                        # Fetch results from blob storage
+                        # Fetch results from job outputs
                         results = self._fetch_worker_results(worker)
                         worker.results = results
                         all_results.extend(results)
@@ -1207,6 +1348,24 @@ class AzureWAAOrchestrator:
                             f"{len(results)} results"
                         )
 
+                    elif job_status in ["Failed", "Canceled"]:
+                        worker.status = "failed"
+                        worker.error = f"Job {job_status}"
+                        worker.end_time = time.time()
+
+                        # Still try to fetch any partial results
+                        results = self._fetch_worker_results(worker)
+                        worker.results = results
+                        all_results.extend(results)
+
+                        pending_workers.remove(worker)
+                        logger.warning(
+                            f"Worker {worker.worker_id} failed ({job_status}): "
+                            f"{len(results)} partial results"
+                        )
+
+                    # else: still running, continue polling
+
                 except Exception as e:
                     logger.warning(f"Error checking worker {worker.worker_id}: {e}")
 
@@ -1216,19 +1375,136 @@ class AzureWAAOrchestrator:
         return all_results
 
     def _fetch_worker_results(self, worker: WorkerState) -> list[BenchmarkResult]:
-        """Fetch results from a worker's output storage."""
-        # In a real implementation, this would download results from blob storage
-        # For now, return placeholder results
+        """Fetch results from a worker's output storage.
+
+        Downloads job outputs from Azure ML and parses WAA result files.
+        WAA writes results in the format: {result_dir}/{domain}/{task_id}/result.txt
+
+        Args:
+            worker: WorkerState with job_name set.
+
+        Returns:
+            List of BenchmarkResult for each task.
+        """
         results = []
-        for task_id in worker.assigned_tasks:
-            results.append(
-                BenchmarkResult(
-                    task_id=task_id,
-                    success=False,  # Placeholder
-                    score=0.0,
-                    num_steps=0,
+
+        if not worker.job_name:
+            logger.warning(f"Worker {worker.worker_id} has no job_name, returning empty results")
+            for task_id in worker.assigned_tasks:
+                results.append(
+                    BenchmarkResult(
+                        task_id=task_id,
+                        success=False,
+                        score=0.0,
+                        num_steps=0,
+                        error_message="No job_name available",
+                    )
                 )
-            )
+            return results
+
+        try:
+            # Download job outputs to a temp directory
+            import tempfile
+            with tempfile.TemporaryDirectory() as temp_dir:
+                output_path = Path(temp_dir)
+
+                # Download all outputs from the job
+                self.ml_client.client.jobs.download(
+                    name=worker.job_name,
+                    download_path=output_path,
+                    output_name="default",  # Default output location
+                )
+
+                # Parse WAA result files
+                # WAA writes: {result_dir}/{action_space}/{observation_type}/{model}/{trial_id}/{domain}/{task_id}/result.txt
+                # But we simplified to: /outputs/{domain}/{task_id}/result.txt
+                outputs_dir = output_path / "outputs"
+                if not outputs_dir.exists():
+                    # Try alternative path structure
+                    outputs_dir = output_path
+
+                results = self._parse_waa_results(outputs_dir, worker.assigned_tasks)
+
+        except Exception as e:
+            logger.error(f"Failed to fetch results for worker {worker.worker_id}: {e}")
+            # Return failed results for all tasks
+            for task_id in worker.assigned_tasks:
+                results.append(
+                    BenchmarkResult(
+                        task_id=task_id,
+                        success=False,
+                        score=0.0,
+                        num_steps=0,
+                        error_message=f"Failed to fetch results: {e}",
+                    )
+                )
+
+        return results
+
+    def _parse_waa_results(
+        self,
+        outputs_dir: Path,
+        task_ids: list[str],
+    ) -> list[BenchmarkResult]:
+        """Parse WAA result files from downloaded outputs.
+
+        WAA writes result.txt files containing a single float (0.0 or 1.0).
+
+        Args:
+            outputs_dir: Directory containing WAA outputs.
+            task_ids: List of expected task IDs.
+
+        Returns:
+            List of BenchmarkResult for each task.
+        """
+        results = []
+
+        for task_id in task_ids:
+            # WAA task_id format: {domain}_{task_num} (e.g., notepad_1)
+            # Result path: {domain}/{task_id}/result.txt
+            parts = task_id.rsplit("_", 1)
+            if len(parts) == 2:
+                domain = parts[0]
+            else:
+                domain = task_id
+
+            result_file = outputs_dir / domain / task_id / "result.txt"
+
+            if result_file.exists():
+                try:
+                    score = float(result_file.read_text().strip())
+                    results.append(
+                        BenchmarkResult(
+                            task_id=task_id,
+                            success=score >= 1.0,
+                            score=score,
+                            num_steps=0,  # WAA doesn't expose step count in result.txt
+                        )
+                    )
+                except (ValueError, OSError) as e:
+                    logger.warning(f"Failed to parse result for {task_id}: {e}")
+                    results.append(
+                        BenchmarkResult(
+                            task_id=task_id,
+                            success=False,
+                            score=0.0,
+                            num_steps=0,
+                            error_message=f"Failed to parse result: {e}",
+                        )
+                    )
+            else:
+                # Result file not found - task may have failed
+                logger.warning(f"Result file not found for {task_id}: {result_file}")
+                results.append(
+                    BenchmarkResult(
+                        task_id=task_id,
+                        success=False,
+                        score=0.0,
+                        num_steps=0,
+                        error_message="Result file not found",
+                    )
+                )
+
         return results
 
     def _cleanup_workers(self, workers: list[WorkerState]) -> None:
