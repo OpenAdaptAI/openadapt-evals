@@ -249,11 +249,17 @@ class AzureConfig:
     subscription_id: str
     resource_group: str
     workspace_name: str
-    vm_size: str = "Standard_D4s_v5"  # Better nested virt support than v3
+    vm_size: str = "Standard_D4ds_v5"  # D4ds_v5 supported by Azure ML compute
     vm_security_type: str = "Standard"  # NOT TrustedLaunch (disables nested virt)
     enable_nested_virtualization: bool = True
     idle_timeout_minutes: int = 60
-    docker_image: str = "windowsarena/winarena:latest"  # Public Docker Hub image
+    # Custom WAA image with unattended installation support
+    # Use openadaptai/waa-auto (not vanilla windowsarena/winarena) because:
+    # - Modern dockurr/windows base (auto-downloads Windows 11)
+    # - FirstLogonCommands patches for unattended installation
+    # - Python 3.9 with transformers 4.46.2 (compatible with navi agent)
+    # Build with: uv run python -m openadapt_evals.benchmarks.cli waa-image build-push
+    docker_image: str = "openadaptai/waa-auto:latest"
     storage_account: str | None = None
     use_managed_identity: bool = False
     managed_identity_name: str | None = None
@@ -274,9 +280,9 @@ class AzureConfig:
             AZURE_ML_WORKSPACE_NAME
 
         Optional env vars:
-            AZURE_VM_SIZE (default: Standard_D4s_v5)
+            AZURE_VM_SIZE (default: Standard_D4ds_v5)
             AZURE_VM_SECURITY_TYPE (default: Standard)
-            AZURE_DOCKER_IMAGE (default: windowsarena/winarena:latest)
+            AZURE_DOCKER_IMAGE (default: openadaptai/waa-auto:latest)
             AZURE_ENABLE_TIERED_VMS (default: false) - Auto-select VM size by task complexity
             AZURE_USE_SPOT_INSTANCES (default: false) - Use spot instances for cost savings
             AZURE_MAX_SPOT_PRICE (default: 0.5) - Maximum hourly price for spot instances
@@ -321,11 +327,11 @@ class AzureConfig:
             subscription_id=subscription_id,
             resource_group=resource_group,
             workspace_name=workspace_name,
-            vm_size=os.getenv("AZURE_VM_SIZE", "Standard_D4s_v5"),
+            vm_size=os.getenv("AZURE_VM_SIZE", "Standard_D4ds_v5"),
             vm_security_type=os.getenv("AZURE_VM_SECURITY_TYPE", "Standard"),
             docker_image=os.getenv(
                 "AZURE_DOCKER_IMAGE",
-                "windowsarena/winarena:latest"
+                "openadaptai/waa-auto:latest"
             ),
             enable_tiered_vms=enable_tiered_vms,
             use_spot_instances=use_spot_instances,
@@ -362,7 +368,7 @@ class WorkerState:
     job_name: str | None = None  # Azure ML job name for this worker
     # Cost tracking
     vm_tier: str = "medium"  # simple, medium, or complex
-    vm_size: str = "Standard_D4s_v5"  # Actual VM size used
+    vm_size: str = "Standard_D4ds_v5"  # Actual VM size used
     is_spot: bool = False  # Whether spot instance was used
     hourly_cost: float = 0.192  # Actual hourly cost
     total_cost: float = 0.0  # Total cost for this worker

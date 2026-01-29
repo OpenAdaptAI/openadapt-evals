@@ -1979,6 +1979,178 @@ def cmd_azure(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_waa_image(args: argparse.Namespace) -> int:
+    """Build and push custom WAA Docker image.
+
+    The custom image includes:
+    - Modern dockurr/windows base (auto-downloads Windows 11)
+    - FirstLogonCommands patches for unattended installation
+    - Python 3.9 with transformers 4.46.2 (compatible with navi agent)
+    - api_agent.py for Claude/GPT support
+    """
+    import subprocess
+    from pathlib import Path
+
+    # Find waa_deploy directory
+    waa_deploy_dir = Path(__file__).parent.parent / "waa_deploy"
+    if not waa_deploy_dir.exists():
+        print(f"ERROR: waa_deploy directory not found at {waa_deploy_dir}")
+        return 1
+
+    dockerfile = waa_deploy_dir / "Dockerfile"
+    if not dockerfile.exists():
+        print(f"ERROR: Dockerfile not found at {dockerfile}")
+        return 1
+
+    action = args.action
+    tag = args.tag
+    local_tag = f"waa-auto:{tag}"
+
+    if action == "build":
+        print(f"Building WAA image: {local_tag}")
+        print(f"Using Dockerfile: {dockerfile}")
+        try:
+            result = subprocess.run(
+                ["docker", "build", "-t", local_tag, str(waa_deploy_dir)],
+                check=True,
+            )
+            print(f"\nSuccessfully built: {local_tag}")
+            return 0
+        except subprocess.CalledProcessError as e:
+            print(f"ERROR: Docker build failed: {e}")
+            return 1
+        except FileNotFoundError:
+            print("ERROR: Docker not found. Please install Docker first.")
+            return 1
+
+    elif action == "push":
+        registry = args.registry
+
+        if registry == "dockerhub":
+            repo = args.repo or "openadaptai/waa-auto"
+            full_tag = f"{repo}:{tag}"
+            print(f"Pushing to Docker Hub: {full_tag}")
+
+            try:
+                # Tag for registry
+                subprocess.run(
+                    ["docker", "tag", local_tag, full_tag],
+                    check=True,
+                )
+                # Push
+                subprocess.run(
+                    ["docker", "push", full_tag],
+                    check=True,
+                )
+                print(f"\nSuccessfully pushed: {full_tag}")
+                return 0
+            except subprocess.CalledProcessError as e:
+                print(f"ERROR: Docker push failed: {e}")
+                print("\nMake sure you're logged in: docker login")
+                return 1
+
+        elif registry == "acr":
+            import os
+            acr_name = os.getenv("AZURE_ACR_NAME", "openadaptacr")
+            full_tag = f"{acr_name}.azurecr.io/waa-auto:{tag}"
+            print(f"Pushing to Azure Container Registry: {full_tag}")
+
+            try:
+                # Login to ACR
+                subprocess.run(
+                    ["az", "acr", "login", "--name", acr_name],
+                    check=True,
+                )
+                # Tag for registry
+                subprocess.run(
+                    ["docker", "tag", local_tag, full_tag],
+                    check=True,
+                )
+                # Push
+                subprocess.run(
+                    ["docker", "push", full_tag],
+                    check=True,
+                )
+                print(f"\nSuccessfully pushed: {full_tag}")
+                return 0
+            except subprocess.CalledProcessError as e:
+                print(f"ERROR: ACR push failed: {e}")
+                return 1
+        else:
+            print(f"ERROR: Unknown registry: {registry}")
+            return 1
+
+    elif action == "build-push":
+        # Build first
+        print(f"Building WAA image: {local_tag}")
+        try:
+            subprocess.run(
+                ["docker", "build", "-t", local_tag, str(waa_deploy_dir)],
+                check=True,
+            )
+            print(f"Successfully built: {local_tag}")
+        except subprocess.CalledProcessError as e:
+            print(f"ERROR: Docker build failed: {e}")
+            return 1
+
+        # Then push
+        args.action = "push"  # Set action to push for the push logic
+        return cmd_waa_image(args)
+
+    elif action == "check":
+        registry = args.registry
+
+        if registry == "dockerhub":
+            repo = args.repo or "openadaptai/waa-auto"
+            print(f"Checking Docker Hub for {repo}:{tag}...")
+
+            # Check if image exists using Docker Hub API
+            import urllib.request
+            import urllib.error
+            url = f"https://hub.docker.com/v2/repositories/{repo}/tags/{tag}"
+            try:
+                urllib.request.urlopen(url, timeout=10)
+                print(f"Image exists: {repo}:{tag}")
+                return 0
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    print(f"Image NOT found: {repo}:{tag}")
+                    return 1
+                print(f"ERROR: Failed to check: {e}")
+                return 1
+
+        elif registry == "acr":
+            import os
+            acr_name = os.getenv("AZURE_ACR_NAME", "openadaptacr")
+            print(f"Checking ACR for {acr_name}.azurecr.io/waa-auto:{tag}...")
+
+            try:
+                result = subprocess.run(
+                    ["az", "acr", "repository", "show-tags",
+                     "--name", acr_name,
+                     "--repository", "waa-auto",
+                     "--output", "tsv"],
+                    capture_output=True,
+                    text=True,
+                )
+                if tag in result.stdout.split("\n"):
+                    print(f"Image exists: {acr_name}.azurecr.io/waa-auto:{tag}")
+                    return 0
+                else:
+                    print(f"Image NOT found: {acr_name}.azurecr.io/waa-auto:{tag}")
+                    return 1
+            except subprocess.CalledProcessError as e:
+                print(f"ERROR: Failed to check ACR: {e}")
+                return 1
+        else:
+            print(f"ERROR: Unknown registry: {registry}")
+            return 1
+
+    else:
+        print(f"ERROR: Unknown action: {action}")
+        return 1
+
+
 def main() -> int:
     """Main entry point for CLI."""
     parser = argparse.ArgumentParser(
@@ -2275,6 +2447,22 @@ def main() -> int:
     wandb_log_parser.add_argument("--dry-run", action="store_true",
                                   help="Validate data but don't upload")
 
+    # WAA Docker image management
+    waa_image_parser = subparsers.add_parser(
+        "waa-image",
+        help="Build and push custom WAA Docker image for unattended installation"
+    )
+    waa_image_parser.add_argument("action", type=str,
+                                  choices=["build", "push", "build-push", "check"],
+                                  help="Action: build, push, build-push, or check")
+    waa_image_parser.add_argument("--registry", type=str, default="dockerhub",
+                                  choices=["dockerhub", "acr"],
+                                  help="Registry: dockerhub or acr (Azure Container Registry)")
+    waa_image_parser.add_argument("--tag", type=str, default="latest",
+                                  help="Image tag (default: latest)")
+    waa_image_parser.add_argument("--repo", type=str, default=None,
+                                  help="Docker Hub repository (default: openadaptai/waa-auto)")
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -2304,6 +2492,7 @@ def main() -> int:
         "wandb-demo": cmd_wandb_demo,
         "wandb-report": cmd_wandb_report,
         "wandb-log": cmd_wandb_log,
+        "waa-image": cmd_waa_image,
     }
 
     handler = handlers.get(args.command)
