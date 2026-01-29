@@ -89,3 +89,14 @@ packages = ["openadapt_evals"]
 
 [tool.ruff]
 line-length = 100
+
+[tool.semantic_release]
+version_toml = ["pyproject.toml:project.version"]
+branch = "main"
+commit_message = "chore: release {version}"
+build_command = "uv build"
+
+[tool.semantic_release.commit_parser_options]
+allowed_tags = ["build", "chore", "ci", "docs", "feat", "fix", "perf", "refactor", "style", "test"]
+minor_tags = ["feat"]
+patch_tags = ["fix", "perf"]
