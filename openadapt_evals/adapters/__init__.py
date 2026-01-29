@@ -34,8 +34,16 @@ from openadapt_evals.adapters.base import (
     StaticDatasetAdapter,
     UIElement,
 )
-from openadapt_evals.adapters.waa import WAAAdapter, WAAConfig, WAAMockAdapter
-from openadapt_evals.adapters.waa_live import WAALiveAdapter, WAALiveConfig
+from openadapt_evals.adapters.waa import (
+    WAAAdapter,
+    WAAConfig,
+    WAAMockAdapter,
+    WAALiveAdapter,
+    WAALiveConfig,
+    SyntheticTaskError,
+    is_real_waa_task_id,
+    is_synthetic_task_id,
+)
 
 __all__ = [
     # Base classes
@@ -52,4 +60,8 @@ __all__ = [
     "WAAMockAdapter",
     "WAALiveAdapter",
     "WAALiveConfig",
+    # Task ID validation
+    "SyntheticTaskError",
+    "is_real_waa_task_id",
+    "is_synthetic_task_id",
 ]

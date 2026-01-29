@@ -422,6 +422,46 @@ See [LIVE_MONITORING.md](./LIVE_MONITORING.md) for full documentation.
 - [CLAUDE.md](./CLAUDE.md) - Development guide and best practices
 - [CHANGELOG.md](./CHANGELOG.md) - Version history and changes
 
+## WAA Benchmark Results
+
+> **⚠️ PLACEHOLDER**: The results below are placeholders. Actual benchmark results will be added once the full evaluation completes.
+
+### Baseline Reproduction
+
+We run the full WAA benchmark using the same methodology as the original paper to establish baseline performance.
+
+**WAA Baseline Results (GPT-4o):**
+
+| Metric | Paper Reported | Our Reproduction | Status |
+|--------|----------------|------------------|--------|
+| Success Rate | ~19.5% | `[PLACEHOLDER]` | `[PENDING]` |
+| Tasks Evaluated | 154 | `[PLACEHOLDER]` | `[PENDING]` |
+| Avg Steps/Task | N/A | `[PLACEHOLDER]` | `[PENDING]` |
+| Avg Time/Task | N/A | `[PLACEHOLDER]` | `[PENDING]` |
+
+### Model Comparison
+
+Performance of different agents on WAA:
+
+| Agent | Success Rate | Avg Steps | Notes |
+|-------|--------------|-----------|-------|
+| GPT-4o (baseline) | `[PLACEHOLDER]` | `[PLACEHOLDER]` | Zero-shot |
+| Claude Sonnet 4.5 | `[PLACEHOLDER]` | `[PLACEHOLDER]` | Zero-shot |
+
+### Domain Breakdown
+
+Success rates by Windows application domain:
+
+| Domain | Tasks | Success Rate |
+|--------|-------|--------------|
+| Notepad | `[PLACEHOLDER]` | `[PLACEHOLDER]` |
+| Chrome | `[PLACEHOLDER]` | `[PLACEHOLDER]` |
+| File Explorer | `[PLACEHOLDER]` | `[PLACEHOLDER]` |
+| Settings | `[PLACEHOLDER]` | `[PLACEHOLDER]` |
+| ... | ... | ... |
+
+> **Note**: Full domain breakdown will be added when benchmark completes.
+
 ## License
 
 MIT
