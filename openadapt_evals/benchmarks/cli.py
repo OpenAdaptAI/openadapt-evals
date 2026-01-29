@@ -2285,9 +2285,310 @@ def cmd_waa_image(args: argparse.Namespace) -> int:
             print(f"ERROR: Unknown registry: {registry}")
             return 1
 
+    elif action == "delete":
+        registry = args.registry
+
+        if registry == "ecr":
+            repo_name = "waa-auto"
+            region = "us-east-1"
+
+            print(f"Deleting AWS ECR Public repository: {repo_name}...")
+
+            try:
+                # Check if repository exists first
+                result = subprocess.run(
+                    ["aws", "ecr-public", "describe-repositories",
+                     "--repository-names", repo_name,
+                     "--region", region],
+                    capture_output=True,
+                    text=True,
+                )
+
+                if result.returncode != 0:
+                    print(f"Repository not found: {repo_name} (already deleted or never created)")
+                    return 0
+
+                # Delete the repository
+                delete_result = subprocess.run(
+                    ["aws", "ecr-public", "delete-repository",
+                     "--repository-name", repo_name,
+                     "--region", region,
+                     "--force"],  # --force deletes even with images
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+
+                print(f"✓ Deleted ECR Public repository: {repo_name}")
+                return 0
+
+            except subprocess.CalledProcessError as e:
+                print(f"ERROR: Failed to delete ECR repository: {e}")
+                if e.stderr:
+                    print(f"Details: {e.stderr}")
+                return 1
+
+        elif registry == "dockerhub":
+            repo = args.repo or "openadaptai/waa-auto"
+            print(f"NOTE: Docker Hub repository deletion must be done via web interface")
+            print(f"  1. Go to: https://hub.docker.com/repository/docker/{repo}/settings")
+            print(f"  2. Click 'Delete Repository'")
+            print(f"\nDocker Hub free tier doesn't charge for storage, so deletion is optional.")
+            return 0
+
+        elif registry == "acr":
+            import os
+            acr_name = os.getenv("AZURE_ACR_NAME", "openadaptacr")
+            print(f"Deleting ACR repository: {acr_name}.azurecr.io/waa-auto...")
+
+            try:
+                subprocess.run(
+                    ["az", "acr", "repository", "delete",
+                     "--name", acr_name,
+                     "--repository", "waa-auto",
+                     "--yes"],  # Skip confirmation
+                    check=True,
+                )
+                print(f"✓ Deleted ACR repository: waa-auto")
+                return 0
+            except subprocess.CalledProcessError as e:
+                print(f"ERROR: Failed to delete ACR repository: {e}")
+                return 1
+
+        else:
+            print(f"ERROR: Unknown registry: {registry}")
+            return 1
+
     else:
         print(f"ERROR: Unknown action: {action}")
         return 1
+
+
+def cmd_aws_costs(args: argparse.Namespace) -> int:
+    """Show AWS costs using Cost Explorer API.
+
+    Displays current month's costs (total and by service), historical costs,
+    and ECR storage costs specifically.
+    """
+    from datetime import datetime, timedelta
+
+    months = getattr(args, "months", 3)
+    output_json = getattr(args, "json", False)
+
+    # Calculate date ranges
+    today = datetime.now()
+    # Current month: 1st of month to today
+    current_month_start = today.replace(day=1).strftime("%Y-%m-%d")
+    current_month_end = today.strftime("%Y-%m-%d")
+
+    # Historical: go back N months
+    historical_start = (today.replace(day=1) - timedelta(days=months * 31)).replace(day=1)
+    historical_start_str = historical_start.strftime("%Y-%m-%d")
+
+    results = {
+        "current_month": {},
+        "current_month_by_service": [],
+        "historical_monthly": [],
+        "ecr_costs": {},
+    }
+
+    # Check AWS CLI availability
+    try:
+        result = subprocess.run(
+            ["aws", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            print("ERROR: AWS CLI not available")
+            return 1
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        print("ERROR: AWS CLI not installed or not in PATH")
+        print("Install: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html")
+        return 1
+
+    # 1. Get current month total costs
+    print("Fetching current month costs...")
+    try:
+        result = subprocess.run(
+            [
+                "aws", "ce", "get-cost-and-usage",
+                "--time-period", f"Start={current_month_start},End={current_month_end}",
+                "--granularity", "MONTHLY",
+                "--metrics", "UnblendedCost",
+                "--output", "json",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            for period in data.get("ResultsByTime", []):
+                total = period.get("Total", {}).get("UnblendedCost", {})
+                results["current_month"] = {
+                    "amount": float(total.get("Amount", 0)),
+                    "unit": total.get("Unit", "USD"),
+                    "start": period.get("TimePeriod", {}).get("Start"),
+                    "end": period.get("TimePeriod", {}).get("End"),
+                }
+        else:
+            print(f"WARNING: Failed to get current month costs: {result.stderr}")
+    except (subprocess.TimeoutExpired, json.JSONDecodeError) as e:
+        print(f"WARNING: Error fetching current month costs: {e}")
+
+    # 2. Get current month costs by service
+    print("Fetching costs by service...")
+    try:
+        result = subprocess.run(
+            [
+                "aws", "ce", "get-cost-and-usage",
+                "--time-period", f"Start={current_month_start},End={current_month_end}",
+                "--granularity", "MONTHLY",
+                "--metrics", "UnblendedCost",
+                "--group-by", "Type=DIMENSION,Key=SERVICE",
+                "--output", "json",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            services = []
+            for period in data.get("ResultsByTime", []):
+                for group in period.get("Groups", []):
+                    service_name = group.get("Keys", ["Unknown"])[0]
+                    cost_data = group.get("Metrics", {}).get("UnblendedCost", {})
+                    amount = float(cost_data.get("Amount", 0))
+                    if amount > 0.001:  # Only include services with non-trivial costs
+                        services.append({
+                            "service": service_name,
+                            "amount": amount,
+                            "unit": cost_data.get("Unit", "USD"),
+                        })
+            # Sort by cost descending
+            services.sort(key=lambda x: x["amount"], reverse=True)
+            results["current_month_by_service"] = services
+        else:
+            print(f"WARNING: Failed to get costs by service: {result.stderr}")
+    except (subprocess.TimeoutExpired, json.JSONDecodeError) as e:
+        print(f"WARNING: Error fetching costs by service: {e}")
+
+    # 3. Get historical monthly costs
+    print(f"Fetching historical costs ({months} months)...")
+    try:
+        result = subprocess.run(
+            [
+                "aws", "ce", "get-cost-and-usage",
+                "--time-period", f"Start={historical_start_str},End={current_month_end}",
+                "--granularity", "MONTHLY",
+                "--metrics", "UnblendedCost",
+                "--output", "json",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            for period in data.get("ResultsByTime", []):
+                total = period.get("Total", {}).get("UnblendedCost", {})
+                time_period = period.get("TimePeriod", {})
+                results["historical_monthly"].append({
+                    "month": time_period.get("Start", "")[:7],  # YYYY-MM
+                    "amount": float(total.get("Amount", 0)),
+                    "unit": total.get("Unit", "USD"),
+                })
+        else:
+            print(f"WARNING: Failed to get historical costs: {result.stderr}")
+    except (subprocess.TimeoutExpired, json.JSONDecodeError) as e:
+        print(f"WARNING: Error fetching historical costs: {e}")
+
+    # 4. Get ECR-specific costs
+    print("Fetching ECR storage costs...")
+    try:
+        result = subprocess.run(
+            [
+                "aws", "ce", "get-cost-and-usage",
+                "--time-period", f"Start={current_month_start},End={current_month_end}",
+                "--granularity", "MONTHLY",
+                "--metrics", "UnblendedCost",
+                "--filter", json.dumps({
+                    "Dimensions": {
+                        "Key": "SERVICE",
+                        "Values": ["Amazon EC2 Container Registry (ECR)", "Amazon Elastic Container Registry"]
+                    }
+                }),
+                "--output", "json",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            ecr_total = 0.0
+            for period in data.get("ResultsByTime", []):
+                total = period.get("Total", {}).get("UnblendedCost", {})
+                ecr_total += float(total.get("Amount", 0))
+            results["ecr_costs"] = {
+                "amount": ecr_total,
+                "unit": "USD",
+                "period": "current_month",
+            }
+        else:
+            # ECR might not have costs - that's fine
+            results["ecr_costs"] = {"amount": 0.0, "unit": "USD", "period": "current_month"}
+    except (subprocess.TimeoutExpired, json.JSONDecodeError) as e:
+        print(f"WARNING: Error fetching ECR costs: {e}")
+        results["ecr_costs"] = {"amount": 0.0, "unit": "USD", "period": "current_month"}
+
+    # Output results
+    if output_json:
+        print(json.dumps(results, indent=2))
+        return 0
+
+    # Pretty print results
+    print("\n" + "=" * 60)
+    print("AWS Cost Report")
+    print("=" * 60)
+
+    # Current month total
+    if results["current_month"]:
+        cm = results["current_month"]
+        print(f"\nCurrent Month ({cm.get('start', 'N/A')} to {cm.get('end', 'N/A')}):")
+        print(f"  Total: ${cm['amount']:.2f} {cm['unit']}")
+    else:
+        print("\nCurrent Month: No data available")
+
+    # By service
+    if results["current_month_by_service"]:
+        print("\nCosts by Service (current month):")
+        for svc in results["current_month_by_service"][:10]:  # Top 10
+            print(f"  {svc['service']:<45} ${svc['amount']:>10.2f}")
+        if len(results["current_month_by_service"]) > 10:
+            remaining = sum(s["amount"] for s in results["current_month_by_service"][10:])
+            print(f"  {'(other services)':<45} ${remaining:>10.2f}")
+
+    # ECR specific
+    if results["ecr_costs"]:
+        ecr = results["ecr_costs"]
+        print(f"\nECR Storage (current month): ${ecr['amount']:.2f}")
+
+    # Historical
+    if results["historical_monthly"]:
+        print(f"\nHistorical Monthly Costs (last {months} months):")
+        for month_data in results["historical_monthly"]:
+            print(f"  {month_data['month']}: ${month_data['amount']:.2f}")
+        total_historical = sum(m["amount"] for m in results["historical_monthly"])
+        avg_monthly = total_historical / len(results["historical_monthly"]) if results["historical_monthly"] else 0
+        print(f"  --------------------------------")
+        print(f"  Average: ${avg_monthly:.2f}/month")
+
+    print("\n" + "=" * 60)
+    return 0
 
 
 def main() -> int:
@@ -2592,15 +2893,25 @@ def main() -> int:
         help="Build and push custom WAA Docker image for unattended installation"
     )
     waa_image_parser.add_argument("action", type=str,
-                                  choices=["build", "push", "build-push", "check"],
-                                  help="Action: build, push, build-push, or check")
-    waa_image_parser.add_argument("--registry", type=str, default="ecr",
-                                  choices=["ecr", "dockerhub", "acr"],
-                                  help="Registry: ecr (AWS ECR Public, default), dockerhub, or acr (Azure)")
+                                  choices=["build", "push", "build-push", "check", "delete"],
+                                  help="Action: build, push, build-push, check, or delete")
+    waa_image_parser.add_argument("--registry", type=str, default="dockerhub",
+                                  choices=["dockerhub", "ecr", "acr"],
+                                  help="Registry: dockerhub (default, free), ecr (AWS ECR Public), or acr (Azure)")
     waa_image_parser.add_argument("--tag", type=str, default="latest",
                                   help="Image tag (default: latest)")
     waa_image_parser.add_argument("--repo", type=str, default=None,
                                   help="Repository override (default: auto-detected per registry)")
+
+    # AWS cost tracking
+    aws_costs_parser = subparsers.add_parser(
+        "aws-costs",
+        help="Show AWS costs (current month, historical, ECR storage)"
+    )
+    aws_costs_parser.add_argument("--months", type=int, default=3,
+                                  help="Number of months for historical costs (default: 3)")
+    aws_costs_parser.add_argument("--json", action="store_true",
+                                  help="Output as JSON for programmatic use")
 
     args = parser.parse_args()
 
@@ -2632,6 +2943,7 @@ def main() -> int:
         "wandb-report": cmd_wandb_report,
         "wandb-log": cmd_wandb_log,
         "waa-image": cmd_waa_image,
+        "aws-costs": cmd_aws_costs,
     }
 
     handler = handlers.get(args.command)
