@@ -2026,7 +2026,91 @@ def cmd_waa_image(args: argparse.Namespace) -> int:
     elif action == "push":
         registry = args.registry
 
-        if registry == "dockerhub":
+        if registry == "ecr":
+            import json
+            import os
+
+            # ECR Public repository name
+            repo_name = "waa-auto"
+            region = "us-east-1"  # ECR Public is only in us-east-1
+
+            print(f"Pushing to AWS ECR Public...")
+
+            try:
+                # Check if repository exists, create if not
+                print("Checking ECR Public repository...")
+                result = subprocess.run(
+                    ["aws", "ecr-public", "describe-repositories",
+                     "--repository-names", repo_name,
+                     "--region", region],
+                    capture_output=True,
+                    text=True,
+                )
+
+                if result.returncode != 0:
+                    print(f"Creating ECR Public repository: {repo_name}")
+                    create_result = subprocess.run(
+                        ["aws", "ecr-public", "create-repository",
+                         "--repository-name", repo_name,
+                         "--region", region,
+                         "--catalog-data", "description=Custom WAA Docker image with unattended Windows installation"],
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                    )
+                    repo_data = json.loads(create_result.stdout)
+                    repo_uri = repo_data["repository"]["repositoryUri"]
+                else:
+                    repo_data = json.loads(result.stdout)
+                    repo_uri = repo_data["repositories"][0]["repositoryUri"]
+
+                print(f"Repository URI: {repo_uri}")
+                full_tag = f"{repo_uri}:{tag}"
+
+                # Login to ECR Public
+                print("Logging in to ECR Public...")
+                login_result = subprocess.run(
+                    ["aws", "ecr-public", "get-login-password", "--region", region],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                subprocess.run(
+                    ["docker", "login", "--username", "AWS", "--password-stdin", "public.ecr.aws"],
+                    input=login_result.stdout,
+                    check=True,
+                )
+
+                # Tag for registry
+                print(f"Tagging image: {full_tag}")
+                subprocess.run(
+                    ["docker", "tag", local_tag, full_tag],
+                    check=True,
+                )
+
+                # Push
+                print(f"Pushing image: {full_tag}")
+                subprocess.run(
+                    ["docker", "push", full_tag],
+                    check=True,
+                )
+
+                print(f"\n✓ Successfully pushed: {full_tag}")
+                print(f"\nTo use this image, set:")
+                print(f"  export AZURE_DOCKER_IMAGE={full_tag}")
+                return 0
+
+            except subprocess.CalledProcessError as e:
+                print(f"ERROR: ECR push failed: {e}")
+                if e.stderr:
+                    print(f"Details: {e.stderr}")
+                print("\nMake sure AWS CLI is configured: aws configure")
+                return 1
+            except json.JSONDecodeError as e:
+                print(f"ERROR: Failed to parse AWS response: {e}")
+                return 1
+
+        elif registry == "dockerhub":
             repo = args.repo or "openadaptai/waa-auto"
             full_tag = f"{repo}:{tag}"
             print(f"Pushing to Docker Hub: {full_tag}")
@@ -2100,7 +2184,58 @@ def cmd_waa_image(args: argparse.Namespace) -> int:
     elif action == "check":
         registry = args.registry
 
-        if registry == "dockerhub":
+        if registry == "ecr":
+            import json
+
+            repo_name = "waa-auto"
+            region = "us-east-1"
+
+            print(f"Checking AWS ECR Public for waa-auto:{tag}...")
+
+            try:
+                # Check if repository exists
+                result = subprocess.run(
+                    ["aws", "ecr-public", "describe-repositories",
+                     "--repository-names", repo_name,
+                     "--region", region],
+                    capture_output=True,
+                    text=True,
+                )
+
+                if result.returncode != 0:
+                    print(f"Repository NOT found: {repo_name}")
+                    return 1
+
+                repo_data = json.loads(result.stdout)
+                repo_uri = repo_data["repositories"][0]["repositoryUri"]
+
+                # Check if tag exists
+                tags_result = subprocess.run(
+                    ["aws", "ecr-public", "describe-image-tags",
+                     "--repository-name", repo_name,
+                     "--region", region],
+                    capture_output=True,
+                    text=True,
+                )
+
+                if tags_result.returncode == 0:
+                    tags_data = json.loads(tags_result.stdout)
+                    existing_tags = [t.get("imageTag") for t in tags_data.get("imageTagDetails", [])]
+                    if tag in existing_tags:
+                        print(f"✓ Image exists: {repo_uri}:{tag}")
+                        return 0
+
+                print(f"Image NOT found: {repo_uri}:{tag}")
+                return 1
+
+            except subprocess.CalledProcessError as e:
+                print(f"ERROR: Failed to check ECR: {e}")
+                return 1
+            except json.JSONDecodeError as e:
+                print(f"ERROR: Failed to parse AWS response: {e}")
+                return 1
+
+        elif registry == "dockerhub":
             repo = args.repo or "openadaptai/waa-auto"
             print(f"Checking Docker Hub for {repo}:{tag}...")
 
@@ -2455,13 +2590,13 @@ def main() -> int:
     waa_image_parser.add_argument("action", type=str,
                                   choices=["build", "push", "build-push", "check"],
                                   help="Action: build, push, build-push, or check")
-    waa_image_parser.add_argument("--registry", type=str, default="dockerhub",
-                                  choices=["dockerhub", "acr"],
-                                  help="Registry: dockerhub or acr (Azure Container Registry)")
+    waa_image_parser.add_argument("--registry", type=str, default="ecr",
+                                  choices=["ecr", "dockerhub", "acr"],
+                                  help="Registry: ecr (AWS ECR Public, default), dockerhub, or acr (Azure)")
     waa_image_parser.add_argument("--tag", type=str, default="latest",
                                   help="Image tag (default: latest)")
     waa_image_parser.add_argument("--repo", type=str, default=None,
-                                  help="Docker Hub repository (default: openadaptai/waa-auto)")
+                                  help="Repository override (default: auto-detected per registry)")
 
     args = parser.parse_args()
 

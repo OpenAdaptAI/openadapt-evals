@@ -254,12 +254,12 @@ class AzureConfig:
     enable_nested_virtualization: bool = True
     idle_timeout_minutes: int = 60
     # Custom WAA image with unattended installation support
-    # Use openadaptai/waa-auto (not vanilla windowsarena/winarena) because:
+    # Use public.ecr.aws image (not vanilla windowsarena/winarena) because:
     # - Modern dockurr/windows base (auto-downloads Windows 11)
     # - FirstLogonCommands patches for unattended installation
     # - Python 3.9 with transformers 4.46.2 (compatible with navi agent)
     # Build with: uv run python -m openadapt_evals.benchmarks.cli waa-image build-push
-    docker_image: str = "openadaptai/waa-auto:latest"
+    docker_image: str = "public.ecr.aws/g3w3k7s5/waa-auto:latest"
     storage_account: str | None = None
     use_managed_identity: bool = False
     managed_identity_name: str | None = None
@@ -282,7 +282,7 @@ class AzureConfig:
         Optional env vars:
             AZURE_VM_SIZE (default: Standard_D4ds_v5)
             AZURE_VM_SECURITY_TYPE (default: Standard)
-            AZURE_DOCKER_IMAGE (default: openadaptai/waa-auto:latest)
+            AZURE_DOCKER_IMAGE (default: public.ecr.aws/g3w3k7s5/waa-auto:latest)
             AZURE_ENABLE_TIERED_VMS (default: false) - Auto-select VM size by task complexity
             AZURE_USE_SPOT_INSTANCES (default: false) - Use spot instances for cost savings
             AZURE_MAX_SPOT_PRICE (default: 0.5) - Maximum hourly price for spot instances
@@ -331,7 +331,7 @@ class AzureConfig:
             vm_security_type=os.getenv("AZURE_VM_SECURITY_TYPE", "Standard"),
             docker_image=os.getenv(
                 "AZURE_DOCKER_IMAGE",
-                "openadaptai/waa-auto:latest"
+                "public.ecr.aws/g3w3k7s5/waa-auto:latest"
             ),
             enable_tiered_vms=enable_tiered_vms,
             use_spot_instances=use_spot_instances,
