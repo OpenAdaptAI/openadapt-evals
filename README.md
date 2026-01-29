@@ -5,7 +5,7 @@
 [![Downloads](https://img.shields.io/pypi/dm/openadapt-evals.svg)](https://pypi.org/project/openadapt-evals/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
-Evaluation infrastructure for GUI agent benchmarks. **First open-source WAA (Windows Agent Arena) reproduction.**
+Evaluation infrastructure for GUI agent benchmarks. **Simplified CLI toolkit for Windows Agent Arena.**
 
 ## Overview
 
@@ -15,10 +15,11 @@ Evaluation infrastructure for GUI agent benchmarks. **First open-source WAA (Win
 
 > **Status**: Actively running full 154-task evaluation. Results coming soon.
 
-This is the **first open-source reproduction** of the [Windows Agent Arena](https://github.com/microsoft/WindowsAgentArena) benchmark, enabling:
-- Reproducible baseline measurements for GUI agents
-- Side-by-side model comparison (GPT-4o, Claude, etc.)
-- Per-domain breakdown of agent capabilities
+A **simplified CLI toolkit** for the [Windows Agent Arena](https://github.com/microsoft/WindowsAgentArena) benchmark, providing:
+- Easy Azure VM setup and SSH tunnel management
+- Agent adapters for Claude, GPT-4o, and custom agents
+- Results viewer with per-domain breakdown
+- Parallelization support for faster evaluations
 
 See the [WAA Benchmark Results](#waa-benchmark-results) section below for current status.
 
@@ -28,7 +29,7 @@ The following features are under active development:
 
 ### Azure Reliability (`[IN PROGRESS]`)
 - **Goal**: 95%+ task completion rate (vs. early issues with 0%)
-- **VM Configuration**: Using `Standard_D8ds_v5` with nested virtualization
+- **VM Configuration**: Using `Standard_D4s_v5` with nested virtualization (configurable)
 - **Health Monitoring**: Automatic detection and retry of stuck jobs
 
 ### Cost Optimization (`[IN PROGRESS]`)
@@ -321,8 +322,8 @@ results = evaluate_agent_on_benchmark(agent, adapter, task_ids=[t.task_id for t 
 Run WAA at scale using Azure ML compute with optimized costs:
 
 > **⚠️ Quota Requirements**: Parallel evaluation requires sufficient Azure vCPU quota.
-> - Each worker needs a `Standard_D8ds_v5` VM (8 vCPUs)
-> - 10 workers = 80 vCPUs required
+> - Default VM: `Standard_D4s_v5` (4 vCPUs per worker)
+> - 10 workers = 40 vCPUs required
 > - Default quota is typically 10 vCPUs - [request an increase](https://learn.microsoft.com/en-us/azure/quotas/quickstart-increase-quota-portal) before running parallel evaluations
 
 ```bash
@@ -365,7 +366,7 @@ results = orchestrator.run_evaluation(
 )
 ```
 
-**Azure Reliability**: The orchestrator uses `Standard_D8ds_v5` VMs with nested virtualization support and automatic health monitoring.
+**Azure Reliability**: The orchestrator uses `Standard_D4s_v5` VMs with nested virtualization support and automatic health monitoring.
 
 ### Live Monitoring
 
