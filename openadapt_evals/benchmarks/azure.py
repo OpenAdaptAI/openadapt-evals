@@ -244,6 +244,8 @@ class AzureConfig:
         max_spot_price: Maximum hourly price for spot instances (default: 0.5).
         spot_eviction_policy: What to do when spot instance is evicted (Deallocate or Delete).
         environment: Deployment environment (production or development).
+        enable_ssh: Whether to enable SSH access for VNC debugging (default: True).
+        ssh_public_key_path: Path to SSH public key file (default: ~/.ssh/id_rsa.pub).
     """
 
     subscription_id: str
@@ -269,6 +271,9 @@ class AzureConfig:
     max_spot_price: float = 0.5  # Maximum hourly price for spot instances
     spot_eviction_policy: str = "Deallocate"  # Deallocate or Delete
     environment: str = "production"  # production or development
+    # SSH/VNC access for debugging parallel workers
+    enable_ssh: bool = True  # Enable SSH for VNC access to workers
+    ssh_public_key_path: str = "~/.ssh/id_rsa.pub"  # Path to SSH public key
 
     @classmethod
     def from_env(cls) -> AzureConfig:
@@ -495,22 +500,22 @@ class AzureMLClient:
     def create_compute_instance(
         self,
         name: str,
-        startup_script: str | None = None,
+        startup_script_path: str | None = None,
         vm_size: str | None = None,
         use_spot: bool | None = None,
     ) -> str:
-        """Create a compute instance.
+        """Create a compute instance with startup script.
 
         Args:
             name: Compute instance name.
-            startup_script: Optional startup script content (not yet implemented).
+            startup_script_path: Path to startup script in datastore (e.g., 'Users/me/startup.sh').
             vm_size: Override VM size (uses config.vm_size if None).
             use_spot: Override spot instance setting (uses config.use_spot_instances if None).
 
         Returns:
             Compute instance name.
         """
-        from azure.ai.ml.entities import ComputeInstance
+        from azure.ai.ml.entities import ComputeInstance, ScriptReference, SetupScripts
 
         # Check if already exists
         try:
@@ -527,10 +532,45 @@ class AzureMLClient:
 
         # CRITICAL: Use Standard security type for nested virtualization
         # TrustedLaunch (Azure default since 2024) disables nested virtualization
+
+        # Configure SSH settings for VNC access
+        ssh_settings = None
+        if self.config.enable_ssh:
+            from azure.ai.ml.entities import ComputeInstanceSshSettings
+
+            # Read SSH public key
+            ssh_key_path = os.path.expanduser(self.config.ssh_public_key_path)
+            if os.path.exists(ssh_key_path):
+                with open(ssh_key_path) as f:
+                    ssh_public_key = f.read().strip()
+                ssh_settings = ComputeInstanceSshSettings(
+                    ssh_public_access="Enabled",
+                    admin_public_key=ssh_public_key,
+                )
+                logger.info(f"SSH enabled for {name} (key: {ssh_key_path})")
+            else:
+                logger.warning(
+                    f"SSH key not found at {ssh_key_path}. "
+                    f"SSH access disabled for {name}. "
+                    f"Generate with: ssh-keygen -t rsa -b 4096"
+                )
+
+        # Configure startup script to stop conflicting services
+        setup_scripts = None
+        if startup_script_path:
+            startup_script_ref = ScriptReference(
+                path=startup_script_path,
+                timeout_minutes=10,
+            )
+            setup_scripts = SetupScripts(startup_script=startup_script_ref)
+            logger.info(f"Startup script configured: {startup_script_path}")
+
         compute = ComputeInstance(
             name=name,
             size=vm_size,
             idle_time_before_shutdown_minutes=self.config.idle_timeout_minutes,
+            ssh_settings=ssh_settings,
+            setup_scripts=setup_scripts,
         )
 
         # Configure spot instance if enabled
@@ -623,6 +663,77 @@ class AzureMLClient:
         compute = self.client.compute.get(name)
         return compute.state
 
+    def get_compute_ssh_info(self, name: str) -> dict[str, Any] | None:
+        """Get SSH connection info for a compute instance.
+
+        Args:
+            name: Compute instance name.
+
+        Returns:
+            Dict with ssh_host, ssh_port, ssh_user, or None if SSH not available.
+            Example: {"ssh_host": "10.0.0.4", "ssh_port": 50000, "ssh_user": "azureuser"}
+        """
+        try:
+            compute = self.client.compute.get(name)
+
+            # Check if SSH settings exist
+            if not hasattr(compute, "ssh_settings") or compute.ssh_settings is None:
+                logger.warning(f"SSH not enabled for compute instance {name}")
+                return None
+
+            # Get SSH connection details from compute properties
+            # Azure ML provides these in the connectivity_endpoints or ssh_settings
+            ssh_info = {
+                "ssh_user": "azureuser",  # Azure ML always uses azureuser
+                "ssh_host": None,
+                "ssh_port": 50000,  # Default SSH port for Azure ML compute
+            }
+
+            # Try to get IP from various possible locations
+            if hasattr(compute, "public_ip_address") and compute.public_ip_address:
+                ssh_info["ssh_host"] = compute.public_ip_address
+            elif hasattr(compute, "connectivity_endpoints"):
+                endpoints = compute.connectivity_endpoints
+                if endpoints and hasattr(endpoints, "public_ip_address"):
+                    ssh_info["ssh_host"] = endpoints.public_ip_address
+                if endpoints and hasattr(endpoints, "ssh_port"):
+                    ssh_info["ssh_port"] = endpoints.ssh_port
+
+            # Alternative: Check properties dict
+            if ssh_info["ssh_host"] is None and hasattr(compute, "properties"):
+                props = compute.properties
+                if isinstance(props, dict):
+                    if "connectivityEndpoints" in props:
+                        ep = props["connectivityEndpoints"]
+                        ssh_info["ssh_host"] = ep.get("publicIpAddress")
+                        ssh_info["ssh_port"] = ep.get("sshPort", 50000)
+
+            if ssh_info["ssh_host"] is None:
+                logger.warning(f"Could not determine SSH host for {name}")
+                return None
+
+            return ssh_info
+
+        except Exception as e:
+            logger.warning(f"Failed to get SSH info for {name}: {e}")
+            return None
+
+    def get_all_workers_ssh_info(self, worker_names: list[str]) -> dict[str, dict]:
+        """Get SSH info for all workers.
+
+        Args:
+            worker_names: List of compute instance names.
+
+        Returns:
+            Dict mapping worker name to SSH info.
+        """
+        ssh_info = {}
+        for name in worker_names:
+            info = self.get_compute_ssh_info(name)
+            if info:
+                ssh_info[name] = info
+        return ssh_info
+
     def submit_job(
         self,
         compute_name: str,
@@ -631,49 +742,135 @@ class AzureMLClient:
         display_name: str | None = None,
         timeout_hours: float = 4.0,
     ) -> str:
-        """Submit a job to a compute instance.
+        """Submit a job to a compute instance using SDK V1 with Docker.
+
+        This uses the Azure ML SDK V1 approach with DockerConfiguration,
+        which is required to run WAA because:
+        1. Docker runs the job INSIDE the container (not just using it as env)
+        2. NET_ADMIN capability is needed for QEMU networking
+        3. entry_setup.sh is called to start Windows VM
 
         Args:
             compute_name: Target compute instance.
-            command: Command to run.
+            command: Command to run (passed to entry script).
             environment_variables: Environment variables.
             display_name: Job display name.
-            timeout_hours: Maximum job duration in hours (default: 4). The job
-                will be automatically canceled after this duration.
+            timeout_hours: Maximum job duration in hours (default: 4).
 
         Returns:
-            Job name/ID.
+            Job run ID.
         """
-        from azure.ai.ml import command as ml_command
-        from azure.ai.ml.entities import Environment, CommandJobLimits
+        # Use SDK V1 for DockerConfiguration support
+        from azureml.core import Workspace, Experiment, Environment
+        from azureml.core.runconfig import RunConfiguration, DockerConfiguration
+        from azureml.core.compute import ComputeTarget
+        from azureml.core import ScriptRunConfig
 
-        # Create environment with Docker image
-        env = Environment(
+        # Connect to workspace using V1 SDK
+        ws = Workspace(
+            subscription_id=self.config.subscription_id,
+            resource_group=self.config.resource_group,
+            workspace_name=self.config.workspace_name,
+        )
+
+        # Create environment from Docker image
+        env = Environment.from_docker_image(
+            name=f"waa-env-{int(time.time())}",
             image=self.config.docker_image,
-            name="waa-agent-env",
         )
 
-        import uuid
-        timestamp = int(time.time())
-        unique_id = str(uuid.uuid4())[:8]
-        job_name = f"waa-{compute_name}-{timestamp}-{unique_id}"
-
-        # Convert hours to seconds for Azure ML timeout
-        timeout_seconds = int(timeout_hours * 3600)
-
-        job = ml_command(
-            command=command,
-            environment=env,
-            compute=compute_name,
-            name=job_name,
-            display_name=display_name or f"waa-job-{compute_name}",
-            environment_variables=environment_variables or {},
-            limits=CommandJobLimits(timeout=timeout_seconds),
+        # Configure Docker with NET_ADMIN capability (required for QEMU networking)
+        docker_config = DockerConfiguration(
+            use_docker=True,
+            shared_volumes=True,
+            arguments=["--cap-add", "NET_ADMIN"],
+            shm_size="16g",  # Shared memory for QEMU
         )
 
-        submitted = self.client.jobs.create_or_update(job)
-        logger.info(f"Job submitted: {submitted.name} (timeout: {timeout_hours}h)")
-        return submitted.name
+        # Set up run configuration
+        run_config = RunConfiguration()
+        run_config.target = ComputeTarget(workspace=ws, name=compute_name)
+        run_config.environment = env
+        run_config.docker = docker_config
+        run_config.environment_variables = environment_variables or {}
+
+        # Get the azure_files directory (contains run_entry.py)
+        azure_files_dir = Path(__file__).parent / "azure_files"
+
+        # Parse command to extract arguments for run_entry.py
+        # Command format: "cd /client && python run.py --agent_name X --model Y ..."
+        # We need to convert this to arguments for run_entry.py
+        import shlex
+        args = self._parse_command_to_args(command)
+
+        # Create script run config
+        src = ScriptRunConfig(
+            source_directory=str(azure_files_dir),
+            script="run_entry.py",
+            arguments=args,
+            run_config=run_config,
+        )
+
+        # Submit to experiment
+        exp_name = display_name or f"waa-{compute_name}"
+        experiment = Experiment(workspace=ws, name=exp_name)
+        run = experiment.submit(config=src)
+
+        logger.info(f"Job submitted: {run.id} (portal: {run.get_portal_url()})")
+        return run.id
+
+    def _parse_command_to_args(self, command: str) -> list[str]:
+        """Parse the WAA command into arguments for run_entry.py.
+
+        Args:
+            command: WAA command string like:
+                "cd /client && python run.py --agent_name navi --model gpt-4o ..."
+
+        Returns:
+            List of arguments for run_entry.py:
+                [output_path, exp_name, num_workers, worker_id, agent, model, max_steps]
+        """
+        # Default values
+        output_path = "/outputs"
+        exp_name = "waa_eval"
+        num_workers = "1"
+        worker_id = "0"
+        agent = "navi"
+        model = "gpt-4o"
+        max_steps = "15"
+
+        # Parse command to extract values
+        if "--worker_id" in command:
+            match = re.search(r"--worker_id\s+(\d+)", command)
+            if match:
+                worker_id = match.group(1)
+
+        if "--num_workers" in command:
+            match = re.search(r"--num_workers\s+(\d+)", command)
+            if match:
+                num_workers = match.group(1)
+
+        if "--agent_name" in command:
+            match = re.search(r"--agent_name\s+(\w+)", command)
+            if match:
+                agent = match.group(1)
+
+        if "--model" in command:
+            match = re.search(r"--model\s+([\w\-\.]+)", command)
+            if match:
+                model = match.group(1)
+
+        if "--max_steps" in command:
+            match = re.search(r"--max_steps\s+(\d+)", command)
+            if match:
+                max_steps = match.group(1)
+
+        if "--result_dir" in command:
+            match = re.search(r"--result_dir\s+(\S+)", command)
+            if match:
+                output_path = match.group(1)
+
+        return [output_path, exp_name, num_workers, worker_id, agent, model, max_steps]
 
     def wait_for_job(self, job_name: str, timeout_seconds: int = 3600) -> dict:
         """Wait for a job to complete.
@@ -810,6 +1007,172 @@ class AzureMLClient:
         return process
 
 
+class WorkerVNCManager:
+    """Manages SSH tunnels for VNC access to parallel workers.
+
+    Provides VNC access to multiple Azure ML compute instances via SSH tunnels.
+    Each worker gets a unique local port (8006, 8007, 8008, ...) mapped to its
+    VNC port (8006) via SSH.
+
+    Example:
+        manager = WorkerVNCManager(ml_client)
+        manager.start_tunnels(["worker0", "worker1", "worker2"])
+        # Access VNC at localhost:8006, localhost:8007, localhost:8008
+
+        # Get status
+        print(manager.get_status())
+
+        # Cleanup
+        manager.stop_all_tunnels()
+    """
+
+    VNC_REMOTE_PORT = 8006  # noVNC port inside Windows container
+    VNC_BASE_LOCAL_PORT = 8006  # Local ports start at 8006
+
+    def __init__(self, ml_client: AzureMLClient):
+        """Initialize VNC manager.
+
+        Args:
+            ml_client: AzureMLClient instance for getting SSH info.
+        """
+        self.ml_client = ml_client
+        self.tunnels: dict[str, subprocess.Popen] = {}  # worker_name -> tunnel process
+        self.local_ports: dict[str, int] = {}  # worker_name -> local port
+
+    def start_tunnel(self, worker_name: str, local_port: int | None = None) -> int | None:
+        """Start SSH tunnel for a single worker.
+
+        Args:
+            worker_name: Compute instance name.
+            local_port: Local port to use (auto-assigned if None).
+
+        Returns:
+            Local port number, or None if tunnel failed.
+        """
+        # Get SSH connection info
+        ssh_info = self.ml_client.get_compute_ssh_info(worker_name)
+        if not ssh_info:
+            logger.error(f"Cannot start tunnel for {worker_name}: no SSH info")
+            return None
+
+        # Assign local port
+        if local_port is None:
+            # Find next available port
+            used_ports = set(self.local_ports.values())
+            local_port = self.VNC_BASE_LOCAL_PORT
+            while local_port in used_ports:
+                local_port += 1
+
+        # Build SSH tunnel command
+        ssh_cmd = [
+            "ssh",
+            "-N",  # Don't execute remote command
+            "-L", f"{local_port}:localhost:{self.VNC_REMOTE_PORT}",
+            "-p", str(ssh_info["ssh_port"]),
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "ServerAliveInterval=60",
+            f"{ssh_info['ssh_user']}@{ssh_info['ssh_host']}",
+        ]
+
+        try:
+            # Start tunnel process
+            process = subprocess.Popen(
+                ssh_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            # Give it a moment to establish
+            time.sleep(1)
+
+            # Check if it's still running
+            if process.poll() is not None:
+                stderr = process.stderr.read().decode() if process.stderr else ""
+                logger.error(f"Tunnel failed for {worker_name}: {stderr}")
+                return None
+
+            self.tunnels[worker_name] = process
+            self.local_ports[worker_name] = local_port
+            logger.info(f"VNC tunnel started: localhost:{local_port} -> {worker_name}:8006")
+            return local_port
+
+        except Exception as e:
+            logger.error(f"Failed to start tunnel for {worker_name}: {e}")
+            return None
+
+    def start_tunnels(self, worker_names: list[str]) -> dict[str, int]:
+        """Start SSH tunnels for multiple workers.
+
+        Args:
+            worker_names: List of compute instance names.
+
+        Returns:
+            Dict mapping worker name to local port.
+        """
+        results = {}
+        for i, worker_name in enumerate(worker_names):
+            local_port = self.VNC_BASE_LOCAL_PORT + i
+            port = self.start_tunnel(worker_name, local_port)
+            if port:
+                results[worker_name] = port
+        return results
+
+    def stop_tunnel(self, worker_name: str) -> None:
+        """Stop SSH tunnel for a worker.
+
+        Args:
+            worker_name: Compute instance name.
+        """
+        if worker_name in self.tunnels:
+            process = self.tunnels[worker_name]
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+            del self.tunnels[worker_name]
+            del self.local_ports[worker_name]
+            logger.info(f"Tunnel stopped for {worker_name}")
+
+    def stop_all_tunnels(self) -> None:
+        """Stop all SSH tunnels."""
+        for worker_name in list(self.tunnels.keys()):
+            self.stop_tunnel(worker_name)
+
+    def get_status(self) -> dict[str, dict]:
+        """Get status of all tunnels.
+
+        Returns:
+            Dict mapping worker name to status info.
+        """
+        status = {}
+        for worker_name, process in self.tunnels.items():
+            is_running = process.poll() is None
+            status[worker_name] = {
+                "local_port": self.local_ports.get(worker_name),
+                "vnc_url": f"http://localhost:{self.local_ports.get(worker_name)}",
+                "running": is_running,
+                "pid": process.pid,
+            }
+        return status
+
+    def print_vnc_urls(self) -> None:
+        """Print VNC URLs for all active tunnels."""
+        status = self.get_status()
+        if not status:
+            print("No active VNC tunnels")
+            return
+
+        print("\n=== VNC Access URLs ===")
+        for worker_name, info in sorted(status.items()):
+            if info["running"]:
+                print(f"  {worker_name}: {info['vnc_url']}")
+            else:
+                print(f"  {worker_name}: (tunnel down)")
+        print()
+
+
 class AzureWAAOrchestrator:
     """Orchestrates WAA evaluation across multiple Azure VMs.
 
@@ -847,6 +1210,7 @@ class AzureWAAOrchestrator:
         self.waa_repo_path = Path(waa_repo_path)
         self.experiment_name = experiment_name
         self.ml_client = AzureMLClient(config)
+        self.vnc_manager = WorkerVNCManager(self.ml_client)
         self._current_run: EvaluationRun | None = None
         self._cleanup_registered = False
         self._interrupted = False
@@ -857,8 +1221,10 @@ class AzureWAAOrchestrator:
             return
 
         def signal_handler(sig, frame):
-            logger.warning("\n⚠️  Interrupted! Cleaning up compute instances...")
+            logger.warning("\n⚠️  Interrupted! Cleaning up...")
             self._interrupted = True
+            # Stop VNC tunnels first
+            self.vnc_manager.stop_all_tunnels()
             if self._current_run and self._current_run.workers:
                 self._cleanup_workers(self._current_run.workers)
             sys.exit(1)
@@ -924,6 +1290,7 @@ class AzureWAAOrchestrator:
         cleanup_on_complete: bool = True,
         cleanup_stale_on_start: bool = True,
         timeout_hours: float = 4.0,
+        enable_vnc: bool = False,
     ) -> list[BenchmarkResult]:
         """Run evaluation across multiple Azure VMs.
 
@@ -937,6 +1304,8 @@ class AzureWAAOrchestrator:
             cleanup_stale_on_start: Whether to cleanup stale instances before starting.
             timeout_hours: Maximum job duration in hours (default: 4). Jobs are
                 auto-canceled after this duration to prevent runaway costs.
+            enable_vnc: Whether to start VNC tunnels for debugging (default: False).
+                When enabled, VNC is accessible at localhost:8006, 8007, etc.
 
         Returns:
             List of BenchmarkResult for all tasks.
@@ -1023,6 +1392,15 @@ class AzureWAAOrchestrator:
             self._provision_workers(workers)
             print(f"      VM(s) ready")
 
+            # Start VNC tunnels if enabled (for debugging)
+            if enable_vnc:
+                print(f"[2.5/5] Starting VNC tunnels for debugging...")
+                vnc_ports = self.start_vnc_tunnels(workers)
+                if vnc_ports:
+                    print(f"      VNC available at: {', '.join(f'localhost:{p}' for p in vnc_ports.values())}")
+                else:
+                    print(f"      Warning: VNC tunnels could not be established")
+
             # Submit jobs to workers
             print(f"[3/5] Submitting evaluation jobs...")
             self._submit_worker_jobs(workers, task_batches, agent, max_steps_per_task, timeout_hours)
@@ -1062,6 +1440,79 @@ class AzureWAAOrchestrator:
         for i, task in enumerate(tasks):
             batches[i % num_workers].append(task)
         return batches
+
+    def start_vnc_tunnels(self, workers: list[WorkerState] | None = None) -> dict[str, int]:
+        """Start VNC tunnels for workers.
+
+        This can be called during evaluation to enable VNC debugging,
+        or standalone to connect to existing workers.
+
+        Args:
+            workers: List of workers to connect to. If None, uses current run's workers.
+
+        Returns:
+            Dict mapping worker name to local VNC port.
+        """
+        if workers is None and self._current_run:
+            workers = self._current_run.workers
+
+        if not workers:
+            logger.warning("No workers to connect to")
+            return {}
+
+        # Get provisioned worker names
+        worker_names = [
+            w.compute_name for w in workers
+            if w.status in ("provisioned", "running")
+        ]
+
+        if not worker_names:
+            logger.warning("No provisioned workers found")
+            return {}
+
+        print(f"\n[VNC] Starting tunnels for {len(worker_names)} worker(s)...")
+        ports = self.vnc_manager.start_tunnels(worker_names)
+
+        if ports:
+            print("\n=== VNC Access URLs ===")
+            for name, port in sorted(ports.items()):
+                print(f"  {name}: http://localhost:{port}")
+            print("\nOpen these URLs in a browser to view Windows VMs")
+            print("Tip: Arrange browser windows side-by-side for multi-worker view\n")
+
+        return ports
+
+    def start_vnc_for_existing_workers(self, prefix: str = "waa") -> dict[str, int]:
+        """Start VNC tunnels for existing workers (standalone debugging).
+
+        Useful for connecting to workers from a previous run or from another
+        terminal while evaluation is in progress.
+
+        Args:
+            prefix: Worker name prefix to filter.
+
+        Returns:
+            Dict mapping worker name to local VNC port.
+        """
+        instances = self.ml_client.list_compute_instances(prefix=prefix)
+        running = [i for i in instances if i.get("state") == "Running"]
+
+        if not running:
+            print(f"No running compute instances found with prefix '{prefix}'")
+            return {}
+
+        worker_names = [i["name"] for i in running]
+        print(f"\nFound {len(worker_names)} running worker(s): {', '.join(worker_names)}")
+
+        ports = self.vnc_manager.start_tunnels(worker_names)
+
+        if ports:
+            print("\n=== VNC Access URLs ===")
+            for name, port in sorted(ports.items()):
+                print(f"  {name}: http://localhost:{port}")
+            print()
+
+        return ports
 
     def _provision_workers(self, workers: list[WorkerState]) -> None:
         """Provision all worker VMs in parallel with cost-optimized sizing."""
@@ -1514,7 +1965,12 @@ cd /client && python run.py \\
         return results
 
     def _cleanup_workers(self, workers: list[WorkerState]) -> None:
-        """Delete all worker VMs."""
+        """Delete all worker VMs and stop VNC tunnels."""
+        # Stop VNC tunnels first
+        if self.vnc_manager.tunnels:
+            logger.info("Stopping VNC tunnels...")
+            self.vnc_manager.stop_all_tunnels()
+
         logger.info("Cleaning up worker VMs...")
         with ThreadPoolExecutor(max_workers=len(workers)) as executor:
             futures = [

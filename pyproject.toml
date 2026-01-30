@@ -52,6 +52,8 @@ azure = [
     # Azure ML dependencies for distributed WAA evaluation
     "azure-ai-ml>=1.12.0",
     "azure-identity>=1.15.0",
+    # SDK V1 for DockerConfiguration (required for WAA Docker containers)
+    "azureml-core>=1.55.0",
 ]
 retrieval = [
     # For RetrievalAugmentedAgent with automatic demo selection
