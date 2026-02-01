@@ -27,7 +27,7 @@ CLI:
         --agent retrieval-claude \
         --demo-library /path/to/demos \
         --server http://vm:5000 \
-        --task-ids notepad_1
+        --task-ids 366de66e-cbae-4d72-b042-26390db2b145-WOS
 """
 
 from __future__ import annotations

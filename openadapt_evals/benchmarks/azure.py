@@ -1917,7 +1917,7 @@ cd /client && python run.py \\
         results = []
 
         for task_id in task_ids:
-            # WAA task_id format: {domain}_{task_num} (e.g., notepad_1)
+            # WAA task_id format: UUID-WOS/wos (e.g., 366de66e-cbae-4d72-b042-26390db2b145-WOS)
             # Result path: {domain}/{task_id}/result.txt
             parts = task_id.rsplit("_", 1)
             if len(parts) == 2:

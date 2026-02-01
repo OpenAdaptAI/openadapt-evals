@@ -276,8 +276,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         task_ids = [t.strip() for t in args.tasks.split(",")]
     else:
         print("ERROR: Specify --task or --tasks")
-        print("Example: --task notepad_1")
-        print("Example: --tasks notepad_1,notepad_2,browser_1")
+        print("Example: --task 366de66e-cbae-4d72-b042-26390db2b145-WOS")
+        print("Example: --tasks 366de66e-cbae-4d72-b042-26390db2b145-WOS,2ae9ba84-3a0d-4d4c-8338-3a1478dc5fe3-wos")
         return 1
 
     # Create agent
@@ -468,7 +468,7 @@ def cmd_live(args: argparse.Namespace) -> int:
     else:
         # For live evaluation, we need explicit task IDs
         print("ERROR: --task-ids required for live evaluation")
-        print("Example: --task-ids notepad_1,notepad_2,browser_1")
+        print("Example: --task-ids 366de66e-cbae-4d72-b042-26390db2b145-WOS,2ae9ba84-3a0d-4d4c-8338-3a1478dc5fe3-wos")
         return 1
 
     # Run evaluation
@@ -1494,10 +1494,10 @@ PY
                     print("      WARNING: /evaluate endpoint health check failed")
                 print("\nRun a no-API-key smoke test with:")
                 print(
-                    f"  uv run python -m openadapt_evals.benchmarks.cli live --server {server_url} --agent noop --task-ids notepad_1"
+                    f"  uv run python -m openadapt_evals.benchmarks.cli live --server {server_url} --agent noop --task-ids 366de66e-cbae-4d72-b042-26390db2b145-WOS"
                 )
                 print("\nOr fully automated (starts + tests + deallocates):")
-                print("  uv run python -m openadapt_evals.benchmarks.cli smoke-live --task-id notepad_1")
+                print("  uv run python -m openadapt_evals.benchmarks.cli smoke-live --task-id 366de66e-cbae-4d72-b042-26390db2b145-WOS")
                 return 0
         except Exception:
             pass
@@ -1870,7 +1870,7 @@ Resources:
 
 Next steps:
   1. Run evaluation:
-     uv run python -m openadapt_evals.benchmarks.cli azure --workers 2 --task-ids notepad_1,notepad_2
+     uv run python -m openadapt_evals.benchmarks.cli azure --workers 2 --task-ids 366de66e-cbae-4d72-b042-26390db2b145-WOS,a7d4b6c5-569b-452e-9e1d-ffdb3d431d15-WOS
 
   2. Estimate costs:
      uv run python -m openadapt_evals.benchmarks.cli estimate --workers 2
@@ -1958,6 +1958,7 @@ def cmd_azure(args: argparse.Namespace) -> int:
             cleanup_on_complete=not args.no_cleanup,
             cleanup_stale_on_start=not args.skip_cleanup_stale,
             timeout_hours=args.timeout_hours,
+            enable_vnc=getattr(args, "enable_vnc", False),
         )
 
         # Report results
@@ -1977,6 +1978,70 @@ def cmd_azure(args: argparse.Namespace) -> int:
     except Exception as e:
         print(f"ERROR: Evaluation failed: {e}")
         return 1
+
+
+def cmd_azure_vnc(args: argparse.Namespace) -> int:
+    """Start VNC tunnels to Azure ML workers for debugging.
+
+    This command connects to running Azure ML compute instances and creates
+    SSH tunnels for VNC access. Use this to debug evaluations in progress.
+
+    Example:
+        # Start tunnels to all running workers
+        uv run python -m openadapt_evals.benchmarks.cli azure-vnc
+
+        # Keep tunnels open until Ctrl+C
+        uv run python -m openadapt_evals.benchmarks.cli azure-vnc --keep-alive
+
+        # Filter by prefix
+        uv run python -m openadapt_evals.benchmarks.cli azure-vnc --prefix waa4704
+    """
+    from openadapt_evals.benchmarks.azure import AzureConfig, AzureWAAOrchestrator
+    from pathlib import Path
+    import time
+
+    print("Connecting to Azure ML workers for VNC access...")
+
+    try:
+        config = AzureConfig.from_env()
+    except ValueError as e:
+        print(f"ERROR: {e}")
+        print("\nAzure is not configured. Set these environment variables:")
+        print("  AZURE_SUBSCRIPTION_ID")
+        print("  AZURE_ML_RESOURCE_GROUP")
+        print("  AZURE_ML_WORKSPACE_NAME")
+        return 1
+
+    # Create orchestrator (with dummy WAA path since we're not running evaluation)
+    orchestrator = AzureWAAOrchestrator(
+        config=config,
+        waa_repo_path=Path("/tmp/dummy"),
+    )
+
+    # Start tunnels to existing workers
+    prefix = getattr(args, "prefix", "waa")
+    ports = orchestrator.start_vnc_for_existing_workers(prefix=prefix)
+
+    if not ports:
+        print("\nNo VNC tunnels established. Check that:")
+        print("  1. Workers are running (use 'azure' command first)")
+        print("  2. SSH is enabled on compute instances")
+        print("  3. Your SSH key is configured")
+        return 1
+
+    if getattr(args, "keep_alive", False):
+        print("\nTunnels active. Press Ctrl+C to stop...")
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\nStopping tunnels...")
+            orchestrator.vnc_manager.stop_all_tunnels()
+    else:
+        print("\nTunnels established. They will remain open as background processes.")
+        print("To stop tunnels, use: pkill -f 'ssh -N -L'")
+
+    return 0
 
 
 def cmd_waa_image(args: argparse.Namespace) -> int:
@@ -2619,9 +2684,9 @@ def main() -> int:
     run_parser.add_argument("--agent", type=str, default="api-openai",
                            help="Agent type: noop, mock, api-claude, api-openai")
     run_parser.add_argument("--task", type=str,
-                           help="Single task ID (e.g., notepad_1)")
+                           help="Single task ID (e.g., 366de66e-cbae-4d72-b042-26390db2b145-WOS)")
     run_parser.add_argument("--tasks", type=str,
-                           help="Comma-separated task IDs (e.g., notepad_1,notepad_2)")
+                           help="Comma-separated task IDs (e.g., 366de66e-cbae-4d72-b042-26390db2b145-WOS,2ae9ba84-3a0d-4d4c-8338-3a1478dc5fe3-wos)")
     run_parser.add_argument("--demo", type=str,
                            help="Demo trajectory file for ApiAgent")
     run_parser.add_argument("--max-steps", type=int, default=15,
@@ -2698,6 +2763,18 @@ def main() -> int:
                              help="Prefix filter for cleanup (default: 'waa')")
     azure_parser.add_argument("--dry-run", action="store_true",
                              help="List instances without deleting (for --cleanup-only)")
+    azure_parser.add_argument("--enable-vnc", action="store_true",
+                             help="Start VNC tunnels for debugging (access at localhost:8006, 8007, ...)")
+
+    # Azure VNC - Connect to running Azure ML workers for debugging
+    azure_vnc_parser = subparsers.add_parser(
+        "azure-vnc",
+        help="Start VNC tunnels to Azure ML workers for debugging"
+    )
+    azure_vnc_parser.add_argument("--prefix", type=str, default="waa",
+                                  help="Worker name prefix filter (default: 'waa')")
+    azure_vnc_parser.add_argument("--keep-alive", action="store_true",
+                                  help="Keep tunnels open until Ctrl+C (default: exit after printing URLs)")
 
     # Azure setup command
     azure_setup_parser = subparsers.add_parser(
@@ -2778,8 +2855,8 @@ def main() -> int:
                                   help="Azure VM name (optional if tagged)")
     smoke_live_parser.add_argument("--resource-group", type=str, default=None,
                                   help="Azure resource group (optional if tagged)")
-    smoke_live_parser.add_argument("--task-id", type=str, default="notepad_1",
-                                  help="Single task ID to run")
+    smoke_live_parser.add_argument("--task-id", type=str, default="366de66e-cbae-4d72-b042-26390db2b145-WOS",
+                                  help="Single task ID to run (e.g., 366de66e-cbae-4d72-b042-26390db2b145-WOS)")
     smoke_live_parser.add_argument("--max-steps", type=int, default=15,
                                   help="Max steps per task")
     smoke_live_parser.add_argument("--boot-wait", type=int, default=30,
@@ -2929,6 +3006,7 @@ def main() -> int:
         "view": cmd_view,
         "estimate": cmd_estimate,
         "azure": cmd_azure,
+        "azure-vnc": cmd_azure_vnc,
         "azure-setup": cmd_azure_setup,
         "azure-monitor": cmd_azure_monitor,
         "vm-start": cmd_vm_start,

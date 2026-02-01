@@ -82,7 +82,7 @@ adapter = WAALiveAdapter(config)
 agent = ApiAgent(provider="anthropic")  # or "openai" for GPT-5.1
 
 # Run evaluation
-results = evaluate_agent_on_benchmark(agent, adapter, task_ids=["notepad_1"])
+results = evaluate_agent_on_benchmark(agent, adapter, task_ids=["366de66e-cbae-4d72-b042-26390db2b145-WOS"])
 
 # Compute metrics
 metrics = compute_metrics(results)
@@ -265,7 +265,7 @@ The package provides a CLI for running WAA evaluations:
 python -m openadapt_evals.benchmarks.cli probe --server http://vm-ip:5000
 
 # Run live evaluation against a WAA server
-python -m openadapt_evals.benchmarks.cli live --server http://vm-ip:5000 --task-ids notepad_1,notepad_2
+python -m openadapt_evals.benchmarks.cli live --server http://vm-ip:5000 --task-ids 366de66e-cbae-4d72-b042-26390db2b145-WOS,a7d4b6c5-569b-452e-9e1d-ffdb3d431d15-WOS
 
 # Generate HTML viewer for results
 python -m openadapt_evals.benchmarks.cli view --run-name my_eval_run
@@ -301,7 +301,7 @@ if not adapter.check_connection():
     print("WAA server not ready")
 
 # Run evaluation
-results = evaluate_agent_on_benchmark(agent, adapter, task_ids=["notepad_1"])
+results = evaluate_agent_on_benchmark(agent, adapter, task_ids=["366de66e-cbae-4d72-b042-26390db2b145-WOS"])
 ```
 
 ### Local WAA Evaluation
@@ -379,7 +379,7 @@ pip install openadapt-evals[viewer]
 # Start an Azure evaluation (in terminal 1)
 python -m openadapt_evals.benchmarks.cli azure \
     --workers 1 \
-    --task-ids notepad_1,browser_1 \
+    --task-ids 366de66e-cbae-4d72-b042-26390db2b145-WOS,2ae9ba84-3a0d-4d4c-8338-3a1478dc5fe3-wos \
     --waa-path /path/to/WAA
 
 # Monitor job logs in real-time (in terminal 2)
