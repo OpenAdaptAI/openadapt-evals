@@ -276,8 +276,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         task_ids = [t.strip() for t in args.tasks.split(",")]
     else:
         print("ERROR: Specify --task or --tasks")
-        print("Example: --task 366de66e-cbae-4d72-b042-26390db2b145-WOS")
-        print("Example: --tasks 366de66e-cbae-4d72-b042-26390db2b145-WOS,2ae9ba84-3a0d-4d4c-8338-3a1478dc5fe3-wos")
+        print("Example: --task notepad_366de66e-cbae-4d72-b042-26390db2b145-WOS")
+        print("Example: --tasks notepad_366de66e-cbae-4d72-b042-26390db2b145-WOS,chrome_2ae9ba84-3a0d-4d4c-8338-3a1478dc5fe3-wos")
         return 1
 
     # Create agent
@@ -468,7 +468,7 @@ def cmd_live(args: argparse.Namespace) -> int:
     else:
         # For live evaluation, we need explicit task IDs
         print("ERROR: --task-ids required for live evaluation")
-        print("Example: --task-ids 366de66e-cbae-4d72-b042-26390db2b145-WOS,2ae9ba84-3a0d-4d4c-8338-3a1478dc5fe3-wos")
+        print("Example: --task-ids notepad_366de66e-cbae-4d72-b042-26390db2b145-WOS,chrome_2ae9ba84-3a0d-4d4c-8338-3a1478dc5fe3-wos")
         return 1
 
     # Run evaluation
@@ -1494,10 +1494,10 @@ PY
                     print("      WARNING: /evaluate endpoint health check failed")
                 print("\nRun a no-API-key smoke test with:")
                 print(
-                    f"  uv run python -m openadapt_evals.benchmarks.cli live --server {server_url} --agent noop --task-ids 366de66e-cbae-4d72-b042-26390db2b145-WOS"
+                    f"  uv run python -m openadapt_evals.benchmarks.cli live --server {server_url} --agent noop --task-ids notepad_366de66e-cbae-4d72-b042-26390db2b145-WOS"
                 )
                 print("\nOr fully automated (starts + tests + deallocates):")
-                print("  uv run python -m openadapt_evals.benchmarks.cli smoke-live --task-id 366de66e-cbae-4d72-b042-26390db2b145-WOS")
+                print("  uv run python -m openadapt_evals.benchmarks.cli smoke-live --task-id notepad_366de66e-cbae-4d72-b042-26390db2b145-WOS")
                 return 0
         except Exception:
             pass
@@ -1870,7 +1870,7 @@ Resources:
 
 Next steps:
   1. Run evaluation:
-     uv run python -m openadapt_evals.benchmarks.cli azure --workers 2 --task-ids 366de66e-cbae-4d72-b042-26390db2b145-WOS,a7d4b6c5-569b-452e-9e1d-ffdb3d431d15-WOS
+     uv run python -m openadapt_evals.benchmarks.cli azure --workers 2 --task-ids notepad_366de66e-cbae-4d72-b042-26390db2b145-WOS,notepad_a7d4b6c5-569b-452e-9e1d-ffdb3d431d15-WOS
 
   2. Estimate costs:
      uv run python -m openadapt_evals.benchmarks.cli estimate --workers 2
@@ -2684,9 +2684,9 @@ def main() -> int:
     run_parser.add_argument("--agent", type=str, default="api-openai",
                            help="Agent type: noop, mock, api-claude, api-openai")
     run_parser.add_argument("--task", type=str,
-                           help="Single task ID (e.g., 366de66e-cbae-4d72-b042-26390db2b145-WOS)")
+                           help="Single task ID (e.g., notepad_366de66e-cbae-4d72-b042-26390db2b145-WOS)")
     run_parser.add_argument("--tasks", type=str,
-                           help="Comma-separated task IDs (e.g., 366de66e-cbae-4d72-b042-26390db2b145-WOS,2ae9ba84-3a0d-4d4c-8338-3a1478dc5fe3-wos)")
+                           help="Comma-separated task IDs (e.g., notepad_366de66e-cbae-4d72-b042-26390db2b145-WOS,chrome_2ae9ba84-3a0d-4d4c-8338-3a1478dc5fe3-wos)")
     run_parser.add_argument("--demo", type=str,
                            help="Demo trajectory file for ApiAgent")
     run_parser.add_argument("--max-steps", type=int, default=15,
@@ -2855,8 +2855,8 @@ def main() -> int:
                                   help="Azure VM name (optional if tagged)")
     smoke_live_parser.add_argument("--resource-group", type=str, default=None,
                                   help="Azure resource group (optional if tagged)")
-    smoke_live_parser.add_argument("--task-id", type=str, default="366de66e-cbae-4d72-b042-26390db2b145-WOS",
-                                  help="Single task ID to run (e.g., 366de66e-cbae-4d72-b042-26390db2b145-WOS)")
+    smoke_live_parser.add_argument("--task-id", type=str, default="notepad_366de66e-cbae-4d72-b042-26390db2b145-WOS",
+                                  help="Single task ID to run (e.g., notepad_366de66e-cbae-4d72-b042-26390db2b145-WOS)")
     smoke_live_parser.add_argument("--max-steps", type=int, default=15,
                                   help="Max steps per task")
     smoke_live_parser.add_argument("--boot-wait", type=int, default=30,
