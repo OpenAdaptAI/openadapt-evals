@@ -535,6 +535,7 @@ class AzureMLClient:
 
         # Configure SSH settings for VNC access
         ssh_settings = None
+        ssh_public_access_enabled = False
         if self.config.enable_ssh:
             from azure.ai.ml.entities import ComputeInstanceSshSettings
 
@@ -544,9 +545,9 @@ class AzureMLClient:
                 with open(ssh_key_path) as f:
                     ssh_public_key = f.read().strip()
                 ssh_settings = ComputeInstanceSshSettings(
-                    ssh_public_access="Enabled",
-                    admin_public_key=ssh_public_key,
+                    ssh_key_value=ssh_public_key,
                 )
+                ssh_public_access_enabled = True
                 logger.info(f"SSH enabled for {name} (key: {ssh_key_path})")
             else:
                 logger.warning(
@@ -569,6 +570,7 @@ class AzureMLClient:
             name=name,
             size=vm_size,
             idle_time_before_shutdown_minutes=self.config.idle_timeout_minutes,
+            ssh_public_access_enabled=ssh_public_access_enabled,
             ssh_settings=ssh_settings,
             setup_scripts=setup_scripts,
         )
@@ -642,7 +644,7 @@ class AzureMLClient:
         computes = self.client.compute.list()
         instances = []
         for c in computes:
-            if c.type == "ComputeInstance":
+            if c.type.lower() == "computeinstance":
                 if prefix is None or c.name.startswith(prefix):
                     instances.append({
                         "name": c.name,
@@ -690,16 +692,35 @@ class AzureMLClient:
             }
 
             # Try to get IP from various possible locations
-            if hasattr(compute, "public_ip_address") and compute.public_ip_address:
-                ssh_info["ssh_host"] = compute.public_ip_address
-            elif hasattr(compute, "connectivity_endpoints"):
-                endpoints = compute.connectivity_endpoints
-                if endpoints and hasattr(endpoints, "public_ip_address"):
-                    ssh_info["ssh_host"] = endpoints.public_ip_address
-                if endpoints and hasattr(endpoints, "ssh_port"):
-                    ssh_info["ssh_port"] = endpoints.ssh_port
+            # Priority 1: network_settings.public_ip_address (Azure ML SDK v2)
+            if hasattr(compute, "network_settings") and compute.network_settings:
+                ns = compute.network_settings
+                if hasattr(ns, "public_ip_address") and ns.public_ip_address:
+                    ssh_info["ssh_host"] = ns.public_ip_address
 
-            # Alternative: Check properties dict
+            # Priority 2: ssh_settings.ssh_port
+            if hasattr(compute, "ssh_settings") and compute.ssh_settings:
+                ss = compute.ssh_settings
+                if hasattr(ss, "ssh_port") and ss.ssh_port:
+                    ssh_info["ssh_port"] = ss.ssh_port
+                if hasattr(ss, "admin_username") and ss.admin_username:
+                    ssh_info["ssh_user"] = ss.admin_username
+
+            # Priority 3: Direct attribute (older SDK)
+            if ssh_info["ssh_host"] is None:
+                if hasattr(compute, "public_ip_address") and compute.public_ip_address:
+                    ssh_info["ssh_host"] = compute.public_ip_address
+
+            # Priority 4: connectivity_endpoints
+            if ssh_info["ssh_host"] is None:
+                if hasattr(compute, "connectivity_endpoints"):
+                    endpoints = compute.connectivity_endpoints
+                    if endpoints and hasattr(endpoints, "public_ip_address"):
+                        ssh_info["ssh_host"] = endpoints.public_ip_address
+                    if endpoints and hasattr(endpoints, "ssh_port"):
+                        ssh_info["ssh_port"] = endpoints.ssh_port
+
+            # Priority 5: properties dict
             if ssh_info["ssh_host"] is None and hasattr(compute, "properties"):
                 props = compute.properties
                 if isinstance(props, dict):
