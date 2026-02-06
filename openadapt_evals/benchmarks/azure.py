@@ -244,24 +244,16 @@ class AzureConfig:
         max_spot_price: Maximum hourly price for spot instances (default: 0.5).
         spot_eviction_policy: What to do when spot instance is evicted (Deallocate or Delete).
         environment: Deployment environment (production or development).
-        enable_ssh: Whether to enable SSH access for VNC debugging (default: True).
-        ssh_public_key_path: Path to SSH public key file (default: ~/.ssh/id_rsa.pub).
     """
 
     subscription_id: str
     resource_group: str
     workspace_name: str
-    vm_size: str = "Standard_D4ds_v5"  # D4ds_v5 supported by Azure ML compute
+    vm_size: str = "Standard_D4s_v5"  # Better nested virt support than v3
     vm_security_type: str = "Standard"  # NOT TrustedLaunch (disables nested virt)
     enable_nested_virtualization: bool = True
     idle_timeout_minutes: int = 60
-    # Custom WAA image with unattended installation support
-    # Use public.ecr.aws image (not vanilla windowsarena/winarena) because:
-    # - Modern dockurr/windows base (auto-downloads Windows 11)
-    # - FirstLogonCommands patches for unattended installation
-    # - Python 3.9 with transformers 4.46.2 (compatible with navi agent)
-    # Build with: uv run python -m openadapt_evals.benchmarks.cli waa-image build-push
-    docker_image: str = "public.ecr.aws/g3w3k7s5/waa-auto:latest"
+    docker_image: str = "windowsarena/winarena:latest"  # Public Docker Hub image
     storage_account: str | None = None
     use_managed_identity: bool = False
     managed_identity_name: str | None = None
@@ -271,9 +263,6 @@ class AzureConfig:
     max_spot_price: float = 0.5  # Maximum hourly price for spot instances
     spot_eviction_policy: str = "Deallocate"  # Deallocate or Delete
     environment: str = "production"  # production or development
-    # SSH/VNC access for debugging parallel workers
-    enable_ssh: bool = True  # Enable SSH for VNC access to workers
-    ssh_public_key_path: str = "~/.ssh/id_rsa.pub"  # Path to SSH public key
 
     @classmethod
     def from_env(cls) -> AzureConfig:
@@ -285,9 +274,9 @@ class AzureConfig:
             AZURE_ML_WORKSPACE_NAME
 
         Optional env vars:
-            AZURE_VM_SIZE (default: Standard_D4ds_v5)
+            AZURE_VM_SIZE (default: Standard_D4s_v5)
             AZURE_VM_SECURITY_TYPE (default: Standard)
-            AZURE_DOCKER_IMAGE (default: public.ecr.aws/g3w3k7s5/waa-auto:latest)
+            AZURE_DOCKER_IMAGE (default: windowsarena/winarena:latest)
             AZURE_ENABLE_TIERED_VMS (default: false) - Auto-select VM size by task complexity
             AZURE_USE_SPOT_INSTANCES (default: false) - Use spot instances for cost savings
             AZURE_MAX_SPOT_PRICE (default: 0.5) - Maximum hourly price for spot instances
@@ -332,11 +321,11 @@ class AzureConfig:
             subscription_id=subscription_id,
             resource_group=resource_group,
             workspace_name=workspace_name,
-            vm_size=os.getenv("AZURE_VM_SIZE", "Standard_D4ds_v5"),
+            vm_size=os.getenv("AZURE_VM_SIZE", "Standard_D4s_v5"),
             vm_security_type=os.getenv("AZURE_VM_SECURITY_TYPE", "Standard"),
             docker_image=os.getenv(
                 "AZURE_DOCKER_IMAGE",
-                "public.ecr.aws/g3w3k7s5/waa-auto:latest"
+                "windowsarena/winarena:latest"
             ),
             enable_tiered_vms=enable_tiered_vms,
             use_spot_instances=use_spot_instances,
@@ -370,10 +359,9 @@ class WorkerState:
     error: str | None = None
     start_time: float | None = None
     end_time: float | None = None
-    job_name: str | None = None  # Azure ML job name for this worker
     # Cost tracking
     vm_tier: str = "medium"  # simple, medium, or complex
-    vm_size: str = "Standard_D4ds_v5"  # Actual VM size used
+    vm_size: str = "Standard_D4s_v5"  # Actual VM size used
     is_spot: bool = False  # Whether spot instance was used
     hourly_cost: float = 0.192  # Actual hourly cost
     total_cost: float = 0.0  # Total cost for this worker
@@ -500,22 +488,22 @@ class AzureMLClient:
     def create_compute_instance(
         self,
         name: str,
-        startup_script_path: str | None = None,
+        startup_script: str | None = None,
         vm_size: str | None = None,
         use_spot: bool | None = None,
     ) -> str:
-        """Create a compute instance with startup script.
+        """Create a compute instance.
 
         Args:
             name: Compute instance name.
-            startup_script_path: Path to startup script in datastore (e.g., 'Users/me/startup.sh').
+            startup_script: Optional startup script content (not yet implemented).
             vm_size: Override VM size (uses config.vm_size if None).
             use_spot: Override spot instance setting (uses config.use_spot_instances if None).
 
         Returns:
             Compute instance name.
         """
-        from azure.ai.ml.entities import ComputeInstance, ScriptReference, SetupScripts
+        from azure.ai.ml.entities import ComputeInstance
 
         # Check if already exists
         try:
@@ -532,47 +520,10 @@ class AzureMLClient:
 
         # CRITICAL: Use Standard security type for nested virtualization
         # TrustedLaunch (Azure default since 2024) disables nested virtualization
-
-        # Configure SSH settings for VNC access
-        ssh_settings = None
-        ssh_public_access_enabled = False
-        if self.config.enable_ssh:
-            from azure.ai.ml.entities import ComputeInstanceSshSettings
-
-            # Read SSH public key
-            ssh_key_path = os.path.expanduser(self.config.ssh_public_key_path)
-            if os.path.exists(ssh_key_path):
-                with open(ssh_key_path) as f:
-                    ssh_public_key = f.read().strip()
-                ssh_settings = ComputeInstanceSshSettings(
-                    ssh_key_value=ssh_public_key,
-                )
-                ssh_public_access_enabled = True
-                logger.info(f"SSH enabled for {name} (key: {ssh_key_path})")
-            else:
-                logger.warning(
-                    f"SSH key not found at {ssh_key_path}. "
-                    f"SSH access disabled for {name}. "
-                    f"Generate with: ssh-keygen -t rsa -b 4096"
-                )
-
-        # Configure startup script to stop conflicting services
-        setup_scripts = None
-        if startup_script_path:
-            startup_script_ref = ScriptReference(
-                path=startup_script_path,
-                timeout_minutes=10,
-            )
-            setup_scripts = SetupScripts(startup_script=startup_script_ref)
-            logger.info(f"Startup script configured: {startup_script_path}")
-
         compute = ComputeInstance(
             name=name,
             size=vm_size,
             idle_time_before_shutdown_minutes=self.config.idle_timeout_minutes,
-            ssh_public_access_enabled=ssh_public_access_enabled,
-            ssh_settings=ssh_settings,
-            setup_scripts=setup_scripts,
         )
 
         # Configure spot instance if enabled
@@ -644,7 +595,7 @@ class AzureMLClient:
         computes = self.client.compute.list()
         instances = []
         for c in computes:
-            if c.type.lower() == "computeinstance":
+            if c.type == "ComputeInstance":
                 if prefix is None or c.name.startswith(prefix):
                     instances.append({
                         "name": c.name,
@@ -665,96 +616,6 @@ class AzureMLClient:
         compute = self.client.compute.get(name)
         return compute.state
 
-    def get_compute_ssh_info(self, name: str) -> dict[str, Any] | None:
-        """Get SSH connection info for a compute instance.
-
-        Args:
-            name: Compute instance name.
-
-        Returns:
-            Dict with ssh_host, ssh_port, ssh_user, or None if SSH not available.
-            Example: {"ssh_host": "10.0.0.4", "ssh_port": 50000, "ssh_user": "azureuser"}
-        """
-        try:
-            compute = self.client.compute.get(name)
-
-            # Check if SSH settings exist
-            if not hasattr(compute, "ssh_settings") or compute.ssh_settings is None:
-                logger.warning(f"SSH not enabled for compute instance {name}")
-                return None
-
-            # Get SSH connection details from compute properties
-            # Azure ML provides these in the connectivity_endpoints or ssh_settings
-            ssh_info = {
-                "ssh_user": "azureuser",  # Azure ML always uses azureuser
-                "ssh_host": None,
-                "ssh_port": 50000,  # Default SSH port for Azure ML compute
-            }
-
-            # Try to get IP from various possible locations
-            # Priority 1: network_settings.public_ip_address (Azure ML SDK v2)
-            if hasattr(compute, "network_settings") and compute.network_settings:
-                ns = compute.network_settings
-                if hasattr(ns, "public_ip_address") and ns.public_ip_address:
-                    ssh_info["ssh_host"] = ns.public_ip_address
-
-            # Priority 2: ssh_settings.ssh_port
-            if hasattr(compute, "ssh_settings") and compute.ssh_settings:
-                ss = compute.ssh_settings
-                if hasattr(ss, "ssh_port") and ss.ssh_port:
-                    ssh_info["ssh_port"] = ss.ssh_port
-                if hasattr(ss, "admin_username") and ss.admin_username:
-                    ssh_info["ssh_user"] = ss.admin_username
-
-            # Priority 3: Direct attribute (older SDK)
-            if ssh_info["ssh_host"] is None:
-                if hasattr(compute, "public_ip_address") and compute.public_ip_address:
-                    ssh_info["ssh_host"] = compute.public_ip_address
-
-            # Priority 4: connectivity_endpoints
-            if ssh_info["ssh_host"] is None:
-                if hasattr(compute, "connectivity_endpoints"):
-                    endpoints = compute.connectivity_endpoints
-                    if endpoints and hasattr(endpoints, "public_ip_address"):
-                        ssh_info["ssh_host"] = endpoints.public_ip_address
-                    if endpoints and hasattr(endpoints, "ssh_port"):
-                        ssh_info["ssh_port"] = endpoints.ssh_port
-
-            # Priority 5: properties dict
-            if ssh_info["ssh_host"] is None and hasattr(compute, "properties"):
-                props = compute.properties
-                if isinstance(props, dict):
-                    if "connectivityEndpoints" in props:
-                        ep = props["connectivityEndpoints"]
-                        ssh_info["ssh_host"] = ep.get("publicIpAddress")
-                        ssh_info["ssh_port"] = ep.get("sshPort", 50000)
-
-            if ssh_info["ssh_host"] is None:
-                logger.warning(f"Could not determine SSH host for {name}")
-                return None
-
-            return ssh_info
-
-        except Exception as e:
-            logger.warning(f"Failed to get SSH info for {name}: {e}")
-            return None
-
-    def get_all_workers_ssh_info(self, worker_names: list[str]) -> dict[str, dict]:
-        """Get SSH info for all workers.
-
-        Args:
-            worker_names: List of compute instance names.
-
-        Returns:
-            Dict mapping worker name to SSH info.
-        """
-        ssh_info = {}
-        for name in worker_names:
-            info = self.get_compute_ssh_info(name)
-            if info:
-                ssh_info[name] = info
-        return ssh_info
-
     def submit_job(
         self,
         compute_name: str,
@@ -763,135 +624,49 @@ class AzureMLClient:
         display_name: str | None = None,
         timeout_hours: float = 4.0,
     ) -> str:
-        """Submit a job to a compute instance using SDK V1 with Docker.
-
-        This uses the Azure ML SDK V1 approach with DockerConfiguration,
-        which is required to run WAA because:
-        1. Docker runs the job INSIDE the container (not just using it as env)
-        2. NET_ADMIN capability is needed for QEMU networking
-        3. entry_setup.sh is called to start Windows VM
+        """Submit a job to a compute instance.
 
         Args:
             compute_name: Target compute instance.
-            command: Command to run (passed to entry script).
+            command: Command to run.
             environment_variables: Environment variables.
             display_name: Job display name.
-            timeout_hours: Maximum job duration in hours (default: 4).
+            timeout_hours: Maximum job duration in hours (default: 4). The job
+                will be automatically canceled after this duration.
 
         Returns:
-            Job run ID.
+            Job name/ID.
         """
-        # Use SDK V1 for DockerConfiguration support
-        from azureml.core import Workspace, Experiment, Environment
-        from azureml.core.runconfig import RunConfiguration, DockerConfiguration
-        from azureml.core.compute import ComputeTarget
-        from azureml.core import ScriptRunConfig
+        from azure.ai.ml import command as ml_command
+        from azure.ai.ml.entities import Environment, CommandJobLimits
 
-        # Connect to workspace using V1 SDK
-        ws = Workspace(
-            subscription_id=self.config.subscription_id,
-            resource_group=self.config.resource_group,
-            workspace_name=self.config.workspace_name,
-        )
-
-        # Create environment from Docker image
-        env = Environment.from_docker_image(
-            name=f"waa-env-{int(time.time())}",
+        # Create environment with Docker image
+        env = Environment(
             image=self.config.docker_image,
+            name="waa-agent-env",
         )
 
-        # Configure Docker with NET_ADMIN capability (required for QEMU networking)
-        docker_config = DockerConfiguration(
-            use_docker=True,
-            shared_volumes=True,
-            arguments=["--cap-add", "NET_ADMIN"],
-            shm_size="16g",  # Shared memory for QEMU
+        import uuid
+        timestamp = int(time.time())
+        unique_id = str(uuid.uuid4())[:8]
+        job_name = f"waa-{compute_name}-{timestamp}-{unique_id}"
+
+        # Convert hours to seconds for Azure ML timeout
+        timeout_seconds = int(timeout_hours * 3600)
+
+        job = ml_command(
+            command=command,
+            environment=env,
+            compute=compute_name,
+            name=job_name,
+            display_name=display_name or f"waa-job-{compute_name}",
+            environment_variables=environment_variables or {},
+            limits=CommandJobLimits(timeout=timeout_seconds),
         )
 
-        # Set up run configuration
-        run_config = RunConfiguration()
-        run_config.target = ComputeTarget(workspace=ws, name=compute_name)
-        run_config.environment = env
-        run_config.docker = docker_config
-        run_config.environment_variables = environment_variables or {}
-
-        # Get the azure_files directory (contains run_entry.py)
-        azure_files_dir = Path(__file__).parent / "azure_files"
-
-        # Parse command to extract arguments for run_entry.py
-        # Command format: "cd /client && python run.py --agent_name X --model Y ..."
-        # We need to convert this to arguments for run_entry.py
-        import shlex
-        args = self._parse_command_to_args(command)
-
-        # Create script run config
-        src = ScriptRunConfig(
-            source_directory=str(azure_files_dir),
-            script="run_entry.py",
-            arguments=args,
-            run_config=run_config,
-        )
-
-        # Submit to experiment
-        exp_name = display_name or f"waa-{compute_name}"
-        experiment = Experiment(workspace=ws, name=exp_name)
-        run = experiment.submit(config=src)
-
-        logger.info(f"Job submitted: {run.id} (portal: {run.get_portal_url()})")
-        return run.id
-
-    def _parse_command_to_args(self, command: str) -> list[str]:
-        """Parse the WAA command into arguments for run_entry.py.
-
-        Args:
-            command: WAA command string like:
-                "cd /client && python run.py --agent_name navi --model gpt-4o ..."
-
-        Returns:
-            List of arguments for run_entry.py:
-                [output_path, exp_name, num_workers, worker_id, agent, model, max_steps]
-        """
-        # Default values
-        output_path = "/outputs"
-        exp_name = "waa_eval"
-        num_workers = "1"
-        worker_id = "0"
-        agent = "navi"
-        model = "gpt-4o"
-        max_steps = "15"
-
-        # Parse command to extract values
-        if "--worker_id" in command:
-            match = re.search(r"--worker_id\s+(\d+)", command)
-            if match:
-                worker_id = match.group(1)
-
-        if "--num_workers" in command:
-            match = re.search(r"--num_workers\s+(\d+)", command)
-            if match:
-                num_workers = match.group(1)
-
-        if "--agent_name" in command:
-            match = re.search(r"--agent_name\s+(\w+)", command)
-            if match:
-                agent = match.group(1)
-
-        if "--model" in command:
-            match = re.search(r"--model\s+([\w\-\.]+)", command)
-            if match:
-                model = match.group(1)
-
-        if "--max_steps" in command:
-            match = re.search(r"--max_steps\s+(\d+)", command)
-            if match:
-                max_steps = match.group(1)
-
-        if "--result_dir" in command:
-            match = re.search(r"--result_dir\s+(\S+)", command)
-            if match:
-                output_path = match.group(1)
-
-        return [output_path, exp_name, num_workers, worker_id, agent, model, max_steps]
+        submitted = self.client.jobs.create_or_update(job)
+        logger.info(f"Job submitted: {submitted.name} (timeout: {timeout_hours}h)")
+        return submitted.name
 
     def wait_for_job(self, job_name: str, timeout_seconds: int = 3600) -> dict:
         """Wait for a job to complete.
@@ -914,65 +689,6 @@ class AzureMLClient:
             time.sleep(10)
 
         raise TimeoutError(f"Job {job_name} did not complete within {timeout_seconds}s")
-
-    def get_job_logs(self, job_name: str, tail: int | None = None) -> str:
-        """Fetch logs for a job (non-streaming).
-
-        Args:
-            job_name: Job name/ID.
-            tail: If specified, return only the last N lines.
-
-        Returns:
-            Log content as string.
-        """
-        try:
-            # Use az ml job download to get logs
-            import tempfile
-            with tempfile.TemporaryDirectory() as temp_dir:
-                result = subprocess.run(
-                    [
-                        "az",
-                        "ml",
-                        "job",
-                        "download",
-                        "--name",
-                        job_name,
-                        "--workspace-name",
-                        self.config.workspace_name,
-                        "--resource-group",
-                        self.config.resource_group,
-                        "--download-path",
-                        temp_dir,
-                        "--outputs",
-                        "logs",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                )
-
-                if result.returncode != 0:
-                    logger.warning(f"Failed to download logs: {result.stderr}")
-                    return ""
-
-                # Find and read the user_logs/std_log.txt file
-                log_dir = Path(temp_dir)
-                log_files = list(log_dir.rglob("std_log.txt")) + list(log_dir.rglob("stdout.txt"))
-
-                if not log_files:
-                    return ""
-
-                logs = log_files[0].read_text()
-
-                if tail:
-                    lines = logs.split("\n")
-                    logs = "\n".join(lines[-tail:])
-
-                return logs
-
-        except Exception as e:
-            logger.warning(f"Error fetching logs for {job_name}: {e}")
-            return ""
 
     def stream_job_logs(
         self,
@@ -1028,172 +744,6 @@ class AzureMLClient:
         return process
 
 
-class WorkerVNCManager:
-    """Manages SSH tunnels for VNC access to parallel workers.
-
-    Provides VNC access to multiple Azure ML compute instances via SSH tunnels.
-    Each worker gets a unique local port (8006, 8007, 8008, ...) mapped to its
-    VNC port (8006) via SSH.
-
-    Example:
-        manager = WorkerVNCManager(ml_client)
-        manager.start_tunnels(["worker0", "worker1", "worker2"])
-        # Access VNC at localhost:8006, localhost:8007, localhost:8008
-
-        # Get status
-        print(manager.get_status())
-
-        # Cleanup
-        manager.stop_all_tunnels()
-    """
-
-    VNC_REMOTE_PORT = 8006  # noVNC port inside Windows container
-    VNC_BASE_LOCAL_PORT = 8006  # Local ports start at 8006
-
-    def __init__(self, ml_client: AzureMLClient):
-        """Initialize VNC manager.
-
-        Args:
-            ml_client: AzureMLClient instance for getting SSH info.
-        """
-        self.ml_client = ml_client
-        self.tunnels: dict[str, subprocess.Popen] = {}  # worker_name -> tunnel process
-        self.local_ports: dict[str, int] = {}  # worker_name -> local port
-
-    def start_tunnel(self, worker_name: str, local_port: int | None = None) -> int | None:
-        """Start SSH tunnel for a single worker.
-
-        Args:
-            worker_name: Compute instance name.
-            local_port: Local port to use (auto-assigned if None).
-
-        Returns:
-            Local port number, or None if tunnel failed.
-        """
-        # Get SSH connection info
-        ssh_info = self.ml_client.get_compute_ssh_info(worker_name)
-        if not ssh_info:
-            logger.error(f"Cannot start tunnel for {worker_name}: no SSH info")
-            return None
-
-        # Assign local port
-        if local_port is None:
-            # Find next available port
-            used_ports = set(self.local_ports.values())
-            local_port = self.VNC_BASE_LOCAL_PORT
-            while local_port in used_ports:
-                local_port += 1
-
-        # Build SSH tunnel command
-        ssh_cmd = [
-            "ssh",
-            "-N",  # Don't execute remote command
-            "-L", f"{local_port}:localhost:{self.VNC_REMOTE_PORT}",
-            "-p", str(ssh_info["ssh_port"]),
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "ServerAliveInterval=60",
-            f"{ssh_info['ssh_user']}@{ssh_info['ssh_host']}",
-        ]
-
-        try:
-            # Start tunnel process
-            process = subprocess.Popen(
-                ssh_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-
-            # Give it a moment to establish
-            time.sleep(1)
-
-            # Check if it's still running
-            if process.poll() is not None:
-                stderr = process.stderr.read().decode() if process.stderr else ""
-                logger.error(f"Tunnel failed for {worker_name}: {stderr}")
-                return None
-
-            self.tunnels[worker_name] = process
-            self.local_ports[worker_name] = local_port
-            logger.info(f"VNC tunnel started: localhost:{local_port} -> {worker_name}:8006")
-            return local_port
-
-        except Exception as e:
-            logger.error(f"Failed to start tunnel for {worker_name}: {e}")
-            return None
-
-    def start_tunnels(self, worker_names: list[str]) -> dict[str, int]:
-        """Start SSH tunnels for multiple workers.
-
-        Args:
-            worker_names: List of compute instance names.
-
-        Returns:
-            Dict mapping worker name to local port.
-        """
-        results = {}
-        for i, worker_name in enumerate(worker_names):
-            local_port = self.VNC_BASE_LOCAL_PORT + i
-            port = self.start_tunnel(worker_name, local_port)
-            if port:
-                results[worker_name] = port
-        return results
-
-    def stop_tunnel(self, worker_name: str) -> None:
-        """Stop SSH tunnel for a worker.
-
-        Args:
-            worker_name: Compute instance name.
-        """
-        if worker_name in self.tunnels:
-            process = self.tunnels[worker_name]
-            process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-            del self.tunnels[worker_name]
-            del self.local_ports[worker_name]
-            logger.info(f"Tunnel stopped for {worker_name}")
-
-    def stop_all_tunnels(self) -> None:
-        """Stop all SSH tunnels."""
-        for worker_name in list(self.tunnels.keys()):
-            self.stop_tunnel(worker_name)
-
-    def get_status(self) -> dict[str, dict]:
-        """Get status of all tunnels.
-
-        Returns:
-            Dict mapping worker name to status info.
-        """
-        status = {}
-        for worker_name, process in self.tunnels.items():
-            is_running = process.poll() is None
-            status[worker_name] = {
-                "local_port": self.local_ports.get(worker_name),
-                "vnc_url": f"http://localhost:{self.local_ports.get(worker_name)}",
-                "running": is_running,
-                "pid": process.pid,
-            }
-        return status
-
-    def print_vnc_urls(self) -> None:
-        """Print VNC URLs for all active tunnels."""
-        status = self.get_status()
-        if not status:
-            print("No active VNC tunnels")
-            return
-
-        print("\n=== VNC Access URLs ===")
-        for worker_name, info in sorted(status.items()):
-            if info["running"]:
-                print(f"  {worker_name}: {info['vnc_url']}")
-            else:
-                print(f"  {worker_name}: (tunnel down)")
-        print()
-
-
 class AzureWAAOrchestrator:
     """Orchestrates WAA evaluation across multiple Azure VMs.
 
@@ -1231,7 +781,6 @@ class AzureWAAOrchestrator:
         self.waa_repo_path = Path(waa_repo_path)
         self.experiment_name = experiment_name
         self.ml_client = AzureMLClient(config)
-        self.vnc_manager = WorkerVNCManager(self.ml_client)
         self._current_run: EvaluationRun | None = None
         self._cleanup_registered = False
         self._interrupted = False
@@ -1242,10 +791,8 @@ class AzureWAAOrchestrator:
             return
 
         def signal_handler(sig, frame):
-            logger.warning("\n⚠️  Interrupted! Cleaning up...")
+            logger.warning("\n⚠️  Interrupted! Cleaning up compute instances...")
             self._interrupted = True
-            # Stop VNC tunnels first
-            self.vnc_manager.stop_all_tunnels()
             if self._current_run and self._current_run.workers:
                 self._cleanup_workers(self._current_run.workers)
             sys.exit(1)
@@ -1311,7 +858,6 @@ class AzureWAAOrchestrator:
         cleanup_on_complete: bool = True,
         cleanup_stale_on_start: bool = True,
         timeout_hours: float = 4.0,
-        enable_vnc: bool = False,
     ) -> list[BenchmarkResult]:
         """Run evaluation across multiple Azure VMs.
 
@@ -1325,8 +871,6 @@ class AzureWAAOrchestrator:
             cleanup_stale_on_start: Whether to cleanup stale instances before starting.
             timeout_hours: Maximum job duration in hours (default: 4). Jobs are
                 auto-canceled after this duration to prevent runaway costs.
-            enable_vnc: Whether to start VNC tunnels for debugging (default: False).
-                When enabled, VNC is accessible at localhost:8006, 8007, etc.
 
         Returns:
             List of BenchmarkResult for all tasks.
@@ -1413,15 +957,6 @@ class AzureWAAOrchestrator:
             self._provision_workers(workers)
             print(f"      VM(s) ready")
 
-            # Start VNC tunnels if enabled (for debugging)
-            if enable_vnc:
-                print(f"[2.5/5] Starting VNC tunnels for debugging...")
-                vnc_ports = self.start_vnc_tunnels(workers)
-                if vnc_ports:
-                    print(f"      VNC available at: {', '.join(f'localhost:{p}' for p in vnc_ports.values())}")
-                else:
-                    print(f"      Warning: VNC tunnels could not be established")
-
             # Submit jobs to workers
             print(f"[3/5] Submitting evaluation jobs...")
             self._submit_worker_jobs(workers, task_batches, agent, max_steps_per_task, timeout_hours)
@@ -1461,79 +996,6 @@ class AzureWAAOrchestrator:
         for i, task in enumerate(tasks):
             batches[i % num_workers].append(task)
         return batches
-
-    def start_vnc_tunnels(self, workers: list[WorkerState] | None = None) -> dict[str, int]:
-        """Start VNC tunnels for workers.
-
-        This can be called during evaluation to enable VNC debugging,
-        or standalone to connect to existing workers.
-
-        Args:
-            workers: List of workers to connect to. If None, uses current run's workers.
-
-        Returns:
-            Dict mapping worker name to local VNC port.
-        """
-        if workers is None and self._current_run:
-            workers = self._current_run.workers
-
-        if not workers:
-            logger.warning("No workers to connect to")
-            return {}
-
-        # Get provisioned worker names
-        worker_names = [
-            w.compute_name for w in workers
-            if w.status in ("provisioned", "running")
-        ]
-
-        if not worker_names:
-            logger.warning("No provisioned workers found")
-            return {}
-
-        print(f"\n[VNC] Starting tunnels for {len(worker_names)} worker(s)...")
-        ports = self.vnc_manager.start_tunnels(worker_names)
-
-        if ports:
-            print("\n=== VNC Access URLs ===")
-            for name, port in sorted(ports.items()):
-                print(f"  {name}: http://localhost:{port}")
-            print("\nOpen these URLs in a browser to view Windows VMs")
-            print("Tip: Arrange browser windows side-by-side for multi-worker view\n")
-
-        return ports
-
-    def start_vnc_for_existing_workers(self, prefix: str = "waa") -> dict[str, int]:
-        """Start VNC tunnels for existing workers (standalone debugging).
-
-        Useful for connecting to workers from a previous run or from another
-        terminal while evaluation is in progress.
-
-        Args:
-            prefix: Worker name prefix to filter.
-
-        Returns:
-            Dict mapping worker name to local VNC port.
-        """
-        instances = self.ml_client.list_compute_instances(prefix=prefix)
-        running = [i for i in instances if i.get("state") == "Running"]
-
-        if not running:
-            print(f"No running compute instances found with prefix '{prefix}'")
-            return {}
-
-        worker_names = [i["name"] for i in running]
-        print(f"\nFound {len(worker_names)} running worker(s): {', '.join(worker_names)}")
-
-        ports = self.vnc_manager.start_tunnels(worker_names)
-
-        if ports:
-            print("\n=== VNC Access URLs ===")
-            for name, port in sorted(ports.items()):
-                print(f"  {name}: http://localhost:{port}")
-            print()
-
-        return ports
 
     def _provision_workers(self, workers: list[WorkerState]) -> None:
         """Provision all worker VMs in parallel with cost-optimized sizing."""
@@ -1581,41 +1043,29 @@ class AzureWAAOrchestrator:
             max_steps: Maximum steps per task.
             timeout_hours: Maximum job duration in hours.
         """
-        # Serialize agent config for remote workers
-        agent_config = self._serialize_agent_config(agent)
-
         for worker, tasks in zip(workers, task_batches):
             if worker.status == "failed":
                 continue
 
             try:
-                # Build command using vanilla WAA run.py
-                # Uses --worker_id and --num_workers for task distribution
-                command = self._build_worker_command(
-                    worker_id=worker.worker_id,
-                    num_workers=len(workers),
-                    max_steps=max_steps,
-                    agent_config=agent_config,
-                )
+                # Serialize task IDs for this worker
+                task_ids = [t.task_id for t in tasks]
+                task_ids_json = json.dumps(task_ids)
 
-                # Environment variables for WAA runner
-                # OPENAI_API_KEY is required by vanilla WAA
-                env_vars = {
-                    "WAA_WORKER_ID": str(worker.worker_id),
-                    "WAA_NUM_WORKERS": str(len(workers)),
-                    "WAA_MAX_STEPS": str(max_steps),
-                    **agent_config.get("env_vars", {}),
-                }
+                # Build command
+                command = self._build_worker_command(task_ids_json, max_steps, agent)
 
-                # Submit job with timeout and capture job_name
-                job_name = self.ml_client.submit_job(
+                # Submit job with timeout
+                self.ml_client.submit_job(
                     compute_name=worker.compute_name,
                     command=command,
-                    environment_variables=env_vars,
+                    environment_variables={
+                        "WAA_TASK_IDS": task_ids_json,
+                        "WAA_MAX_STEPS": str(max_steps),
+                    },
                     display_name=f"waa-worker-{worker.worker_id}",
                     timeout_hours=timeout_hours,
                 )
-                worker.job_name = job_name
                 worker.status = "running"
                 worker.start_time = time.time()
 
@@ -1624,88 +1074,31 @@ class AzureWAAOrchestrator:
                 worker.error = str(e)
                 logger.error(f"Failed to submit job for worker {worker.worker_id}: {e}")
 
-    def _serialize_agent_config(self, agent: BenchmarkAgent) -> dict[str, Any]:
-        """Serialize agent configuration for remote execution.
-
-        Extracts API keys and model config that can be passed via environment
-        variables to remote workers running vanilla WAA.
-
-        Args:
-            agent: The agent to serialize.
-
-        Returns:
-            Dict with:
-                - agent_name: WAA agent name (e.g., "navi")
-                - model: Model name (e.g., "gpt-4o")
-                - env_vars: Dict of environment variables to set
-        """
-        config: dict[str, Any] = {
-            "agent_name": "navi",  # Default WAA agent
-            "model": "gpt-4o",  # Default model
-            "env_vars": {},
-        }
-
-        # Check if agent has provider/model info (ApiAgent pattern)
-        if hasattr(agent, "provider"):
-            if agent.provider == "openai":
-                config["model"] = getattr(agent, "model", "gpt-4o")
-                # Get API key from agent or environment
-                api_key = getattr(agent, "api_key", None) or os.getenv("OPENAI_API_KEY")
-                if api_key:
-                    config["env_vars"]["OPENAI_API_KEY"] = api_key
-            elif agent.provider == "anthropic":
-                # WAA's navi agent supports Azure OpenAI, but we can use direct OpenAI
-                # For Claude, we'd need custom agent code on the worker
-                config["model"] = getattr(agent, "model", "claude-sonnet-4-5-20250929")
-                api_key = getattr(agent, "api_key", None) or os.getenv("ANTHROPIC_API_KEY")
-                if api_key:
-                    config["env_vars"]["ANTHROPIC_API_KEY"] = api_key
-
-        # Check for OpenAI API key in environment as fallback
-        if "OPENAI_API_KEY" not in config["env_vars"]:
-            openai_key = os.getenv("OPENAI_API_KEY")
-            if openai_key:
-                config["env_vars"]["OPENAI_API_KEY"] = openai_key
-
-        return config
-
     def _build_worker_command(
         self,
-        worker_id: int,
-        num_workers: int,
+        task_ids_json: str,
         max_steps: int,
-        agent_config: dict[str, Any],
+        agent: BenchmarkAgent,
     ) -> str:
         """Build the command to run on a worker VM.
 
-        Uses vanilla WAA's run.py with --worker_id and --num_workers for
-        built-in task distribution. This matches Microsoft's official
-        Azure deployment pattern.
-
         Args:
-            worker_id: This worker's ID (0-indexed).
-            num_workers: Total number of workers.
+            task_ids_json: JSON string of task IDs for this worker.
             max_steps: Maximum steps per task.
-            agent_config: Serialized agent configuration.
-
-        Returns:
-            Shell command string to execute in the WAA container.
+            agent: Agent to run (TODO: serialize agent config for remote execution).
         """
-        agent_name = agent_config.get("agent_name", "navi")
-        model = agent_config.get("model", "gpt-4o")
-
+        # TODO: Serialize agent config and pass to remote worker
+        # For now, workers use a default agent configuration
+        _ = agent  # Reserved for agent serialization
         # WAA Docker image has client at /client (see Dockerfile-WinArena)
-        # The run.py script uses --worker_id and --num_workers for task distribution
-        # Results are written to --result_dir
+        # The run.py script is at /client/run.py (not a module, so use python run.py)
         return f"""
-cd /client && python run.py \\
-    --agent_name {agent_name} \\
-    --model {model} \\
-    --worker_id {worker_id} \\
-    --num_workers {num_workers} \\
-    --max_steps {max_steps} \\
-    --result_dir /outputs
-"""
+        cd /client && \
+        python run.py \
+            --task_ids '{task_ids_json}' \
+            --max_steps {max_steps} \
+            --output_dir /outputs
+        """
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=4, max=60),
@@ -1784,11 +1177,7 @@ cd /client && python run.py \\
         workers: list[WorkerState],
         on_worker_complete: Callable[[WorkerState], None] | None,
     ) -> list[BenchmarkResult]:
-        """Wait for all workers and collect results.
-
-        Polls Azure ML job status (not compute status) to determine completion.
-        Jobs can complete with status: Completed, Failed, Canceled.
-        """
+        """Wait for all workers and collect results."""
         all_results: list[BenchmarkResult] = []
 
         # Poll workers for completion
@@ -1797,22 +1186,14 @@ cd /client && python run.py \\
         while pending_workers:
             for worker in pending_workers[:]:
                 try:
-                    # Check job status (not compute status)
-                    if not worker.job_name:
-                        logger.warning(f"Worker {worker.worker_id} has no job_name")
-                        worker.status = "failed"
-                        worker.error = "No job submitted"
-                        pending_workers.remove(worker)
-                        continue
+                    status = self.ml_client.get_compute_status(worker.compute_name)
 
-                    job = self.ml_client.client.jobs.get(worker.job_name)
-                    job_status = job.status
-
-                    if job_status in ["Completed", "Finished"]:
+                    # Check if job completed (simplified - real impl would check job status)
+                    if status in ["Stopped", "Deallocated"]:
                         worker.status = "completed"
                         worker.end_time = time.time()
 
-                        # Fetch results from job outputs
+                        # Fetch results from blob storage
                         results = self._fetch_worker_results(worker)
                         worker.results = results
                         all_results.extend(results)
@@ -1826,24 +1207,6 @@ cd /client && python run.py \\
                             f"{len(results)} results"
                         )
 
-                    elif job_status in ["Failed", "Canceled"]:
-                        worker.status = "failed"
-                        worker.error = f"Job {job_status}"
-                        worker.end_time = time.time()
-
-                        # Still try to fetch any partial results
-                        results = self._fetch_worker_results(worker)
-                        worker.results = results
-                        all_results.extend(results)
-
-                        pending_workers.remove(worker)
-                        logger.warning(
-                            f"Worker {worker.worker_id} failed ({job_status}): "
-                            f"{len(results)} partial results"
-                        )
-
-                    # else: still running, continue polling
-
                 except Exception as e:
                     logger.warning(f"Error checking worker {worker.worker_id}: {e}")
 
@@ -1853,145 +1216,23 @@ cd /client && python run.py \\
         return all_results
 
     def _fetch_worker_results(self, worker: WorkerState) -> list[BenchmarkResult]:
-        """Fetch results from a worker's output storage.
-
-        Downloads job outputs from Azure ML and parses WAA result files.
-        WAA writes results in the format: {result_dir}/{domain}/{task_id}/result.txt
-
-        Args:
-            worker: WorkerState with job_name set.
-
-        Returns:
-            List of BenchmarkResult for each task.
-        """
+        """Fetch results from a worker's output storage."""
+        # In a real implementation, this would download results from blob storage
+        # For now, return placeholder results
         results = []
-
-        if not worker.job_name:
-            logger.warning(f"Worker {worker.worker_id} has no job_name, returning empty results")
-            for task_id in worker.assigned_tasks:
-                results.append(
-                    BenchmarkResult(
-                        task_id=task_id,
-                        success=False,
-                        score=0.0,
-                        num_steps=0,
-                        error_message="No job_name available",
-                    )
+        for task_id in worker.assigned_tasks:
+            results.append(
+                BenchmarkResult(
+                    task_id=task_id,
+                    success=False,  # Placeholder
+                    score=0.0,
+                    num_steps=0,
                 )
-            return results
-
-        try:
-            # Download job outputs to a temp directory
-            import tempfile
-            with tempfile.TemporaryDirectory() as temp_dir:
-                output_path = Path(temp_dir)
-
-                # Download all outputs from the job
-                self.ml_client.client.jobs.download(
-                    name=worker.job_name,
-                    download_path=output_path,
-                    output_name="default",  # Default output location
-                )
-
-                # Parse WAA result files
-                # WAA writes: {result_dir}/{action_space}/{observation_type}/{model}/{trial_id}/{domain}/{task_id}/result.txt
-                # But we simplified to: /outputs/{domain}/{task_id}/result.txt
-                outputs_dir = output_path / "outputs"
-                if not outputs_dir.exists():
-                    # Try alternative path structure
-                    outputs_dir = output_path
-
-                results = self._parse_waa_results(outputs_dir, worker.assigned_tasks)
-
-        except Exception as e:
-            logger.error(f"Failed to fetch results for worker {worker.worker_id}: {e}")
-            # Return failed results for all tasks
-            for task_id in worker.assigned_tasks:
-                results.append(
-                    BenchmarkResult(
-                        task_id=task_id,
-                        success=False,
-                        score=0.0,
-                        num_steps=0,
-                        error_message=f"Failed to fetch results: {e}",
-                    )
-                )
-
-        return results
-
-    def _parse_waa_results(
-        self,
-        outputs_dir: Path,
-        task_ids: list[str],
-    ) -> list[BenchmarkResult]:
-        """Parse WAA result files from downloaded outputs.
-
-        WAA writes result.txt files containing a single float (0.0 or 1.0).
-
-        Args:
-            outputs_dir: Directory containing WAA outputs.
-            task_ids: List of expected task IDs.
-
-        Returns:
-            List of BenchmarkResult for each task.
-        """
-        results = []
-
-        for task_id in task_ids:
-            # WAA task_id format: UUID-WOS/wos (e.g., notepad_366de66e-cbae-4d72-b042-26390db2b145-WOS)
-            # Result path: {domain}/{task_id}/result.txt
-            parts = task_id.rsplit("_", 1)
-            if len(parts) == 2:
-                domain = parts[0]
-            else:
-                domain = task_id
-
-            result_file = outputs_dir / domain / task_id / "result.txt"
-
-            if result_file.exists():
-                try:
-                    score = float(result_file.read_text().strip())
-                    results.append(
-                        BenchmarkResult(
-                            task_id=task_id,
-                            success=score >= 1.0,
-                            score=score,
-                            num_steps=0,  # WAA doesn't expose step count in result.txt
-                        )
-                    )
-                except (ValueError, OSError) as e:
-                    logger.warning(f"Failed to parse result for {task_id}: {e}")
-                    results.append(
-                        BenchmarkResult(
-                            task_id=task_id,
-                            success=False,
-                            score=0.0,
-                            num_steps=0,
-                            error_message=f"Failed to parse result: {e}",
-                        )
-                    )
-            else:
-                # Result file not found - task may have failed
-                logger.warning(f"Result file not found for {task_id}: {result_file}")
-                results.append(
-                    BenchmarkResult(
-                        task_id=task_id,
-                        success=False,
-                        score=0.0,
-                        num_steps=0,
-                        error_message="Result file not found",
-                    )
-                )
-
+            )
         return results
 
     def _cleanup_workers(self, workers: list[WorkerState]) -> None:
-        """Delete all worker VMs and stop VNC tunnels."""
-        # Stop VNC tunnels first
-        if self.vnc_manager.tunnels:
-            logger.info("Stopping VNC tunnels...")
-            self.vnc_manager.stop_all_tunnels()
-
+        """Delete all worker VMs."""
         logger.info("Cleaning up worker VMs...")
         with ThreadPoolExecutor(max_workers=len(workers)) as executor:
             futures = [

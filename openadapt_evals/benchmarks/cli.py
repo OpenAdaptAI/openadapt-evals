@@ -276,8 +276,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         task_ids = [t.strip() for t in args.tasks.split(",")]
     else:
         print("ERROR: Specify --task or --tasks")
-        print("Example: --task notepad_366de66e-cbae-4d72-b042-26390db2b145-WOS")
-        print("Example: --tasks notepad_366de66e-cbae-4d72-b042-26390db2b145-WOS,chrome_2ae9ba84-3a0d-4d4c-8338-3a1478dc5fe3-wos")
+        print("Example: --task notepad_1")
+        print("Example: --tasks notepad_1,notepad_2,browser_1")
         return 1
 
     # Create agent
@@ -468,7 +468,7 @@ def cmd_live(args: argparse.Namespace) -> int:
     else:
         # For live evaluation, we need explicit task IDs
         print("ERROR: --task-ids required for live evaluation")
-        print("Example: --task-ids notepad_366de66e-cbae-4d72-b042-26390db2b145-WOS,chrome_2ae9ba84-3a0d-4d4c-8338-3a1478dc5fe3-wos")
+        print("Example: --task-ids notepad_1,notepad_2,browser_1")
         return 1
 
     # Run evaluation
@@ -1494,10 +1494,10 @@ PY
                     print("      WARNING: /evaluate endpoint health check failed")
                 print("\nRun a no-API-key smoke test with:")
                 print(
-                    f"  uv run python -m openadapt_evals.benchmarks.cli live --server {server_url} --agent noop --task-ids notepad_366de66e-cbae-4d72-b042-26390db2b145-WOS"
+                    f"  uv run python -m openadapt_evals.benchmarks.cli live --server {server_url} --agent noop --task-ids notepad_1"
                 )
                 print("\nOr fully automated (starts + tests + deallocates):")
-                print("  uv run python -m openadapt_evals.benchmarks.cli smoke-live --task-id notepad_366de66e-cbae-4d72-b042-26390db2b145-WOS")
+                print("  uv run python -m openadapt_evals.benchmarks.cli smoke-live --task-id notepad_1")
                 return 0
         except Exception:
             pass
@@ -1711,174 +1711,6 @@ def cmd_azure_monitor(args: argparse.Namespace) -> int:
         return 1
 
 
-def cmd_azure_setup(args: argparse.Namespace) -> int:
-    """Set up Azure resources for WAA benchmark evaluation.
-
-    This is a simplified setup that:
-    1. Checks Azure CLI is installed and user is logged in
-    2. Creates resource group if needed
-    3. Creates ML workspace if needed
-    4. Writes config to .env file
-    """
-    import shutil
-
-    def run_az(cmd: list[str], check: bool = True) -> tuple[int, str, str]:
-        """Run az command and return (returncode, stdout, stderr)."""
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        return result.returncode, result.stdout.strip(), result.stderr.strip()
-
-    print("\n" + "=" * 50)
-    print("Azure Setup for WAA Benchmark")
-    print("=" * 50)
-
-    # Step 1: Check Azure CLI
-    print("\n[1/5] Checking Azure CLI...")
-    if not shutil.which("az"):
-        print("  ERROR: Azure CLI not found!")
-        print("\n  Install Azure CLI:")
-        print("    macOS:   brew install azure-cli")
-        print("    Windows: winget install Microsoft.AzureCLI")
-        print("    Linux:   curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash")
-        return 1
-    print("  Azure CLI is installed")
-
-    # Step 2: Check login / login if needed
-    print("\n[2/5] Checking Azure login...")
-    rc, out, err = run_az(["az", "account", "show", "-o", "json"])
-    if rc != 0:
-        print("  Not logged in. Running 'az login'...")
-        rc, out, err = run_az(["az", "login"], check=False)
-        if rc != 0:
-            print(f"  ERROR: Login failed: {err}")
-            return 1
-        rc, out, err = run_az(["az", "account", "show", "-o", "json"])
-
-    account = json.loads(out)
-    subscription_id = account.get("id")
-    user_name = account.get("user", {}).get("name", "unknown")
-    print(f"  Logged in as: {user_name}")
-    print(f"  Subscription: {account.get('name')} ({subscription_id[:8]}...)")
-
-    resource_group = args.resource_group
-    workspace_name = args.workspace
-    location = args.location
-
-    # Step 3: Create resource group
-    print(f"\n[3/5] Creating resource group '{resource_group}'...")
-    rc, out, err = run_az(["az", "group", "show", "--name", resource_group])
-    if rc == 0:
-        print(f"  Resource group '{resource_group}' already exists")
-    else:
-        rc, out, err = run_az([
-            "az", "group", "create",
-            "--name", resource_group,
-            "--location", location
-        ])
-        if rc != 0:
-            print(f"  ERROR: Failed to create resource group: {err}")
-            return 1
-        print(f"  Resource group '{resource_group}' created")
-
-    # Step 4: Install ML extension if needed and create workspace
-    print(f"\n[4/5] Creating ML workspace '{workspace_name}'...")
-
-    # Check if ml extension is installed
-    rc, out, err = run_az(["az", "extension", "list", "-o", "json"])
-    if rc == 0:
-        extensions = json.loads(out) if out else []
-        has_ml = any(ext.get("name") == "ml" for ext in extensions)
-        if not has_ml:
-            print("  Installing Azure ML CLI extension...")
-            run_az(["az", "extension", "add", "--name", "ml", "--yes"])
-
-    # Check if workspace exists
-    rc, out, err = run_az([
-        "az", "ml", "workspace", "show",
-        "--name", workspace_name,
-        "--resource-group", resource_group
-    ])
-    if rc == 0:
-        print(f"  ML workspace '{workspace_name}' already exists")
-    else:
-        print(f"  Creating ML workspace (this takes 1-2 minutes)...")
-        rc, out, err = run_az([
-            "az", "ml", "workspace", "create",
-            "--name", workspace_name,
-            "--resource-group", resource_group,
-            "--location", location
-        ])
-        if rc != 0:
-            print(f"  ERROR: Failed to create workspace: {err}")
-            return 1
-        print(f"  ML workspace '{workspace_name}' created")
-
-    # Step 5: Write to .env file
-    print(f"\n[5/5] Writing config to .env...")
-    env_path = Path(args.env_file)
-
-    # Read existing content
-    existing_content = ""
-    if env_path.exists():
-        existing_content = env_path.read_text()
-
-    # Check if Azure section exists
-    azure_vars = {
-        "AZURE_SUBSCRIPTION_ID": subscription_id,
-        "AZURE_ML_RESOURCE_GROUP": resource_group,
-        "AZURE_ML_WORKSPACE_NAME": workspace_name,
-    }
-
-    if "AZURE_SUBSCRIPTION_ID=" in existing_content:
-        print("  Updating existing Azure config in .env")
-        lines = existing_content.split("\n")
-        new_lines = []
-        for line in lines:
-            updated = False
-            for var, value in azure_vars.items():
-                if line.startswith(f"{var}="):
-                    new_lines.append(f"{var}={value}")
-                    updated = True
-                    break
-            if not updated:
-                new_lines.append(line)
-        env_path.write_text("\n".join(new_lines))
-    else:
-        # Append Azure section
-        azure_section = f"""
-# =============================================================================
-# Azure Configuration (auto-generated by azure-setup)
-# =============================================================================
-AZURE_SUBSCRIPTION_ID={subscription_id}
-AZURE_ML_RESOURCE_GROUP={resource_group}
-AZURE_ML_WORKSPACE_NAME={workspace_name}
-"""
-        with open(env_path, "a") as f:
-            f.write(azure_section)
-
-    print(f"  Config written to {env_path}")
-
-    # Validation
-    print("\n" + "=" * 50)
-    print("Setup Complete!")
-    print("=" * 50)
-    print(f"""
-Resources:
-  - Subscription: {subscription_id[:8]}...
-  - Resource Group: {resource_group}
-  - ML Workspace: {workspace_name}
-  - Location: {location}
-
-Next steps:
-  1. Run evaluation:
-     uv run python -m openadapt_evals.benchmarks.cli azure --workers 2 --task-ids notepad_366de66e-cbae-4d72-b042-26390db2b145-WOS,notepad_a7d4b6c5-569b-452e-9e1d-ffdb3d431d15-WOS
-
-  2. Estimate costs:
-     uv run python -m openadapt_evals.benchmarks.cli estimate --workers 2
-""")
-
-    return 0
-
-
 def cmd_azure(args: argparse.Namespace) -> int:
     """Run Azure-based parallel evaluation."""
     from openadapt_evals.benchmarks.azure import AzureConfig, AzureWAAOrchestrator
@@ -1890,9 +1722,7 @@ def cmd_azure(args: argparse.Namespace) -> int:
         config = AzureConfig.from_env()
     except ValueError as e:
         print(f"ERROR: {e}")
-        print("\nAzure is not configured. Run setup first:")
-        print("  uv run python -m openadapt_evals.benchmarks.cli azure-setup")
-        print("\nOr set these environment variables manually:")
+        print("\nSet these environment variables:")
         print("  AZURE_SUBSCRIPTION_ID")
         print("  AZURE_ML_RESOURCE_GROUP")
         print("  AZURE_ML_WORKSPACE_NAME")
@@ -1958,7 +1788,6 @@ def cmd_azure(args: argparse.Namespace) -> int:
             cleanup_on_complete=not args.no_cleanup,
             cleanup_stale_on_start=not args.skip_cleanup_stale,
             timeout_hours=args.timeout_hours,
-            enable_vnc=getattr(args, "enable_vnc", False),
         )
 
         # Report results
@@ -1978,682 +1807,6 @@ def cmd_azure(args: argparse.Namespace) -> int:
     except Exception as e:
         print(f"ERROR: Evaluation failed: {e}")
         return 1
-
-
-def cmd_azure_vnc(args: argparse.Namespace) -> int:
-    """Start VNC tunnels to Azure ML workers for debugging.
-
-    This command connects to running Azure ML compute instances and creates
-    SSH tunnels for VNC access. Use this to debug evaluations in progress.
-
-    Example:
-        # Start tunnels to all running workers
-        uv run python -m openadapt_evals.benchmarks.cli azure-vnc
-
-        # Keep tunnels open until Ctrl+C
-        uv run python -m openadapt_evals.benchmarks.cli azure-vnc --keep-alive
-
-        # Filter by prefix
-        uv run python -m openadapt_evals.benchmarks.cli azure-vnc --prefix waa4704
-    """
-    from openadapt_evals.benchmarks.azure import AzureConfig, AzureWAAOrchestrator
-    from pathlib import Path
-    import time
-
-    print("Connecting to Azure ML workers for VNC access...")
-
-    try:
-        config = AzureConfig.from_env()
-    except ValueError as e:
-        print(f"ERROR: {e}")
-        print("\nAzure is not configured. Set these environment variables:")
-        print("  AZURE_SUBSCRIPTION_ID")
-        print("  AZURE_ML_RESOURCE_GROUP")
-        print("  AZURE_ML_WORKSPACE_NAME")
-        return 1
-
-    # Create orchestrator (with dummy WAA path since we're not running evaluation)
-    orchestrator = AzureWAAOrchestrator(
-        config=config,
-        waa_repo_path=Path("/tmp/dummy"),
-    )
-
-    # Start tunnels to existing workers
-    prefix = getattr(args, "prefix", "waa")
-    ports = orchestrator.start_vnc_for_existing_workers(prefix=prefix)
-
-    if not ports:
-        print("\nNo VNC tunnels established. Check that:")
-        print("  1. Workers are running (use 'azure' command first)")
-        print("  2. SSH is enabled on compute instances")
-        print("  3. Your SSH key is configured")
-        return 1
-
-    if getattr(args, "keep_alive", False):
-        print("\nTunnels active. Press Ctrl+C to stop...")
-        try:
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            print("\nStopping tunnels...")
-            orchestrator.vnc_manager.stop_all_tunnels()
-    else:
-        print("\nTunnels established. They will remain open as background processes.")
-        print("To stop tunnels, use: pkill -f 'ssh -N -L'")
-
-    return 0
-
-
-def cmd_waa_image(args: argparse.Namespace) -> int:
-    """Build and push custom WAA Docker image.
-
-    The custom image includes:
-    - Modern dockurr/windows base (auto-downloads Windows 11)
-    - FirstLogonCommands patches for unattended installation
-    - Python 3.9 with transformers 4.46.2 (compatible with navi agent)
-    - api_agent.py for Claude/GPT support
-    """
-    import subprocess
-    from pathlib import Path
-
-    # Find waa_deploy directory
-    waa_deploy_dir = Path(__file__).parent.parent / "waa_deploy"
-    if not waa_deploy_dir.exists():
-        print(f"ERROR: waa_deploy directory not found at {waa_deploy_dir}")
-        return 1
-
-    dockerfile = waa_deploy_dir / "Dockerfile"
-    if not dockerfile.exists():
-        print(f"ERROR: Dockerfile not found at {dockerfile}")
-        return 1
-
-    action = args.action
-    tag = args.tag
-    local_tag = f"waa-auto:{tag}"
-
-    if action == "build":
-        print(f"Building WAA image: {local_tag}")
-        print(f"Using Dockerfile: {dockerfile}")
-        print("Platform: linux/amd64 (required for windowsarena base image)")
-        try:
-            result = subprocess.run(
-                ["docker", "build", "--platform", "linux/amd64",
-                 "-t", local_tag, str(waa_deploy_dir)],
-                check=True,
-            )
-            print(f"\nSuccessfully built: {local_tag}")
-            return 0
-        except subprocess.CalledProcessError as e:
-            print(f"ERROR: Docker build failed: {e}")
-            return 1
-        except FileNotFoundError:
-            print("ERROR: Docker not found. Please install Docker first.")
-            return 1
-
-    elif action == "push":
-        registry = args.registry
-
-        if registry == "ecr":
-            import json
-            import os
-
-            # ECR Public repository name
-            repo_name = "waa-auto"
-            region = "us-east-1"  # ECR Public is only in us-east-1
-
-            print(f"Pushing to AWS ECR Public...")
-
-            try:
-                # Check if repository exists, create if not
-                print("Checking ECR Public repository...")
-                result = subprocess.run(
-                    ["aws", "ecr-public", "describe-repositories",
-                     "--repository-names", repo_name,
-                     "--region", region],
-                    capture_output=True,
-                    text=True,
-                )
-
-                if result.returncode != 0:
-                    print(f"Creating ECR Public repository: {repo_name}")
-                    create_result = subprocess.run(
-                        ["aws", "ecr-public", "create-repository",
-                         "--repository-name", repo_name,
-                         "--region", region,
-                         "--catalog-data", "description=Custom WAA Docker image with unattended Windows installation"],
-                        capture_output=True,
-                        text=True,
-                        check=True,
-                    )
-                    repo_data = json.loads(create_result.stdout)
-                    repo_uri = repo_data["repository"]["repositoryUri"]
-                else:
-                    repo_data = json.loads(result.stdout)
-                    repo_uri = repo_data["repositories"][0]["repositoryUri"]
-
-                print(f"Repository URI: {repo_uri}")
-                full_tag = f"{repo_uri}:{tag}"
-
-                # Login to ECR Public
-                print("Logging in to ECR Public...")
-                login_result = subprocess.run(
-                    ["aws", "ecr-public", "get-login-password", "--region", region],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
-                subprocess.run(
-                    ["docker", "login", "--username", "AWS", "--password-stdin", "public.ecr.aws"],
-                    input=login_result.stdout,
-                    check=True,
-                )
-
-                # Tag for registry
-                print(f"Tagging image: {full_tag}")
-                subprocess.run(
-                    ["docker", "tag", local_tag, full_tag],
-                    check=True,
-                )
-
-                # Push
-                print(f"Pushing image: {full_tag}")
-                subprocess.run(
-                    ["docker", "push", full_tag],
-                    check=True,
-                )
-
-                print(f"\n✓ Successfully pushed: {full_tag}")
-                print(f"\nTo use this image, set:")
-                print(f"  export AZURE_DOCKER_IMAGE={full_tag}")
-                return 0
-
-            except subprocess.CalledProcessError as e:
-                print(f"ERROR: ECR push failed: {e}")
-                if e.stderr:
-                    print(f"Details: {e.stderr}")
-                print("\nMake sure AWS CLI is configured: aws configure")
-                return 1
-            except json.JSONDecodeError as e:
-                print(f"ERROR: Failed to parse AWS response: {e}")
-                return 1
-
-        elif registry == "dockerhub":
-            repo = args.repo or "openadaptai/waa-auto"
-            full_tag = f"{repo}:{tag}"
-            print(f"Pushing to Docker Hub: {full_tag}")
-
-            try:
-                # Tag for registry
-                subprocess.run(
-                    ["docker", "tag", local_tag, full_tag],
-                    check=True,
-                )
-                # Push
-                subprocess.run(
-                    ["docker", "push", full_tag],
-                    check=True,
-                )
-                print(f"\nSuccessfully pushed: {full_tag}")
-                return 0
-            except subprocess.CalledProcessError as e:
-                print(f"ERROR: Docker push failed: {e}")
-                print("\nMake sure you're logged in: docker login")
-                return 1
-
-        elif registry == "acr":
-            import os
-            acr_name = os.getenv("AZURE_ACR_NAME", "openadaptacr")
-            full_tag = f"{acr_name}.azurecr.io/waa-auto:{tag}"
-            print(f"Pushing to Azure Container Registry: {full_tag}")
-
-            try:
-                # Login to ACR
-                subprocess.run(
-                    ["az", "acr", "login", "--name", acr_name],
-                    check=True,
-                )
-                # Tag for registry
-                subprocess.run(
-                    ["docker", "tag", local_tag, full_tag],
-                    check=True,
-                )
-                # Push
-                subprocess.run(
-                    ["docker", "push", full_tag],
-                    check=True,
-                )
-                print(f"\nSuccessfully pushed: {full_tag}")
-                return 0
-            except subprocess.CalledProcessError as e:
-                print(f"ERROR: ACR push failed: {e}")
-                return 1
-        else:
-            print(f"ERROR: Unknown registry: {registry}")
-            return 1
-
-    elif action == "build-push":
-        # Build first
-        print(f"Building WAA image: {local_tag}")
-        print("Platform: linux/amd64 (required for windowsarena base image)")
-        try:
-            subprocess.run(
-                ["docker", "build", "--platform", "linux/amd64",
-                 "-t", local_tag, str(waa_deploy_dir)],
-                check=True,
-            )
-            print(f"Successfully built: {local_tag}")
-        except subprocess.CalledProcessError as e:
-            print(f"ERROR: Docker build failed: {e}")
-            return 1
-
-        # Then push
-        args.action = "push"  # Set action to push for the push logic
-        return cmd_waa_image(args)
-
-    elif action == "check":
-        registry = args.registry
-
-        if registry == "ecr":
-            import json
-
-            repo_name = "waa-auto"
-            region = "us-east-1"
-
-            print(f"Checking AWS ECR Public for waa-auto:{tag}...")
-
-            try:
-                # Check if repository exists
-                result = subprocess.run(
-                    ["aws", "ecr-public", "describe-repositories",
-                     "--repository-names", repo_name,
-                     "--region", region],
-                    capture_output=True,
-                    text=True,
-                )
-
-                if result.returncode != 0:
-                    print(f"Repository NOT found: {repo_name}")
-                    return 1
-
-                repo_data = json.loads(result.stdout)
-                repo_uri = repo_data["repositories"][0]["repositoryUri"]
-
-                # Check if tag exists
-                tags_result = subprocess.run(
-                    ["aws", "ecr-public", "describe-image-tags",
-                     "--repository-name", repo_name,
-                     "--region", region],
-                    capture_output=True,
-                    text=True,
-                )
-
-                if tags_result.returncode == 0:
-                    tags_data = json.loads(tags_result.stdout)
-                    existing_tags = [t.get("imageTag") for t in tags_data.get("imageTagDetails", [])]
-                    if tag in existing_tags:
-                        print(f"✓ Image exists: {repo_uri}:{tag}")
-                        return 0
-
-                print(f"Image NOT found: {repo_uri}:{tag}")
-                return 1
-
-            except subprocess.CalledProcessError as e:
-                print(f"ERROR: Failed to check ECR: {e}")
-                return 1
-            except json.JSONDecodeError as e:
-                print(f"ERROR: Failed to parse AWS response: {e}")
-                return 1
-
-        elif registry == "dockerhub":
-            repo = args.repo or "openadaptai/waa-auto"
-            print(f"Checking Docker Hub for {repo}:{tag}...")
-
-            # Check if image exists using Docker Hub API
-            import urllib.request
-            import urllib.error
-            url = f"https://hub.docker.com/v2/repositories/{repo}/tags/{tag}"
-            try:
-                urllib.request.urlopen(url, timeout=10)
-                print(f"Image exists: {repo}:{tag}")
-                return 0
-            except urllib.error.HTTPError as e:
-                if e.code == 404:
-                    print(f"Image NOT found: {repo}:{tag}")
-                    return 1
-                print(f"ERROR: Failed to check: {e}")
-                return 1
-
-        elif registry == "acr":
-            import os
-            acr_name = os.getenv("AZURE_ACR_NAME", "openadaptacr")
-            print(f"Checking ACR for {acr_name}.azurecr.io/waa-auto:{tag}...")
-
-            try:
-                result = subprocess.run(
-                    ["az", "acr", "repository", "show-tags",
-                     "--name", acr_name,
-                     "--repository", "waa-auto",
-                     "--output", "tsv"],
-                    capture_output=True,
-                    text=True,
-                )
-                if tag in result.stdout.split("\n"):
-                    print(f"Image exists: {acr_name}.azurecr.io/waa-auto:{tag}")
-                    return 0
-                else:
-                    print(f"Image NOT found: {acr_name}.azurecr.io/waa-auto:{tag}")
-                    return 1
-            except subprocess.CalledProcessError as e:
-                print(f"ERROR: Failed to check ACR: {e}")
-                return 1
-        else:
-            print(f"ERROR: Unknown registry: {registry}")
-            return 1
-
-    elif action == "delete":
-        registry = args.registry
-
-        if registry == "ecr":
-            repo_name = "waa-auto"
-            region = "us-east-1"
-
-            print(f"Deleting AWS ECR Public repository: {repo_name}...")
-
-            try:
-                # Check if repository exists first
-                result = subprocess.run(
-                    ["aws", "ecr-public", "describe-repositories",
-                     "--repository-names", repo_name,
-                     "--region", region],
-                    capture_output=True,
-                    text=True,
-                )
-
-                if result.returncode != 0:
-                    print(f"Repository not found: {repo_name} (already deleted or never created)")
-                    return 0
-
-                # Delete the repository
-                delete_result = subprocess.run(
-                    ["aws", "ecr-public", "delete-repository",
-                     "--repository-name", repo_name,
-                     "--region", region,
-                     "--force"],  # --force deletes even with images
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
-
-                print(f"✓ Deleted ECR Public repository: {repo_name}")
-                return 0
-
-            except subprocess.CalledProcessError as e:
-                print(f"ERROR: Failed to delete ECR repository: {e}")
-                if e.stderr:
-                    print(f"Details: {e.stderr}")
-                return 1
-
-        elif registry == "dockerhub":
-            repo = args.repo or "openadaptai/waa-auto"
-            print(f"NOTE: Docker Hub repository deletion must be done via web interface")
-            print(f"  1. Go to: https://hub.docker.com/repository/docker/{repo}/settings")
-            print(f"  2. Click 'Delete Repository'")
-            print(f"\nDocker Hub free tier doesn't charge for storage, so deletion is optional.")
-            return 0
-
-        elif registry == "acr":
-            import os
-            acr_name = os.getenv("AZURE_ACR_NAME", "openadaptacr")
-            print(f"Deleting ACR repository: {acr_name}.azurecr.io/waa-auto...")
-
-            try:
-                subprocess.run(
-                    ["az", "acr", "repository", "delete",
-                     "--name", acr_name,
-                     "--repository", "waa-auto",
-                     "--yes"],  # Skip confirmation
-                    check=True,
-                )
-                print(f"✓ Deleted ACR repository: waa-auto")
-                return 0
-            except subprocess.CalledProcessError as e:
-                print(f"ERROR: Failed to delete ACR repository: {e}")
-                return 1
-
-        else:
-            print(f"ERROR: Unknown registry: {registry}")
-            return 1
-
-    else:
-        print(f"ERROR: Unknown action: {action}")
-        return 1
-
-
-def cmd_aws_costs(args: argparse.Namespace) -> int:
-    """Show AWS costs using Cost Explorer API.
-
-    Displays current month's costs (total and by service), historical costs,
-    and ECR storage costs specifically.
-    """
-    from datetime import datetime, timedelta
-
-    months = getattr(args, "months", 3)
-    output_json = getattr(args, "json", False)
-
-    # Calculate date ranges
-    today = datetime.now()
-    # Current month: 1st of month to today
-    current_month_start = today.replace(day=1).strftime("%Y-%m-%d")
-    current_month_end = today.strftime("%Y-%m-%d")
-
-    # Historical: go back N months
-    historical_start = (today.replace(day=1) - timedelta(days=months * 31)).replace(day=1)
-    historical_start_str = historical_start.strftime("%Y-%m-%d")
-
-    results = {
-        "current_month": {},
-        "current_month_by_service": [],
-        "historical_monthly": [],
-        "ecr_costs": {},
-    }
-
-    # Check AWS CLI availability
-    try:
-        result = subprocess.run(
-            ["aws", "--version"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode != 0:
-            print("ERROR: AWS CLI not available")
-            return 1
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        print("ERROR: AWS CLI not installed or not in PATH")
-        print("Install: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html")
-        return 1
-
-    # 1. Get current month total costs
-    print("Fetching current month costs...")
-    try:
-        result = subprocess.run(
-            [
-                "aws", "ce", "get-cost-and-usage",
-                "--time-period", f"Start={current_month_start},End={current_month_end}",
-                "--granularity", "MONTHLY",
-                "--metrics", "UnblendedCost",
-                "--output", "json",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        if result.returncode == 0:
-            data = json.loads(result.stdout)
-            for period in data.get("ResultsByTime", []):
-                total = period.get("Total", {}).get("UnblendedCost", {})
-                results["current_month"] = {
-                    "amount": float(total.get("Amount", 0)),
-                    "unit": total.get("Unit", "USD"),
-                    "start": period.get("TimePeriod", {}).get("Start"),
-                    "end": period.get("TimePeriod", {}).get("End"),
-                }
-        else:
-            print(f"WARNING: Failed to get current month costs: {result.stderr}")
-    except (subprocess.TimeoutExpired, json.JSONDecodeError) as e:
-        print(f"WARNING: Error fetching current month costs: {e}")
-
-    # 2. Get current month costs by service
-    print("Fetching costs by service...")
-    try:
-        result = subprocess.run(
-            [
-                "aws", "ce", "get-cost-and-usage",
-                "--time-period", f"Start={current_month_start},End={current_month_end}",
-                "--granularity", "MONTHLY",
-                "--metrics", "UnblendedCost",
-                "--group-by", "Type=DIMENSION,Key=SERVICE",
-                "--output", "json",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        if result.returncode == 0:
-            data = json.loads(result.stdout)
-            services = []
-            for period in data.get("ResultsByTime", []):
-                for group in period.get("Groups", []):
-                    service_name = group.get("Keys", ["Unknown"])[0]
-                    cost_data = group.get("Metrics", {}).get("UnblendedCost", {})
-                    amount = float(cost_data.get("Amount", 0))
-                    if amount > 0.001:  # Only include services with non-trivial costs
-                        services.append({
-                            "service": service_name,
-                            "amount": amount,
-                            "unit": cost_data.get("Unit", "USD"),
-                        })
-            # Sort by cost descending
-            services.sort(key=lambda x: x["amount"], reverse=True)
-            results["current_month_by_service"] = services
-        else:
-            print(f"WARNING: Failed to get costs by service: {result.stderr}")
-    except (subprocess.TimeoutExpired, json.JSONDecodeError) as e:
-        print(f"WARNING: Error fetching costs by service: {e}")
-
-    # 3. Get historical monthly costs
-    print(f"Fetching historical costs ({months} months)...")
-    try:
-        result = subprocess.run(
-            [
-                "aws", "ce", "get-cost-and-usage",
-                "--time-period", f"Start={historical_start_str},End={current_month_end}",
-                "--granularity", "MONTHLY",
-                "--metrics", "UnblendedCost",
-                "--output", "json",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        if result.returncode == 0:
-            data = json.loads(result.stdout)
-            for period in data.get("ResultsByTime", []):
-                total = period.get("Total", {}).get("UnblendedCost", {})
-                time_period = period.get("TimePeriod", {})
-                results["historical_monthly"].append({
-                    "month": time_period.get("Start", "")[:7],  # YYYY-MM
-                    "amount": float(total.get("Amount", 0)),
-                    "unit": total.get("Unit", "USD"),
-                })
-        else:
-            print(f"WARNING: Failed to get historical costs: {result.stderr}")
-    except (subprocess.TimeoutExpired, json.JSONDecodeError) as e:
-        print(f"WARNING: Error fetching historical costs: {e}")
-
-    # 4. Get ECR-specific costs
-    print("Fetching ECR storage costs...")
-    try:
-        result = subprocess.run(
-            [
-                "aws", "ce", "get-cost-and-usage",
-                "--time-period", f"Start={current_month_start},End={current_month_end}",
-                "--granularity", "MONTHLY",
-                "--metrics", "UnblendedCost",
-                "--filter", json.dumps({
-                    "Dimensions": {
-                        "Key": "SERVICE",
-                        "Values": ["Amazon EC2 Container Registry (ECR)", "Amazon Elastic Container Registry"]
-                    }
-                }),
-                "--output", "json",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        if result.returncode == 0:
-            data = json.loads(result.stdout)
-            ecr_total = 0.0
-            for period in data.get("ResultsByTime", []):
-                total = period.get("Total", {}).get("UnblendedCost", {})
-                ecr_total += float(total.get("Amount", 0))
-            results["ecr_costs"] = {
-                "amount": ecr_total,
-                "unit": "USD",
-                "period": "current_month",
-            }
-        else:
-            # ECR might not have costs - that's fine
-            results["ecr_costs"] = {"amount": 0.0, "unit": "USD", "period": "current_month"}
-    except (subprocess.TimeoutExpired, json.JSONDecodeError) as e:
-        print(f"WARNING: Error fetching ECR costs: {e}")
-        results["ecr_costs"] = {"amount": 0.0, "unit": "USD", "period": "current_month"}
-
-    # Output results
-    if output_json:
-        print(json.dumps(results, indent=2))
-        return 0
-
-    # Pretty print results
-    print("\n" + "=" * 60)
-    print("AWS Cost Report")
-    print("=" * 60)
-
-    # Current month total
-    if results["current_month"]:
-        cm = results["current_month"]
-        print(f"\nCurrent Month ({cm.get('start', 'N/A')} to {cm.get('end', 'N/A')}):")
-        print(f"  Total: ${cm['amount']:.2f} {cm['unit']}")
-    else:
-        print("\nCurrent Month: No data available")
-
-    # By service
-    if results["current_month_by_service"]:
-        print("\nCosts by Service (current month):")
-        for svc in results["current_month_by_service"][:10]:  # Top 10
-            print(f"  {svc['service']:<45} ${svc['amount']:>10.2f}")
-        if len(results["current_month_by_service"]) > 10:
-            remaining = sum(s["amount"] for s in results["current_month_by_service"][10:])
-            print(f"  {'(other services)':<45} ${remaining:>10.2f}")
-
-    # ECR specific
-    if results["ecr_costs"]:
-        ecr = results["ecr_costs"]
-        print(f"\nECR Storage (current month): ${ecr['amount']:.2f}")
-
-    # Historical
-    if results["historical_monthly"]:
-        print(f"\nHistorical Monthly Costs (last {months} months):")
-        for month_data in results["historical_monthly"]:
-            print(f"  {month_data['month']}: ${month_data['amount']:.2f}")
-        total_historical = sum(m["amount"] for m in results["historical_monthly"])
-        avg_monthly = total_historical / len(results["historical_monthly"]) if results["historical_monthly"] else 0
-        print(f"  --------------------------------")
-        print(f"  Average: ${avg_monthly:.2f}/month")
-
-    print("\n" + "=" * 60)
-    return 0
 
 
 def main() -> int:
@@ -2684,9 +1837,9 @@ def main() -> int:
     run_parser.add_argument("--agent", type=str, default="api-openai",
                            help="Agent type: noop, mock, api-claude, api-openai")
     run_parser.add_argument("--task", type=str,
-                           help="Single task ID (e.g., notepad_366de66e-cbae-4d72-b042-26390db2b145-WOS)")
+                           help="Single task ID (e.g., notepad_1)")
     run_parser.add_argument("--tasks", type=str,
-                           help="Comma-separated task IDs (e.g., notepad_366de66e-cbae-4d72-b042-26390db2b145-WOS,chrome_2ae9ba84-3a0d-4d4c-8338-3a1478dc5fe3-wos)")
+                           help="Comma-separated task IDs (e.g., notepad_1,notepad_2)")
     run_parser.add_argument("--demo", type=str,
                            help="Demo trajectory file for ApiAgent")
     run_parser.add_argument("--max-steps", type=int, default=15,
@@ -2763,32 +1916,6 @@ def main() -> int:
                              help="Prefix filter for cleanup (default: 'waa')")
     azure_parser.add_argument("--dry-run", action="store_true",
                              help="List instances without deleting (for --cleanup-only)")
-    azure_parser.add_argument("--enable-vnc", action="store_true",
-                             help="Start VNC tunnels for debugging (access at localhost:8006, 8007, ...)")
-
-    # Azure VNC - Connect to running Azure ML workers for debugging
-    azure_vnc_parser = subparsers.add_parser(
-        "azure-vnc",
-        help="Start VNC tunnels to Azure ML workers for debugging"
-    )
-    azure_vnc_parser.add_argument("--prefix", type=str, default="waa",
-                                  help="Worker name prefix filter (default: 'waa')")
-    azure_vnc_parser.add_argument("--keep-alive", action="store_true",
-                                  help="Keep tunnels open until Ctrl+C (default: exit after printing URLs)")
-
-    # Azure setup command
-    azure_setup_parser = subparsers.add_parser(
-        "azure-setup",
-        help="Set up Azure resources for WAA benchmark (resource group, ML workspace)"
-    )
-    azure_setup_parser.add_argument("--resource-group", "-g", type=str, default="openadapt-agents",
-                                    help="Resource group name (default: openadapt-agents)")
-    azure_setup_parser.add_argument("--workspace", "-w", type=str, default="openadapt-ml",
-                                    help="ML workspace name (default: openadapt-ml)")
-    azure_setup_parser.add_argument("--location", "-l", type=str, default="eastus",
-                                    help="Azure region (default: eastus)")
-    azure_setup_parser.add_argument("--env-file", type=str, default=".env",
-                                    help="Path to .env file (default: .env)")
 
     # VM management commands
     vm_start_parser = subparsers.add_parser("vm-start", help="Start an Azure VM")
@@ -2855,8 +1982,8 @@ def main() -> int:
                                   help="Azure VM name (optional if tagged)")
     smoke_live_parser.add_argument("--resource-group", type=str, default=None,
                                   help="Azure resource group (optional if tagged)")
-    smoke_live_parser.add_argument("--task-id", type=str, default="notepad_366de66e-cbae-4d72-b042-26390db2b145-WOS",
-                                  help="Single task ID to run (e.g., notepad_366de66e-cbae-4d72-b042-26390db2b145-WOS)")
+    smoke_live_parser.add_argument("--task-id", type=str, default="notepad_1",
+                                  help="Single task ID to run")
     smoke_live_parser.add_argument("--max-steps", type=int, default=15,
                                   help="Max steps per task")
     smoke_live_parser.add_argument("--boot-wait", type=int, default=30,
@@ -2964,32 +2091,6 @@ def main() -> int:
     wandb_log_parser.add_argument("--dry-run", action="store_true",
                                   help="Validate data but don't upload")
 
-    # WAA Docker image management
-    waa_image_parser = subparsers.add_parser(
-        "waa-image",
-        help="Build and push custom WAA Docker image for unattended installation"
-    )
-    waa_image_parser.add_argument("action", type=str,
-                                  choices=["build", "push", "build-push", "check", "delete"],
-                                  help="Action: build, push, build-push, check, or delete")
-    waa_image_parser.add_argument("--registry", type=str, default="dockerhub",
-                                  choices=["dockerhub", "ecr", "acr"],
-                                  help="Registry: dockerhub (default, free), ecr (AWS ECR Public), or acr (Azure)")
-    waa_image_parser.add_argument("--tag", type=str, default="latest",
-                                  help="Image tag (default: latest)")
-    waa_image_parser.add_argument("--repo", type=str, default=None,
-                                  help="Repository override (default: auto-detected per registry)")
-
-    # AWS cost tracking
-    aws_costs_parser = subparsers.add_parser(
-        "aws-costs",
-        help="Show AWS costs (current month, historical, ECR storage)"
-    )
-    aws_costs_parser.add_argument("--months", type=int, default=3,
-                                  help="Number of months for historical costs (default: 3)")
-    aws_costs_parser.add_argument("--json", action="store_true",
-                                  help="Output as JSON for programmatic use")
-
     args = parser.parse_args()
 
     if args.command is None:
@@ -3006,8 +2107,6 @@ def main() -> int:
         "view": cmd_view,
         "estimate": cmd_estimate,
         "azure": cmd_azure,
-        "azure-vnc": cmd_azure_vnc,
-        "azure-setup": cmd_azure_setup,
         "azure-monitor": cmd_azure_monitor,
         "vm-start": cmd_vm_start,
         "vm-stop": cmd_vm_stop,
@@ -3020,8 +2119,6 @@ def main() -> int:
         "wandb-demo": cmd_wandb_demo,
         "wandb-report": cmd_wandb_report,
         "wandb-log": cmd_wandb_log,
-        "waa-image": cmd_waa_image,
-        "aws-costs": cmd_aws_costs,
     }
 
     handler = handlers.get(args.command)
