@@ -5,41 +5,44 @@
 [![Downloads](https://img.shields.io/pypi/dm/openadapt-evals.svg)](https://pypi.org/project/openadapt-evals/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
-[![Azure Success Rate](https://img.shields.io/badge/Azure%20Success%20Rate-95%25%2B-success)](https://github.com/OpenAdaptAI/openadapt-evals)
-[![Cost Savings](https://img.shields.io/badge/Cost%20Savings-67%25-brightgreen)](https://github.com/OpenAdaptAI/openadapt-evals/blob/main/COST_OPTIMIZATION.md)
-
-Evaluation infrastructure for GUI agent benchmarks.
+Evaluation infrastructure for GUI agent benchmarks. **Simplified CLI toolkit for Windows Agent Arena.**
 
 ## Overview
 
 `openadapt-evals` provides a unified framework for evaluating GUI automation agents across standardized benchmarks like Windows Agent Arena (WAA), OSWorld, WebArena, and others.
 
-## Recent Improvements
+## Windows Agent Arena (WAA) - Headline Feature
 
-We've made significant improvements to reliability, cost-efficiency, and observability:
+> **Status**: Actively running full 154-task evaluation. Results coming soon.
 
-### Azure Reliability (v0.2.0 - January 2026)
-- **95%+ Success Rate Target**: Fixed nested virtualization issues that caused 0% task completion
-- **VM Configuration**: Upgraded to `Standard_D4s_v5` with proper nested virtualization support
+A **simplified CLI toolkit** for the [Windows Agent Arena](https://github.com/microsoft/WindowsAgentArena) benchmark, providing:
+- Easy Azure VM setup and SSH tunnel management
+- Agent adapters for Claude, GPT-4o, and custom agents
+- Results viewer with per-domain breakdown
+- Parallelization support for faster evaluations
+
+See the [WAA Benchmark Results](#waa-benchmark-results) section below for current status.
+
+## Roadmap (In Progress)
+
+The following features are under active development:
+
+### Azure Reliability (`[IN PROGRESS]`)
+- **Goal**: 95%+ task completion rate (vs. early issues with 0%)
+- **VM Configuration**: Using `Standard_D4s_v5` with nested virtualization (configurable)
 - **Health Monitoring**: Automatic detection and retry of stuck jobs
-- **Fast Failure Detection**: 10-minute timeout instead of 8+ hour hangs
-- See [PR #11](https://github.com/OpenAdaptAI/openadapt-evals/pull/11) for details
 
-### Cost Optimization (v0.2.0 - January 2026)
-- **67% Cost Reduction**: From $7.68 to $2.50 per full evaluation (154 tasks)
-- **Tiered VM Sizing**: Automatic VM size selection based on task complexity (37% savings)
-- **Spot Instance Support**: 70-80% discount on compute costs (64% savings with tiered VMs)
-- **Azure Container Registry**: 10x faster image pulls (1-2 min vs 8-12 min)
-- **Real-time Cost Tracking**: Monitor costs during evaluation
-- See [COST_OPTIMIZATION.md](./COST_OPTIMIZATION.md) and [PR #13](https://github.com/OpenAdaptAI/openadapt-evals/pull/13) for details
+### Cost Optimization (`[IN PROGRESS]`)
+- **Goal**: Reduce per-evaluation cost from ~$7.68 to ~$2.50 (154 tasks)
+- **Tiered VM Sizing**: Match VM size to task complexity
+- **Spot Instance Support**: Use preemptible VMs for 70-80% discount
+- See [COST_OPTIMIZATION.md](./COST_OPTIMIZATION.md) for design
 
-### Screenshot Validation & Viewer (v0.2.0 - January 2026)
-- **Real Benchmark Screenshots**: Viewer now displays actual WAA evaluation screenshots
+### Benchmark Viewer (Available)
+- **Real Benchmark Screenshots**: Viewer displays actual WAA evaluation screenshots
 - **Auto-Screenshot Tool**: Automated screenshot generation with Playwright
-- **Screenshot Validation**: Manifest-based validation ensuring correctness
 - **Execution Logs**: Step-by-step logs with search and filtering
-- **Live Monitoring**: Real-time Azure ML job monitoring with auto-refresh
-- See [PR #6](https://github.com/OpenAdaptAI/openadapt-evals/pull/6) for details
+- **Live Monitoring**: Real-time progress tracking
 
 ## Installation
 
@@ -79,7 +82,7 @@ adapter = WAALiveAdapter(config)
 agent = ApiAgent(provider="anthropic")  # or "openai" for GPT-5.1
 
 # Run evaluation
-results = evaluate_agent_on_benchmark(agent, adapter, task_ids=["notepad_1"])
+results = evaluate_agent_on_benchmark(agent, adapter, task_ids=["notepad_366de66e-cbae-4d72-b042-26390db2b145-WOS"])
 
 # Compute metrics
 metrics = compute_metrics(results)
@@ -262,7 +265,7 @@ The package provides a CLI for running WAA evaluations:
 python -m openadapt_evals.benchmarks.cli probe --server http://vm-ip:5000
 
 # Run live evaluation against a WAA server
-python -m openadapt_evals.benchmarks.cli live --server http://vm-ip:5000 --task-ids notepad_1,notepad_2
+python -m openadapt_evals.benchmarks.cli live --server http://vm-ip:5000 --task-ids notepad_366de66e-cbae-4d72-b042-26390db2b145-WOS,notepad_a7d4b6c5-569b-452e-9e1d-ffdb3d431d15-WOS
 
 # Generate HTML viewer for results
 python -m openadapt_evals.benchmarks.cli view --run-name my_eval_run
@@ -298,7 +301,7 @@ if not adapter.check_connection():
     print("WAA server not ready")
 
 # Run evaluation
-results = evaluate_agent_on_benchmark(agent, adapter, task_ids=["notepad_1"])
+results = evaluate_agent_on_benchmark(agent, adapter, task_ids=["notepad_366de66e-cbae-4d72-b042-26390db2b145-WOS"])
 ```
 
 ### Local WAA Evaluation
@@ -317,6 +320,11 @@ results = evaluate_agent_on_benchmark(agent, adapter, task_ids=[t.task_id for t 
 ### Azure-based Parallel Evaluation
 
 Run WAA at scale using Azure ML compute with optimized costs:
+
+> **⚠️ Quota Requirements**: Parallel evaluation requires sufficient Azure vCPU quota.
+> - Default VM: `Standard_D4s_v5` (4 vCPUs per worker)
+> - 10 workers = 40 vCPUs required
+> - Default quota is typically 10 vCPUs - [request an increase](https://learn.microsoft.com/en-us/azure/quotas/quickstart-increase-quota-portal) before running parallel evaluations
 
 ```bash
 # Install Azure dependencies
@@ -358,7 +366,7 @@ results = orchestrator.run_evaluation(
 )
 ```
 
-**Azure Reliability**: The orchestrator now uses `Standard_D4s_v5` VMs with proper nested virtualization support and automatic health monitoring, achieving 95%+ success rates.
+**Azure Reliability**: The orchestrator uses `Standard_D4s_v5` VMs with nested virtualization support and automatic health monitoring.
 
 ### Live Monitoring
 
@@ -371,7 +379,7 @@ pip install openadapt-evals[viewer]
 # Start an Azure evaluation (in terminal 1)
 python -m openadapt_evals.benchmarks.cli azure \
     --workers 1 \
-    --task-ids notepad_1,browser_1 \
+    --task-ids notepad_366de66e-cbae-4d72-b042-26390db2b145-WOS,chrome_2ae9ba84-3a0d-4d4c-8338-3a1478dc5fe3-wos \
     --waa-path /path/to/WAA
 
 # Monitor job logs in real-time (in terminal 2)
