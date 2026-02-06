@@ -366,7 +366,7 @@ print(f"Savings: {optimized['savings_percentage']}%")
 | `AZURE_ENABLE_TIERED_VMS` | Enable automatic VM tier selection | false |
 | `AZURE_USE_SPOT_INSTANCES` | Use spot instances | false (true for development) |
 | `AZURE_MAX_SPOT_PRICE` | Maximum hourly spot price | 0.5 |
-| `AZURE_DOCKER_IMAGE` | Docker image to use | public.ecr.aws/g3w3k7s5/waa-auto:latest |
+| `AZURE_DOCKER_IMAGE` | Docker image to use | windowsarena/winarena:latest |
 
 ## API Reference
 
