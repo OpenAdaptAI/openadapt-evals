@@ -132,8 +132,6 @@ sudo apt-get install -y docker.io
 sudo systemctl start docker
 sudo systemctl enable docker
 sudo usermod -aG docker $USER
-# TODO: Switch to openadaptai/waa-auto:latest once it's published to Docker Hub
-# The vanilla image requires manual setup; waa-auto has unattended installation
 sudo docker pull windowsarena/winarena:latest
 echo "WAA image pulled successfully"
 """
