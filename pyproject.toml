@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "openadapt-evals"
-version = "0.1.1"
+version = "0.1.2"
 description = "Evaluation infrastructure for GUI agent benchmarks"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -91,3 +91,13 @@ packages = ["openadapt_evals"]
 
 [tool.ruff]
 line-length = 100
+
+[tool.semantic_release]
+version_toml = ["pyproject.toml:project.version"]
+branch = "main"
+commit_message = "chore: release {version}"
+
+[tool.semantic_release.commit_parser_options]
+allowed_tags = ["build", "chore", "ci", "docs", "feat", "fix", "perf", "refactor", "style", "test"]
+minor_tags = ["feat"]
+patch_tags = ["fix", "perf"]
