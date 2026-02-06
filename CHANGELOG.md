@@ -1,6 +1,156 @@
 # CHANGELOG
 
 
+## v0.2.0 (2026-02-06)
+
+### Features
+
+- **azure**: Implement Azure ML parallelization for WAA evaluation
+  ([#24](https://github.com/OpenAdaptAI/openadapt-evals/pull/24),
+  [`077f339`](https://github.com/OpenAdaptAI/openadapt-evals/commit/077f339408001b9e95f890865897cf95999c2668))
+
+* docs: replace aspirational claims with honest placeholders
+
+- Remove unvalidated badges (95%+ success rate, 67% cost savings) - Add "First open-source WAA
+  reproduction" as headline - Move WAA to top as main feature with status indicator - Change "Recent
+  Improvements" to "Roadmap (In Progress)" - Remove v0.2.0 version references (current is v0.1.1) -
+  Add Azure quota requirements note for parallelization - Mark features as [IN PROGRESS] where
+  appropriate
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+
+* feat(azure): implement Azure ML parallelization for WAA evaluation
+
+Complete the Azure ML parallelization implementation:
+
+1. Agent config serialization (_serialize_agent_config): - Extracts provider, model, and API keys
+  from agent - Passes OPENAI_API_KEY/ANTHROPIC_API_KEY via env vars - Supports OpenAI and Anthropic
+  agents
+
+2. Worker command building (_build_worker_command): - Uses vanilla WAA run.py with --worker_id and
+  --num_workers - Matches Microsoft's official Azure deployment pattern - Task distribution handled
+  by WAA internally
+
+3. Result fetching (_fetch_worker_results, _parse_waa_results): - Downloads job outputs via Azure ML
+  SDK - Parses WAA result.txt files (0.0 or 1.0 score) - Handles partial results for failed jobs
+
+4. Job status tracking: - Added job_name field to WorkerState - Updated _wait_and_collect_results to
+  poll job status - Fixed: was checking compute status instead of job status
+
+5. Log fetching (get_job_logs in AzureMLClient): - Downloads logs via az ml job download - Supports
+  tail parameter for last N lines - Updated health_checker to use new method
+
+Uses vanilla windowsarena/winarena:latest with VERSION=11e.
+
+* docs: fix inaccurate "first reproduction" claim
+
+WAA is already open-source from Microsoft. Changed to accurate claim: "Simplified CLI toolkit for
+  Windows Agent Arena"
+
+Updated value proposition to reflect what we actually provide: - Azure VM setup and SSH tunnel
+  management - Agent adapters for Claude/GPT/custom agents - Results viewer - Parallelization
+  support
+
+* docs: fix VM size to match code (D4s_v5 not D8ds_v5)
+
+The code uses Standard_D4s_v5 (4 vCPUs) by default, not D8ds_v5. Updated all references to be
+  accurate.
+
+* feat(cli): add azure-setup command for easy Azure configuration
+
+New command that: - Checks Azure CLI installation and login status - Creates resource group
+  (default: openadapt-agents) - Creates ML workspace (default: openadapt-ml) - Writes config to .env
+  file
+
+Usage: uv run python -m openadapt_evals.benchmarks.cli azure-setup
+
+Also improved azure command error message to guide users to run setup.
+
+* feat(cli): add waa-image command for building custom Docker image
+
+The vanilla windowsarena/winarena:latest image does NOT work for unattended WAA installation. This
+  adds:
+
+- `waa-image build` - Build custom waa-auto image locally - `waa-image push` - Push to Docker Hub or
+  ACR - `waa-image build-push` - Build and push in one command - `waa-image check` - Check if image
+  exists in registry
+
+Also updates azure.py to use openadaptai/waa-auto:latest as default image.
+
+The custom Dockerfile (in waa_deploy/) includes: - Modern dockurr/windows base (auto-downloads
+  Windows 11) - FirstLogonCommands patches for unattended installation - Python 3.9 with
+  transformers 4.46.2 (navi agent compatibility) - api_agent.py for Claude/GPT support
+
+* feat(cli): add AWS ECR Public support for waa-image command
+
+- Add ECR as the default registry (ecr, dockerhub, acr options) - Auto-create ECR repository if it
+  doesn't exist - Auto-login to ECR Public using AWS CLI - Update azure.py to use
+  public.ecr.aws/g3w3k7s5/waa-auto:latest as default - Update docs with new default image
+
+ECR Public is preferred because: - No Docker Hub login required - Uses existing AWS credentials -
+  Public access for Azure ML to pull without cross-cloud auth
+
+* fix(cli): add --platform linux/amd64 flag for Docker build
+
+The windowsarena/winarena base image is only available for linux/amd64. This fixes builds on macOS
+  (arm64) by explicitly specifying the target platform.
+
+* feat(cli): add aws-costs command and waa-image delete action
+
+- Add `aws-costs` command to show AWS cost breakdown using Cost Explorer API - Shows current month
+  costs (total and by service) - Shows historical monthly costs - Shows ECR storage costs
+  specifically
+
+- Add `waa-image delete` action to clean up registry resources - ECR: Deletes repository with
+  --force - Docker Hub: Shows manual instructions (free tier) - ACR: Deletes repository
+
+- Change default registry from ECR to Docker Hub - Docker Hub is free (no storage charges) - Use ECR
+  when rate limiting becomes an issue
+
+* ci: add auto-release workflow
+
+Automatically bumps version and creates tags on PR merge: - feat: minor version bump - fix/perf:
+  patch version bump - docs/style/refactor/test/chore/ci/build: patch version bump
+
+Triggers publish.yml which deploys to PyPI.
+
+* fix(azure): use SDK V1 DockerConfiguration for WAA container execution
+
+Root cause: Azure ML compute instances don't have Docker installed. Our code used SDK V2 command
+  jobs which run in bare Python environment, never calling /entry_setup.sh to start QEMU/Windows.
+
+Fix follows Microsoft's official WAA Azure pattern: - Add azureml-core dependency (SDK V1) - Use
+  DockerConfiguration with NET_ADMIN capability for QEMU networking - Create run_entry.py that calls
+  /entry_setup.sh before running client - Create compute-instance-startup.sh to stop conflicting
+  services (DNS, nginx) - Use ScriptRunConfig instead of raw command jobs
+
+* fix(cli): replace synthetic task IDs with real WAA UUID format
+
+- Updated CLI help text and examples to use valid WAA task IDs - Fixed smoke-live default task ID
+  (critical: was causing immediate failure) - Updated README examples with real notepad/chrome task
+  IDs - Fixed azure.py comment about WAA task ID format - Fixed retrieval_agent.py docstring example
+
+Real task IDs used from test_all.json: - notepad: 366de66e-cbae-4d72-b042-26390db2b145-WOS - chrome:
+  2ae9ba84-3a0d-4d4c-8338-3a1478dc5fe3-wos
+
+* fix(cli): add domain prefix to WAA task IDs
+
+WAA adapter creates task_ids as `{domain}_{uuid}-WOS`, not just `{uuid}-WOS`. Updated all examples
+  to use correct format: `notepad_366de66e...` instead of just `366de66e...`.
+
+* fix(azure): enable SSH and fix SSH info detection for Azure ML compute instances
+
+- Add ssh_public_access_enabled=True when creating compute instances - Fix get_compute_ssh_info() to
+  check network_settings.public_ip_address - Fix type check for compute instance type (lowercase
+  comparison)
+
+This enables VNC access to Azure ML compute instances for debugging WAA evaluation.
+
+---------
+
+Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com>
+
+
 ## v0.1.2 (2026-01-29)
 
 ### Bug Fixes
