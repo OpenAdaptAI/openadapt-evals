@@ -56,10 +56,10 @@ SSH_OPTS = [
     "ServerAliveCountMax=10",
 ]
 
-# VM size constants
-VM_SIZE_STANDARD = "Standard_D4ds_v4"
-VM_SIZE_FAST = "Standard_D8ds_v5"
-VM_SIZE_FAST_FALLBACKS = [
+# VM size: D8ds_v5 ($0.38/hr, 8 vCPU, 32GB RAM)
+# D4ds_v4 (16GB) OOMs with navi agent's GroundingDINO + SoM models — do not use.
+VM_SIZE = "Standard_D8ds_v5"
+VM_SIZE_FALLBACKS = [
     ("Standard_D8ds_v5", 0.38),
     ("Standard_D8s_v5", 0.36),
     ("Standard_D8ds_v4", 0.38),
@@ -367,17 +367,11 @@ class AzureVMManager:
         )
         return result.returncode == 0
 
-    def find_available_size_and_region(
-        self,
-        fast: bool = True,
-    ) -> tuple[str, str, float]:
+    def find_available_size_and_region(self) -> tuple[str, str, float]:
         """Find a working VM size and region by creating a test VM.
 
         Tries size/region combinations until one succeeds, then cleans up
         the test VM.
-
-        Args:
-            fast: If True, try D8 sizes first. If False, use standard D4.
 
         Returns:
             Tuple of (vm_size, region, cost_per_hour).
@@ -385,10 +379,7 @@ class AzureVMManager:
         Raises:
             RuntimeError: If no available size/region found.
         """
-        if fast:
-            sizes_to_try = VM_SIZE_FAST_FALLBACKS
-        else:
-            sizes_to_try = [(VM_SIZE_STANDARD, 0.19)]
+        sizes_to_try = VM_SIZE_FALLBACKS
 
         test_vm_to_cleanup = None
         try:

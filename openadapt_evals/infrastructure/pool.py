@@ -173,7 +173,6 @@ class PoolManager:
     def create(
         self,
         workers: int = 3,
-        fast: bool = True,
         auto_shutdown_hours: int = 4,
     ) -> VMPool:
         """Create a pool of VMs for parallel WAA evaluation.
@@ -182,7 +181,6 @@ class PoolManager:
 
         Args:
             workers: Number of worker VMs to create.
-            fast: If True, use D8 VM sizes. If False, use standard D4.
             auto_shutdown_hours: Hours until auto-shutdown (safety net).
 
         Returns:
@@ -199,9 +197,7 @@ class PoolManager:
 
         # Find available size/region
         self._log("POOL", "Finding available region and VM size...")
-        vm_size, region, cost = self.vm_manager.find_available_size_and_region(
-            fast=fast,
-        )
+        vm_size, region, cost = self.vm_manager.find_available_size_and_region()
         self._log("POOL", f"Using {vm_size} (${cost:.2f}/hr) in {region}")
 
         if auto_shutdown_hours > 0:
