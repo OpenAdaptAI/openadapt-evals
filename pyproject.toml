@@ -33,6 +33,7 @@ keywords = ["gui", "automation", "evaluation", "benchmark", "agent", "ai"]
 dependencies = [
     "open-clip-torch>=2.20.0",
     "pillow>=10.0.0",
+    "pydantic-settings>=2.0.0",
     "python-dotenv>=1.2.1",
     "tenacity>=8.2.0",
     "requests>=2.28.0",
@@ -52,6 +53,10 @@ azure = [
     # Azure ML dependencies for distributed WAA evaluation
     "azure-ai-ml>=1.12.0",
     "azure-identity>=1.15.0",
+    # Azure VM management (SDK path)
+    "azure-mgmt-compute>=33.0.0",
+    "azure-mgmt-network>=27.0.0",
+    "azure-mgmt-resource>=23.2.0",
 ]
 retrieval = [
     # For RetrievalAugmentedAgent with automatic demo selection
@@ -77,6 +82,8 @@ test = [
 oa = "openadapt_evals.cli.main:main"
 # Legacy entry point (kept for backward compatibility)
 openadapt-evals = "openadapt_evals.benchmarks.cli:main"
+# VM/pool infrastructure CLI (migrated from openadapt-ml)
+oa-vm = "openadapt_evals.benchmarks.vm_cli:main"
 
 [project.urls]
 Homepage = "https://github.com/OpenAdaptAI/openadapt-evals"
