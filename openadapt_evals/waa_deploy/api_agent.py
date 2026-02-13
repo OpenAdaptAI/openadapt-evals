@@ -13,10 +13,10 @@ Why this exists:
 
 Usage from CLI:
     # Run with Claude Sonnet 4.5 (requires ANTHROPIC_API_KEY)
-    uv run python -m openadapt_evals.cli vm run-waa --agent api-claude --num-tasks 5
+    uv run python -m openadapt_evals.benchmarks.vm_cli vm run-waa --agent api-claude --num-tasks 5
 
     # Run with GPT-5.1 (requires OPENAI_API_KEY)
-    uv run python -m openadapt_evals.cli vm run-waa --agent api-openai --num-tasks 5
+    uv run python -m openadapt_evals.benchmarks.vm_cli vm run-waa --agent api-openai --num-tasks 5
 
 How it works:
     1. The Dockerfile copies this file to /client/mm_agents/api_agent.py
@@ -118,7 +118,9 @@ def format_accessibility_tree(tree: dict, indent: int = 0, max_depth: int = 5) -
     bbox_str = ""
     if "bounding_rectangle" in tree:
         br = tree["bounding_rectangle"]
-        bbox_str = f" [{br.get('left', 0)},{br.get('top', 0)},{br.get('right', 0)},{br.get('bottom', 0)}]"
+        bbox_str = (
+            f" [{br.get('left', 0)},{br.get('top', 0)},{br.get('right', 0)},{br.get('bottom', 0)}]"
+        )
 
     line = f"{prefix}[{node_id}] {role}"
     if name:
@@ -229,9 +231,7 @@ class ApiAgent:
 
                 self._client = OpenAI(api_key=self.api_key)
             except ImportError:
-                raise RuntimeError(
-                    "openai package required. Install with: pip install openai"
-                )
+                raise RuntimeError("openai package required. Install with: pip install openai")
         else:
             raise ValueError(f"Unsupported provider: {provider}")
 
@@ -242,9 +242,7 @@ class ApiAgent:
         self.memory_block_text = "# empty memory block"
         self.step_counter = 0
 
-        logger.info(
-            f"ApiAgent initialized with provider={provider}, model={self.model}"
-        )
+        logger.info(f"ApiAgent initialized with provider={provider}, model={self.model}")
         if self.demo:
             logger.info(
                 f"Demo trajectory provided ({len(self.demo)} chars) - will persist across all steps"
@@ -386,18 +384,14 @@ class ApiAgent:
             actions = [code_text]
             self.prev_actions.append(code_text)
             # Store rich history with reasoning (memory + action)
-            self._add_to_history(
-                f"Thought: {self.memory_block_text}\nAction: {code_text}"
-            )
+            self._add_to_history(f"Thought: {self.memory_block_text}\nAction: {code_text}")
         else:
             # Try to extract action from response text
             action = self._parse_action_from_text(response_text, w, h)
             if action:
                 actions = [action]
                 self.prev_actions.append(action)
-                self._add_to_history(
-                    f"Thought: {self.memory_block_text}\nAction: {action}"
-                )
+                self._add_to_history(f"Thought: {self.memory_block_text}\nAction: {action}")
             else:
                 logger.warning("Could not extract action from response")
                 actions = ["# Could not parse action"]
@@ -448,11 +442,7 @@ class ApiAgent:
 
             # Extract text from response
             parts = getattr(resp, "content", [])
-            texts = [
-                getattr(p, "text", "")
-                for p in parts
-                if getattr(p, "type", "") == "text"
-            ]
+            texts = [getattr(p, "text", "") for p in parts if getattr(p, "type", "") == "text"]
             return "\n".join([t for t in texts if t]).strip()
 
         elif self.provider == "openai":
