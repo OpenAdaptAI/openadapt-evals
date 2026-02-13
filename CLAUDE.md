@@ -57,23 +57,28 @@ uv run python -m openadapt_evals.benchmarks.cli up
 
 ---
 
-## 🎯 WAA BENCHMARK WORKFLOW (COMPLETE GUIDE)
+## WAA BENCHMARK WORKFLOW (COMPLETE GUIDE)
 
 ### Architecture Overview
 
-The WAA setup spans TWO repos with distinct responsibilities:
+All evaluation infrastructure lives in openadapt-evals. Three CLI entry points:
+
+- `oa` — unified CLI (`oa evals run`, `oa evals mock`)
+- `oa-vm` — VM/pool management (`oa-vm pool-create`, `oa-vm status`)
+- `openadapt-evals` — legacy entry point
 
 ```
-LOCAL MACHINE
-├── openadapt-ml CLI (VM management)
-│   - vm setup-waa    # Create VM + Docker + WAA
-│   - vm monitor      # Dashboard + SSH tunnels
-│   - vm deallocate   # Stop billing
+LOCAL MACHINE (openadapt-evals)
+├── oa-vm CLI (VM + pool management)
+│   - create / delete    # Single VM lifecycle
+│   - pool-create / pool-cleanup  # Multi-VM pools
+│   - vm monitor         # Dashboard + SSH tunnels
+│   - pool-run           # Distributed benchmark execution
 │
-├── openadapt-evals CLI (benchmark execution)
-│   - run             # Simplified benchmark run
-│   - live            # Full control live eval
-│   - mock            # No VM needed
+├── oa CLI (benchmark execution)
+│   - evals run          # Simplified benchmark run
+│   - evals live         # Full control live eval
+│   - evals mock         # No VM needed
 │
 └── SSH Tunnels (auto-managed by vm monitor)
     - localhost:5001 → VM:5000 (WAA Flask API)
@@ -89,21 +94,24 @@ AZURE VM (Ubuntu)
 
 ### Step-by-Step Workflow
 
-**Step 1: Setup VM (from openadapt-ml, first time only)**
-```bash
-cd /Users/abrichr/oa/src/openadapt-ml
-uv run python -m openadapt_ml.benchmarks.cli vm setup-waa ```
+All commands run from openadapt-evals (`cd /Users/abrichr/oa/src/openadapt-evals`).
 
-**Step 2: Start Dashboard and Tunnels (from openadapt-ml)**
+**Step 1: Create VM Pool**
 ```bash
-uv run python -m openadapt_ml.benchmarks.cli vm monitor
+# Single VM for quick tests
+oa-vm pool-create --workers 1
+
+# Multiple VMs for parallel evaluation
+oa-vm pool-create --workers 3
 ```
-Keep this running! It manages SSH tunnels automatically.
 
-**Step 3: Run Benchmark (from openadapt-evals)**
+**Step 2: Wait for WAA Ready**
 ```bash
-cd /Users/abrichr/oa/src/openadapt-evals
+oa-vm pool-wait
+```
 
+**Step 3: Run Benchmark**
+```bash
 # Quick smoke test (no API key needed)
 uv run python -m openadapt_evals.benchmarks.cli run --agent noop --task notepad_1
 
@@ -113,8 +121,8 @@ uv run python -m openadapt_evals.benchmarks.cli run --agent api-openai --task no
 # With Claude
 uv run python -m openadapt_evals.benchmarks.cli run --agent api-claude --task notepad_1
 
-# Multiple tasks
-uv run python -m openadapt_evals.benchmarks.cli run --agent api-openai --tasks notepad_1,notepad_2
+# Distributed across pool
+oa-vm pool-run --tasks 10
 ```
 
 **Step 4: View Results**
@@ -122,15 +130,14 @@ uv run python -m openadapt_evals.benchmarks.cli run --agent api-openai --tasks n
 uv run python -m openadapt_evals.benchmarks.cli view --run-name live_eval
 ```
 
-**Step 5: Stop VM (from openadapt-ml)**
+**Step 5: Cleanup (Stop Billing)**
 ```bash
-cd /Users/abrichr/oa/src/openadapt-ml
-uv run python -m openadapt_ml.benchmarks.cli vm deallocate -y
+oa-vm pool-cleanup -y
 ```
 
 ### Key Points
 
-1. **Two CLIs** - openadapt-ml manages VM/Docker, openadapt-evals runs benchmarks
+1. **One repo** - all VM management AND benchmark execution in openadapt-evals
 2. **SSH tunnels required** - Azure NSG blocks direct port access
 3. **Default server is localhost:5001** - The `run` command uses this automatically
 4. **WAA runs INSIDE Windows** - Not on the Ubuntu host
@@ -139,6 +146,8 @@ uv run python -m openadapt_ml.benchmarks.cli vm deallocate -y
 ---
 
 ## CLI Commands
+
+### Benchmark CLI (`openadapt_evals.benchmarks.cli`)
 
 | Command | Description |
 |---------|-------------|
@@ -151,10 +160,24 @@ uv run python -m openadapt_ml.benchmarks.cli vm deallocate -y
 | `estimate` | Estimate Azure costs |
 | `dashboard` | Generate VM usage dashboard |
 | `up` | All-in-one: Start VM + WAA server + wait until ready |
-| `vm-start` | Start an Azure VM |
-| `vm-stop` | Stop (deallocate) an Azure VM |
-| `vm-status` | Check Azure VM status and IP |
-| `vm-setup` | Full WAA container setup (automated) |
+
+### VM/Pool CLI (`oa-vm`)
+
+| Command | Description |
+|---------|-------------|
+| `pool-create --workers N` | Create N VMs with Docker + WAA |
+| `pool-wait` | Wait for WAA server ready on all workers |
+| `pool-run --tasks N` | Run N tasks distributed across workers |
+| `pool-status` | Show status of all pool VMs |
+| `pool-vnc` | Open VNC to pool workers |
+| `pool-logs` | Stream logs from all workers |
+| `pool-cleanup -y` | Delete all pool VMs and resources |
+| `create --fast` | Create single VM |
+| `delete` | Delete VM and all resources |
+| `status` | Show VM status and IP |
+| `vm monitor` | Dashboard + SSH tunnels |
+| `deallocate` | Stop VM (preserves disk, stops billing) |
+| `azure-ml-quota-wait` | Wait for Azure quota approval |
 
 ### `run` Command (Recommended for Live Evaluation)
 
@@ -193,14 +216,28 @@ openadapt_evals/
 │   ├── base.py               # BenchmarkAdapter ABC
 │   ├── waa.py                # WAAAdapter, WAAMockAdapter
 │   └── waa_live.py           # WAALiveAdapter (HTTP)
+├── infrastructure/            # Azure VM/pool management (migrated from openadapt-ml)
+│   ├── azure_vm.py           # AzureVMManager (SDK + az CLI)
+│   ├── pool.py               # PoolManager (multi-VM orchestration)
+│   ├── vm_monitor.py         # VMMonitor dashboard
+│   ├── azure_ops_tracker.py  # Azure operations tracking
+│   ├── resource_tracker.py   # Cost tracking
+│   └── ssh_tunnel.py         # SSH tunnel manager
+├── waa_deploy/                # Docker agent deployment (migrated from openadapt-ml)
+│   ├── api_agent.py          # ApiAgent for WAA container
+│   └── Dockerfile            # WAA Docker image
 ├── server/                    # WAA server extensions
 │   ├── evaluate_endpoint.py  # /evaluate endpoint
 │   └── waa_server_patch.py   # Deploy script
 ├── benchmarks/                # Evaluation utilities
 │   ├── runner.py             # evaluate_agent_on_benchmark()
 │   ├── azure.py              # AzureWAAOrchestrator
-│   ├── cli.py                # Unified CLI
+│   ├── cli.py                # Benchmark CLI (run, mock, live, view)
+│   ├── vm_cli.py             # VM/Pool CLI (oa-vm entry point, 50+ commands)
+│   ├── pool_viewer.py        # Pool results HTML viewer
+│   ├── trace_export.py       # Training data export
 │   └── viewer.py             # HTML viewer
+├── config.py                  # Settings (pydantic-settings, .env loading)
 └── __init__.py
 ```
 
@@ -227,7 +264,11 @@ agent = ApiAgent(provider="anthropic", demo="Step 1: Click Start menu\n...")
 | `agents/retrieval_agent.py` | Auto demo selection |
 | `adapters/waa_live.py` | HTTP adapter for WAA server |
 | `benchmarks/azure.py` | Azure orchestrator with cost optimization |
-| `benchmarks/cli.py` | CLI entry point |
+| `benchmarks/cli.py` | Benchmark CLI entry point |
+| `benchmarks/vm_cli.py` | VM/Pool CLI (`oa-vm`, 50+ commands) |
+| `infrastructure/azure_vm.py` | AzureVMManager (SDK + az CLI fallback) |
+| `infrastructure/pool.py` | PoolManager for parallel evaluation |
+| `config.py` | Settings (pydantic-settings, .env loading) |
 
 ## Azure Dashboard
 
@@ -239,11 +280,11 @@ Shows: real-time costs, VM status, activity logs, start/stop controls.
 ## WAA Container Setup
 
 ```bash
-uv run python -m openadapt_evals.benchmarks.cli vm-setup --auto-verify
+oa-vm vm setup-waa
 ```
 
 Automated WAA deployment (95%+ reliability). Fresh VM: 15-20 min, existing: 2-5 min.
-Implementation: bash script in cli.py. Use `--help` for troubleshooting.
+Implementation: in `benchmarks/vm_cli.py`. Use `--help` for troubleshooting.
 
 ## Screenshot Requirements
 
