@@ -129,7 +129,7 @@ def setup_vnc_tunnel_and_browser(ip: str) -> Optional[subprocess.Popen]:
 
 
 # Dockerfile location (relative to this file)
-DOCKERFILE_PATH = Path(__file__).parent / "waa_deploy" / "Dockerfile"
+DOCKERFILE_PATH = Path(__file__).parent.parent / "waa_deploy" / "Dockerfile"
 
 # =============================================================================
 # Logging
@@ -7179,7 +7179,7 @@ def cmd_view_pool(args):
 
 def cmd_tail_output(args):
     """List or tail background task output files."""
-    task_dir = Path("/private/tmp/claude-501/-Users-abrichr-oa-src-openadapt-ml/tasks/")
+    task_dir = Path("/private/tmp/claude-501/-Users-abrichr-oa-src-openadapt-evals/tasks/")
 
     if not task_dir.exists():
         print(f"Task directory not found: {task_dir}")
