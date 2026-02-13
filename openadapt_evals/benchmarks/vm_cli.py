@@ -46,19 +46,16 @@ from typing import Optional
 # Constants (single source of truth)
 # =============================================================================
 
-# VM sizes with nested virtualization support
-# Standard: $0.19/hr, 4 vCPU, 16GB RAM - OOMs with navi agent (GroundingDINO + SoM)
-# Fast: $0.38/hr, 8 vCPU, 32GB RAM - works reliably with navi agent
-VM_SIZE_STANDARD = "Standard_D4ds_v4"
-VM_SIZE_FAST = "Standard_D8ds_v5"
-VM_SIZE = VM_SIZE_FAST  # Default to fast — standard OOMs with navi agent
+# VM size: D8ds_v5 ($0.38/hr, 8 vCPU, 32GB RAM)
+# D4ds_v4 (16GB) OOMs with navi agent's GroundingDINO + SoM models — do not use.
+VM_SIZE = "Standard_D8ds_v5"
 
-# Fallback sizes for --fast mode (in order of preference)
+# Fallback VM sizes (in order of preference, all 8 vCPU / 32GB)
 # D8ds_v5: First choice (v5 with local SSD)
 # D8s_v5: v5 without local SSD
 # D8ds_v4: v4 with local SSD
 # D8as_v5: AMD version
-VM_SIZE_FAST_FALLBACKS = [
+VM_SIZE_FALLBACKS = [
     ("Standard_D8ds_v5", 0.38),
     ("Standard_D8s_v5", 0.36),
     ("Standard_D8ds_v4", 0.38),
@@ -258,19 +255,12 @@ def cmd_create(args):
         log("CREATE", "Use 'delete' first if you want to recreate")
         return 0
 
-    # Determine which sizes to try
-    use_fast = getattr(args, "fast", False)
-    if use_fast:
-        # Try multiple fast sizes with fallbacks
-        sizes_to_try = VM_SIZE_FAST_FALLBACKS
-        log(
-            "CREATE",
-            f"Creating VM '{VM_NAME}' with --fast (trying multiple D8 sizes)...",
-        )
-    else:
-        # Standard mode: single size
-        sizes_to_try = [(VM_SIZE_STANDARD, 0.19)]
-        log("CREATE", f"Creating VM '{VM_NAME}' ({VM_SIZE_STANDARD}, $0.19/hr)...")
+    # Try multiple D8 sizes with fallbacks (all 32GB, required for navi agent)
+    sizes_to_try = VM_SIZE_FALLBACKS
+    log(
+        "CREATE",
+        f"Creating VM '{VM_NAME}' (trying D8 sizes with fallbacks)...",
+    )
 
     # Try size+region combinations until one works
     vm_created = False
@@ -627,7 +617,6 @@ def cmd_pool_create(args):
     from openadapt_evals.infrastructure.pool import PoolManager
 
     num_workers = getattr(args, "workers", 3)
-    use_standard = getattr(args, "standard", False)
     auto_shutdown_hours = getattr(args, "auto_shutdown_hours", 4)
 
     vm_manager = AzureVMManager(resource_group=RESOURCE_GROUP)
@@ -636,7 +625,6 @@ def cmd_pool_create(args):
     try:
         manager.create(
             workers=num_workers,
-            fast=not use_standard,
             auto_shutdown_hours=auto_shutdown_hours,
         )
         return 0
@@ -1428,22 +1416,10 @@ def cmd_start(args):
     # - Downloads Windows 11 Enterprise if not present
     # - Boots QEMU VM
     # - Runs WAA server automatically via FirstLogonCommands
-    # QEMU resource allocation (--fast uses more resources on D8ds_v5)
-    if getattr(args, "fast", False):
-        ram_size = "16G"
-        cpu_cores = 6
-        log(
-            "START",
-            "Starting container with VERSION=11e (FAST mode: 6 cores, 16GB RAM)...",
-        )
-    else:
-        ram_size = "8G"
-        cpu_cores = 4
-        log("START", "Starting container with VERSION=11e...")
-        log(
-            "START",
-            "WARNING: Standard mode (8G RAM) may OOM with navi agent. Use --fast for 32GB VM.",
-        )
+    # QEMU resource allocation — always use 16G/6 cores (D8ds_v5, 32GB host)
+    ram_size = "16G"
+    cpu_cores = 6
+    log("START", "Starting container with VERSION=11e (6 cores, 16GB RAM)...")
 
     # Get agent and model from args (defaults match WAA defaults)
     getattr(args, "agent", "navi")
@@ -1572,11 +1548,10 @@ def cmd_test_golden_image(args):
     # Start container from golden image (NOT fresh)
     log("TEST", "Starting container from golden image...")
 
-    # Use fast mode for quicker boot
-    ram_size = "16G" if args.fast else "8G"
-    cpu_cores = 6 if args.fast else 4
-    mode_str = "FAST mode" if args.fast else "standard mode"
-    log("TEST", f"  Using {mode_str}: {cpu_cores} cores, {ram_size} RAM")
+    # 16GB RAM / 6 cores for D8ds_v5 VM
+    ram_size = "16G"
+    cpu_cores = 6
+    log("TEST", f"  Using {cpu_cores} cores, {ram_size} RAM")
 
     docker_cmd = f"""docker run -d \\
   --name winarena \\
@@ -1927,7 +1902,6 @@ def cmd_test_all(args):
     log("TEST-ALL", "-" * 30)
 
     class FakeArgs2:
-        fast = getattr(args, "fast", False)
         timeout = 120
 
     results["golden_image"] = cmd_test_golden_image(FakeArgs2()) == 0
@@ -4347,13 +4321,11 @@ def cmd_run_azure_ml_auto(args):
     probe_timeout = getattr(args, "probe_timeout", 1800)  # 30 min for WAA server
     skip_upload = getattr(args, "skip_upload", False)
     skip_benchmark = getattr(args, "skip_benchmark", False)
-    fast_vm = getattr(args, "fast", False)
 
     log("AUTO", "Configuration:")
     log("AUTO", f"  Workers: {num_workers}")
     log("AUTO", f"  Setup timeout: {timeout_minutes} min")
     log("AUTO", f"  Probe timeout: {probe_timeout} sec")
-    log("AUTO", f"  Fast VM: {fast_vm}")
     log("AUTO", "")
 
     # =========================================================================
@@ -4396,7 +4368,6 @@ def cmd_run_azure_ml_auto(args):
 
         # Build args for cmd_create
         class CreateArgs:
-            fast = fast_vm
             workers = 1
 
         result = cmd_create(CreateArgs())
@@ -4453,8 +4424,8 @@ def cmd_run_azure_ml_auto(args):
         ssh_run(ip, "docker stop winarena 2>/dev/null; docker rm -f winarena 2>/dev/null")
 
         # Start container with VERSION=11e
-        ram_size = "16G" if fast_vm else "8G"
-        cpu_cores = 6 if fast_vm else 4
+        ram_size = "16G"
+        cpu_cores = 6
 
         docker_cmd = f"""docker run -d \\
   --name winarena \\
@@ -7347,11 +7318,6 @@ Examples:
     # create
     p_create = subparsers.add_parser("create", help="Create Azure VM")
     p_create.add_argument(
-        "--fast",
-        action="store_true",
-        help="Use larger VM (D8ds_v5, $0.38/hr) for ~30%% faster install, ~40%% faster eval",
-    )
-    p_create.add_argument(
         "--workers",
         type=int,
         default=1,
@@ -7395,15 +7361,6 @@ Examples:
         type=int,
         default=3,
         help="Number of worker VMs to create (default: 3)",
-    )
-    p_pool_create.add_argument(
-        "--fast",
-        action="store_true",
-        default=True,
-        help="Use D8 (8 vCPU) VMs for faster evaluation (default: True)",
-    )
-    p_pool_create.add_argument(
-        "--standard", action="store_true", help="Use D4 (4 vCPU) VMs to save costs"
     )
     p_pool_create.add_argument(
         "--auto-shutdown-hours",
@@ -7533,11 +7490,6 @@ Examples:
         "--fresh", action="store_true", help="Clean storage for fresh Windows install"
     )
     p_start.add_argument("--no-vnc", action="store_true", help="Don't auto-launch VNC viewer")
-    p_start.add_argument(
-        "--fast",
-        action="store_true",
-        help="Allocate more CPU/RAM to QEMU (use with D8ds_v5 VM)",
-    )
     p_start.set_defaults(func=cmd_start)
 
     # stop
@@ -7563,11 +7515,6 @@ Examples:
         default=180,
         help="Max wait time in seconds (default: 180)",
     )
-    p_test_golden.add_argument(
-        "--fast",
-        action="store_true",
-        help="Use more CPU/RAM for faster boot (requires D8ds_v5 VM)",
-    )
     p_test_golden.set_defaults(func=cmd_test_golden_image)
 
     # test-blob-access
@@ -7590,11 +7537,6 @@ Examples:
         "test-all", help="Run all pre-flight tests before Azure ML benchmark"
     )
     p_test_all.add_argument("--api-key", help="OpenAI API key (or set OPENAI_API_KEY in .env)")
-    p_test_all.add_argument(
-        "--fast",
-        action="store_true",
-        help="Use more CPU/RAM for faster boot (requires D8ds_v5 VM)",
-    )
     p_test_all.set_defaults(func=cmd_test_all)
 
     # run
@@ -7817,11 +7759,6 @@ Example:
         type=int,
         default=1800,
         help="WAA server probe timeout in seconds (default: 1800 = 30 min)",
-    )
-    p_azure_ml_auto.add_argument(
-        "--fast",
-        action="store_true",
-        help="Use larger VM (D8ds_v5, $0.38/hr) for faster setup",
     )
     p_azure_ml_auto.add_argument(
         "--skip-upload",
