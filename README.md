@@ -12,7 +12,7 @@ Evaluation infrastructure for GUI agent benchmarks.
 
 ## Overview
 
-`openadapt-evals` provides a unified framework for evaluating GUI automation agents across standardized benchmarks like Windows Agent Arena (WAA), OSWorld, WebArena, and others.
+`openadapt-evals` provides a unified framework for evaluating GUI automation agents across standardized benchmarks like Windows Agent Arena (WAA), OSWorld, WebArena, and others. The package also includes all VM and pool management infrastructure for Azure-based evaluation, providing a single entry point for both benchmark execution and compute orchestration.
 
 ## Recent Improvements
 
@@ -102,6 +102,29 @@ results = evaluate_agent_on_benchmark(agent, adapter, max_steps=15)
 ```
 
 **Warning:** Mock adapter uses synthetic data and is only for testing infrastructure. Always use real WAA data for actual evaluations.
+
+### VM & Pool Management (oa-vm CLI)
+
+All Azure VM management and pool orchestration is included in this package:
+
+```bash
+# Create a pool of 5 Azure VMs with WAA
+oa-vm pool-create --workers 5
+
+# Wait for all workers to be ready
+oa-vm pool-wait
+
+# Run 154 tasks distributed across workers
+oa-vm pool-run --tasks 154
+
+# Monitor progress
+oa-vm pool-status
+
+# Cleanup (stop billing)
+oa-vm pool-cleanup -y
+```
+
+For complete VM/pool CLI documentation, see [CLAUDE.md](./CLAUDE.md).
 
 ## Core Concepts
 
@@ -468,6 +491,6 @@ MIT
 
 ## Related Projects
 
-- [openadapt-ml](https://github.com/OpenAdaptAI/openadapt-ml) - Training and policy runtime
+- [openadapt-ml](https://github.com/OpenAdaptAI/openadapt-ml) - ML training, schemas, and model adapters
 - [openadapt-grounding](https://github.com/OpenAdaptAI/openadapt-grounding) - UI element localization
 - [openadapt-capture](https://github.com/OpenAdaptAI/openadapt-capture) - Screen recording
