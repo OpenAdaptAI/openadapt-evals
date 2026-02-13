@@ -47,11 +47,11 @@ from typing import Optional
 # =============================================================================
 
 # VM sizes with nested virtualization support
-# Standard: $0.19/hr, 4 vCPU, 16GB RAM - baseline
-# Fast: $0.38/hr, 8 vCPU, 32GB RAM - ~30% faster install, ~40% faster eval
+# Standard: $0.19/hr, 4 vCPU, 16GB RAM - OOMs with navi agent (GroundingDINO + SoM)
+# Fast: $0.38/hr, 8 vCPU, 32GB RAM - works reliably with navi agent
 VM_SIZE_STANDARD = "Standard_D4ds_v4"
 VM_SIZE_FAST = "Standard_D8ds_v5"
-VM_SIZE = VM_SIZE_STANDARD  # Default, can be overridden by --fast flag
+VM_SIZE = VM_SIZE_FAST  # Default to fast — standard OOMs with navi agent
 
 # Fallback sizes for --fast mode (in order of preference)
 # D8ds_v5: First choice (v5 with local SSD)
@@ -1440,6 +1440,10 @@ def cmd_start(args):
         ram_size = "8G"
         cpu_cores = 4
         log("START", "Starting container with VERSION=11e...")
+        log(
+            "START",
+            "WARNING: Standard mode (8G RAM) may OOM with navi agent. Use --fast for 32GB VM.",
+        )
 
     # Get agent and model from args (defaults match WAA defaults)
     getattr(args, "agent", "navi")
@@ -2091,8 +2095,10 @@ def cmd_run(args):
         task_info.append(f"task={task}")
     elif domain != "all":
         task_info.append(f"domain={domain}")
-    else:
+    elif args.num_tasks:
         task_info.append(f"{args.num_tasks} task(s)")
+    else:
+        task_info.append("all tasks")
 
     log("RUN", f"Starting benchmark: {', '.join(task_info)}, model={model}")
 
@@ -2127,7 +2133,7 @@ for domain, tasks in d.items():
 print(f"ERROR: Task {{task_id}} not found in test_all.json")
 sys.exit(1)
 FINDEOF
-python3 /tmp/find_task.py"""
+python3 /tmp/find_task.py && """
         run_args.append("--test_all_meta_path evaluation_examples_windows/test_custom.json")
         pre_cmd = create_custom_test_cmd
     elif args.num_tasks and args.num_tasks < 154:
@@ -7543,7 +7549,7 @@ Examples:
     p_probe = subparsers.add_parser("probe", help="Check if WAA server is ready")
     p_probe.add_argument("--wait", action="store_true", help="Wait until ready")
     p_probe.add_argument(
-        "--timeout", type=int, default=1200, help="Timeout in seconds (default: 1200)"
+        "--timeout", type=int, default=1800, help="Timeout in seconds (default: 1800)"
     )
     p_probe.set_defaults(func=cmd_probe)
 
@@ -7596,8 +7602,8 @@ Examples:
     p_run.add_argument(
         "--num-tasks",
         type=int,
-        default=1,
-        help="Number of tasks to run (ignored if --task specified)",
+        default=None,
+        help="Number of tasks to run (default: all; ignored if --task specified)",
     )
     p_run.add_argument("--task", help="Specific task ID to run")
     p_run.add_argument(
