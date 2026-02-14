@@ -1,45 +1,26 @@
 # OpenAdapt Evals
 
-[![Build Status](https://github.com/OpenAdaptAI/openadapt-evals/actions/workflows/publish.yml/badge.svg)](https://github.com/OpenAdaptAI/openadapt-evals/actions/workflows/publish.yml)
-[![PyPI version](https://img.shields.io/pypi/v/openadapt-evals.svg)](https://pypi.org/project/openadapt-evals/)
-[![Downloads](https://img.shields.io/pypi/dm/openadapt-evals.svg)](https://pypi.org/project/openadapt-evals/)
+[![Build](https://github.com/OpenAdaptAI/openadapt-evals/actions/workflows/release.yml/badge.svg)](https://github.com/OpenAdaptAI/openadapt-evals/actions/workflows/release.yml)
+[![PyPI](https://img.shields.io/pypi/v/openadapt-evals.svg)](https://pypi.org/project/openadapt-evals/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
-[![Azure Success Rate](https://img.shields.io/badge/Azure%20Success%20Rate-95%25%2B-success)](https://github.com/OpenAdaptAI/openadapt-evals)
-[![Cost Savings](https://img.shields.io/badge/Cost%20Savings-67%25-brightgreen)](https://github.com/OpenAdaptAI/openadapt-evals/blob/main/COST_OPTIMIZATION.md)
 
-Evaluation infrastructure for GUI agent benchmarks.
+Evaluation infrastructure for GUI agent benchmarks, built for [OpenAdapt](https://github.com/OpenAdaptAI/OpenAdapt).
 
-## Overview
+## What is OpenAdapt Evals?
 
-`openadapt-evals` provides a unified framework for evaluating GUI automation agents across standardized benchmarks like Windows Agent Arena (WAA), OSWorld, WebArena, and others.
+OpenAdapt Evals is a unified framework for evaluating GUI automation agents against standardized benchmarks such as [Windows Agent Arena (WAA)](https://microsoft.github.io/WindowsAgentArena/). It provides benchmark adapters, agent interfaces, Azure VM infrastructure for parallel evaluation, and result visualization -- everything needed to go from "I have a GUI agent" to "here are its benchmark scores."
 
-## Recent Improvements
+## Key Features
 
-We've made significant improvements to reliability, cost-efficiency, and observability:
-
-### Azure Reliability (v0.2.0 - January 2026)
-- **95%+ Success Rate Target**: Fixed nested virtualization issues that caused 0% task completion
-- **VM Configuration**: Upgraded to `Standard_D4s_v5` with proper nested virtualization support
-- **Health Monitoring**: Automatic detection and retry of stuck jobs
-- **Fast Failure Detection**: 10-minute timeout instead of 8+ hour hangs
-- See [PR #11](https://github.com/OpenAdaptAI/openadapt-evals/pull/11) for details
-
-### Cost Optimization (v0.2.0 - January 2026)
-- **67% Cost Reduction**: From $7.68 to $2.50 per full evaluation (154 tasks)
-- **Tiered VM Sizing**: Automatic VM size selection based on task complexity (37% savings)
-- **Spot Instance Support**: 70-80% discount on compute costs (64% savings with tiered VMs)
-- **Azure Container Registry**: 10x faster image pulls (1-2 min vs 8-12 min)
-- **Real-time Cost Tracking**: Monitor costs during evaluation
-- See [COST_OPTIMIZATION.md](./COST_OPTIMIZATION.md) and [PR #13](https://github.com/OpenAdaptAI/openadapt-evals/pull/13) for details
-
-### Screenshot Validation & Viewer (v0.2.0 - January 2026)
-- **Real Benchmark Screenshots**: Viewer now displays actual WAA evaluation screenshots
-- **Auto-Screenshot Tool**: Automated screenshot generation with Playwright
-- **Screenshot Validation**: Manifest-based validation ensuring correctness
-- **Execution Logs**: Step-by-step logs with search and filtering
-- **Live Monitoring**: Real-time Azure ML job monitoring with auto-refresh
-- See [PR #6](https://github.com/OpenAdaptAI/openadapt-evals/pull/6) for details
+- **Benchmark adapters** for WAA (live, mock, and local modes), with an extensible base for OSWorld, WebArena, and others
+- **Agent interfaces** including `ApiAgent` (Claude / GPT), `RetrievalAugmentedAgent`, `RandomAgent`, and `PolicyAgent`
+- **Azure VM infrastructure** with `AzureVMManager`, `PoolManager`, `SSHTunnelManager`, and `VMMonitor` for running evaluations at scale
+- **CLI tools** -- `oa-vm` for VM and pool management (50+ commands), benchmark CLI for running evals
+- **Cost optimization** -- tiered VM sizing, spot instance support, and real-time cost tracking
+- **Results visualization** -- HTML viewer with step-by-step screenshot replay, execution logs, and domain breakdowns
+- **Trace export** for converting evaluation trajectories into training data
+- **Configuration via pydantic-settings** with automatic `.env` loading
 
 ## Installation
 
@@ -47,191 +28,162 @@ We've made significant improvements to reliability, cost-efficiency, and observa
 pip install openadapt-evals
 ```
 
-Or with uv:
+With optional dependencies:
+
 ```bash
-uv add openadapt-evals
+pip install openadapt-evals[azure]      # Azure VM management
+pip install openadapt-evals[retrieval]  # Demo retrieval agent
+pip install openadapt-evals[viewer]     # Live results viewer
+pip install openadapt-evals[all]        # Everything
 ```
 
 ## Quick Start
 
-**Note:** Examples use real WAA evaluation data. For testing without a Windows VM, see the Mock Adapter section below.
+### Run a mock evaluation (no VM required)
+
+```bash
+openadapt-evals mock --tasks 10
+```
+
+### Run a live evaluation against a WAA server
+
+```bash
+# Start with a single Azure VM
+oa-vm pool-create --workers 1
+oa-vm pool-wait
+
+# Run evaluation
+openadapt-evals run --agent api-claude --task notepad_1
+
+# View results
+openadapt-evals view --run-name live_eval
+
+# Clean up (stop billing)
+oa-vm pool-cleanup -y
+```
+
+### Python API
 
 ```python
 from openadapt_evals import (
+    ApiAgent,
     WAALiveAdapter,
     WAALiveConfig,
-    ApiAgent,
     evaluate_agent_on_benchmark,
     compute_metrics,
 )
 
-# Configure connection to WAA server (real Windows VM)
-config = WAALiveConfig(
-    server_url="http://vm-ip:5000",
-    a11y_backend="uia",
-    max_steps=15,
-)
+adapter = WAALiveAdapter(WAALiveConfig(server_url="http://localhost:5001"))
+agent = ApiAgent(provider="anthropic")
 
-# Create adapter for live WAA evaluation
-adapter = WAALiveAdapter(config)
-
-# Create API-based agent (Claude or GPT)
-agent = ApiAgent(provider="anthropic")  # or "openai" for GPT-5.1
-
-# Run evaluation
 results = evaluate_agent_on_benchmark(agent, adapter, task_ids=["notepad_1"])
-
-# Compute metrics
 metrics = compute_metrics(results)
 print(f"Success rate: {metrics['success_rate']:.1%}")
 ```
 
-### Mock Adapter for Testing
-
-For testing without a Windows VM, use the mock adapter:
-
-```python
-from openadapt_evals import WAAMockAdapter, SmartMockAgent
-
-# Create mock adapter (testing only, not for production use)
-adapter = WAAMockAdapter(num_tasks=10)
-agent = SmartMockAgent()
-
-# Run mock evaluation
-results = evaluate_agent_on_benchmark(agent, adapter, max_steps=15)
-```
-
-**Warning:** Mock adapter uses synthetic data and is only for testing infrastructure. Always use real WAA data for actual evaluations.
-
-## Core Concepts
-
-### BenchmarkAdapter
-
-Abstract interface for benchmark integration. Implementations:
-- `WAAAdapter` - Windows Agent Arena (requires WAA repository)
-- `WAAMockAdapter` - Mock adapter for testing without Windows
-
-### BenchmarkAgent
-
-Abstract interface for agents to be evaluated. Implementations:
-- `ScriptedAgent` - Follows predefined action sequence
-- `RandomAgent` - Takes random actions (baseline)
-- `SmartMockAgent` - Designed to pass mock adapter tests
-
-### Data Classes
-
-- `BenchmarkTask` - Task definition (instruction, domain, etc.)
-- `BenchmarkObservation` - Screenshot, accessibility tree, context
-- `BenchmarkAction` - Click, type, scroll, key actions
-- `BenchmarkResult` - Success/failure, score, trajectory
-
-## Benchmark Viewer
-
-Generate an HTML viewer for benchmark results:
-
-```python
-from openadapt_evals import generate_benchmark_viewer
-from pathlib import Path
-
-# Run evaluation with trace collection
-from openadapt_evals import EvaluationConfig
-
-config = EvaluationConfig(
-    save_execution_traces=True,
-    output_dir="benchmark_results",
-    run_name="my_eval_run",
-)
-
-results = evaluate_agent_on_benchmark(agent, adapter, config=config)
-
-# Generate viewer
-generate_benchmark_viewer(
-    benchmark_dir=Path("benchmark_results/my_eval_run"),
-    output_path=Path("benchmark_results/my_eval_run/viewer.html"),
-)
-```
-
-### Demo: Benchmark Viewer in Action
-
-![Benchmark Viewer Animation](animations/benchmark-viewer.gif)
-
-*Animation shows real WAA evaluation results from `waa-live_eval_20260116_200004`*
-
-The viewer provides:
-- Summary statistics (success rate, per-domain breakdown)
-- Task list with pass/fail status
-- Step-by-step replay with screenshots
-- Action and reasoning display
-- Playback controls (play/pause, speed, seek)
-- Execution logs with filtering and search
-
-### Viewer Screenshots
-
-**Overview Panel**
-
-Desktop view showing summary statistics and domain breakdown:
-
-![Benchmark Viewer Overview](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/main/screenshots/desktop_overview.png)
-
-**Task Detail View**
-
-Step-by-step task execution with screenshot replay:
-
-![Task Detail View](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/main/screenshots/desktop_task_detail.png)
-
-**Execution Logs**
-
-Detailed execution logs with filtering and search capabilities:
-
-![Execution Logs](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/main/screenshots/desktop_log_expanded.png)
-
-**Responsive Design**
-
-The viewer works on all devices:
-
-| Desktop (1920x1080) | Tablet (768x1024) | Mobile (375x667) |
-|---------------------|-------------------|------------------|
-| ![Desktop](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/main/screenshots/desktop_overview.png) | ![Tablet](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/main/screenshots/tablet_overview.png) | ![Mobile](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/main/screenshots/mobile_overview.png) |
-
-### Generating Viewer Screenshots
-
-Automatically capture screenshots of the viewer in multiple viewports with built-in validation:
+### Parallel evaluation on Azure
 
 ```bash
-# Install Playwright (required for screenshots)
-pip install playwright
-playwright install chromium
+# Create a pool of VMs and distribute tasks
+oa-vm pool-create --workers 5
+oa-vm pool-wait
+oa-vm pool-run --tasks 50
 
-# Generate screenshots with automatic validation
-python -m openadapt_evals.benchmarks.auto_screenshot \
-    --html-path benchmark_results/my_eval_run/viewer.html \
-    --output-dir screenshots \
-    --viewports desktop tablet mobile \
-    --states overview task_detail log_expanded log_collapsed
+# Or use Azure ML orchestration
+openadapt-evals azure --workers 10 --waa-path /path/to/WindowsAgentArena
 ```
 
-The auto-screenshot tool includes:
-- **Automatic Validation**: Ensures screenshots match expected dimensions and content
-- **Manifest Generation**: Creates `manifest.json` with screenshot metadata
-- **Multiple Viewports**: Desktop (1920x1080), Tablet (768x1024), Mobile (375x667)
-- **Multiple States**: Overview, task detail, log expanded, log collapsed
+## Architecture
 
-Or programmatically:
-
-```python
-from openadapt_evals.benchmarks.auto_screenshot import generate_screenshots
-
-screenshots = generate_screenshots(
-    html_path="benchmark_results/my_eval_run/viewer.html",
-    output_dir="screenshots",
-    viewports=["desktop", "tablet", "mobile"],
-    states=["overview", "task_detail", "log_expanded", "log_collapsed"],
-)
 ```
+openadapt_evals/
+├── agents/               # Agent implementations
+│   ├── base.py           #   BenchmarkAgent ABC
+│   ├── api_agent.py      #   ApiAgent (Claude, GPT)
+│   ├── retrieval_agent.py#   RetrievalAugmentedAgent
+│   └── policy_agent.py   #   PolicyAgent (trained models)
+├── adapters/             # Benchmark adapters
+│   ├── base.py           #   BenchmarkAdapter ABC + data classes
+│   └── waa/              #   WAA live, mock, and local adapters
+├── infrastructure/       # Azure VM and pool management
+│   ├── azure_vm.py       #   AzureVMManager
+│   ├── pool.py           #   PoolManager
+│   ├── ssh_tunnel.py     #   SSHTunnelManager
+│   └── vm_monitor.py     #   VMMonitor dashboard
+├── benchmarks/           # Evaluation runner, CLI, viewers
+│   ├── runner.py         #   evaluate_agent_on_benchmark()
+│   ├── cli.py            #   Benchmark CLI (run, mock, live, view)
+│   ├── vm_cli.py         #   VM/Pool CLI (oa-vm, 50+ commands)
+│   ├── viewer.py         #   HTML results viewer
+│   ├── pool_viewer.py    #   Pool results viewer
+│   └── trace_export.py   #   Training data export
+├── waa_deploy/           # Docker agent deployment
+├── server/               # WAA server extensions
+├── config.py             # Settings (pydantic-settings, .env)
+└── __init__.py
+```
+
+### How it fits together
+
+```
+LOCAL MACHINE                          AZURE VM (Ubuntu)
+┌─────────────────────┐                ┌──────────────────────┐
+│  oa-vm CLI          │   SSH Tunnel   │  Docker              │
+│  (pool management)  │ ─────────────> │  └─ QEMU (Win 11)   │
+│                     │  :5001 → :5000 │     ├─ WAA Flask API │
+│  openadapt-evals    │  :8006 → :8006 │     └─ Agent         │
+│  (benchmark runner) │                │                      │
+└─────────────────────┘                └──────────────────────┘
+```
+
+## CLI Reference
+
+### Benchmark CLI (`openadapt-evals`)
+
+| Command    | Description                                   |
+|------------|-----------------------------------------------|
+| `run`      | Run live evaluation (localhost:5001 default)   |
+| `mock`     | Run with mock adapter (no VM required)         |
+| `live`     | Run against a WAA server (full control)        |
+| `azure`    | Run parallel evaluation on Azure ML            |
+| `probe`    | Check if a WAA server is ready                 |
+| `view`     | Generate HTML viewer for results               |
+| `estimate` | Estimate Azure costs                           |
+
+### VM/Pool CLI (`oa-vm`)
+
+| Command         | Description                              |
+|-----------------|------------------------------------------|
+| `pool-create`   | Create N VMs with Docker and WAA         |
+| `pool-wait`     | Wait until WAA is ready on all workers   |
+| `pool-run`      | Distribute tasks across pool workers     |
+| `pool-status`   | Show status of all pool VMs              |
+| `pool-cleanup`  | Delete all pool VMs and resources        |
+| `vm monitor`    | Dashboard with SSH tunnels               |
+| `vm setup-waa`  | Deploy WAA container on a VM             |
+
+Run `oa-vm --help` for the full list of 50+ commands.
+
+## Configuration
+
+Settings are loaded automatically from environment variables or a `.env` file in the project root via [pydantic-settings](https://docs.pydantic.dev/latest/concepts/pydantic_settings/).
+
+```bash
+# .env
+ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=sk-...
+
+# Azure (required for VM management)
+AZURE_SUBSCRIPTION_ID=...
+AZURE_ML_RESOURCE_GROUP=...
+AZURE_ML_WORKSPACE_NAME=...
+```
+
+See [`openadapt_evals/config.py`](openadapt_evals/config.py) for all available settings.
 
 ## Custom Agents
 
-Implement the `BenchmarkAgent` interface:
+Implement the `BenchmarkAgent` interface to evaluate your own agent:
 
 ```python
 from openadapt_evals import BenchmarkAgent, BenchmarkAction, BenchmarkObservation, BenchmarkTask
@@ -247,227 +199,31 @@ class MyAgent(BenchmarkAgent):
         return BenchmarkAction(type="click", x=0.5, y=0.5)
 
     def reset(self) -> None:
-        # Reset agent state between tasks
         pass
 ```
 
-## Windows Agent Arena Integration
+## Contributing
 
-### Command Line Interface
-
-The package provides a CLI for running WAA evaluations:
+We welcome contributions. To get started:
 
 ```bash
-# Check if WAA server is ready
-python -m openadapt_evals.benchmarks.cli probe --server http://vm-ip:5000
-
-# Run live evaluation against a WAA server
-python -m openadapt_evals.benchmarks.cli live --server http://vm-ip:5000 --task-ids notepad_1,notepad_2
-
-# Generate HTML viewer for results
-python -m openadapt_evals.benchmarks.cli view --run-name my_eval_run
-
-# Estimate Azure costs (with optimization options)
-python -m openadapt_evals.benchmarks.cli estimate --tasks 154 --workers 10 --enable-tiered-vms --use-spot
-
-# Run mock evaluation for testing (no Windows VM required - testing only!)
-python -m openadapt_evals.benchmarks.cli mock --tasks 10
+git clone https://github.com/OpenAdaptAI/openadapt-evals.git
+cd openadapt-evals
+pip install -e ".[dev]"
+pytest tests/ -v
 ```
 
-**Note:** Mock mode is for testing infrastructure only. Always use live or Azure mode for actual evaluations.
-
-### Live WAA Adapter
-
-Connect to a WAA Flask server running inside a Windows VM:
-
-```python
-from openadapt_evals import WAALiveAdapter, WAALiveConfig
-
-# Configure connection to WAA server
-config = WAALiveConfig(
-    server_url="http://vm-ip:5000",
-    a11y_backend="uia",  # or "win32"
-    max_steps=15,
-)
-
-# Create adapter
-adapter = WAALiveAdapter(config)
-
-# Check connection
-if not adapter.check_connection():
-    print("WAA server not ready")
-
-# Run evaluation
-results = evaluate_agent_on_benchmark(agent, adapter, task_ids=["notepad_1"])
-```
-
-### Local WAA Evaluation
-
-For real WAA evaluation with local WAA repository:
-
-```python
-from openadapt_evals import WAAAdapter
-
-adapter = WAAAdapter(waa_repo_path="/path/to/WindowsAgentArena")
-tasks = adapter.list_tasks(domain="notepad")
-
-results = evaluate_agent_on_benchmark(agent, adapter, task_ids=[t.task_id for t in tasks[:5]])
-```
-
-### Azure-based Parallel Evaluation
-
-Run WAA at scale using Azure ML compute with optimized costs:
-
-```bash
-# Install Azure dependencies
-pip install openadapt-evals[azure]
-
-# Set environment variables
-export AZURE_SUBSCRIPTION_ID="your-subscription-id"
-export AZURE_ML_RESOURCE_GROUP="your-resource-group"
-export AZURE_ML_WORKSPACE_NAME="your-workspace"
-
-# Enable cost optimizations (recommended)
-export AZURE_ENABLE_TIERED_VMS=true
-export AZURE_ENVIRONMENT=development  # Enables spot instances
-
-# Run evaluation with multiple workers
-python -m openadapt_evals.benchmarks.cli azure \
-    --waa-path /path/to/WindowsAgentArena \
-    --workers 10 \
-    --timeout-hours 4
-```
-
-**Cost Optimization**: With tiered VMs and spot instances enabled, a full 154-task evaluation costs $2.50-4.00 instead of $7.68. See [COST_OPTIMIZATION.md](./COST_OPTIMIZATION.md) for details.
-
-Or programmatically:
-
-```python
-from openadapt_evals.benchmarks.azure import AzureConfig, AzureWAAOrchestrator
-
-config = AzureConfig.from_env()
-orchestrator = AzureWAAOrchestrator(
-    config=config,
-    waa_repo_path="/path/to/WindowsAgentArena",
-)
-
-results = orchestrator.run_evaluation(
-    agent=my_agent,
-    num_workers=40,  # 40 parallel VMs
-    cleanup_on_complete=True,
-)
-```
-
-**Azure Reliability**: The orchestrator now uses `Standard_D4s_v5` VMs with proper nested virtualization support and automatic health monitoring, achieving 95%+ success rates.
-
-### Live Monitoring
-
-Monitor Azure ML jobs in real-time with auto-refreshing viewer:
-
-```bash
-# Install viewer dependencies
-pip install openadapt-evals[viewer]
-
-# Start an Azure evaluation (in terminal 1)
-python -m openadapt_evals.benchmarks.cli azure \
-    --workers 1 \
-    --task-ids notepad_1,browser_1 \
-    --waa-path /path/to/WAA
-
-# Monitor job logs in real-time (in terminal 2)
-python -m openadapt_evals.benchmarks.cli azure-monitor \
-    --job-name waa-waa3718w0-1768743963-20a88242 \
-    --output benchmark_live.json
-
-# Start live viewer API (in terminal 3)
-python -m openadapt_evals.benchmarks.live_api \
-    --live-file benchmark_live.json \
-    --port 5001
-
-# Open http://localhost:5001 in browser to see live progress!
-```
-
-Features:
-- Real-time log streaming from Azure ML jobs
-- Auto-refreshing viewer with "LIVE" indicator
-- Task/step progress tracking
-- Real-time cost tracking
-- No need to wait for job completion
-
-See [LIVE_MONITORING.md](./LIVE_MONITORING.md) for full documentation.
-
-## API Reference
-
-### Evaluation Functions
-
-- `evaluate_agent_on_benchmark(agent, adapter, ...)` - Run evaluation
-- `compute_metrics(results)` - Aggregate metrics (success_rate, avg_score, etc.)
-- `compute_domain_metrics(results, tasks)` - Per-domain metrics
-
-### Data Collection
-
-- `ExecutionTraceCollector` - Collect execution traces during evaluation
-- `save_execution_trace(task, result, trajectory, ...)` - Save single trace
-
-### Utilities
-
-- `action_to_string(action)` - Convert action to readable string
-- `format_accessibility_tree(tree)` - Format a11y tree for display
-- `parse_action_response(response)` - Parse VLM response to action
-
-## Documentation
-
-- [COST_OPTIMIZATION.md](./COST_OPTIMIZATION.md) - Azure cost optimization guide (67% savings)
-- [LIVE_MONITORING.md](./LIVE_MONITORING.md) - Real-time Azure ML job monitoring
-- [CLAUDE.md](./CLAUDE.md) - Development guide and best practices
-- [CHANGELOG.md](./CHANGELOG.md) - Version history and changes
-
-## WAA Benchmark Results
-
-> **⚠️ PLACEHOLDER**: The results below are placeholders. Actual benchmark results will be added once the full evaluation completes.
-
-### Baseline Reproduction
-
-We run the full WAA benchmark using the same methodology as the original paper to establish baseline performance.
-
-**WAA Baseline Results (GPT-4o):**
-
-| Metric | Paper Reported | Our Reproduction | Status |
-|--------|----------------|------------------|--------|
-| Success Rate | ~19.5% | `[PLACEHOLDER]` | `[PENDING]` |
-| Tasks Evaluated | 154 | `[PLACEHOLDER]` | `[PENDING]` |
-| Avg Steps/Task | N/A | `[PLACEHOLDER]` | `[PENDING]` |
-| Avg Time/Task | N/A | `[PLACEHOLDER]` | `[PENDING]` |
-
-### Model Comparison
-
-Performance of different agents on WAA:
-
-| Agent | Success Rate | Avg Steps | Notes |
-|-------|--------------|-----------|-------|
-| GPT-4o (baseline) | `[PLACEHOLDER]` | `[PLACEHOLDER]` | Zero-shot |
-| Claude Sonnet 4.5 | `[PLACEHOLDER]` | `[PLACEHOLDER]` | Zero-shot |
-
-### Domain Breakdown
-
-Success rates by Windows application domain:
-
-| Domain | Tasks | Success Rate |
-|--------|-------|--------------|
-| Notepad | `[PLACEHOLDER]` | `[PLACEHOLDER]` |
-| Chrome | `[PLACEHOLDER]` | `[PLACEHOLDER]` |
-| File Explorer | `[PLACEHOLDER]` | `[PLACEHOLDER]` |
-| Settings | `[PLACEHOLDER]` | `[PLACEHOLDER]` |
-| ... | ... | ... |
-
-> **Note**: Full domain breakdown will be added when benchmark completes.
-
-## License
-
-MIT
+See [CLAUDE.md](./CLAUDE.md) for development conventions and architecture details.
 
 ## Related Projects
 
-- [openadapt-ml](https://github.com/OpenAdaptAI/openadapt-ml) - Training and policy runtime
-- [openadapt-grounding](https://github.com/OpenAdaptAI/openadapt-grounding) - UI element localization
-- [openadapt-capture](https://github.com/OpenAdaptAI/openadapt-capture) - Screen recording
+| Project | Description |
+|---------|-------------|
+| [OpenAdapt](https://github.com/OpenAdaptAI/OpenAdapt) | Desktop automation with demo-conditioned AI agents |
+| [openadapt-ml](https://github.com/OpenAdaptAI/openadapt-ml) | Training and policy runtime |
+| [openadapt-capture](https://github.com/OpenAdaptAI/openadapt-capture) | Screen recording and demo sharing |
+| [openadapt-grounding](https://github.com/OpenAdaptAI/openadapt-grounding) | UI element localization |
+
+## License
+
+[MIT](https://opensource.org/licenses/MIT)
