@@ -1,6 +1,151 @@
 # CHANGELOG
 
 
+## v0.3.0 (2026-02-14)
+
+### Bug Fixes
+
+- **ci**: Fix release automation — use ADMIN_TOKEN to push to protected branches
+  ([#28](https://github.com/OpenAdaptAI/openadapt-evals/pull/28),
+  [`9132540`](https://github.com/OpenAdaptAI/openadapt-evals/commit/91325400a98013edea50c5b8433edb783f2fa693))
+
+Root cause: GITHUB_TOKEN cannot push commits to protected branches. Semantic-release created the
+  v0.3.0 tag (tags bypass protection) but the "chore: release 0.3.0" commit that bumps
+  pyproject.toml was orphaned.
+
+- Use ADMIN_TOKEN for checkout and semantic-release (can push to main) - Add skip-check to prevent
+  infinite loops on release commits - Sync pyproject.toml version to 0.3.0 (matches latest tag)
+
+Prerequisite: Add ADMIN_TOKEN secret (GitHub PAT with repo scope) to
+
+repository settings.
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+- **ci**: Fix semantic-release config and delete orphaned v0.3.0 tag
+  ([`a09f88e`](https://github.com/OpenAdaptAI/openadapt-evals/commit/a09f88e9725a11963759462a3dcf148f12f7dee4))
+
+The v0.3.0 tag was on a commit not reachable from HEAD (orphaned by a non-squash merge of PR #27).
+  semantic-release walked past it and computed 0.3.0 from v0.2.0, then refused because "0.3.0 has
+  already been released".
+
+Fix: deleted the orphaned tag/release and added major_on_zero=false to
+
+prevent feat commits from bumping to 1.0.0 while in 0.x range.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+- **cli**: Fix --task flag concatenation bug and three other issues
+  ([#31](https://github.com/OpenAdaptAI/openadapt-evals/pull/31),
+  [`b0e09e9`](https://github.com/OpenAdaptAI/openadapt-evals/commit/b0e09e92aee9159379209fe31867a216c7bdfd52))
+
+* fix(cli): fix --task flag concatenation bug and three other issues
+
+Bug 1 (Critical): --task flag produced `find_task.pycd` due to missing `&&` separator between
+  pre_cmd and `cd /client`. Every `run --task` invocation since v0.4.2 silently failed. Fixed by
+  adding `&&`.
+
+Bug 2: --num-tasks defaulted to 1, silently limiting runs. Changed default to None (all tasks).
+
+Bug 3: probe --wait timeout of 1200s was too short for first boot (OOBE takes 18-22 min). Increased
+  to 1800s.
+
+Bug 4: Default VM size (D4ds_v4, 16GB) OOMs with navi agent's GroundingDINO + SoM models. Changed
+  default to D8ds_v5 (32GB). Added warning when standard mode is used explicitly.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* refactor: remove --fast flag, standardize on D8ds_v5 (32GB) VM
+
+D4ds_v4 (16GB) OOMs with navi agent's GroundingDINO + SoM models. Standardize on D8ds_v5 across all
+  commands — no more --fast/--standard flags.
+
+---------
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+### Chores
+
+- Remove synthetic demos that don't match WAA tasks
+  ([#26](https://github.com/OpenAdaptAI/openadapt-evals/pull/26),
+  [`272edcb`](https://github.com/OpenAdaptAI/openadapt-evals/commit/272edcbf3aa07f1bf1729a962b1abaeb983f9956))
+
+The synthetic_demos/ directory contained 154 generic template demos (e.g., "Open Notepad", "Navigate
+  to example.com") that don't match actual WAA task IDs (UUIDs like
+  366de66e-cbae-4d72-b042-26390db2b145-WOS).
+
+These were misleading - they suggested we had demo coverage when we didn't. Actual WAA tasks have
+  specific instructions like "create draft.txt, type 'This is a draft.', save to Documents" which
+  the generic demos don't cover.
+
+Also removes stale index/embedding files that referenced the deleted demos.
+
+Keeps demo_library/demos/ (16 example demos) as format reference.
+
+Adds WAA literature review documenting: - No GPT-5.x results published on WAA yet - WAA-V2 exists
+  (141 tasks, stricter eval) but has only 3 GitHub stars - Current SOTA: PC Agent-E at 36% on WAA-V2
+  - Cost estimates for running evaluations
+
+Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com>
+
+### Documentation
+
+- Update CLAUDE.md for unified evaluation CLI
+  ([#30](https://github.com/OpenAdaptAI/openadapt-evals/pull/30),
+  [`12b6189`](https://github.com/OpenAdaptAI/openadapt-evals/commit/12b6189330c55832015b3736604c620cd22809cc))
+
+All VM/pool management now lives in openadapt-evals (migrated from openadapt-ml in PR #29). Update
+  CLAUDE.md to reflect:
+
+- Single repo for all evaluation infrastructure - oa-vm CLI entry point for VM/pool commands -
+  Updated architecture tree with infrastructure/ and waa_deploy/ - Removed references to
+  openadapt_ml.benchmarks.cli
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+### Features
+
+- Migrate evaluation infrastructure from openadapt-ml
+  ([#29](https://github.com/OpenAdaptAI/openadapt-evals/pull/29),
+  [`ca791bf`](https://github.com/OpenAdaptAI/openadapt-evals/commit/ca791bf859526a6ea62b52b5dafec8af8a5f5ad4))
+
+* feat: migrate evaluation infrastructure from openadapt-ml
+
+Move all evaluation infrastructure (~13,000 lines) from openadapt-ml/benchmarks/ to openadapt-evals
+  so openadapt-ml can focus on pure ML (schemas, training, inference, model adapters).
+
+Migrated modules: - benchmarks/vm_cli.py: Full VM/pool CLI with 50+ commands (8,503 lines) -
+  infrastructure/azure_vm.py: AzureVMManager with SDK + CLI fallback - infrastructure/pool.py:
+  PoolManager for multi-VM orchestration - infrastructure/resource_tracker.py: Azure cost tracking -
+  benchmarks/pool_viewer.py: Pool results HTML viewer - benchmarks/trace_export.py: Training data
+  export (keeps openadapt_ml.schema dep) - waa_deploy/: Docker agent deployment files
+
+Also adds: - config.py: Pydantic-settings config for Azure credentials - pydantic-settings +
+  azure-mgmt-* dependencies - 4 test files migrated from openadapt-ml
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* fix: correct DOCKERFILE_PATH and stale debug path in vm_cli
+
+- DOCKERFILE_PATH: use parent.parent to reach waa_deploy/ from benchmarks/ - cmd_tail_output: update
+  hardcoded task dir from openadapt-ml to openadapt-evals
+
+---------
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+- **demos**: Add WAA demo recording workflow
+  ([`312f608`](https://github.com/OpenAdaptAI/openadapt-evals/commit/312f6080af658734ec5fdda596c4f9b38af7af30))
+
+- Add scripts/record_waa_demos.py for guided demo recording - Auto-installs dependencies
+  (openadapt-capture, magic-wormhole) - Shows step-by-step instructions for each task - Supports
+  redo if mistakes are made - Sends recordings via Magic Wormhole for easy transfer - Rename
+  demo_library/demos -> synthetic_demos_legacy - Clarifies existing demos are synthetic and unusable
+  - Real demos will be recorded using the new workflow
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+
+
 ## v0.2.0 (2026-02-06)
 
 ### Features
