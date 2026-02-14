@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v0.3.1 (2026-02-14)
+
+### Bug Fixes
+
+- **ci**: Document squash-merge requirement to prevent orphaned tags
+  ([`c696ec2`](https://github.com/OpenAdaptAI/openadapt-evals/commit/c696ec20df67c736e39a097dd52cd4fd677901d0))
+
+PyPI rejected 0.3.0 upload because the old orphaned release already published that version. This
+  commit triggers 0.3.1 release and documents the squash-merge requirement that prevents recurrence.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.3.0 (2026-02-14)
 
 ### Bug Fixes
