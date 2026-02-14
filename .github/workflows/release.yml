@@ -1,8 +1,8 @@
 name: Release and PyPI Publish
 
-# IMPORTANT: This repo must use squash merges only. Non-squash merges can
-# orphan semantic-release's "chore: release" commit, breaking version detection.
-# Enforced via GitHub repo settings (allow_merge_commit=false, allow_rebase_merge=false).
+# Requires ADMIN_TOKEN secret (GitHub PAT with repo scope) to push release
+# commits to protected branches. Without it, the tag gets created but the
+# version bump commit is rejected by branch protection, orphaning the tag.
 
 on:
   push:
