@@ -11,6 +11,23 @@ Evaluation infrastructure for GUI agent benchmarks, built for [OpenAdapt](https:
 
 OpenAdapt Evals is a unified framework for evaluating GUI automation agents against standardized benchmarks such as [Windows Agent Arena (WAA)](https://microsoft.github.io/WindowsAgentArena/). It provides benchmark adapters, agent interfaces, Azure VM infrastructure for parallel evaluation, and result visualization -- everything needed to go from "I have a GUI agent" to "here are its benchmark scores."
 
+## Benchmark Viewer
+
+![Benchmark Viewer Animation](animations/benchmark-viewer.gif)
+
+<details>
+<summary>More screenshots</summary>
+
+**Task Detail View** -- step-by-step replay with screenshots, actions, and execution logs:
+
+![Task Detail View](docs/screenshots/desktop_task_detail.png)
+
+**Cost Tracking Dashboard** -- real-time Azure VM cost monitoring with tiered sizing and spot instances:
+
+![Cost Dashboard](screenshots/cost_dashboard_preview.png)
+
+</details>
+
 ## Key Features
 
 - **Benchmark adapters** for WAA (live, mock, and local modes), with an extensible base for OSWorld, WebArena, and others
