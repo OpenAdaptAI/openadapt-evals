@@ -1,5 +1,9 @@
 name: Release and PyPI Publish
 
+# IMPORTANT: This repo must use squash merges only. Non-squash merges can
+# orphan semantic-release's "chore: release" commit, breaking version detection.
+# Enforced via GitHub repo settings (allow_merge_commit=false, allow_rebase_merge=false).
+
 on:
   push:
     branches:
