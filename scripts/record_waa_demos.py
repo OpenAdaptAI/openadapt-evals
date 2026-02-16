@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 # WAA tasks to record
@@ -171,9 +172,9 @@ def record_task(task: dict, recordings_dir: Path) -> Path | None:
             capture_audio=False,
         ) as recorder:
             try:
-                # Wait for Ctrl+C
+                # Wait for Ctrl+C (sleep yields CPU)
                 while True:
-                    pass
+                    time.sleep(0.5)
             except KeyboardInterrupt:
                 pass
 
