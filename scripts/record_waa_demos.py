@@ -190,11 +190,11 @@ def record_task(task: dict, recordings_dir: Path) -> Path | None:
         shutil.rmtree(recording_path)
 
     print("Press ENTER when ready to start recording...")
-    print("(Press Ctrl+C when you've completed the task)")
+    print("(Press Ctrl 3 times to stop recording)")
     input()
 
     print()
-    print("🔴 RECORDING... (Ctrl+C to stop)")
+    print("🔴 RECORDING... (press Ctrl 3 times to stop)")
     print()
 
     try:
@@ -220,14 +220,20 @@ def record_task(task: dict, recordings_dir: Path) -> Path | None:
         return None
 
 
-def send_recording(recording_path: Path) -> str | None:
-    """Send a recording via wormhole.
+def send_all_recordings(recording_paths: list[Path]) -> None:
+    """Send all recordings via wormhole sequentially.
 
-    Returns:
-        Status message if sent, None if failed.
+    Each send blocks until the receiver accepts, so this prints clear
+    instructions before each one.
     """
     from openadapt_capture.share import send
-    return send(str(recording_path))
+
+    for i, path in enumerate(recording_paths, 1):
+        print(f"--- Recording {i}/{len(recording_paths)}: {path.name} ---")
+        print("Run 'wormhole receive <code>' on the receiving machine.")
+        print()
+        send(str(path))
+        print()
 
 
 def main() -> int:
@@ -311,24 +317,14 @@ def main() -> int:
         return 0
 
     print_header("Sending Recordings")
-    print("Each recording will generate a wormhole code.")
-    print("Share these codes to receive the recordings.")
+    print("Each recording will be sent one at a time.")
+    print("You must run 'wormhole receive <code>' on the receiving machine for each one.")
     print()
 
-    codes = []
-    for task_id in successful:
-        recording_path = results[task_id]
-        print(f"Sending {task_id}...")
-        result = send_recording(recording_path)
-        if result:
-            codes.append((task_id, "sent"))
-        else:
-            codes.append((task_id, "failed"))
-        print()
+    paths = [results[tid] for tid in successful]
+    send_all_recordings(paths)
 
     print_header("Done!")
-    print("Share the wormhole codes displayed above.")
-    print()
 
     return 0
 
