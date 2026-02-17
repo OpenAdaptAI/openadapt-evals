@@ -171,10 +171,10 @@ def record_task(task: dict, recordings_dir: Path) -> Path | None:
             capture_video=True,
             capture_audio=False,
         ) as recorder:
+            recorder.wait_for_ready()
             try:
-                # Wait for Ctrl+C (sleep yields CPU)
-                while True:
-                    time.sleep(0.5)
+                while recorder.is_recording:
+                    time.sleep(1)
             except KeyboardInterrupt:
                 pass
 
