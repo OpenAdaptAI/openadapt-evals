@@ -56,6 +56,7 @@ TASKS = [
             "and move all .docx files into it."
         ),
         "domain": "file_explorer",
+        "setup": "create_docx_files",
         "tips": [
             "Open File Explorer (Win+E)",
             "Navigate to Documents",
@@ -66,6 +67,9 @@ TASKS = [
         ],
     },
 ]
+
+# File names for the docx setup task
+DOCX_FILES = ["report.docx", "meeting_notes.docx", "proposal.docx"]
 
 
 def print_header(text: str) -> None:
@@ -130,6 +134,35 @@ def check_dependencies() -> bool:
 
     print()
     return True
+
+
+def setup_create_docx_files() -> None:
+    """Create dummy .docx files in Documents for the archive task."""
+    docs_dir = Path.home() / "Documents"
+    docs_dir.mkdir(parents=True, exist_ok=True)
+
+    # Remove Archive folder from previous runs
+    archive_dir = docs_dir / "Archive"
+    if archive_dir.exists():
+        import shutil
+        shutil.rmtree(archive_dir)
+
+    created = []
+    for name in DOCX_FILES:
+        path = docs_dir / name
+        if not path.exists():
+            path.write_bytes(b"")
+            created.append(name)
+
+    if created:
+        print(f"  Created {len(created)} .docx file(s) in Documents: {', '.join(created)}")
+    else:
+        print(f"  .docx files already exist in Documents")
+
+
+SETUP_FUNCTIONS = {
+    "create_docx_files": setup_create_docx_files,
+}
 
 
 def get_recordings_dir() -> Path:
@@ -218,6 +251,13 @@ def main() -> int:
 
         print_header(f"Task {task_index + 1} of {len(TASKS)}")
         print_task(task, task_index, len(TASKS))
+
+        # Run setup if needed
+        setup_name = task.get("setup")
+        if setup_name and setup_name in SETUP_FUNCTIONS:
+            print("  Setting up environment...")
+            SETUP_FUNCTIONS[setup_name]()
+            print()
 
         recording_path = record_task(task, recordings_dir)
 
