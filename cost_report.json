@@ -1,0 +1,41 @@
+{
+  "run_id": "test-123",
+  "start_time": 1771013859.7663229,
+  "end_time": 1771013859.766748,
+  "total_runtime_hours": 1.1,
+  "total_cost": 0.04,
+  "total_tasks": 30,
+  "cost_per_task": 0.0014,
+  "vm_hours_by_tier": {
+    "simple": 0.5,
+    "medium": 0.6,
+    "complex": 0.0
+  },
+  "savings": {
+    "spot_savings": 0.12,
+    "tiered_savings": 0.05,
+    "total_savings": 0.17
+  },
+  "workers": [
+    {
+      "vm_size": "Standard_D2_v3",
+      "vm_tier": "simple",
+      "is_spot": true,
+      "hourly_cost": 0.024,
+      "runtime_hours": 0.5,
+      "total_cost": 0.012,
+      "tasks_completed": 15,
+      "cost_per_task": 0.0008
+    },
+    {
+      "vm_size": "Standard_D4_v3",
+      "vm_tier": "medium",
+      "is_spot": true,
+      "hourly_cost": 0.048,
+      "runtime_hours": 0.6,
+      "total_cost": 0.0288,
+      "tasks_completed": 15,
+      "cost_per_task": 0.00192
+    }
+  ]
+}
