@@ -140,7 +140,7 @@ docker run -d --name winarena \\
   -e CPU_CORES=4 \\
   -e DISK_SIZE=64G \\
   --entrypoint /bin/bash \\
-  windowsarena/winarena:latest \\
+  waa-auto:latest \\
   -c './entry.sh --prepare-image false --start-client false'
 echo "STARTED"
 """

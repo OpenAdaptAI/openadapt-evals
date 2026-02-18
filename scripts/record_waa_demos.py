@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 # WAA tasks to record
@@ -55,6 +56,7 @@ TASKS = [
             "and move all .docx files into it."
         ),
         "domain": "file_explorer",
+        "setup": "create_docx_files",
         "tips": [
             "Open File Explorer (Win+E)",
             "Navigate to Documents",
@@ -65,6 +67,9 @@ TASKS = [
         ],
     },
 ]
+
+# File names for the docx setup task
+DOCX_FILES = ["report.docx", "meeting_notes.docx", "proposal.docx"]
 
 
 def print_header(text: str) -> None:
@@ -131,6 +136,35 @@ def check_dependencies() -> bool:
     return True
 
 
+def setup_create_docx_files() -> None:
+    """Create dummy .docx files in Documents for the archive task."""
+    docs_dir = Path.home() / "Documents"
+    docs_dir.mkdir(parents=True, exist_ok=True)
+
+    # Remove Archive folder from previous runs
+    archive_dir = docs_dir / "Archive"
+    if archive_dir.exists():
+        import shutil
+        shutil.rmtree(archive_dir)
+
+    created = []
+    for name in DOCX_FILES:
+        path = docs_dir / name
+        if not path.exists():
+            path.write_bytes(b"")
+            created.append(name)
+
+    if created:
+        print(f"  Created {len(created)} .docx file(s) in Documents: {', '.join(created)}")
+    else:
+        print(f"  .docx files already exist in Documents")
+
+
+SETUP_FUNCTIONS = {
+    "create_docx_files": setup_create_docx_files,
+}
+
+
 def get_recordings_dir() -> Path:
     """Get the recordings directory path."""
     # Use a standard location
@@ -156,11 +190,11 @@ def record_task(task: dict, recordings_dir: Path) -> Path | None:
         shutil.rmtree(recording_path)
 
     print("Press ENTER when ready to start recording...")
-    print("(Press Ctrl+C when you've completed the task)")
+    print("(Press Ctrl 3 times to stop recording)")
     input()
 
     print()
-    print("🔴 RECORDING... (Ctrl+C to stop)")
+    print("🔴 RECORDING... (press Ctrl 3 times to stop)")
     print()
 
     try:
@@ -170,10 +204,10 @@ def record_task(task: dict, recordings_dir: Path) -> Path | None:
             capture_video=True,
             capture_audio=False,
         ) as recorder:
+            recorder.wait_for_ready()
             try:
-                # Wait for Ctrl+C
-                while True:
-                    pass
+                while recorder.is_recording:
+                    time.sleep(1)
             except KeyboardInterrupt:
                 pass
 
@@ -186,14 +220,20 @@ def record_task(task: dict, recordings_dir: Path) -> Path | None:
         return None
 
 
-def send_recording(recording_path: Path) -> str | None:
-    """Send a recording via wormhole.
+def send_all_recordings(recording_paths: list[Path]) -> None:
+    """Send all recordings via wormhole sequentially.
 
-    Returns:
-        Status message if sent, None if failed.
+    Each send blocks until the receiver accepts, so this prints clear
+    instructions before each one.
     """
     from openadapt_capture.share import send
-    return send(str(recording_path))
+
+    for i, path in enumerate(recording_paths, 1):
+        print(f"--- Recording {i}/{len(recording_paths)}: {path.name} ---")
+        print("Run 'wormhole receive <code>' on the receiving machine.")
+        print()
+        send(str(path))
+        print()
 
 
 def main() -> int:
@@ -217,6 +257,13 @@ def main() -> int:
 
         print_header(f"Task {task_index + 1} of {len(TASKS)}")
         print_task(task, task_index, len(TASKS))
+
+        # Run setup if needed
+        setup_name = task.get("setup")
+        if setup_name and setup_name in SETUP_FUNCTIONS:
+            print("  Setting up environment...")
+            SETUP_FUNCTIONS[setup_name]()
+            print()
 
         recording_path = record_task(task, recordings_dir)
 
@@ -270,24 +317,14 @@ def main() -> int:
         return 0
 
     print_header("Sending Recordings")
-    print("Each recording will generate a wormhole code.")
-    print("Share these codes to receive the recordings.")
+    print("Each recording will be sent one at a time.")
+    print("You must run 'wormhole receive <code>' on the receiving machine for each one.")
     print()
 
-    codes = []
-    for task_id in successful:
-        recording_path = results[task_id]
-        print(f"Sending {task_id}...")
-        result = send_recording(recording_path)
-        if result:
-            codes.append((task_id, "sent"))
-        else:
-            codes.append((task_id, "failed"))
-        print()
+    paths = [results[tid] for tid in successful]
+    send_all_recordings(paths)
 
     print_header("Done!")
-    print("Share the wormhole codes displayed above.")
-    print()
 
     return 0
 
