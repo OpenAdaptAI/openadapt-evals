@@ -99,9 +99,11 @@ line-length = 100
 
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
-branch = "main"
 commit_message = "chore: release {version}"
 major_on_zero = false
+
+[tool.semantic_release.branches.main]
+match = "main"
 
 [tool.semantic_release.commit_parser_options]
 allowed_tags = ["build", "chore", "ci", "docs", "feat", "fix", "perf", "refactor", "style", "test"]
