@@ -4441,7 +4441,7 @@ def cmd_run_azure_ml_auto(args):
   -e CPU_CORES={cpu_cores} \\
   -e DISK_SIZE=64G \\
   --entrypoint /bin/bash \\
-  windowsarena/winarena:latest \\
+  waa-auto:latest \\
   -c './entry.sh --prepare-image false --start-client false'"""
         # Note: --start-client false for setup - just boot Windows + Flask server
         # Azure ML compute instances run the benchmark separately via run_entry.py
