@@ -1,6 +1,46 @@
 # CHANGELOG
 
 
+## v0.3.2 (2026-02-18)
+
+### Bug Fixes
+
+- **ci**: Use v9 branch config for python-semantic-release
+  ([#34](https://github.com/OpenAdaptAI/openadapt-evals/pull/34),
+  [`0630b0f`](https://github.com/OpenAdaptAI/openadapt-evals/commit/0630b0f6f4c34990ec1ad27e9b876546c65f5b07))
+
+Replace `branch = "main"` (v7/v8 key) with `[tool.semantic_release.branches.main]` table (v9 key).
+  The old key is silently ignored by v9, causing releases to never trigger on the main branch.
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+### Documentation
+
+- Add screenshots back to README
+  ([`ed5e9b5`](https://github.com/OpenAdaptAI/openadapt-evals/commit/ed5e9b58df0e8a75509133bee4d8d3cbf20d6cda))
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+- Rewrite CLAUDE.md — remove stale sections, match current architecture
+  ([`f4f5eb7`](https://github.com/OpenAdaptAI/openadapt-evals/commit/f4f5eb73b83fbddb43452ba6aef526a0c0713843))
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+- Rewrite README for professional open-source style
+  ([`9e3e904`](https://github.com/OpenAdaptAI/openadapt-evals/commit/9e3e904f867d6198d8c4829b3fd299261050100c))
+
+Replace changelog-style README with clean structure following popular AI OSS conventions. Fix broken
+  build badge (publish.yml → release.yml). Remove placeholder data, excessive viewer docs, and
+  fabricated badges.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+- **ci**: Correct release workflow comment — root cause was branch protection, not merge type
+  ([`8f18cf5`](https://github.com/OpenAdaptAI/openadapt-evals/commit/8f18cf5c620065bb5209cc09c91136a156e26d9a))
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.3.1 (2026-02-14)
 
 ### Bug Fixes
