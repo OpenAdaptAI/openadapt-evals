@@ -1,6 +1,20 @@
 # CHANGELOG
 
 
+## v0.3.3 (2026-02-18)
+
+### Bug Fixes
+
+- **pool**: Use waa-auto image instead of broken windowsarena/winarena
+  ([`8879be6`](https://github.com/OpenAdaptAI/openadapt-evals/commit/8879be66fa9448442129808b89a69a0f752e2538))
+
+WAA_START_SCRIPT and setup-waa were using windowsarena/winarena:latest (dockurr/windows v0.00, can't
+  download ISO) instead of waa-auto:latest (dockurr/windows:latest v5.14, auto-downloads ISO).
+  Regression from openadapt-ml migration — the fix existed in commit e81c79a but was lost.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.3.2 (2026-02-18)
 
 ### Bug Fixes
