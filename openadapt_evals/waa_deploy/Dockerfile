@@ -82,6 +82,11 @@ RUN sed -i 's|20.20.20.21|172.30.0.2|g' /entry_setup.sh && \
 RUN find /client -name "*.py" -exec sed -i 's|20.20.20.21|172.30.0.2|g' {} \; && \
     echo "Patched client Python files"
 
+# Add timeout to OpenAI API calls (prevents infinite hangs)
+RUN sed -i 's|openai.OpenAI(api_key=self.api_key)|openai.OpenAI(api_key=self.api_key, timeout=120.0)|' \
+    /client/mm_agents/navi/gpt/gpt4v_oai.py && \
+    echo "Patched OpenAI client with 120s timeout"
+
 # -----------------------------------------------------------------------------
 # Add API-backed agent support (Claude / OpenAI)
 # NOTE: API agents (api-claude, api-openai) are run EXTERNALLY via openadapt-evals CLI

@@ -106,6 +106,7 @@ RUN sed -i '/^return 0$/i cp -r /oem/* /tmp/smb/ 2>/dev/null || true' /run/samba
 RUN printf '#!/bin/bash\\n/usr/bin/tini -s /run/entry.sh\\n' > /start_vm.sh && chmod +x /start_vm.sh
 RUN sed -i 's|20.20.20.21|172.30.0.2|g' /entry_setup.sh /entry.sh /start_client.sh
 RUN find /client -name "*.py" -exec sed -i 's|20.20.20.21|172.30.0.2|g' {} \\;
+RUN sed -i 's|openai.OpenAI(api_key=self.api_key)|openai.OpenAI(api_key=self.api_key, timeout=120.0)|' /client/mm_agents/navi/gpt/gpt4v_oai.py
 RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr libgl1 libglib2.0-0 && rm -rf /var/lib/apt/lists/*
 ENV VERSION="11e" RAM_SIZE="8G" CPU_CORES="4" ARGUMENTS="-qmp tcp:0.0.0.0:7200,server,nowait"
 ENTRYPOINT ["/usr/bin/tini", "-s", "/run/entry.sh"]
@@ -498,25 +499,119 @@ class PoolManager:
             return self._run_external_agent(ready_workers, tasks, agent_factory, exp_name)
 
         # Default path: run WAA's built-in agent via docker exec
+        # Uses docker exec -d (detached) + tail -f for streaming.
+        # Process survives SSH drops; tail -f reconnects automatically.
+        stale_timeout = 15 * 60  # Kill if no log activity for 15 minutes
+
         def run_on_worker(
             worker: PoolWorker,
             worker_idx: int,
             total_workers: int,
         ) -> tuple[str, int, int, str | None]:
-            run_cmd = f"""
-docker exec -e OPENAI_API_KEY='{api_key}' winarena bash -c 'cd /client && python run.py \\
-    --agent {agent} \\
-    --model {model} \\
-    --exp_name {exp_name}_{worker.name} \\
-    --worker_id {worker_idx} \\
-    --num_workers {total_workers} \\
-    --emulator_ip 172.30.0.2 2>&1' | tee /home/azureuser/benchmark.log
-"""
-            result = ssh_run(worker.ip, run_cmd, stream=True, step="RUN", log_fn=self.log_fn)
-            if result.returncode == 0:
+            log_file = "/tmp/benchmark.log"
+            exit_file = "/tmp/benchmark.exit"
+
+            # Start benchmark detached inside container (returns immediately)
+            run_cmd = (
+                f"cd /client && python -u run.py "
+                f"--agent {agent} --model {model} "
+                f"--exp_name {exp_name}_{worker.name} "
+                f"--worker_id {worker_idx} --num_workers {total_workers} "
+                f"--emulator_ip 172.30.0.2 "
+                f"> {log_file} 2>&1; echo $? > {exit_file}"
+            )
+            ssh_run(
+                worker.ip,
+                f"docker exec -d -e OPENAI_API_KEY='{api_key}' winarena "
+                f"bash -c '{run_cmd}'",
+            )
+            self._log("RUN", f"  {worker.name}: started (detached), log: {log_file}")
+
+            # Wait for process to start and get its PID
+            time.sleep(3)
+            pid_result = ssh_run(
+                worker.ip,
+                "docker exec winarena pgrep -f 'python.*run.py' || echo ''",
+            )
+            pid = pid_result.stdout.strip().splitlines()[0] if pid_result.stdout.strip() else ""
+            if pid:
+                self._log("RUN", f"  {worker.name}: benchmark PID {pid}")
+                tail_cmd = f"docker exec winarena tail -f --pid={pid} {log_file}"
+            else:
+                self._log("RUN", f"  {worker.name}: could not get PID, using plain tail -f")
+                tail_cmd = f"docker exec winarena tail -f {log_file}"
+
+            # Stream logs via tail -f with auto-reconnect on SSH drop
+            # tail -f --pid exits when the benchmark process dies
+            last_activity = time.time()
+            while True:
+                try:
+                    result = ssh_run(
+                        worker.ip,
+                        tail_cmd,
+                        stream=True,
+                        step="RUN",
+                        log_fn=self.log_fn,
+                    )
+                    # tail -f exited — process likely done
+                    break
+                except KeyboardInterrupt:
+                    self._log("RUN", f"  {worker.name}: interrupted (process continues on VM)")
+                    return (worker.name, 0, 1, "interrupted by user")
+                except Exception as e:
+                    # SSH dropped — check if benchmark is still running
+                    self._log("RUN", f"  {worker.name}: SSH reconnecting ({e})")
+                    time.sleep(5)
+                    try:
+                        check = ssh_run(
+                            worker.ip,
+                            "docker exec winarena pgrep -f run.py > /dev/null "
+                            "&& echo RUNNING || echo DONE",
+                        )
+                        if "DONE" in check.stdout:
+                            break
+                        # Check for stale progress
+                        mtime_result = ssh_run(
+                            worker.ip,
+                            f"docker exec winarena stat -c %Y {log_file} 2>/dev/null || echo 0",
+                        )
+                        now_result = ssh_run(worker.ip, "date +%s")
+                        mtime = int(mtime_result.stdout.strip()) if mtime_result.stdout.strip().isdigit() else 0
+                        now = int(now_result.stdout.strip()) if now_result.stdout.strip().isdigit() else 0
+                        if mtime > 0 and now - mtime > stale_timeout:
+                            self._log(
+                                "RUN",
+                                f"  {worker.name}: no log activity for "
+                                f"{stale_timeout // 60}m — killing",
+                            )
+                            ssh_run(
+                                worker.ip,
+                                "docker exec winarena bash -c "
+                                "'kill -9 $(pgrep -f run.py) 2>/dev/null' || true",
+                            )
+                            return (
+                                worker.name, 0, 1,
+                                f"killed: no activity for {stale_timeout // 60} minutes",
+                            )
+                        last_activity = time.time()
+                    except Exception:
+                        # Can't even check — retry
+                        continue
+
+            # Get exit code
+            try:
+                exit_result = ssh_run(
+                    worker.ip,
+                    f"docker exec winarena cat {exit_file} 2>/dev/null || echo 1",
+                )
+                exit_code = int(exit_result.stdout.strip()) if exit_result.stdout.strip().isdigit() else 1
+            except Exception:
+                exit_code = 1
+
+            if exit_code == 0:
                 return (worker.name, 1, 0, None)
             else:
-                return (worker.name, 0, 1, "benchmark failed")
+                return (worker.name, 0, 1, f"exit code {exit_code}")
 
         self._log("POOL-RUN", "")
         self._log("POOL-RUN", "Starting benchmark on all workers...")
