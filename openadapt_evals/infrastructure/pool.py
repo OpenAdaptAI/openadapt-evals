@@ -511,13 +511,34 @@ class PoolManager:
             log_file = "/tmp/benchmark.log"
             exit_file = "/tmp/benchmark.exit"
 
+            # Create a subset test JSON if --tasks limits the count.
+            # WAA's run.py uses --test_all_meta_path to decide which tasks to run.
+            # Without this, it runs ALL 154 tasks regardless of our --tasks flag.
+            test_meta_arg = ""
+            if tasks and tasks < 154:
+                subset_json = "/tmp/test_subset.json"
+                py_cmd = (
+                    f"import json; "
+                    f"data=json.load(open('/client/evaluation_examples_windows/test_all.json')); "
+                    f"pairs=[(d,t) for d in data for t in data[d]][:{tasks}]; "
+                    f"s={{}}; [s.setdefault(d,[]).append(t) for d,t in pairs]; "
+                    f"json.dump(s,open('{subset_json}','w'),indent=2); "
+                    f"print(f'Created subset: {{len(pairs)}} tasks')"
+                )
+                ssh_run(
+                    worker.ip,
+                    f'docker exec winarena python -c "{py_cmd}"',
+                )
+                self._log("RUN", f"  {worker.name}: limited to {tasks} tasks")
+                test_meta_arg = f"--test_all_meta_path {subset_json} "
+
             # Start benchmark detached inside container (returns immediately)
             run_cmd = (
                 f"cd /client && python -u run.py "
                 f"--agent {agent} --model {model} "
                 f"--exp_name {exp_name}_{worker.name} "
                 f"--worker_id {worker_idx} --num_workers {total_workers} "
-                f"--emulator_ip 172.30.0.2 "
+                f"--emulator_ip 172.30.0.2 {test_meta_arg}"
                 f"> {log_file} 2>&1; echo $? > {exit_file}"
             )
             ssh_run(
