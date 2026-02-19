@@ -485,8 +485,11 @@ class WAALiveAdapter(BenchmarkAdapter):
                     reason=result.get("reason"),
                 )
 
-            elif resp.status_code == 404:
+            elif resp.status_code == 404 or (
+                resp.status_code == 500 and "404 Not Found" in resp.text
+            ):
                 # /evaluate endpoint not available - fall back to heuristic
+                # WAA server wraps 404s in 500 responses
                 logger.warning(
                     "/evaluate endpoint not found on WAA server. "
                     "Deploy openadapt_evals.server.evaluate_endpoint to enable "

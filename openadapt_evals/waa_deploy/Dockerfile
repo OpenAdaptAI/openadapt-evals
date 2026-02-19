@@ -93,6 +93,70 @@ RUN find /client -name "*.py" -exec sed -i 's|20.20.20.21|172.30.0.2|g' {} \; &&
 COPY api_agent.py /client/mm_agents/api_agent.py
 
 # -----------------------------------------------------------------------------
+# Inject /evaluate endpoint into WAA Flask server
+# The WAA server (main.py) runs inside Windows but is copied from /oem/server/
+# We patch it at build time so it's present when Windows first boots
+# -----------------------------------------------------------------------------
+
+RUN python3 -c "\
+import re; \
+path = '/oem/server/main.py'; \
+code = open(path).read(); \
+patch = '''\n\
+# === BEGIN EVALUATE ENDPOINT PATCH ===\n\
+import sys as _sys\n\
+from pathlib import Path as _Path\n\
+_evaluators_path = _Path('/client/desktop_env')\n\
+if _evaluators_path.exists():\n\
+    _sys.path.insert(0, str(_evaluators_path))\n\
+try:\n\
+    from evaluators import getters as _getters, metrics as _metrics\n\
+    class _MockEnv:\n\
+        vm_ip = '172.30.0.2'\n\
+        port = 5000\n\
+    @app.route('/evaluate', methods=['POST'])\n\
+    def evaluate():\n\
+        from flask import jsonify, request\n\
+        task_config = request.json\n\
+        if not task_config:\n\
+            return jsonify({'error': 'No task config'}), 400\n\
+        evaluator_config = task_config.get('evaluator', {})\n\
+        if not evaluator_config:\n\
+            return jsonify({'success': False, 'score': 0.0, 'reason': 'No evaluator config'})\n\
+        env = _MockEnv()\n\
+        result_spec = evaluator_config.get('result', {})\n\
+        result_type = result_spec.get('type', 'vm_command_line')\n\
+        getter_func = getattr(_getters, f'get_{result_type}', None)\n\
+        actual = getter_func(env, result_spec) if getter_func else None\n\
+        expected_spec = evaluator_config.get('expected', {})\n\
+        if expected_spec.get('type') == 'rule':\n\
+            expected = expected_spec.get('rules', {}).get('match')\n\
+        elif 'value' in expected_spec:\n\
+            expected = expected_spec.get('value')\n\
+        else:\n\
+            expected = None\n\
+        func_name = evaluator_config.get('func', 'exact_match')\n\
+        metric_func = getattr(_metrics, func_name, _metrics.exact_match)\n\
+        try:\n\
+            score = float(metric_func(actual, expected))\n\
+        except Exception as e:\n\
+            score = 0.0\n\
+        return jsonify({'success': score >= 1.0, 'score': score, 'reason': f'Score: {score:.2f}'})\n\
+    print('Evaluate endpoint registered at /evaluate')\n\
+except ImportError as e:\n\
+    print(f'WARNING: evaluators not available: {e}')\n\
+# === END EVALUATE ENDPOINT PATCH ===\n\
+'''; \
+marker = 'app.run('; \
+idx = code.rfind(marker); \
+assert idx >= 0, f'/evaluate patch failed: app.run( not found in {path}'; \
+line_start = code.rfind('\n', 0, idx) + 1; \
+patched = code[:line_start] + patch + '\n' + code[line_start:]; \
+open(path, 'w').write(patched); \
+print('Patched /evaluate endpoint into', path); \
+" && echo "Evaluate endpoint injected successfully"
+
+# -----------------------------------------------------------------------------
 # Fix Windows setup for automation
 # -----------------------------------------------------------------------------
 

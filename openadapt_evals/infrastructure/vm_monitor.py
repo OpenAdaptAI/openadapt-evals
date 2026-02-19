@@ -14,7 +14,7 @@ Usage:
         ssh_host="172.171.112.41",
         ssh_user="azureuser",
         docker_container="winarena",
-        internal_ip="20.20.20.21",
+        internal_ip="localhost",
     )
 
     monitor = VMMonitor(config)
@@ -61,7 +61,7 @@ class VMConfig:
     waa_port: int = 5000
     qmp_port: int = 7200
     docker_container: str = "winarena"
-    internal_ip: str = "20.20.20.21"
+    internal_ip: str = "localhost"
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""

@@ -709,6 +709,77 @@ def cmd_pool_cleanup(args):
     return 0
 
 
+def cmd_pool_auto(args):
+    """Fully automated pool workflow: create → wait → run.
+
+    Creates VMs, installs Docker, builds WAA image, starts containers,
+    waits for WAA server readiness, then runs benchmark tasks — all in
+    one command.
+
+    If a pool already exists, skips creation and resumes from wait → run.
+    """
+    init_logging()
+    from openadapt_evals.infrastructure.azure_vm import AzureVMManager
+    from openadapt_evals.infrastructure.pool import PoolManager
+
+    num_workers = getattr(args, "workers", 1)
+    auto_shutdown_hours = getattr(args, "auto_shutdown_hours", 4)
+    timeout_minutes = getattr(args, "timeout", 45)
+    num_tasks = getattr(args, "tasks", 10)
+    agent = getattr(args, "agent", "navi")
+    model = getattr(args, "model", "gpt-4o-mini")
+    api_key = getattr(args, "api_key", None)
+
+    vm_manager = AzureVMManager(resource_group=RESOURCE_GROUP)
+    manager = PoolManager(vm_manager=vm_manager, log_fn=log)
+
+    try:
+        # Step 1: Create pool (skip if one already exists)
+        pool = manager.status()
+        if pool is not None:
+            log("POOL-AUTO", f"Pool already exists ({len(pool.workers)} workers). Skipping create.")
+        else:
+            log("POOL-AUTO", "=== Step 1/3: Creating pool ===")
+            manager.create(
+                workers=num_workers,
+                auto_shutdown_hours=auto_shutdown_hours,
+            )
+
+        # Step 2: Wait for WAA readiness
+        log("POOL-AUTO", "=== Step 2/3: Waiting for WAA server ===")
+        workers_ready = manager.wait(
+            timeout_minutes=timeout_minutes,
+            start_containers=True,
+        )
+
+        if not workers_ready:
+            log("POOL-AUTO", "ERROR: No workers became ready. Aborting.")
+            return 1
+
+        # Step 3: Run benchmark
+        log("POOL-AUTO", "=== Step 3/3: Running benchmark ===")
+        result = manager.run(
+            tasks=num_tasks,
+            agent=agent,
+            model=model,
+            api_key=api_key,
+        )
+
+        log("POOL-AUTO", "")
+        log("POOL-AUTO", "=== POOL-AUTO COMPLETE ===")
+        log("POOL-AUTO", f"  Workers: {len(workers_ready)}")
+        log("POOL-AUTO", f"  Tasks: {result.completed}/{result.total_tasks}")
+        log("POOL-AUTO", f"  Failed: {result.failed}")
+        log("POOL-AUTO", f"  Time: {result.elapsed_seconds / 60:.1f} minutes")
+        log("POOL-AUTO", "")
+        log("POOL-AUTO", "Next: oa-vm pool-cleanup -y  (to stop billing)")
+
+        return 0 if result.failed == 0 else 1
+    except RuntimeError as e:
+        log("POOL-AUTO", f"ERROR: {e}")
+        return 1
+
+
 def cmd_pool_vnc(args):
     """Open VNC to a specific pool worker via SSH tunnel.
 
@@ -7408,6 +7479,33 @@ Examples:
     )
     p_pool_cleanup.add_argument("-y", "--yes", action="store_true", help="Skip confirmation")
     p_pool_cleanup.set_defaults(func=cmd_pool_cleanup)
+
+    # pool-auto (end-to-end: create → wait → run)
+    p_pool_auto = subparsers.add_parser(
+        "pool-auto",
+        help="Fully automated: create VMs → wait for WAA → run benchmark",
+    )
+    p_pool_auto.add_argument(
+        "--workers", "-w", type=int, default=1, help="Number of worker VMs (default: 1)"
+    )
+    p_pool_auto.add_argument(
+        "--tasks", "-n", type=int, default=10,
+        help="Number of tasks to run (default: 10, use 154 for full benchmark)",
+    )
+    p_pool_auto.add_argument("--agent", default="navi", help="Agent type (default: navi)")
+    p_pool_auto.add_argument(
+        "--model", default="gpt-4o-mini", help="Model name (default: gpt-4o-mini)"
+    )
+    p_pool_auto.add_argument("--api-key", help="OpenAI API key (default: from .env)")
+    p_pool_auto.add_argument(
+        "--timeout", "-t", type=int, default=45,
+        help="Timeout in minutes for WAA readiness (default: 45)",
+    )
+    p_pool_auto.add_argument(
+        "--auto-shutdown-hours", type=int, default=4,
+        help="Auto-shutdown VMs after N hours (default: 4)",
+    )
+    p_pool_auto.set_defaults(func=cmd_pool_auto)
 
     # pool-logs
     p_pool_logs = subparsers.add_parser(

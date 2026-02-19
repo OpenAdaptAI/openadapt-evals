@@ -1370,11 +1370,12 @@ wheels = [
 
 [[package]]
 name = "openadapt-evals"
-version = "0.3.0"
+version = "0.3.2"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
     { name = "open-clip-torch" },
+    { name = "openai" },
     { name = "pillow" },
     { name = "pydantic-settings" },
     { name = "python-dotenv" },
@@ -1439,6 +1440,7 @@ requires-dist = [
     { name = "open-clip-torch", specifier = ">=2.20.0" },
     { name = "openadapt-evals", extras = ["dev", "waa", "azure", "retrieval", "viewer", "wandb"], marker = "extra == 'all'" },
     { name = "openadapt-retrieval", marker = "extra == 'retrieval'", specifier = ">=0.1.0" },
+    { name = "openai", specifier = ">=1.0.0" },
     { name = "pillow", specifier = ">=10.0.0" },
     { name = "pydantic-settings", specifier = ">=2.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
@@ -1466,6 +1468,25 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/78/10/87a0cc98556fba8fb3f9b9e923f404244f51e26c96d107f1494e3e3ac9cf/openadapt_retrieval-0.1.0.tar.gz", hash = "sha256:1e30d34b881f3fdd54ff75daf9c4d1ce1243e0a0e7b0ee7ae30be514ee887d2b", size = 120333 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d6/7a/49b3a1c2b341e9b75ac0f5d641efccc93016f32b5bb41d0198a64e53d09a/openadapt_retrieval-0.1.0-py3-none-any.whl", hash = "sha256:535e5b65cc491be9f2a0b5305046257cf4779fdbe296e9e184b19216bda29c81", size = 32532 },
+]
+
+[[package]]
+name = "openai"
+version = "2.21.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "distro" },
+    { name = "httpx" },
+    { name = "jiter" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "tqdm" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/92/e5/3d197a0947a166649f566706d7a4c8f7fe38f1fa7b24c9bcffe4c7591d44/openai-2.21.0.tar.gz", hash = "sha256:81b48ce4b8bbb2cc3af02047ceb19561f7b1dc0d4e52d1de7f02abfd15aa59b7", size = 644374 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cc/56/0a89092a453bb2c676d66abee44f863e742b2110d4dbb1dbcca3f7e5fc33/openai-2.21.0-py3-none-any.whl", hash = "sha256:0bc1c775e5b1536c294eded39ee08f8407656537ccc71b1004104fe1602e267c", size = 1103065 },
 ]
 
 [[package]]

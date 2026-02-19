@@ -107,7 +107,7 @@ RUN printf '#!/bin/bash\\n/usr/bin/tini -s /run/entry.sh\\n' > /start_vm.sh && c
 RUN sed -i 's|20.20.20.21|172.30.0.2|g' /entry_setup.sh /entry.sh /start_client.sh
 RUN find /client -name "*.py" -exec sed -i 's|20.20.20.21|172.30.0.2|g' {} \\;
 RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr libgl1 libglib2.0-0 && rm -rf /var/lib/apt/lists/*
-ENV VERSION="11e" RAM_SIZE="8G" CPU_CORES="4"
+ENV VERSION="11e" RAM_SIZE="8G" CPU_CORES="4" ARGUMENTS="-qmp tcp:0.0.0.0:7200,server,nowait"
 ENTRYPOINT ["/usr/bin/tini", "-s", "/run/entry.sh"]
 DOCKERFILE_EOF
 
@@ -139,6 +139,7 @@ docker run -d --name winarena \\
   -e RAM_SIZE=8G \\
   -e CPU_CORES=4 \\
   -e DISK_SIZE=64G \\
+  -e ARGUMENTS="-qmp tcp:0.0.0.0:7200,server,nowait" \\
   --entrypoint /bin/bash \\
   waa-auto:latest \\
   -c './entry.sh --prepare-image false --start-client false'
@@ -372,7 +373,7 @@ class PoolManager:
                     config = VMConfig(
                         name=name,
                         ssh_host=worker.ip,
-                        internal_ip="172.30.0.2",
+                        internal_ip="localhost",
                     )
                     monitor = VMMonitor(config, timeout=5)
                     ready, _response = monitor.check_waa_probe()
