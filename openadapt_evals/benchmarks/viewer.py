@@ -1587,7 +1587,7 @@ def _generate_benchmark_viewer_html(
                 const raw = action.raw_action;
                 if (raw) {{
                     const code = typeof raw === 'string' ? raw : (raw.code || '');
-                    const m = code.match(/computer\\.click\\((\\d+),\\s*(\\d+)\\)/);
+                    const m = code.match(/computer\\.(?:click|double_click|right_click)\\((\\d+),\\s*(\\d+)\\)/);
                     if (m && img && img.naturalWidth > 0) {{
                         normX = parseInt(m[1]) / img.naturalWidth;
                         normY = parseInt(m[2]) / img.naturalHeight;
@@ -1879,7 +1879,7 @@ def _generate_benchmark_viewer_html(
                 const raw = a.raw_action;
                 if (raw && natW > 0) {{
                     const code = typeof raw === 'string' ? raw : (raw.code || raw.waa_action || '');
-                    const cm = code.match(/computer\\.click\\((\\d+),\\s*(\\d+)\\)/);
+                    const cm = code.match(/computer\\.(?:click|double_click|right_click)\\((\\d+),\\s*(\\d+)\\)/);
                     if (cm) {{ nx = parseInt(cm[1]) / natW; ny = parseInt(cm[2]) / natH; }}
                 }}
                 clicks.push({{ x: nx * canvas.width, y: ny * canvas.height }});

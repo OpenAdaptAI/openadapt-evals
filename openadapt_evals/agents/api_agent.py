@@ -956,8 +956,10 @@ class ApiAgent(BenchmarkAgent):
         """
         raw_action = {"code": code}
 
-        # Parse click
-        click_match = re.match(r"computer\.click\((\d+),\s*(\d+)\)", code)
+        # Parse click / double_click / right_click (all map to "click" action type)
+        click_match = re.match(
+            r"computer\.(?:click|double_click|right_click)\((\d+),\s*(\d+)\)", code
+        )
         if click_match:
             x, y = int(click_match.group(1)), int(click_match.group(2))
             # Normalize if we have viewport
@@ -993,6 +995,25 @@ class ApiAgent(BenchmarkAgent):
             direction = "up" if amount < 0 else "down"
             return BenchmarkAction(type="scroll", scroll_direction=direction, raw_action=raw_action)
 
+        # Parse drag
+        drag_match = re.match(
+            r"computer\.drag\((\d+),\s*(\d+),\s*(\d+),\s*(\d+)\)", code
+        )
+        if drag_match:
+            x1, y1 = int(drag_match.group(1)), int(drag_match.group(2))
+            x2, y2 = int(drag_match.group(3)), int(drag_match.group(4))
+            if observation.viewport:
+                w, h = observation.viewport
+                return BenchmarkAction(
+                    type="click", x=x1/w, y=y1/h, end_x=x2/w, end_y=y2/h,
+                    raw_action=raw_action,
+                )
+            return BenchmarkAction(
+                type="click", x=float(x1), y=float(y1),
+                end_x=float(x2), end_y=float(y2), raw_action=raw_action,
+            )
+
+        logger.warning(f"Unrecognized action, treating as no-op: {code}")
         return BenchmarkAction(type="done", raw_action=raw_action)
 
     def _add_to_history(self, entry: str) -> None:

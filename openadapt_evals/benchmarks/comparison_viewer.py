@@ -483,7 +483,7 @@ function updateStep() {{
         if (a.x != null && a.y != null && a.type === 'click' && imgEl && ssEl) {{
           let nx = a.x, ny = a.y;
           const code = a.code || '';
-          const cm = code.match(/computer\\.click\\((\\d+),\\s*(\\d+)\\)/);
+          const cm = code.match(/computer\\.(?:click|double_click|right_click)\\((\\d+),\\s*(\\d+)\\)/);
           if (cm && imgEl.naturalWidth > 0) {{
             nx = parseInt(cm[1]) / imgEl.naturalWidth;
             ny = parseInt(cm[2]) / imgEl.naturalHeight;
