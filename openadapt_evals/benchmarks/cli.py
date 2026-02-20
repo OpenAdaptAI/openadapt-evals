@@ -247,11 +247,13 @@ def cmd_run(args: argparse.Namespace) -> int:
     )
 
     server_url = args.server
+    evaluate_url = getattr(args, "evaluate_url", None)
     print(f"Connecting to WAA server at {server_url}...")
 
     # Create live adapter
     config = WAALiveConfig(
         server_url=server_url,
+        evaluate_url=evaluate_url,
         max_steps=args.max_steps,
     )
     adapter = WAALiveAdapter(config)
@@ -364,11 +366,13 @@ def cmd_live(args: argparse.Namespace) -> int:
         compute_metrics,
     )
 
+    evaluate_url = getattr(args, "evaluate_url", None)
     print(f"Connecting to WAA server at {args.server}...")
 
     # Create live adapter
     config = WAALiveConfig(
         server_url=args.server,
+        evaluate_url=evaluate_url,
         max_steps=args.max_steps,
     )
     adapter = WAALiveAdapter(config)
@@ -828,6 +832,59 @@ def cmd_view(args: argparse.Namespace) -> int:
     if not args.no_open:
         import webbrowser
         webbrowser.open(f"file://{output_path.absolute()}")
+
+    return 0
+
+
+def cmd_compare(args: argparse.Namespace) -> int:
+    """Generate a comparison viewer for multiple evaluation runs."""
+    from openadapt_evals.benchmarks.comparison_viewer import generate_comparison_viewer
+
+    benchmark_dir = Path(args.benchmark_dir or "benchmark_results")
+
+    # Parse runs: "run_name:Label,run_name2:Label2"
+    runs = []
+    for spec in args.runs.split(","):
+        parts = spec.strip().split(":", 1)
+        run_name = parts[0].strip()
+        label = parts[1].strip() if len(parts) > 1 else run_name
+        run_dir = benchmark_dir / run_name
+        if not run_dir.exists():
+            print(f"ERROR: Run directory not found: {run_dir}")
+            return 1
+        runs.append((run_dir, label))
+
+    if len(runs) < 2:
+        print("ERROR: At least 2 runs required for comparison")
+        return 1
+
+    # Demo prompts
+    demo_dir = Path(args.demo_prompts) if args.demo_prompts else None
+
+    # Output path
+    if args.output:
+        output_path = Path(args.output)
+    else:
+        output_path = benchmark_dir / "comparison.html"
+
+    embed = not args.no_embed
+
+    print(f"Comparing {len(runs)} runs: {', '.join(label for _, label in runs)}")
+    print(f"Embed screenshots: {embed}")
+
+    result = generate_comparison_viewer(
+        runs=runs,
+        output_path=output_path,
+        demo_prompts_dir=demo_dir,
+        embed_screenshots=embed,
+    )
+
+    print(f"Comparison viewer generated: {result}")
+    print(f"Size: {result.stat().st_size / 1024:.0f} KB")
+
+    if not args.no_open:
+        import webbrowser
+        webbrowser.open(f"file://{result.absolute()}")
 
     return 0
 
@@ -1834,6 +1891,8 @@ def main() -> int:
     )
     run_parser.add_argument("--server", type=str, default="http://localhost:5001",
                            help="WAA server URL (default: localhost:5001 for SSH tunnel)")
+    run_parser.add_argument("--evaluate-url", type=str, default="http://localhost:5050",
+                           help="Evaluate server URL (default: localhost:5050)")
     run_parser.add_argument("--agent", type=str, default="api-openai",
                            help="Agent type: noop, mock, api-claude, api-openai")
     run_parser.add_argument("--task", type=str,
@@ -1853,6 +1912,8 @@ def main() -> int:
     live_parser = subparsers.add_parser("live", help="Run live evaluation against WAA server (full control)")
     live_parser.add_argument("--server", type=str, default="http://localhost:5001",
                             help="WAA server URL (default: localhost:5001 for SSH tunnel)")
+    live_parser.add_argument("--evaluate-url", type=str, default="http://localhost:5050",
+                            help="Evaluate server URL (default: localhost:5050)")
     live_parser.add_argument("--agent", type=str, default="mock",
                             help="Agent type: mock, noop, api-claude, api-openai, retrieval-claude, retrieval-openai")
     live_parser.add_argument("--demo", type=str, help="Demo trajectory file for ApiAgent")
@@ -1884,6 +1945,26 @@ def main() -> int:
                             help="Embed screenshots as base64")
     view_parser.add_argument("--no-open", action="store_true",
                             help="Don't auto-open browser")
+
+    # Comparison viewer
+    compare_parser = subparsers.add_parser(
+        "compare",
+        help="Generate comparison viewer for multiple runs"
+    )
+    compare_parser.add_argument(
+        "--runs", type=str, required=True,
+        help="Comma-separated run specs: run_name:Label,run_name2:Label2"
+    )
+    compare_parser.add_argument("--benchmark-dir", type=str,
+                                help="Benchmark results directory")
+    compare_parser.add_argument("--output", type=str,
+                                help="Output HTML path")
+    compare_parser.add_argument("--demo-prompts", type=str,
+                                help="Directory containing demo prompt .txt files")
+    compare_parser.add_argument("--no-embed", action="store_true",
+                                help="Use file paths instead of embedding screenshots")
+    compare_parser.add_argument("--no-open", action="store_true",
+                                help="Don't auto-open browser")
 
     # Cost estimation
     estimate_parser = subparsers.add_parser("estimate", help="Estimate Azure costs")
@@ -2105,6 +2186,7 @@ def main() -> int:
         "smoke-live": cmd_smoke_live,
         "probe": cmd_probe,
         "view": cmd_view,
+        "compare": cmd_compare,
         "estimate": cmd_estimate,
         "azure": cmd_azure,
         "azure-monitor": cmd_azure_monitor,

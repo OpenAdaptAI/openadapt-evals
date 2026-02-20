@@ -318,6 +318,9 @@ class ApiAgent(BenchmarkAgent):
         # Call predict (WAA interface)
         _, actions, logs, _ = self.predict(task.instruction, obs_dict)
 
+        # Store logs so runner.py can read them for execution trace
+        self._last_step_logs = logs
+
         # Parse response into BenchmarkAction
         if actions and actions[0] in ("DONE", "FAIL", "WAIT"):
             return BenchmarkAction(type="done", raw_action={"waa_action": actions[0]})
@@ -453,6 +456,12 @@ class ApiAgent(BenchmarkAgent):
 
             logs["plan_result"] = response_text
 
+            # Capture token usage from last API call
+            token_usage = getattr(self, "_last_token_usage", None)
+            if token_usage:
+                logs["token_usage"] = token_usage
+                self._last_token_usage = None
+
             # Parse the response with robust error handling
             parse_result = self._parse_api_response(response_text, w, h, logs)
 
@@ -535,6 +544,14 @@ class ApiAgent(BenchmarkAgent):
                 messages=[{"role": "user", "content": content}],
             )
 
+            # Capture token usage
+            usage = getattr(resp, "usage", None)
+            if usage:
+                self._last_token_usage = {
+                    "input_tokens": getattr(usage, "input_tokens", None),
+                    "output_tokens": getattr(usage, "output_tokens", None),
+                }
+
             # Extract text from response
             parts = getattr(resp, "content", [])
             texts = [
@@ -565,6 +582,15 @@ class ApiAgent(BenchmarkAgent):
                 max_completion_tokens=self.max_tokens,
                 temperature=self.temperature,
             )
+
+            # Capture token usage
+            usage = getattr(resp, "usage", None)
+            if usage:
+                self._last_token_usage = {
+                    "input_tokens": getattr(usage, "prompt_tokens", None),
+                    "output_tokens": getattr(usage, "completion_tokens", None),
+                }
+
             return resp.choices[0].message.content or ""
 
         raise ValueError(f"Unsupported provider: {self.provider}")
