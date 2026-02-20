@@ -98,68 +98,19 @@ RUN sed -i 's|openai.OpenAI(api_key=self.api_key)|openai.OpenAI(api_key=self.api
 COPY api_agent.py /client/mm_agents/api_agent.py
 
 # -----------------------------------------------------------------------------
-# Inject /evaluate endpoint into WAA Flask server
-# The WAA server (main.py) runs inside Windows but is copied from /oem/server/
-# We patch it at build time so it's present when Windows first boots
+# Deploy evaluate server (runs on Docker Linux side, NOT inside Windows)
+# The evaluate server imports WAA evaluator modules from /client/desktop_env/
+# and connects to the Windows VM at 172.30.0.2:5000 via PythonController.
+# It exposes /evaluate and /task/<task_id> endpoints on port 5050.
 # -----------------------------------------------------------------------------
 
-RUN python3 -c "\
-import re; \
-path = '/oem/server/main.py'; \
-code = open(path).read(); \
-patch = '''\n\
-# === BEGIN EVALUATE ENDPOINT PATCH ===\n\
-import sys as _sys\n\
-from pathlib import Path as _Path\n\
-_evaluators_path = _Path('/client/desktop_env')\n\
-if _evaluators_path.exists():\n\
-    _sys.path.insert(0, str(_evaluators_path))\n\
-try:\n\
-    from evaluators import getters as _getters, metrics as _metrics\n\
-    class _MockEnv:\n\
-        vm_ip = '172.30.0.2'\n\
-        port = 5000\n\
-    @app.route('/evaluate', methods=['POST'])\n\
-    def evaluate():\n\
-        from flask import jsonify, request\n\
-        task_config = request.json\n\
-        if not task_config:\n\
-            return jsonify({'error': 'No task config'}), 400\n\
-        evaluator_config = task_config.get('evaluator', {})\n\
-        if not evaluator_config:\n\
-            return jsonify({'success': False, 'score': 0.0, 'reason': 'No evaluator config'})\n\
-        env = _MockEnv()\n\
-        result_spec = evaluator_config.get('result', {})\n\
-        result_type = result_spec.get('type', 'vm_command_line')\n\
-        getter_func = getattr(_getters, f'get_{result_type}', None)\n\
-        actual = getter_func(env, result_spec) if getter_func else None\n\
-        expected_spec = evaluator_config.get('expected', {})\n\
-        if expected_spec.get('type') == 'rule':\n\
-            expected = expected_spec.get('rules', {}).get('match')\n\
-        elif 'value' in expected_spec:\n\
-            expected = expected_spec.get('value')\n\
-        else:\n\
-            expected = None\n\
-        func_name = evaluator_config.get('func', 'exact_match')\n\
-        metric_func = getattr(_metrics, func_name, _metrics.exact_match)\n\
-        try:\n\
-            score = float(metric_func(actual, expected))\n\
-        except Exception as e:\n\
-            score = 0.0\n\
-        return jsonify({'success': score >= 1.0, 'score': score, 'reason': f'Score: {score:.2f}'})\n\
-    print('Evaluate endpoint registered at /evaluate')\n\
-except ImportError as e:\n\
-    print(f'WARNING: evaluators not available: {e}')\n\
-# === END EVALUATE ENDPOINT PATCH ===\n\
-'''; \
-marker = 'app.run('; \
-idx = code.rfind(marker); \
-assert idx >= 0, f'/evaluate patch failed: app.run( not found in {path}'; \
-line_start = code.rfind('\n', 0, idx) + 1; \
-patched = code[:line_start] + patch + '\n' + code[line_start:]; \
-open(path, 'w').write(patched); \
-print('Patched /evaluate endpoint into', path); \
-" && echo "Evaluate endpoint injected successfully"
+COPY evaluate_server.py /evaluate_server.py
+
+# Install flask for the evaluate server and socat for port forwarding
+RUN pip install flask 2>/dev/null || pip3 install flask 2>/dev/null || \
+    python -m pip install flask 2>/dev/null || \
+    echo "WARNING: flask install failed, evaluate server may not work"
+RUN apt-get update -qq && apt-get install -y -qq socat && rm -rf /var/lib/apt/lists/*
 
 # -----------------------------------------------------------------------------
 # Fix Windows setup for automation
@@ -276,10 +227,15 @@ ENV VERSION="11e"
 ENV ARGUMENTS="-qmp tcp:0.0.0.0:7200,server,nowait"
 
 # Expose ports
-EXPOSE 8006 5000 7200 3389
+EXPOSE 8006 5000 5050 7200 3389
 
-# Default entrypoint - use dockurr/windows's native entry point
-# The OEM files are copied by samba.sh (patched above) when Samba starts
-# dockurr/windows handles: QEMU VM startup, Samba, VNC, Windows boot
-# Our patched autounattend.xml handles: FirstLogonCommands that run install.bat
-ENTRYPOINT ["/usr/bin/tini", "-s", "/run/entry.sh"]
+# -----------------------------------------------------------------------------
+# Entrypoint: start evaluate server + dockurr/windows entry point
+# The evaluate server runs on port 5050 and provides /evaluate + /task/<id>
+# endpoints using WAA's evaluator modules from the Docker Linux side.
+# -----------------------------------------------------------------------------
+
+COPY start_with_evaluate.sh /run/start_with_evaluate.sh
+RUN chmod +x /run/start_with_evaluate.sh
+
+ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/run/start_with_evaluate.sh"]

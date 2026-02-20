@@ -133,6 +133,7 @@ docker run -d --name winarena \\
   --cap-add NET_ADMIN \\
   --stop-timeout 120 \\
   -p 5000:5000 \\
+  -p 5050:5050 \\
   -p 8006:8006 \\
   -p 7200:7200 \\
   -v /mnt/waa-storage:/storage \\
@@ -143,7 +144,14 @@ docker run -d --name winarena \\
   -e ARGUMENTS="-qmp tcp:0.0.0.0:7200,server,nowait" \\
   --entrypoint /bin/bash \\
   waa-auto:latest \\
-  -c './entry.sh --prepare-image false --start-client false'
+  -c 'cd /client && python /evaluate_server.py > /tmp/evaluate_server.log 2>&1 & /entry.sh --prepare-image false --start-client false'
+
+# Set up socat proxy for evaluate server (Docker port forwarding doesn't work
+# due to QEMU's custom bridge networking with --cap-add NET_ADMIN)
+which socat >/dev/null 2>&1 || sudo apt-get install -y -qq socat
+killall socat 2>/dev/null || true
+sleep 2
+nohup socat TCP-LISTEN:5051,fork,reuseaddr EXEC:"docker exec -i winarena socat - TCP\\:127.0.0.1\\:5050" > /dev/null 2>&1 &
 echo "STARTED"
 """
 

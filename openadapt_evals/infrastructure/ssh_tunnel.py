@@ -101,6 +101,7 @@ class SSHTunnelManager:
     DEFAULT_TUNNELS = [
         TunnelConfig(name="vnc", local_port=8006, remote_port=8006),
         TunnelConfig(name="waa", local_port=5001, remote_port=5000),
+        TunnelConfig(name="evaluate", local_port=5050, remote_port=5051),
     ]
 
     # Auto-reconnect settings

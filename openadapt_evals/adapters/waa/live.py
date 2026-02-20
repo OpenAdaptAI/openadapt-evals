@@ -112,6 +112,9 @@ class WAALiveConfig:
 
     Attributes:
         server_url: URL of WAA Flask server (e.g., "http://172.171.112.41:5000").
+        evaluate_url: URL of evaluate server (e.g., "http://localhost:5050").
+            If None, defaults to server_url. The evaluate server runs on the
+            Docker Linux side (port 5050) and has access to WAA evaluator modules.
         a11y_backend: Accessibility backend ("uia" or "win32").
         screen_width: Screen width in pixels.
         screen_height: Screen height in pixels.
@@ -124,6 +127,7 @@ class WAALiveConfig:
     """
 
     server_url: str = "http://localhost:5000"
+    evaluate_url: str | None = None
     a11y_backend: str = "uia"
     screen_width: int = 1920
     screen_height: int = 1200
@@ -220,17 +224,20 @@ class WAALiveAdapter(BenchmarkAdapter):
 
         import requests
 
-        # Try to load from server first
-        try:
-            resp = requests.get(
-                f"{self.config.server_url}/task/{task_id}",
-                timeout=10.0,
-            )
-            if resp.status_code == 200:
-                config = resp.json()
-                return self._create_task_from_config(task_id, config)
-        except Exception:
-            pass  # Server doesn't support /task endpoint, try other methods
+        # Try to load from evaluate server first (has /task/<id> endpoint
+        # that reads task configs from WAA's evaluation_examples_windows/)
+        evaluate_base = self.config.evaluate_url or self.config.server_url
+        for base_url in [evaluate_base, self.config.server_url]:
+            try:
+                resp = requests.get(
+                    f"{base_url}/task/{task_id}",
+                    timeout=10.0,
+                )
+                if resp.status_code == 200:
+                    config = resp.json()
+                    return self._create_task_from_config(task_id, config)
+            except Exception:
+                continue
 
         # Try to load from local WAA examples directory
         if hasattr(self.config, "waa_examples_path") and self.config.waa_examples_path:
@@ -467,10 +474,15 @@ class WAALiveAdapter(BenchmarkAdapter):
             elif last_action.answer:
                 eval_request["agent_last_action"] = last_action.answer
 
+        # Determine evaluate URL: prefer dedicated evaluate server (port 5050),
+        # fall back to WAA server's /evaluate endpoint
+        evaluate_base = self.config.evaluate_url or self.config.server_url
+        evaluate_endpoint = f"{evaluate_base}/evaluate"
+
         # Try the /evaluate endpoint
         try:
             resp = requests.post(
-                f"{self.config.server_url}/evaluate",
+                evaluate_endpoint,
                 json=eval_request,
                 timeout=self.config.timeout,
             )
@@ -488,12 +500,9 @@ class WAALiveAdapter(BenchmarkAdapter):
             elif resp.status_code == 404 or (
                 resp.status_code == 500 and "404 Not Found" in resp.text
             ):
-                # /evaluate endpoint not available - fall back to heuristic
-                # WAA server wraps 404s in 500 responses
                 logger.warning(
-                    "/evaluate endpoint not found on WAA server. "
-                    "Deploy openadapt_evals.server.evaluate_endpoint to enable "
-                    "proper evaluation."
+                    f"/evaluate endpoint not found at {evaluate_endpoint}. "
+                    "Ensure the evaluate server is running on port 5050."
                 )
                 return self._evaluate_fallback(task)
 
