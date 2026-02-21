@@ -1579,18 +1579,27 @@ def _generate_benchmark_viewer_html(
         // The marker shows where the agent will click on THIS screenshot.
         if (marker) {{
             if (action.x != null && action.y != null) {{
-                // Stored action.x/y are normalized against config resolution (1920x1200)
-                // which differs from the actual VM screen (1280x720). Parse the raw pixel
-                // coords from raw_action.code and normalize against screenshot dimensions.
                 let normX = action.x;
                 let normY = action.y;
+                // Backward compat: check if stored action.x/y were normalized correctly.
+                // New data (after coordinate fix): action.x * imgWidth ≈ raw pixel x.
+                // Old data (before fix): normalized against wrong resolution, so they diverge.
                 const raw = action.raw_action;
-                if (raw) {{
+                if (raw && img && img.naturalWidth > 0) {{
                     const code = typeof raw === 'string' ? raw : (raw.code || '');
                     const m = code.match(/computer\\.(?:click|double_click|right_click)\\((\\d+),\\s*(\\d+)\\)/);
-                    if (m && img && img.naturalWidth > 0) {{
-                        normX = parseInt(m[1]) / img.naturalWidth;
-                        normY = parseInt(m[2]) / img.naturalHeight;
+                    if (m) {{
+                        const rawX = parseInt(m[1]);
+                        const rawY = parseInt(m[2]);
+                        const storedPixelX = action.x * img.naturalWidth;
+                        const storedPixelY = action.y * img.naturalHeight;
+                        const tolerance = 5;
+                        if (Math.abs(storedPixelX - rawX) > tolerance || Math.abs(storedPixelY - rawY) > tolerance) {{
+                            // Old data: stored coords are wrong, use raw pixels
+                            normX = rawX / img.naturalWidth;
+                            normY = rawY / img.naturalHeight;
+                        }}
+                        // Otherwise: new data, stored coords are correct, use as-is
                     }}
                 }}
                 marker.style.left = (normX * 100) + '%';
@@ -1880,7 +1889,13 @@ def _generate_benchmark_viewer_html(
                 if (raw && natW > 0) {{
                     const code = typeof raw === 'string' ? raw : (raw.code || raw.waa_action || '');
                     const cm = code.match(/computer\\.(?:click|double_click|right_click)\\((\\d+),\\s*(\\d+)\\)/);
-                    if (cm) {{ nx = parseInt(cm[1]) / natW; ny = parseInt(cm[2]) / natH; }}
+                    if (cm) {{
+                        const rawX = parseInt(cm[1]), rawY = parseInt(cm[2]);
+                        const tol = 5;
+                        if (Math.abs(a.x * natW - rawX) > tol || Math.abs(a.y * natH - rawY) > tol) {{
+                            nx = rawX / natW; ny = rawY / natH;
+                        }}
+                    }}
                 }}
                 clicks.push({{ x: nx * canvas.width, y: ny * canvas.height }});
             }}

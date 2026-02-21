@@ -158,6 +158,7 @@ class WAALiveAdapter(BenchmarkAdapter):
         self._current_rects: dict[str, list[int]] = {}  # element_id -> [l, t, r, b]
         self._current_screenshot: bytes | None = None
         self._actions: list[BenchmarkAction] = []
+        self._actual_screen_size: tuple[int, int] | None = None
 
     @property
     def name(self) -> str:
@@ -603,6 +604,14 @@ class WAALiveAdapter(BenchmarkAdapter):
             if resp.status_code == 200:
                 screenshot = resp.content
                 self._current_screenshot = screenshot
+                # Detect actual screen dimensions from screenshot
+                try:
+                    from io import BytesIO
+                    from PIL import Image
+                    img = Image.open(BytesIO(screenshot))
+                    self._actual_screen_size = img.size
+                except Exception:
+                    pass
                 logger.debug(f"Got screenshot: {len(screenshot)} bytes")
             else:
                 logger.warning(f"Screenshot request failed: {resp.status_code}")
@@ -638,7 +647,7 @@ class WAALiveAdapter(BenchmarkAdapter):
 
         return BenchmarkObservation(
             screenshot=screenshot,
-            viewport=(self.config.screen_width, self.config.screen_height),
+            viewport=self._actual_screen_size or (self.config.screen_width, self.config.screen_height),
             accessibility_tree=a11y_tree,
             window_title=self._extract_window_title(a11y_tree),
         )
@@ -739,7 +748,8 @@ class WAALiveAdapter(BenchmarkAdapter):
             screenshot_b64 = base64.b64encode(self._current_screenshot).decode("utf-8")
 
         # Window rect (full screen for now)
-        window_rect = [0, 0, self.config.screen_width, self.config.screen_height]
+        screen_w, screen_h = self._actual_screen_size or (self.config.screen_width, self.config.screen_height)
+        window_rect = [0, 0, screen_w, screen_h]
 
         payload = {
             "rects": self._current_rects,
@@ -855,16 +865,18 @@ class WAALiveAdapter(BenchmarkAdapter):
                     start_x = (rect[0] + rect[2]) // 2
                     start_y = (rect[1] + rect[3]) // 2
             elif action.x is not None and action.y is not None:
-                start_x = action.x if not isinstance(action.x, float) or action.x > 1 else int(action.x * self.config.screen_width)
-                start_y = action.y if not isinstance(action.y, float) or action.y > 1 else int(action.y * self.config.screen_height)
+                screen_w, screen_h = self._actual_screen_size or (self.config.screen_width, self.config.screen_height)
+                start_x = action.x if not isinstance(action.x, float) or action.x > 1 else int(action.x * screen_w)
+                start_y = action.y if not isinstance(action.y, float) or action.y > 1 else int(action.y * screen_h)
 
             # Get end position
+            screen_w, screen_h = self._actual_screen_size or (self.config.screen_width, self.config.screen_height)
             end_x = action.end_x or 0
             end_y = action.end_y or 0
             if isinstance(end_x, float) and 0 <= end_x <= 1:
-                end_x = int(end_x * self.config.screen_width)
+                end_x = int(end_x * screen_w)
             if isinstance(end_y, float) and 0 <= end_y <= 1:
-                end_y = int(end_y * self.config.screen_height)
+                end_y = int(end_y * screen_h)
 
             return f"import pyautogui; pyautogui.moveTo({int(start_x)}, {int(start_y)}); pyautogui.drag({int(end_x - start_x)}, {int(end_y - start_y)}, duration=0.5)"
 
@@ -905,10 +917,11 @@ class WAALiveAdapter(BenchmarkAdapter):
         y = action.y if action.y is not None else 0
 
         # Convert normalized coordinates to pixels
+        screen_w, screen_h = self._actual_screen_size or (self.config.screen_width, self.config.screen_height)
         if isinstance(x, float) and 0 <= x <= 1:
-            x = int(x * self.config.screen_width)
+            x = int(x * screen_w)
         if isinstance(y, float) and 0 <= y <= 1:
-            y = int(y * self.config.screen_height)
+            y = int(y * screen_h)
 
         return f"import pyautogui; pyautogui.{pyautogui_method}({int(x)}, {int(y)})"
 

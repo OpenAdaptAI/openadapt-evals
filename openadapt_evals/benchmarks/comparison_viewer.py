@@ -485,8 +485,12 @@ function updateStep() {{
           const code = a.code || '';
           const cm = code.match(/computer\\.(?:click|double_click|right_click)\\((\\d+),\\s*(\\d+)\\)/);
           if (cm && imgEl.naturalWidth > 0) {{
-            nx = parseInt(cm[1]) / imgEl.naturalWidth;
-            ny = parseInt(cm[2]) / imgEl.naturalHeight;
+            const rawX = parseInt(cm[1]), rawY = parseInt(cm[2]);
+            const tol = 5;
+            if (Math.abs(a.x * imgEl.naturalWidth - rawX) > tol || Math.abs(a.y * imgEl.naturalHeight - rawY) > tol) {{
+              nx = rawX / imgEl.naturalWidth;
+              ny = rawY / imgEl.naturalHeight;
+            }}
           }}
           const imgR = imgEl.getBoundingClientRect();
           const ssR = ssEl.getBoundingClientRect();

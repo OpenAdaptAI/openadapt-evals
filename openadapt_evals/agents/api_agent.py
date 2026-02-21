@@ -98,7 +98,7 @@ You must respond with a Python code block that uses the pyautogui API. Available
 - computer.scroll(direction) - Scroll up (-3) or down (3)
 - computer.drag(x1, y1, x2, y2) - Drag from (x1,y1) to (x2,y2)
 
-Coordinates are pixel values within the screen (1920x1200 by default).
+Coordinates are pixel values within the screen (matching the screenshot dimensions).
 
 Format your response as:
 
