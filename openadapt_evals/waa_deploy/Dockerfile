@@ -107,9 +107,9 @@ COPY api_agent.py /client/mm_agents/api_agent.py
 COPY evaluate_server.py /evaluate_server.py
 
 # Install flask for the evaluate server and socat for port forwarding
-RUN pip install flask 2>/dev/null || pip3 install flask 2>/dev/null || \
-    python -m pip install flask 2>/dev/null || \
-    echo "WARNING: flask install failed, evaluate server may not work"
+RUN pip install flask requests-toolbelt 2>/dev/null || pip3 install flask requests-toolbelt 2>/dev/null || \
+    python -m pip install flask requests-toolbelt 2>/dev/null || \
+    echo "WARNING: flask/requests-toolbelt install failed, evaluate server may not work"
 RUN apt-get update -qq && apt-get install -y -qq socat && rm -rf /var/lib/apt/lists/*
 
 # -----------------------------------------------------------------------------

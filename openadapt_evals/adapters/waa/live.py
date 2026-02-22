@@ -379,8 +379,8 @@ class WAALiveAdapter(BenchmarkAdapter):
         if task.raw_config:
             self._run_task_setup(task.raw_config)
 
-        # Small delay for UI to settle
-        time.sleep(1.0)
+        # Delay for UI to settle after setup (WAA uses 5s)
+        time.sleep(5.0)
 
         return self._get_observation()
 
@@ -774,40 +774,37 @@ class WAALiveAdapter(BenchmarkAdapter):
     def _run_task_setup(self, raw_config: dict) -> None:
         """Run task setup commands from raw_config.
 
+        WAA tasks use a 'config' array of {type, parameters} objects specifying
+        preconditions (file downloads, app launches, sleeps). We POST this array
+        to the evaluate server's /setup endpoint which processes each entry.
+
         Args:
             raw_config: Task configuration with setup commands.
         """
+        config = raw_config.get("config", [])
+        if not config:
+            return
+
         import requests
 
-        # Handle different setup command formats
-        setup = raw_config.get("setup", raw_config.get("init", {}))
-
-        if isinstance(setup, dict):
-            # Launch application if specified
-            if "app" in setup or "application" in setup:
-                app = setup.get("app") or setup.get("application")
-                try:
-                    requests.post(
-                        f"{self.config.server_url}/setup/launch",
-                        json={"app": app},
-                        timeout=30.0
-                    )
-                    logger.info(f"Launched app: {app}")
-                except Exception as e:
-                    logger.warning(f"Failed to launch app: {e}")
-
-            # Run shell commands if specified
-            if "commands" in setup:
-                for cmd in setup["commands"]:
-                    try:
-                        requests.post(
-                            f"{self.config.server_url}/execute_windows",
-                            json={"command": cmd, "shell": "powershell"},
-                            timeout=60.0
-                        )
-                        logger.info(f"Ran setup command: {cmd[:50]}...")
-                    except Exception as e:
-                        logger.warning(f"Setup command failed: {e}")
+        evaluate_base = self.config.evaluate_url or self.config.server_url
+        try:
+            resp = requests.post(
+                f"{evaluate_base}/setup",
+                json={"config": config},
+                timeout=120.0,
+            )
+            if resp.status_code == 200:
+                results = resp.json().get("results", [])
+                for r in results:
+                    status = r.get("status", "unknown")
+                    logger.info(f"Setup {r.get('type')}: {status}")
+            else:
+                logger.error(
+                    f"Setup failed: {resp.status_code} {resp.text[:200]}"
+                )
+        except Exception as e:
+            logger.error(f"Setup request failed: {e}")
 
     def _translate_action(self, action: BenchmarkAction) -> str | None:
         """Translate BenchmarkAction to element-based command for WAA's Computer.

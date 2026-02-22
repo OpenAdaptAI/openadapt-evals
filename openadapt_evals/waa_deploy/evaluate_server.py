@@ -17,6 +17,7 @@ import os
 import sys
 import time
 import traceback
+import uuid
 
 # Add WAA paths
 sys.path.insert(0, "/client")
@@ -69,6 +70,195 @@ def get_task(task_id):
                 with open(task_file) as f:
                     return jsonify(json.load(f))
     return jsonify({"error": f"Task {task_id} not found"}), 404
+
+
+# ---------------------------------------------------------------------------
+# Task setup handlers — mirror WAA's SetupController logic
+# ---------------------------------------------------------------------------
+
+WAA_SERVER = "http://172.30.0.2:5000"
+SETUP_CACHE = "/tmp/setup_cache"
+os.makedirs(SETUP_CACHE, exist_ok=True)
+
+
+def _setup_download(files, **_kwargs):
+    """Download files from URLs and upload to Windows VM."""
+    import requests as req
+    from requests_toolbelt.multipart.encoder import MultipartEncoder
+
+    for f in files:
+        url = f["url"]
+        path = f["path"]
+        cache_path = os.path.join(
+            SETUP_CACHE,
+            f"{uuid.uuid5(uuid.NAMESPACE_URL, url)}_{os.path.basename(path)}",
+        )
+        if not os.path.exists(cache_path):
+            for attempt in range(3):
+                try:
+                    resp = req.get(url, stream=True, timeout=60)
+                    resp.raise_for_status()
+                    with open(cache_path, "wb") as fh:
+                        for chunk in resp.iter_content(chunk_size=8192):
+                            if chunk:
+                                fh.write(chunk)
+                    logger.info(f"Downloaded {url} -> {cache_path}")
+                    break
+                except Exception as e:
+                    logger.warning(f"Download attempt {attempt+1} failed for {url}: {e}")
+                    if attempt == 2:
+                        raise
+
+        form = MultipartEncoder({
+            "file_path": path,
+            "file_data": (os.path.basename(path), open(cache_path, "rb")),
+        })
+        resp = req.post(
+            f"{WAA_SERVER}/setup/upload",
+            headers={"Content-Type": form.content_type},
+            data=form,
+            timeout=60,
+        )
+        if resp.status_code == 200:
+            logger.info(f"Uploaded {os.path.basename(path)} -> {path}")
+        else:
+            logger.error(f"Upload failed ({resp.status_code}): {resp.text[:200]}")
+
+
+def _setup_launch(command, shell=False, **_kwargs):
+    """Launch a command on Windows."""
+    import requests as req
+    resp = req.post(
+        f"{WAA_SERVER}/setup/launch",
+        json={"command": command, "shell": shell},
+        timeout=30,
+    )
+    if resp.status_code != 200:
+        logger.error(f"Launch failed ({resp.status_code}): {resp.text[:200]}")
+
+
+def _setup_sleep(seconds=1, **_kwargs):
+    """Sleep for UI to settle."""
+    time.sleep(seconds)
+
+
+def _setup_execute(command, shell=False, **_kwargs):
+    """Execute a command on Windows."""
+    import requests as req
+    resp = req.post(
+        f"{WAA_SERVER}/setup/execute",
+        json={"command": command, "shell": shell},
+        timeout=60,
+    )
+    if resp.status_code != 200:
+        logger.error(f"Execute failed ({resp.status_code}): {resp.text[:200]}")
+
+
+def _setup_open(path, **_kwargs):
+    """Open a file on Windows."""
+    import requests as req
+    resp = req.post(
+        f"{WAA_SERVER}/setup/open_file",
+        json={"path": path},
+        timeout=30,
+    )
+    if resp.status_code != 200:
+        logger.error(f"Open failed ({resp.status_code}): {resp.text[:200]}")
+
+
+def _setup_activate_window(window_name, strict=False, by_class=False, **_kwargs):
+    """Activate a window by name."""
+    import requests as req
+    resp = req.post(
+        f"{WAA_SERVER}/setup/activate_window",
+        json={"window_name": window_name, "strict": strict, "by_class": by_class},
+        timeout=10,
+    )
+    if resp.status_code != 200:
+        logger.error(f"Activate window failed ({resp.status_code}): {resp.text[:200]}")
+
+
+def _setup_close_all(**_kwargs):
+    """Close all windows."""
+    import requests as req
+    resp = req.post(f"{WAA_SERVER}/setup/close_all", json={}, timeout=30)
+    if resp.status_code != 200:
+        logger.error(f"Close all failed ({resp.status_code}): {resp.text[:200]}")
+
+
+def _setup_create_folder(path, **_kwargs):
+    """Create a folder on Windows."""
+    import requests as req
+    resp = req.post(
+        f"{WAA_SERVER}/setup/create_folder",
+        json={"path": path},
+        timeout=30,
+    )
+    if resp.status_code != 200:
+        logger.error(f"Create folder failed ({resp.status_code}): {resp.text[:200]}")
+
+
+def _setup_create_file(path, content="", **_kwargs):
+    """Create a file on Windows."""
+    import requests as req
+    resp = req.post(
+        f"{WAA_SERVER}/setup/create_file",
+        json={"path": path, "content": content},
+        timeout=30,
+    )
+    if resp.status_code != 200:
+        logger.error(f"Create file failed ({resp.status_code}): {resp.text[:200]}")
+
+
+def _setup_clear_task_files(**_kwargs):
+    """Clear task files from previous run."""
+    import requests as req
+    resp = req.post(
+        f"{WAA_SERVER}/setup/clear_task_files",
+        json={},
+        timeout=30,
+    )
+    if resp.status_code != 200:
+        logger.warning(f"Clear task files failed ({resp.status_code})")
+
+
+SETUP_HANDLERS = {
+    "download": _setup_download,
+    "launch": _setup_launch,
+    "sleep": _setup_sleep,
+    "execute": _setup_execute,
+    "command": _setup_execute,
+    "open": _setup_open,
+    "activate_window": _setup_activate_window,
+    "close_all": _setup_close_all,
+    "create_folder": _setup_create_folder,
+    "create_file": _setup_create_file,
+    "clear_task_files": _setup_clear_task_files,
+}
+
+
+@app.route("/setup", methods=["POST"])
+def run_setup():
+    """Execute task setup config array (mirrors WAA SetupController)."""
+    config = request.json.get("config", [])
+    results = []
+    for cfg in config:
+        cfg_type = cfg.get("type", "")
+        params = cfg.get("parameters", {})
+        try:
+            handler = SETUP_HANDLERS.get(cfg_type)
+            if handler:
+                handler(**params)
+                logger.info(f"Setup {cfg_type}: ok")
+                results.append({"type": cfg_type, "status": "ok"})
+            else:
+                logger.warning(f"Unknown setup type: {cfg_type}")
+                results.append({"type": cfg_type, "status": "skipped"})
+        except Exception as e:
+            logger.error(f"Setup {cfg_type} failed: {e}")
+            traceback.print_exc()
+            results.append({"type": cfg_type, "status": "error", "error": str(e)})
+    return jsonify({"status": "ok", "results": results})
 
 
 @app.route("/evaluate", methods=["POST"])
