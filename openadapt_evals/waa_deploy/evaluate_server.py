@@ -45,6 +45,8 @@ class MockEnv:
 
     def __init__(self, ctrl):
         self.controller = ctrl
+        self.cache_dir = "/tmp/eval_cache"
+        os.makedirs(self.cache_dir, exist_ok=True)
 
 
 env = MockEnv(controller)
