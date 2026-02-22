@@ -23,13 +23,16 @@ Example:
 from __future__ import annotations
 
 import logging
+import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable
 
 from openadapt_evals.infrastructure.azure_vm import (
+    SSH_OPTS,
     AzureVMManager,
     ssh_run,
     wait_for_ssh,
@@ -84,34 +87,8 @@ sudo systemctl start docker
 sudo docker pull dockurr/windows:latest
 sudo docker pull windowsarena/winarena:latest
 
-# Build waa-auto image that has working auto-download
-mkdir -p /tmp/waa-build
-cat > /tmp/waa-build/Dockerfile << 'DOCKERFILE_EOF'
-FROM dockurr/windows:latest
-COPY --from=windowsarena/winarena:latest /entry.sh /entry.sh
-COPY --from=windowsarena/winarena:latest /entry_setup.sh /entry_setup.sh
-COPY --from=windowsarena/winarena:latest /start_client.sh /start_client.sh
-COPY --from=windowsarena/winarena:latest /client /client
-COPY --from=windowsarena/winarena:latest /models /models
-COPY --from=windowsarena/winarena:latest /oem /oem
-COPY --from=windowsarena/winarena:latest /usr/local/bin/python* /usr/local/bin/
-COPY --from=windowsarena/winarena:latest /usr/local/bin/pip* /usr/local/bin/
-COPY --from=windowsarena/winarena:latest /usr/local/lib/python3.9 /usr/local/lib/python3.9
-COPY --from=windowsarena/winarena:latest /usr/local/lib/libpython3.9.so* /usr/local/lib/
-RUN ldconfig && \\
-    ln -sf /usr/local/bin/python3.9 /usr/local/bin/python && \\
-    ln -sf /usr/local/bin/python3.9 /usr/bin/python && \\
-    ln -sf /usr/local/bin/pip3.9 /usr/local/bin/pip
-RUN sed -i '/^return 0$/i cp -r /oem/* /tmp/smb/ 2>/dev/null || true' /run/samba.sh
-RUN printf '#!/bin/bash\\n/usr/bin/tini -s /run/entry.sh\\n' > /start_vm.sh && chmod +x /start_vm.sh
-RUN sed -i 's|20.20.20.21|172.30.0.2|g' /entry_setup.sh /entry.sh /start_client.sh
-RUN find /client -name "*.py" -exec sed -i 's|20.20.20.21|172.30.0.2|g' {} \\;
-RUN sed -i 's|openai.OpenAI(api_key=self.api_key)|openai.OpenAI(api_key=self.api_key, timeout=120.0)|' /client/mm_agents/navi/gpt/gpt4v_oai.py
-RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr libgl1 libglib2.0-0 && rm -rf /var/lib/apt/lists/*
-ENV VERSION="11e" RAM_SIZE="8G" CPU_CORES="4" ARGUMENTS="-qmp tcp:0.0.0.0:7200,server,nowait"
-ENTRYPOINT ["/usr/bin/tini", "-s", "/run/entry.sh"]
-DOCKERFILE_EOF
-
+# Build waa-auto image from Dockerfile uploaded via SCP
+# (build context at /tmp/waa-build/ contains Dockerfile + supporting files)
 sudo docker build -t waa-auto:latest /tmp/waa-build/
 rm -rf /tmp/waa-build
 """
@@ -272,6 +249,25 @@ class PoolManager:
             name_ip: tuple[str, str],
         ) -> tuple[str, bool, str]:
             name, ip = name_ip
+            # Upload Docker build context (Dockerfile + supporting files)
+            waa_deploy_dir = Path(__file__).parent.parent / "waa_deploy"
+            subprocess.run(
+                ["ssh", *SSH_OPTS, f"azureuser@{ip}", "mkdir -p /tmp/waa-build"],
+                capture_output=True,
+            )
+            for fname in [
+                "Dockerfile",
+                "evaluate_server.py",
+                "start_with_evaluate.sh",
+                "start_waa_server.bat",
+                "api_agent.py",
+            ]:
+                src = waa_deploy_dir / fname
+                if src.exists():
+                    subprocess.run(
+                        ["scp", *SSH_OPTS, str(src), f"azureuser@{ip}:/tmp/waa-build/"],
+                        capture_output=True,
+                    )
             result = ssh_run(ip, DOCKER_SETUP_SCRIPT, stream=False, step="DOCKER")
             error = result.stderr[:200] if result.stderr else ""
             return (name, result.returncode == 0, error)
@@ -388,7 +384,19 @@ class PoolManager:
                     ready, _response = monitor.check_waa_probe()
 
                     if ready:
-                        self._log("POOL-WAIT", f"  {name}: READY")
+                        # Also check evaluate server (informational)
+                        try:
+                            eval_result = ssh_run(
+                                worker.ip,
+                                "curl -sf http://localhost:5051/probe",
+                                stream=False,
+                                step="EVAL",
+                            )
+                            eval_ok = eval_result.returncode == 0
+                        except Exception:
+                            eval_ok = False
+                        eval_status = ", evaluate: ok" if eval_ok else ", evaluate: not ready"
+                        self._log("POOL-WAIT", f"  {name}: READY{eval_status}")
                         workers_ready.append(worker)
                         del workers_pending[name]
                         self.registry.update_worker(name, waa_ready=True, status="ready")
