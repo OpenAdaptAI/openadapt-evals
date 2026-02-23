@@ -371,6 +371,8 @@ class VMPool:
     total_tasks: int = 0
     completed_tasks: int = 0
     failed_tasks: int = 0
+    status: str = "active"  # active, paused
+    paused_since: str | None = None  # ISO timestamp when pool was paused
 
 
 class VMPoolRegistry:
@@ -405,6 +407,8 @@ class VMPoolRegistry:
                         total_tasks=data.get("total_tasks", 0),
                         completed_tasks=data.get("completed_tasks", 0),
                         failed_tasks=data.get("failed_tasks", 0),
+                        status=data.get("status", "active"),
+                        paused_since=data.get("paused_since"),
                     )
             except (json.JSONDecodeError, KeyError) as e:
                 print(f"Warning: Could not load pool registry: {e}")
@@ -483,6 +487,19 @@ class VMPoolRegistry:
             return
         self._pool.completed_tasks += completed
         self._pool.failed_tasks += failed
+        self.save()
+
+    def update_pool_status(self, status: str, paused_since: str | None = None) -> None:
+        """Update pool status (e.g., active, paused).
+
+        Args:
+            status: New pool status string.
+            paused_since: ISO timestamp when pool was paused (None to clear).
+        """
+        if self._pool is None:
+            return
+        self._pool.status = status
+        self._pool.paused_since = paused_since
         self.save()
 
     def delete_pool(self) -> bool:

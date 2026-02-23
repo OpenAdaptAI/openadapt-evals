@@ -732,6 +732,142 @@ class PoolManager:
         """
         return self.registry.get_pool()
 
+    def pause(self) -> bool:
+        """Deallocate all pool VMs. Stops compute billing, keeps disks.
+
+        The pool state is saved to the registry so it can be resumed later
+        with resume(). Disk and IP costs (~$0.25/day) continue while paused.
+
+        Returns:
+            True if all VMs were deallocated successfully.
+
+        Raises:
+            RuntimeError: If no pool exists or pool is already paused.
+        """
+        pool = self.registry.get_pool()
+        if pool is None:
+            raise RuntimeError("No active pool. Create one with: pool-create --workers N")
+
+        if pool.status == "paused":
+            raise RuntimeError(
+                "Pool is already paused. Resume with: pool-resume"
+            )
+
+        self._log("POOL-PAUSE", f"Pausing pool {pool.pool_id} ({len(pool.workers)} workers)...")
+        self._log("POOL-PAUSE", "Deallocating VMs (compute billing will stop)...")
+
+        all_ok = True
+        for worker in pool.workers:
+            self._log("POOL-PAUSE", f"  {worker.name}: deallocating...")
+            success = self.vm_manager.deallocate_vm(worker.name)
+            if success:
+                self._log("POOL-PAUSE", f"  {worker.name}: deallocated")
+                self.registry.update_worker(worker.name, status="deallocated", waa_ready=False)
+            else:
+                self._log("POOL-PAUSE", f"  {worker.name}: FAILED to deallocate")
+                all_ok = False
+
+        # Update pool status
+        paused_since = datetime.now().isoformat()
+        self.registry.update_pool_status(status="paused", paused_since=paused_since)
+
+        self._log("POOL-PAUSE", "=" * 60)
+        self._log("POOL-PAUSE", "Pool paused. Compute billing stopped.")
+        self._log("POOL-PAUSE", "  Idle cost: ~$0.25/day (disk + IP)")
+        self._log("POOL-PAUSE", "  Resume with: oa-vm pool-resume")
+        self._log("POOL-PAUSE", "  Delete with: oa-vm pool-cleanup -y")
+        self._log("POOL-PAUSE", "=" * 60)
+
+        return all_ok
+
+    def resume(self, timeout_minutes: int = 10) -> list[PoolWorker]:
+        """Start deallocated pool VMs and wait for WAA ready.
+
+        Starts all VMs in the pool, waits for SSH access, then starts
+        WAA containers and waits for readiness. This is much faster than
+        creating a new pool (~5 min vs ~42 min) because Docker images
+        and Windows disk state are preserved.
+
+        Args:
+            timeout_minutes: Maximum minutes to wait for WAA readiness.
+
+        Returns:
+            List of ready PoolWorker instances.
+
+        Raises:
+            RuntimeError: If no pool exists or pool is not paused.
+        """
+        pool = self.registry.get_pool()
+        if pool is None:
+            raise RuntimeError("No active pool. Create one with: pool-create --workers N")
+
+        if pool.status != "paused":
+            raise RuntimeError(
+                f"Pool is not paused (status: {pool.status}). "
+                "Use pool-pause first, or pool-wait if already running."
+            )
+
+        self._log("POOL-RESUME", f"Resuming pool {pool.pool_id} ({len(pool.workers)} workers)...")
+
+        # Start all VMs
+        self._log("POOL-RESUME", "Starting VMs...")
+        for worker in pool.workers:
+            self._log("POOL-RESUME", f"  {worker.name}: starting...")
+            success = self.vm_manager.start_vm(worker.name)
+            if success:
+                self._log("POOL-RESUME", f"  {worker.name}: started")
+                self.registry.update_worker(worker.name, status="starting")
+            else:
+                self._log("POOL-RESUME", f"  {worker.name}: FAILED to start")
+
+        # Wait for SSH on all workers
+        self._log("POOL-RESUME", "Waiting for SSH access...")
+        workers_ssh_ok: list[PoolWorker] = []
+        for worker in pool.workers:
+            # Re-fetch IP (may have changed after deallocate/start cycle)
+            new_ip = self.vm_manager.get_vm_ip(worker.name)
+            if new_ip and new_ip != worker.ip:
+                self._log(
+                    "POOL-RESUME",
+                    f"  {worker.name}: IP changed {worker.ip} -> {new_ip}",
+                )
+                self.registry.update_worker(worker.name, ip=new_ip)
+                worker.ip = new_ip
+
+            if not worker.ip:
+                self._log("POOL-RESUME", f"  {worker.name}: no IP address, skipping")
+                continue
+
+            if wait_for_ssh(worker.ip, timeout=120):
+                self._log("POOL-RESUME", f"  {worker.name}: SSH ready")
+                workers_ssh_ok.append(worker)
+            else:
+                self._log("POOL-RESUME", f"  {worker.name}: SSH timeout")
+
+        if not workers_ssh_ok:
+            self._log("POOL-RESUME", "ERROR: No VMs have SSH access after start")
+            return []
+
+        # Update pool status back to active
+        self.registry.update_pool_status(status="active", paused_since=None)
+        for worker in workers_ssh_ok:
+            self.registry.update_worker(worker.name, status="ready")
+
+        # Wait for WAA readiness (starts containers, waits for probe)
+        self._log("POOL-RESUME", "Starting WAA containers and waiting for readiness...")
+        ready_workers = self.wait(
+            timeout_minutes=timeout_minutes,
+            start_containers=True,
+        )
+
+        self._log("POOL-RESUME", "=" * 60)
+        self._log("POOL-RESUME", f"Pool resumed: {len(ready_workers)}/{len(pool.workers)} workers ready")
+        if ready_workers:
+            self._log("POOL-RESUME", "  Run benchmark: oa-vm pool-run --tasks 10")
+        self._log("POOL-RESUME", "=" * 60)
+
+        return ready_workers
+
     def cleanup(
         self,
         confirm: bool = True,

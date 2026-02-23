@@ -270,6 +270,38 @@ class AzureVMManager:
             return self._sdk_delete_vm(name)
         return self._cli_delete_vm(name)
 
+    def deallocate_vm(self, name: str) -> bool:
+        """Deallocate a VM (stop billing, keep disk and NIC).
+
+        Deallocating stops compute charges but preserves the OS disk,
+        NIC, and public IP. The VM can be restarted later with start_vm().
+
+        Args:
+            name: VM name.
+
+        Returns:
+            True if deallocation succeeded.
+        """
+        if self._use_sdk:
+            return self._sdk_deallocate_vm(name)
+        return self._cli_deallocate_vm(name)
+
+    def start_vm(self, name: str) -> bool:
+        """Start a deallocated VM.
+
+        Resumes a previously deallocated VM. The VM retains its OS disk,
+        NIC, and public IP from before deallocation.
+
+        Args:
+            name: VM name.
+
+        Returns:
+            True if start succeeded.
+        """
+        if self._use_sdk:
+            return self._sdk_start_vm(name)
+        return self._cli_start_vm(name)
+
     def set_auto_shutdown(
         self,
         name: str,
@@ -584,6 +616,36 @@ class AzureVMManager:
 
         return True
 
+    def _sdk_deallocate_vm(self, name: str) -> bool:
+        """Deallocate VM via Azure SDK."""
+        try:
+            compute = self._get_compute_client()
+            logger.info(f"Deallocating VM {name} via SDK...")
+            compute.virtual_machines.begin_deallocate(
+                self.resource_group, name
+            ).result()
+            logger.info(f"VM {name} deallocated successfully")
+            return True
+        except Exception as e:
+            logger.warning(f"SDK deallocate_vm failed for {name}: {e}")
+            # Fall back to CLI
+            return self._cli_deallocate_vm(name)
+
+    def _sdk_start_vm(self, name: str) -> bool:
+        """Start a deallocated VM via Azure SDK."""
+        try:
+            compute = self._get_compute_client()
+            logger.info(f"Starting VM {name} via SDK...")
+            compute.virtual_machines.begin_start(
+                self.resource_group, name
+            ).result()
+            logger.info(f"VM {name} started successfully")
+            return True
+        except Exception as e:
+            logger.warning(f"SDK start_vm failed for {name}: {e}")
+            # Fall back to CLI
+            return self._cli_start_vm(name)
+
     # =========================================================================
     # az CLI fallback implementations
     # =========================================================================
@@ -710,6 +772,44 @@ class AzureVMManager:
             ]
         )
         return result.returncode == 0
+
+    def _cli_deallocate_vm(self, name: str) -> bool:
+        """Deallocate VM via az CLI."""
+        logger.info(f"Deallocating VM {name} via CLI...")
+        result = self._az_run(
+            [
+                "vm",
+                "deallocate",
+                "-g",
+                self.resource_group,
+                "-n",
+                name,
+            ]
+        )
+        if result.returncode == 0:
+            logger.info(f"VM {name} deallocated successfully")
+            return True
+        logger.warning(f"CLI deallocate_vm failed for {name}: {result.stderr}")
+        return False
+
+    def _cli_start_vm(self, name: str) -> bool:
+        """Start a deallocated VM via az CLI."""
+        logger.info(f"Starting VM {name} via CLI...")
+        result = self._az_run(
+            [
+                "vm",
+                "start",
+                "-g",
+                self.resource_group,
+                "-n",
+                name,
+            ]
+        )
+        if result.returncode == 0:
+            logger.info(f"VM {name} started successfully")
+            return True
+        logger.warning(f"CLI start_vm failed for {name}: {result.stderr}")
+        return False
 
 
 # =========================================================================

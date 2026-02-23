@@ -528,9 +528,18 @@ def cmd_pool_status(args):
         print("No active VM pool. Create one with: create --workers N")
         return 0
 
-    print(f"\n=== VM Pool: {pool.pool_id} ===\n")
+    pool_status_label = pool.status.upper() if hasattr(pool, "status") else "ACTIVE"
+    print(f"\n=== VM Pool: {pool.pool_id} ({pool_status_label}) ===\n")
     print(f"Created: {pool.created_at}")
     print(f"Workers: {len(pool.workers)}")
+    print(f"Status: {pool_status_label}")
+    if hasattr(pool, "paused_since") and pool.paused_since:
+        from datetime import datetime as _dt
+
+        paused_dt = _dt.fromisoformat(pool.paused_since)
+        paused_days = (_dt.now() - paused_dt).total_seconds() / 86400
+        print(f"Paused since: {pool.paused_since} ({paused_days:.1f} days)")
+        print(f"Idle cost: ~${0.25 * len(pool.workers):.2f}/day")
     print(f"Tasks: {pool.completed_tasks}/{pool.total_tasks}")
     print()
 
@@ -777,6 +786,51 @@ def cmd_pool_auto(args):
         return 0 if result.failed == 0 else 1
     except RuntimeError as e:
         log("POOL-AUTO", f"ERROR: {e}")
+        return 1
+
+
+def cmd_pool_pause(args):
+    """Pause pool: deallocate all VMs to stop compute billing.
+
+    Keeps disks and IPs so the pool can be quickly resumed (~5 min)
+    instead of recreating from scratch (~42 min). Idle cost ~$0.25/day.
+    """
+    init_logging()
+    from openadapt_evals.infrastructure.azure_vm import AzureVMManager
+    from openadapt_evals.infrastructure.pool import PoolManager
+
+    vm_manager = AzureVMManager(resource_group=RESOURCE_GROUP)
+    manager = PoolManager(vm_manager=vm_manager, log_fn=log)
+
+    try:
+        manager.pause()
+        return 0
+    except RuntimeError as e:
+        log("POOL-PAUSE", f"ERROR: {e}")
+        return 1
+
+
+def cmd_pool_resume(args):
+    """Resume a paused pool: start VMs and wait for WAA readiness.
+
+    Starts all deallocated VMs, waits for SSH, restarts WAA containers,
+    and waits for WAA server readiness. Much faster than pool-create
+    (~5 min vs ~42 min).
+    """
+    init_logging()
+    from openadapt_evals.infrastructure.azure_vm import AzureVMManager
+    from openadapt_evals.infrastructure.pool import PoolManager
+
+    timeout_minutes = getattr(args, "timeout", 10)
+
+    vm_manager = AzureVMManager(resource_group=RESOURCE_GROUP)
+    manager = PoolManager(vm_manager=vm_manager, log_fn=log)
+
+    try:
+        ready_workers = manager.resume(timeout_minutes=timeout_minutes)
+        return 0 if ready_workers else 1
+    except RuntimeError as e:
+        log("POOL-RESUME", f"ERROR: {e}")
         return 1
 
 
@@ -7506,6 +7560,27 @@ Examples:
         help="Auto-shutdown VMs after N hours (default: 4)",
     )
     p_pool_auto.set_defaults(func=cmd_pool_auto)
+
+    # pool-pause
+    p_pool_pause = subparsers.add_parser(
+        "pool-pause",
+        help="Deallocate pool VMs (stops compute billing, keeps disks ~$0.25/day)",
+    )
+    p_pool_pause.set_defaults(func=cmd_pool_pause)
+
+    # pool-resume
+    p_pool_resume = subparsers.add_parser(
+        "pool-resume",
+        help="Resume a paused pool (start VMs, wait for WAA ~5 min)",
+    )
+    p_pool_resume.add_argument(
+        "--timeout",
+        "-t",
+        type=int,
+        default=10,
+        help="Timeout in minutes for WAA readiness (default: 10)",
+    )
+    p_pool_resume.set_defaults(func=cmd_pool_resume)
 
     # pool-logs
     p_pool_logs = subparsers.add_parser(
