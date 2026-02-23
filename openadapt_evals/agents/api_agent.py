@@ -192,6 +192,53 @@ def _prev_actions_to_string(prev_actions: list[str], n_prev: int = 3) -> str:
     return result
 
 
+# Patterns to filter from a11y tree (system noise that wastes context)
+_A11Y_NOISE_PATTERNS = [
+    "OneDrive",
+    "Turn On Windows Backup",
+    "Remind me again in",
+    "Let's get started",
+    "No thanks",
+    "ShellExperienceHost",
+    "Windows.UI.Notifications",
+    "NotificationCenter",
+]
+
+
+def _filter_a11y_noise(tree_str: str) -> str:
+    """Remove system notification noise from a11y tree text.
+
+    OneDrive and other system notifications dominate the a11y tree,
+    pushing task-relevant elements past the truncation limit.
+
+    Args:
+        tree_str: Formatted accessibility tree string.
+
+    Returns:
+        Filtered tree string with noise elements removed.
+    """
+    if not tree_str:
+        return tree_str
+    filtered_lines = []
+    skip_depth = -1
+    for line in tree_str.split("\n"):
+        # Compute indent depth
+        stripped = line.lstrip()
+        depth = len(line) - len(stripped)
+        # If we're skipping a subtree, continue until we exit it
+        if skip_depth >= 0:
+            if depth > skip_depth:
+                continue
+            else:
+                skip_depth = -1
+        # Check if this line matches a noise pattern
+        if any(pattern in line for pattern in _A11Y_NOISE_PATTERNS):
+            skip_depth = depth  # Skip this element and its children
+            continue
+        filtered_lines.append(line)
+    return "\n".join(filtered_lines)
+
+
 class ApiAgent(BenchmarkAgent):
     """API-backed agent using Claude or GPT-5.1.
 
@@ -285,6 +332,7 @@ class ApiAgent(BenchmarkAgent):
         # Parsing configuration
         self.max_parse_retries = 2  # Number of retries on parse failure
         self.loop_detection_threshold = 3  # Trigger alternative strategy after N identical actions
+        self._loop_count = 0  # How many consecutive loops detected (for progressive offsets)
 
         logger.info(f"ApiAgent initialized with provider={provider}, model={self.model}")
         if self.demo:
@@ -405,9 +453,12 @@ class ApiAgent(BenchmarkAgent):
             a11y_tree = obs.get("accessibility_tree")
             if a11y_tree:
                 tree_str = _format_accessibility_tree(a11y_tree)
-                # Truncate if too long
-                if len(tree_str) > 4000:
-                    tree_str = tree_str[:4000] + "\n... (truncated)"
+                # Filter out noise elements (system notifications that
+                # dominate the tree and push task-relevant elements out)
+                tree_str = _filter_a11y_noise(tree_str)
+                # Truncate if too long (increased from 4000 to 8000)
+                if len(tree_str) > 8000:
+                    tree_str = tree_str[:8000] + "\n... (truncated)"
                 content_parts.append(f"UI Elements:\n{tree_str}")
                 logs["accessibility_tree_len"] = len(tree_str)
 
@@ -491,14 +542,17 @@ class ApiAgent(BenchmarkAgent):
         if actions and actions[0].startswith("computer."):
             loop_detected = self._detect_action_loop(actions[0])
             if loop_detected:
+                self._loop_count += 1
                 logs["loop_detected"] = True
-                logger.warning(f"Action loop detected: {actions[0]} repeated {self.loop_detection_threshold}+ times")
-                # Add hint to break the loop
+                logs["loop_count"] = self._loop_count
+                logger.warning(f"Action loop detected: {actions[0]} repeated {self.loop_detection_threshold}+ times (loop #{self._loop_count})")
                 alternative_action = self._generate_alternative_action(actions[0], w, h)
                 if alternative_action:
                     logger.info(f"Substituting alternative action: {alternative_action}")
                     actions = [alternative_action]
                     logs["alternative_action"] = alternative_action
+            else:
+                self._loop_count = 0
 
         # Build computer_update_args (for WAA compatibility)
         computer_update_args = {
@@ -914,33 +968,72 @@ class ApiAgent(BenchmarkAgent):
     ) -> str | None:
         """Generate an alternative action when a loop is detected.
 
+        Uses progressive strategies based on how many consecutive loops have
+        been detected (_loop_count). For clicks, varies the offset direction
+        and magnitude. For hotkeys (Ctrl+S etc.), does NOT substitute Escape
+        since that destroys dialogs the agent may be trying to interact with.
+
         Args:
             stuck_action: The action that's being repeated.
             width: Screen width.
             height: Screen height.
 
         Returns:
-            An alternative action or None.
+            An alternative action, or None to let the original through.
         """
-        # If stuck on a click, try a slight offset or press escape
-        click_match = re.match(r"computer\.click\((\d+),\s*(\d+)\)", stuck_action)
-        if click_match:
-            x, y = int(click_match.group(1)), int(click_match.group(2))
-            # Try clicking slightly offset
-            offset_x = min(x + 50, width - 10)
-            offset_y = min(y + 50, height - 10)
-            return f"computer.click({offset_x}, {offset_y})"
+        loop_n = self._loop_count  # 1-based, incremented before this call
 
-        # If stuck on typing, try pressing enter
+        # Hotkey loops (e.g. Ctrl+S): do NOT substitute Escape.
+        # The agent may be trying to trigger a dialog that needs time to appear.
+        # Let the action through on first loop, then try Enter (to confirm a
+        # dialog that may have appeared), then scroll to change context.
+        if "computer.hotkey" in stuck_action:
+            if loop_n <= 2:
+                return None  # Let the hotkey through
+            elif loop_n == 3:
+                return 'computer.press("enter")'  # Try confirming a dialog
+            else:
+                return 'computer.press("tab")'  # Try navigating to next element
+
+        # Click loops: use progressive offsets in different directions
+        click_match = re.match(
+            r"computer\.(click|double_click|right_click)\((\d+),\s*(\d+)\)",
+            stuck_action,
+        )
+        if click_match:
+            action_type = click_match.group(1)
+            x, y = int(click_match.group(2)), int(click_match.group(3))
+
+            # Progressive strategies: offset in different directions, then try
+            # escape or clicking screen center
+            offsets = [
+                (0, -60),    # Up (try element above)
+                (0, 60),     # Down (try element below)
+                (-80, 0),    # Left
+                (80, 0),     # Right
+            ]
+            if loop_n <= len(offsets):
+                dx, dy = offsets[loop_n - 1]
+                nx = max(10, min(x + dx, width - 10))
+                ny = max(10, min(y + dy, height - 10))
+                return f"computer.{action_type}({nx}, {ny})"
+            elif loop_n == len(offsets) + 1:
+                return 'computer.press("escape")'  # Try dismissing a popup
+            else:
+                # Click screen center as last resort
+                return f"computer.click({width // 2}, {height // 2})"
+
+        # Type loops: try pressing enter
         if "computer.type" in stuck_action:
             return 'computer.press("enter")'
 
-        # If stuck on pressing a key, try escape
+        # Press loops: try tab to move focus
         if "computer.press" in stuck_action:
-            return 'computer.press("escape")'
+            if loop_n <= 2:
+                return None  # Let it through
+            return 'computer.press("tab")'
 
-        # Default: press escape to try to break out
-        return 'computer.press("escape")'
+        return None  # Unknown action type — let it through
 
     def _parse_computer_action(
         self, code: str, observation: BenchmarkObservation
@@ -1035,5 +1128,6 @@ class ApiAgent(BenchmarkAgent):
         self.history = []  # Clear rich history too
         self.memory_block_text = "# empty memory block"
         self.step_counter = 0
+        self._loop_count = 0
         # Note: demo is NOT reset - it persists across resets if set
         logger.info("ApiAgent reset")

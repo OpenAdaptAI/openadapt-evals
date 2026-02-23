@@ -375,6 +375,9 @@ class WAALiveAdapter(BenchmarkAdapter):
         except Exception as e:
             logger.warning(f"Failed to close windows: {e}")
 
+        # Dismiss system notifications (OneDrive, etc.) that persist through close_all
+        self._dismiss_notifications(requests)
+
         # If task has setup commands in raw_config, execute them
         if task.raw_config:
             self._run_task_setup(task.raw_config)
@@ -805,6 +808,38 @@ class WAALiveAdapter(BenchmarkAdapter):
                 )
         except Exception as e:
             logger.error(f"Setup request failed: {e}")
+
+    def _dismiss_notifications(self, requests_module) -> None:
+        """Dismiss system notifications that persist through close_all.
+
+        OneDrive "Turn On Windows Backup" and similar toast notifications
+        are not closeable via close_all (they're system toasts, not windows).
+        Kill the notification processes and dismiss via keyboard.
+        """
+        evaluate_base = self.config.evaluate_url or self.config.server_url
+        # Kill OneDrive and related notification processes
+        commands = [
+            "taskkill /F /IM OneDrive.exe /T",
+            "taskkill /F /IM OneDriveStandaloneUpdater.exe /T",
+            # Dismiss any remaining toast notifications via Action Center
+            (
+                "powershell -Command \""
+                "Get-Process -Name 'ShellExperienceHost' -ErrorAction SilentlyContinue | "
+                "ForEach-Object { $_.CloseMainWindow() }\""
+            ),
+        ]
+        for cmd in commands:
+            try:
+                requests_module.post(
+                    f"{evaluate_base}/setup",
+                    json={"config": [
+                        {"type": "execute", "parameters": {"command": cmd, "shell": True}},
+                    ]},
+                    timeout=10.0,
+                )
+            except Exception:
+                pass  # Best-effort; don't fail reset if notification kill fails
+        logger.debug("Dismissed system notifications")
 
     def _translate_action(self, action: BenchmarkAction) -> str | None:
         """Translate BenchmarkAction to element-based command for WAA's Computer.

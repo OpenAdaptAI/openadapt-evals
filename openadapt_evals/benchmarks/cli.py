@@ -1877,8 +1877,14 @@ def _suite_task_short_name(task_id: str) -> str:
 
 
 def _suite_find_demo(demo_dir: Path, task_id: str) -> Path | None:
-    """Find demo file (.json or .txt) for a task ID."""
-    for ext in (".json", ".txt"):
+    """Find demo file (.txt preferred, then .json) for a task ID.
+
+    Prefers .txt (natural language) over .json because:
+    - .txt demos describe actions in human-readable terms
+    - .json demos contain normalized coordinates (0-1) that mismatch
+      the agent's pixel coordinate action space
+    """
+    for ext in (".txt", ".json"):
         p = demo_dir / f"{task_id}{ext}"
         if p.exists():
             return p
@@ -1944,7 +1950,7 @@ def cmd_eval_suite(args: argparse.Namespace) -> int:
         print("Creating pool with 1 worker...")
         pool_mgr.create(workers=1)
 
-        timeout = getattr(args, "pool_timeout", 40)
+        timeout = getattr(args, "pool_timeout", 50)
         print(f"Waiting for WAA (timeout: {timeout}m)...")
         workers = pool_mgr.wait(timeout_minutes=timeout)
         if not workers:
@@ -2384,8 +2390,8 @@ def main() -> int:
         help="Skip VM deletion after evals",
     )
     suite_parser.add_argument(
-        "--pool-timeout", type=int, default=40,
-        help="Minutes to wait for WAA ready (default: 40)",
+        "--pool-timeout", type=int, default=50,
+        help="Minutes to wait for WAA ready (default: 50)",
     )
     suite_parser.add_argument(
         "--server", type=str, default="http://localhost:5001",
