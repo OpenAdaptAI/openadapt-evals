@@ -367,7 +367,12 @@ class Qwen3VLAgent(BenchmarkAgent):
         task: BenchmarkTask,
         history: list[tuple[BenchmarkObservation, BenchmarkAction]] | None = None,
     ) -> str:
-        """Build the text prompt for inference.
+        """Build the user turn text for inference.
+
+        The format is aligned with the training data produced by
+        convert_demos.py so the model sees the same structure at
+        training and inference time. The system prompt is added
+        separately in _run_inference().
 
         Args:
             observation: Current observation.
@@ -375,11 +380,11 @@ class Qwen3VLAgent(BenchmarkAgent):
             history: Optional action history.
 
         Returns:
-            Formatted prompt string.
+            Formatted user turn string.
         """
-        parts = [SYSTEM_PROMPT, ""]
+        parts = []
 
-        # Demo injection
+        # Demo injection (inference-only; not present in training data)
         if self.demo:
             parts.append(
                 "Here is a demonstration of a similar completed task:\n"
@@ -389,24 +394,22 @@ class Qwen3VLAgent(BenchmarkAgent):
             parts.append("Now complete this task:")
 
         parts.append(f"Instruction: {task.instruction}")
-        parts.append("")
 
         # Action history
         if self._action_history:
+            parts.append("")
             parts.append("Previous actions:")
             for i, act_str in enumerate(self._action_history):
                 parts.append(f"  Step {i}: {act_str}")
-            parts.append("")
 
-        parts.append("Current screenshot: <image>")
-
+        parts.append("")
         if self.use_thinking:
             parts.append(
-                "\nFirst reason about what you see in <think>...</think> "
+                "First reason about what you see in <think>...</think> "
                 "tags, then output exactly one action."
             )
         else:
-            parts.append("\nOutput exactly one action.")
+            parts.append("Output exactly one action.")
 
         return "\n".join(parts)
 
@@ -437,19 +440,22 @@ class Qwen3VLAgent(BenchmarkAgent):
         """Run model inference.
 
         Args:
-            prompt: Text prompt.
+            prompt: User turn text (from _build_prompt).
             image: PIL Image or None.
 
         Returns:
             Generated text response.
         """
-        # Build messages in the Qwen VL chat format
+        # Build messages in the Qwen VL chat format with system role
         content: list[dict[str, Any]] = []
         if image is not None:
             content.append({"type": "image", "image": image})
         content.append({"type": "text", "text": prompt})
 
-        messages = [{"role": "user", "content": content}]
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": content},
+        ]
 
         text = self._processor.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
