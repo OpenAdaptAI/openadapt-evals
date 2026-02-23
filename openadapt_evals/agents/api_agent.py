@@ -192,53 +192,6 @@ def _prev_actions_to_string(prev_actions: list[str], n_prev: int = 3) -> str:
     return result
 
 
-# Patterns to filter from a11y tree (system noise that wastes context)
-_A11Y_NOISE_PATTERNS = [
-    "OneDrive",
-    "Turn On Windows Backup",
-    "Remind me again in",
-    "Let's get started",
-    "No thanks",
-    "ShellExperienceHost",
-    "Windows.UI.Notifications",
-    "NotificationCenter",
-]
-
-
-def _filter_a11y_noise(tree_str: str) -> str:
-    """Remove system notification noise from a11y tree text.
-
-    OneDrive and other system notifications dominate the a11y tree,
-    pushing task-relevant elements past the truncation limit.
-
-    Args:
-        tree_str: Formatted accessibility tree string.
-
-    Returns:
-        Filtered tree string with noise elements removed.
-    """
-    if not tree_str:
-        return tree_str
-    filtered_lines = []
-    skip_depth = -1
-    for line in tree_str.split("\n"):
-        # Compute indent depth
-        stripped = line.lstrip()
-        depth = len(line) - len(stripped)
-        # If we're skipping a subtree, continue until we exit it
-        if skip_depth >= 0:
-            if depth > skip_depth:
-                continue
-            else:
-                skip_depth = -1
-        # Check if this line matches a noise pattern
-        if any(pattern in line for pattern in _A11Y_NOISE_PATTERNS):
-            skip_depth = depth  # Skip this element and its children
-            continue
-        filtered_lines.append(line)
-    return "\n".join(filtered_lines)
-
-
 class ApiAgent(BenchmarkAgent):
     """API-backed agent using Claude or GPT-5.1.
 
@@ -453,10 +406,6 @@ class ApiAgent(BenchmarkAgent):
             a11y_tree = obs.get("accessibility_tree")
             if a11y_tree:
                 tree_str = _format_accessibility_tree(a11y_tree)
-                # Filter out noise elements (system notifications that
-                # dominate the tree and push task-relevant elements out)
-                tree_str = _filter_a11y_noise(tree_str)
-                # Truncate if too long (increased from 4000 to 8000)
                 if len(tree_str) > 8000:
                     tree_str = tree_str[:8000] + "\n... (truncated)"
                 content_parts.append(f"UI Elements:\n{tree_str}")
