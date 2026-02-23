@@ -189,9 +189,29 @@ def cmd_mock(args: argparse.Namespace) -> int:
         except RuntimeError as e:
             print(f"ERROR: {e}")
             return 1
+    elif agent_type in ("api-claude-cu", "claude-cu"):
+        try:
+            from openadapt_evals.agents import ClaudeComputerUseAgent
+            agent = ClaudeComputerUseAgent(demo=demo_text)
+            print(f"Using ClaudeComputerUseAgent (demo={'yes' if agent.demo else 'no'})")
+        except RuntimeError as e:
+            print(f"ERROR: {e}")
+            return 1
+    elif agent_type == "qwen3vl":
+        try:
+            from openadapt_evals.agents import Qwen3VLAgent
+            model_path = getattr(args, "model_path", None)
+            use_thinking = getattr(args, "use_thinking", False)
+            agent = Qwen3VLAgent(
+                model_path=model_path, demo=demo_text, use_thinking=use_thinking,
+            )
+            print(f"Using Qwen3VLAgent (model={agent.model_path}, demo={'yes' if agent.demo else 'no'})")
+        except RuntimeError as e:
+            print(f"ERROR: {e}")
+            return 1
     else:
         print(f"ERROR: Unknown agent type: {agent_type}")
-        print("Available for mock: mock, api-claude, api-openai")
+        print("Available for mock: mock, api-claude, api-openai, api-claude-cu, qwen3vl")
         return 1
 
     # Create config for trace collection
@@ -315,9 +335,29 @@ def cmd_run(args: argparse.Namespace) -> int:
         except RuntimeError as e:
             print(f"ERROR: {e}")
             return 1
+    elif agent_type in ("api-claude-cu", "claude-cu"):
+        try:
+            from openadapt_evals.agents import ClaudeComputerUseAgent
+            agent = ClaudeComputerUseAgent(demo=demo_text)
+            print(f"Using ClaudeComputerUseAgent (demo={'yes' if agent.demo else 'no'})")
+        except RuntimeError as e:
+            print(f"ERROR: {e}")
+            return 1
+    elif agent_type == "qwen3vl":
+        try:
+            from openadapt_evals.agents import Qwen3VLAgent
+            model_path = getattr(args, "model_path", None)
+            use_thinking = getattr(args, "use_thinking", False)
+            agent = Qwen3VLAgent(
+                model_path=model_path, demo=demo_text, use_thinking=use_thinking,
+            )
+            print(f"Using Qwen3VLAgent (model={agent.model_path}, demo={'yes' if agent.demo else 'no'})")
+        except RuntimeError as e:
+            print(f"ERROR: {e}")
+            return 1
     else:
         print(f"ERROR: Unknown agent type: {agent_type}")
-        print("Available: noop, mock, api-claude, api-openai")
+        print("Available: noop, mock, api-claude, api-openai, api-claude-cu, qwen3vl")
         return 1
 
     # Create config for trace collection
@@ -450,10 +490,30 @@ def cmd_live(args: argparse.Namespace) -> int:
         except Exception as e:
             print(f"ERROR: {e}")
             return 1
+    elif agent_type in ("api-claude-cu", "claude-cu"):
+        try:
+            from openadapt_evals.agents import ClaudeComputerUseAgent
+            agent = ClaudeComputerUseAgent(demo=demo_text)
+            print(f"Using ClaudeComputerUseAgent (demo={'yes' if agent.demo else 'no'})")
+        except RuntimeError as e:
+            print(f"ERROR: {e}")
+            return 1
+    elif agent_type == "qwen3vl":
+        try:
+            from openadapt_evals.agents import Qwen3VLAgent
+            model_path = getattr(args, "model_path", None)
+            use_thinking = getattr(args, "use_thinking", False)
+            agent = Qwen3VLAgent(
+                model_path=model_path, demo=demo_text, use_thinking=use_thinking,
+            )
+            print(f"Using Qwen3VLAgent (model={agent.model_path}, demo={'yes' if agent.demo else 'no'})")
+        except RuntimeError as e:
+            print(f"ERROR: {e}")
+            return 1
     else:
         print(f"ERROR: Unknown agent type: {agent_type}")
         print(
-            "Available: mock, noop, api-claude, api-openai, retrieval-claude, retrieval-openai"
+            "Available: mock, noop, api-claude, api-openai, api-claude-cu, qwen3vl, retrieval-claude, retrieval-openai"
         )
         return 1
 
@@ -2003,8 +2063,20 @@ def cmd_eval_suite(args: argparse.Namespace) -> int:
                 continue
 
             try:
-                provider = _suite_agent_provider(args.agent)
-                agent = ApiAgent(provider=provider, demo=demo_text)
+                if args.agent in ("api-claude-cu", "claude-cu"):
+                    from openadapt_evals.agents import ClaudeComputerUseAgent
+                    agent = ClaudeComputerUseAgent(demo=demo_text)
+                elif args.agent == "qwen3vl":
+                    from openadapt_evals.agents import Qwen3VLAgent
+                    model_path = getattr(args, "model_path", None)
+                    use_thinking = getattr(args, "use_thinking", False)
+                    agent = Qwen3VLAgent(
+                        model_path=model_path, demo=demo_text,
+                        use_thinking=use_thinking,
+                    )
+                else:
+                    provider = _suite_agent_provider(args.agent)
+                    agent = ApiAgent(provider=provider, demo=demo_text)
             except RuntimeError as e:
                 print(f"  ERROR creating agent: {e}")
                 all_results[cond_name] = None
@@ -2062,8 +2134,10 @@ def main() -> int:
     mock_parser.add_argument("--tasks", type=int, default=10, help="Number of tasks")
     mock_parser.add_argument("--max-steps", type=int, default=15, help="Max steps per task")
     mock_parser.add_argument("--agent", type=str, default="mock",
-                            help="Agent type: mock, api-claude, api-openai")
+                            help="Agent type: mock, api-claude, api-openai, api-claude-cu, qwen3vl")
     mock_parser.add_argument("--demo", type=str, help="Demo trajectory file for ApiAgent")
+    mock_parser.add_argument("--model-path", type=str, help="Model path for Qwen3VL agent")
+    mock_parser.add_argument("--use-thinking", action="store_true", help="Enable thinking mode for Qwen3VL")
     mock_parser.add_argument("--output", type=str, help="Output directory for traces")
     mock_parser.add_argument("--run-name", type=str, help="Name for this evaluation run")
 
@@ -2077,13 +2151,15 @@ def main() -> int:
     run_parser.add_argument("--evaluate-url", type=str, default="http://localhost:5050",
                            help="Evaluate server URL (default: localhost:5050)")
     run_parser.add_argument("--agent", type=str, default="api-openai",
-                           help="Agent type: noop, mock, api-claude, api-openai")
+                           help="Agent type: noop, mock, api-claude, api-openai, api-claude-cu, qwen3vl")
     run_parser.add_argument("--task", type=str,
                            help="Single task ID (e.g., notepad_1)")
     run_parser.add_argument("--tasks", type=str,
                            help="Comma-separated task IDs (e.g., notepad_1,notepad_2)")
     run_parser.add_argument("--demo", type=str,
                            help="Demo trajectory file for ApiAgent")
+    run_parser.add_argument("--model-path", type=str, help="Model path for Qwen3VL agent")
+    run_parser.add_argument("--use-thinking", action="store_true", help="Enable thinking mode for Qwen3VL")
     run_parser.add_argument("--max-steps", type=int, default=15,
                            help="Max steps per task")
     run_parser.add_argument("--output", type=str, default="benchmark_results",
@@ -2098,8 +2174,10 @@ def main() -> int:
     live_parser.add_argument("--evaluate-url", type=str, default="http://localhost:5050",
                             help="Evaluate server URL (default: localhost:5050)")
     live_parser.add_argument("--agent", type=str, default="mock",
-                            help="Agent type: mock, noop, api-claude, api-openai, retrieval-claude, retrieval-openai")
+                            help="Agent type: mock, noop, api-claude, api-openai, api-claude-cu, qwen3vl, retrieval-claude, retrieval-openai")
     live_parser.add_argument("--demo", type=str, help="Demo trajectory file for ApiAgent")
+    live_parser.add_argument("--model-path", type=str, help="Model path for Qwen3VL agent")
+    live_parser.add_argument("--use-thinking", action="store_true", help="Enable thinking mode for Qwen3VL")
     live_parser.add_argument("--demo-library", type=str,
                             help="Path to demo library for retrieval agents")
     live_parser.add_argument("--task-ids", type=str, help="Comma-separated task IDs")
@@ -2366,7 +2444,15 @@ def main() -> int:
     )
     suite_parser.add_argument(
         "--agent", type=str, default="api-openai",
-        help="Agent type: api-openai, api-claude",
+        help="Agent type: api-openai, api-claude, api-claude-cu, qwen3vl",
+    )
+    suite_parser.add_argument(
+        "--model-path", type=str,
+        help="Model path for Qwen3VL agent",
+    )
+    suite_parser.add_argument(
+        "--use-thinking", action="store_true",
+        help="Enable thinking mode for Qwen3VL",
     )
     suite_parser.add_argument(
         "--demo-dir", type=str,
