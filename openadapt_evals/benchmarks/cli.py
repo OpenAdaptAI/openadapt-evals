@@ -1866,6 +1866,183 @@ def cmd_azure(args: argparse.Namespace) -> int:
         return 1
 
 
+def _suite_task_short_name(task_id: str) -> str:
+    """Map task UUID prefix to readable short name."""
+    short_names = {
+        "37e10fc4": "settings",
+        "0c9dda13": "archive",
+        "366de66e": "notepad",
+    }
+    return short_names.get(task_id[:8], task_id[:8])
+
+
+def _suite_find_demo(demo_dir: Path, task_id: str) -> Path | None:
+    """Find demo file (.json or .txt) for a task ID."""
+    for ext in (".json", ".txt"):
+        p = demo_dir / f"{task_id}{ext}"
+        if p.exists():
+            return p
+    return None
+
+
+def _suite_agent_provider(agent_type: str) -> str:
+    """Map CLI agent type to provider string."""
+    if agent_type in ("api-claude", "claude", "anthropic"):
+        return "anthropic"
+    return "openai"
+
+
+def _suite_print_summary(all_results: dict) -> None:
+    """Print eval suite comparison table."""
+    print("\n" + "=" * 60)
+    print("EVAL SUITE RESULTS")
+    print("=" * 60)
+    print(f"{'Condition':<25} {'Score':>7} {'Steps':>7} {'Success':>9}")
+    print("-" * 60)
+    for cond, metrics in all_results.items():
+        if metrics is None:
+            print(f"{cond:<25} {'ERROR':>7}")
+        else:
+            print(
+                f"{cond:<25} {metrics['avg_score']:>7.2f} "
+                f"{metrics['avg_steps']:>7.1f} "
+                f"{metrics['success_rate']:>8.0%}"
+            )
+    print("=" * 60)
+
+
+def cmd_eval_suite(args: argparse.Namespace) -> int:
+    """Run evaluation suite: pool lifecycle + task x condition matrix."""
+    from datetime import datetime
+
+    from openadapt_evals.adapters import WAALiveAdapter, WAALiveConfig
+    from openadapt_evals.agents import ApiAgent
+    from openadapt_evals.benchmarks import (
+        EvaluationConfig,
+        compute_metrics,
+        evaluate_agent_on_benchmark,
+    )
+
+    task_ids = [t.strip() for t in args.tasks.split(",")]
+    suite_name = getattr(args, "suite_name", None) or (
+        f"suite_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    )
+    output_dir = Path(getattr(args, "output", "benchmark_results"))
+    demo_dir = Path(args.demo_dir) if getattr(args, "demo_dir", None) else None
+
+    # --- Phase 1: Pool lifecycle ---
+    pool_mgr = None
+    tunnel_mgr = None
+    server_url = args.server
+    evaluate_url = args.evaluate_url
+
+    if not args.no_pool_create:
+        from openadapt_evals.infrastructure.pool import PoolManager
+        from openadapt_evals.infrastructure.ssh_tunnel import SSHTunnelManager
+
+        pool_mgr = PoolManager()
+        print("Creating pool with 1 worker...")
+        pool_mgr.create(workers=1)
+
+        timeout = getattr(args, "pool_timeout", 40)
+        print(f"Waiting for WAA (timeout: {timeout}m)...")
+        workers = pool_mgr.wait(timeout_minutes=timeout)
+        if not workers:
+            print("ERROR: Pool wait timed out")
+            return 1
+
+        worker_ip = workers[0].ip
+        print(f"Worker ready: {worker_ip}")
+
+        tunnel_mgr = SSHTunnelManager()
+        tunnel_mgr.start_tunnels_for_vm(vm_ip=worker_ip)
+        server_url = "http://localhost:5001"
+        evaluate_url = "http://localhost:5050"
+        # Give tunnels a moment to establish
+        import time
+        time.sleep(3)
+
+    # --- Phase 2: Build eval matrix ---
+    matrix = []  # list of (task_id, condition_name, demo_text|None)
+    for tid in task_ids:
+        short = _suite_task_short_name(tid)
+        matrix.append((tid, f"zs_{short}", None))
+        if demo_dir:
+            demo_path = _suite_find_demo(demo_dir, tid)
+            if demo_path:
+                demo_text = demo_path.read_text()
+                matrix.append((tid, f"dc_{short}", demo_text))
+
+    print(f"\nEval matrix: {len(matrix)} runs ({len(task_ids)} tasks)")
+    for tid, cond, demo in matrix:
+        print(f"  {cond}: {tid[:12]}... (demo={'yes' if demo else 'no'})")
+
+    # --- Phase 3: Run evals ---
+    all_results = {}
+    try:
+        for i, (tid, cond_name, demo_text) in enumerate(matrix):
+            run_name = f"{suite_name}_{cond_name}"
+            print(f"\n[{i + 1}/{len(matrix)}] {run_name}")
+
+            adapter = WAALiveAdapter(
+                WAALiveConfig(
+                    server_url=server_url,
+                    evaluate_url=evaluate_url,
+                    max_steps=args.max_steps,
+                )
+            )
+            if not adapter.check_connection():
+                print(f"  ERROR: Cannot connect to {server_url}")
+                all_results[cond_name] = None
+                continue
+
+            try:
+                provider = _suite_agent_provider(args.agent)
+                agent = ApiAgent(provider=provider, demo=demo_text)
+            except RuntimeError as e:
+                print(f"  ERROR creating agent: {e}")
+                all_results[cond_name] = None
+                continue
+
+            config = EvaluationConfig(
+                save_execution_traces=True,
+                output_dir=str(output_dir),
+                run_name=run_name,
+            )
+
+            results = evaluate_agent_on_benchmark(
+                agent=agent,
+                adapter=adapter,
+                max_steps=args.max_steps,
+                task_ids=[tid],
+                config=config,
+            )
+            metrics = compute_metrics(results)
+            all_results[cond_name] = metrics
+            print(
+                f"  Score: {metrics['avg_score']:.2f}, "
+                f"Steps: {metrics['avg_steps']:.0f}, "
+                f"Success: {metrics['success_rate']:.0%}"
+            )
+
+    except KeyboardInterrupt:
+        print("\n\nSuite interrupted by user.")
+
+    finally:
+        # --- Phase 4: Summary ---
+        if all_results:
+            _suite_print_summary(all_results)
+
+        # --- Phase 5: Cleanup ---
+        if tunnel_mgr:
+            tunnel_mgr.stop_all_tunnels()
+        if pool_mgr and not args.no_pool_cleanup:
+            print("\nCleaning up pool...")
+            pool_mgr.cleanup(confirm=False)
+
+    return 0
+
+
 def main() -> int:
     """Main entry point for CLI."""
     parser = argparse.ArgumentParser(
@@ -2172,6 +2349,53 @@ def main() -> int:
     wandb_log_parser.add_argument("--dry-run", action="store_true",
                                   help="Validate data but don't upload")
 
+    # Eval suite (automated full-cycle evaluation)
+    suite_parser = subparsers.add_parser(
+        "eval-suite",
+        help="Run full evaluation suite: create VM, run task x condition matrix, compare, cleanup",
+    )
+    suite_parser.add_argument(
+        "--tasks", type=str, required=True,
+        help="Comma-separated task IDs",
+    )
+    suite_parser.add_argument(
+        "--agent", type=str, default="api-openai",
+        help="Agent type: api-openai, api-claude",
+    )
+    suite_parser.add_argument(
+        "--demo-dir", type=str,
+        help="Directory with annotated demos (.json/.txt). Enables DC runs for tasks with matching demos.",
+    )
+    suite_parser.add_argument("--max-steps", type=int, default=15)
+    suite_parser.add_argument(
+        "--output", type=str, default="benchmark_results",
+        help="Output directory for traces",
+    )
+    suite_parser.add_argument(
+        "--suite-name", type=str,
+        help="Name prefix for runs (default: suite_YYYYMMDD_HHMMSS)",
+    )
+    suite_parser.add_argument(
+        "--no-pool-create", action="store_true",
+        help="Skip VM creation (use existing tunnels)",
+    )
+    suite_parser.add_argument(
+        "--no-pool-cleanup", action="store_true",
+        help="Skip VM deletion after evals",
+    )
+    suite_parser.add_argument(
+        "--pool-timeout", type=int, default=40,
+        help="Minutes to wait for WAA ready (default: 40)",
+    )
+    suite_parser.add_argument(
+        "--server", type=str, default="http://localhost:5001",
+        help="WAA server URL (used with --no-pool-create)",
+    )
+    suite_parser.add_argument(
+        "--evaluate-url", type=str, default="http://localhost:5050",
+        help="Evaluate server URL (used with --no-pool-create)",
+    )
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -2201,6 +2425,7 @@ def main() -> int:
         "wandb-demo": cmd_wandb_demo,
         "wandb-report": cmd_wandb_report,
         "wandb-log": cmd_wandb_log,
+        "eval-suite": cmd_eval_suite,
     }
 
     handler = handlers.get(args.command)

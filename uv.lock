@@ -1373,6 +1373,7 @@ name = "openadapt-evals"
 version = "0.3.2"
 source = { editable = "." }
 dependencies = [
+    { name = "anthropic" },
     { name = "httpx" },
     { name = "open-clip-torch" },
     { name = "openai" },
@@ -1428,6 +1429,7 @@ wandb = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anthropic", specifier = ">=0.76.0" },
     { name = "anthropic", marker = "extra == 'test'", specifier = ">=0.76.0" },
     { name = "azure-ai-ml", marker = "extra == 'azure'", specifier = ">=1.12.0" },
     { name = "azure-identity", marker = "extra == 'azure'", specifier = ">=1.15.0" },
