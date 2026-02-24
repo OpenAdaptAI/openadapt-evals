@@ -1,6 +1,28 @@
 # CHANGELOG
 
 
+## v0.4.3 (2026-02-24)
+
+### Bug Fixes
+
+- Add DEBIAN_FRONTEND=noninteractive and 128GB OS disk
+  ([#38](https://github.com/OpenAdaptAI/openadapt-evals/pull/38),
+  [`9cf161a`](https://github.com/OpenAdaptAI/openadapt-evals/commit/9cf161a87b3f86cb3917314918c541d11c5b46b9))
+
+* fix: add DEBIAN_FRONTEND=noninteractive and 128GB disk for CLI path
+
+Docker install failed with debconf Dialog frontend error on non-interactive SSH sessions. Also add
+  --os-disk-size-gb 128 to the az CLI create path (SDK path already had it).
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* chore: sync beads state
+
+---------
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.4.2 (2026-02-24)
 
 ### Bug Fixes
