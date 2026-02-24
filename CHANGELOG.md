@@ -1,6 +1,21 @@
 # CHANGELOG
 
 
+## v0.4.2 (2026-02-24)
+
+### Bug Fixes
+
+- Use persistent storage for Docker data-root instead of ephemeral /mnt
+  ([#37](https://github.com/OpenAdaptAI/openadapt-evals/pull/37),
+  [`4665f33`](https://github.com/OpenAdaptAI/openadapt-evals/commit/4665f33ca9657a3c694d25b7d6619950747393de))
+
+The Azure ephemeral disk (/mnt) gets wiped on VM deallocate, causing Docker images to be lost and
+  pool-resume to fail with WAA timeout. Move Docker data-root to /home/azureuser/docker (OS disk,
+  persistent) and increase OS disk to 128GB to accommodate Docker images.
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.4.1 (2026-02-24)
 
 ### Bug Fixes
