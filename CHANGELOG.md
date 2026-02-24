@@ -1,6 +1,252 @@
 # CHANGELOG
 
 
+## v0.4.0 (2026-02-24)
+
+### Features
+
+- Waa eval pipeline — recording, annotation, golden images, and CI
+  ([#35](https://github.com/OpenAdaptAI/openadapt-evals/pull/35),
+  [`19a11ee`](https://github.com/OpenAdaptAI/openadapt-evals/commit/19a11ee36938d4adb3b585e25ffb972424ea52db))
+
+* fix(recording): replace busy-wait loop with time.sleep
+
+The `while True: pass` loop burned an entire CPU core during recording. Replace with
+  `time.sleep(0.5)` to yield CPU while waiting for Ctrl+C.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* fix: add wait_for_ready() and match CLI recording loop pattern
+
+- Call recorder.wait_for_ready() before entering the wait loop - Use recorder.is_recording check and
+  1s sleep to match CLI behavior
+
+* fix: auto-create dummy .docx files for archive task
+
+The third WAA task requires .docx files in Documents. The script now creates empty report.docx,
+  meeting_notes.docx, and proposal.docx before recording that task, and cleans up any Archive folder
+  from previous runs.
+
+* fix: update stop instructions and clarify wormhole send flow
+
+- Change "Press Ctrl+C" to "press Ctrl 3 times" (matches stop sequence) - Clarify wormhole send
+  instructions (each send blocks until received)
+
+* fix(pool): use waa-auto image instead of broken windowsarena/winarena
+
+The DOCKER_SETUP_SCRIPT builds waa-auto:latest (based on dockurr/windows:latest which can
+  auto-download Windows ISO) but WAA_START_SCRIPT and setup-waa were starting
+  windowsarena/winarena:latest which uses the old dockurr/windows v0.00 that cannot download the
+  ISO, causing "ISO file not found" error.
+
+* fix(pool): fix WAA probe IP, add QMP support, add pool-auto command
+
+Three bugs prevented pool-run from working:
+
+1. WAA probe used 172.30.0.2 (QEMU guest IP) but Docker port-forwards to localhost — pool-wait timed
+  out every time. Changed to localhost in pool.py and vm_monitor.py.
+
+2. dockurr/windows base image doesn't configure QMP (QEMU Machine Protocol). WAA client needs QMP on
+  port 7200 for VM status. Added ARGUMENTS env var to inject -qmp flag into QEMU startup.
+
+3. Config defaults had Standard_D2_v3 (8GB, OOMs) and old windowsarena/winarena image. Fixed to
+  D8ds_v5 and waa-auto.
+
+Also adds: - pool-auto command: single oa-vm pool-auto --workers N --tasks M chains create → wait →
+  run - /evaluate endpoint injection in waa_deploy Dockerfile - Handle WAA server wrapping 404 in
+  500 responses (live.py) - openai dependency for API agents
+
+* fix(pool): use docker exec -d + tail -f for resilient benchmark execution
+
+Replace fragile streaming SSH with docker exec -d (detached) for starting benchmarks. Logs stream
+  via tail -f --pid which auto-exits when the benchmark finishes. On SSH drop, reconnects and
+  resumes. Also adds 120s timeout to OpenAI API calls to prevent infinite hangs.
+
+* fix(pool): limit tasks with --test_all_meta_path subset JSON
+
+WAA's run.py ignores --tasks and runs all 154 tasks based on worker_id/num_workers. Fix by creating
+  a subset test JSON with only the requested number of tasks and passing it via
+  --test_all_meta_path.
+
+* feat(pool): add dedicated evaluate server with socat proxy
+
+Add a standalone evaluate server (port 5050) that runs inside the WAA Docker container and has
+  direct access to WAA evaluator modules. This avoids needing to patch the WAA Flask server's
+  /evaluate endpoint.
+
+- Add evaluate_server.py and start_with_evaluate.sh - Add evaluate_url config to WAALiveConfig - Set
+  up socat proxy (5051→5050) for Docker bridge networking - Add SSH tunnel for evaluate port -
+  Simplify Dockerfile
+
+* feat(viz): add instrumentation, comparison viewer, and viewer enhancements
+
+Instrumentation (captures richer data per step): - Propagate agent logs (LLM response, parse
+  strategy, demo info, loop detection, memory) from ApiAgent to execution trace - Add per-step
+  timing (agent_think_ms, env_execute_ms) - Capture token counts from OpenAI/Anthropic API responses
+
+Viewer enhancements (viewer.py): - Agent Thinking panel showing LLM response, memory, parse strategy
+  - Action timeline bar color-coded by action type - Click heatmap overlay showing click frequency
+  hotspots - Click marker using raw pixel coords for correct positioning
+
+Comparison viewer (new): - comparison_viewer.py generates side-by-side HTML comparisons -
+  Synchronized step slider, click markers, action diffs - First-divergence detection, action type
+  distribution charts - CLI 'compare' command for generating comparisons - Demo prompts and initial
+  eval results for 3 WAA tasks
+
+* fix(agent): handle double_click, right_click, and drag in action parser
+
+_parse_computer_action() only handled click, type, press, hotkey, and scroll. Any other action
+  (double_click, right_click, drag) fell through to the default return of type="done", which
+  prematurely terminated the task. This caused the demo-conditioned notepad eval to stop after 1
+  step when the agent correctly issued computer.double_click() to open Notepad.
+
+Also add a warning log when an unrecognized action falls through, and update viewer regexes to
+  handle double_click/right_click coordinates.
+
+* fix(coords): detect actual screen size from screenshot instead of hardcoded config
+
+WAALiveConfig defaulted to 1920x1200 but actual VM screen is 1280x720. This caused stored action.x/y
+  to be normalized against the wrong resolution. Now detects real dimensions from the screenshot via
+  PIL, uses them for viewport, denormalization, window_rect, and drag coordinates. Viewers use a
+  divergence check for backward compatibility with old data.
+
+* docs: add Feb 21 eval results with comparison screenshots
+
+ZS vs demo-conditioned on 3 WAA tasks (GPT-5.1). DC agent signals completion on 2/3 tasks (Settings:
+  11 steps, Notepad: 8 steps) while ZS hits max steps on all 3. Includes Playwright screenshots of
+  comparison viewers and step-by-step screenshots.
+
+* fix(pool): consolidate Dockerfiles and deploy evaluate server
+
+Replace inline 25-line Dockerfile in pool.py with SCP of waa_deploy/ build context. This eliminates
+  drift between the inline and full Dockerfile, and ensures evaluate_server.py + Flask are included
+  in the container image. Adds evaluate server health check during pool-wait.
+
+* fix(evaluate): add cache_dir to MockEnv for WAA file getters
+
+WAA evaluator getters (get_vm_file, get_cloud_file) expect env.cache_dir for downloading/caching
+  files during evaluation. Without it, the compare_text_file metric fails with AttributeError.
+
+* feat(setup): implement WAA task setup config array processing
+
+WAA tasks use a 'config' array with preconditions (file downloads, app launches, sleeps) that must
+  run before the agent starts. Previously _run_task_setup() looked for non-existent 'setup'/'init'
+  keys, so task preconditions were never executed — causing Archive and other tasks with file
+  dependencies to always score 0.
+
+- Add /setup endpoint to evaluate_server.py with 11 handlers mirroring WAA's SetupController
+  (download, launch, sleep, execute, open, etc.) - Add requests-toolbelt to Dockerfile for multipart
+  file uploads - Rewrite _run_task_setup() in live.py to POST config array to evaluate server's
+  /setup endpoint - Increase reset delay from 1s to 5s to match WAA defaults
+
+* feat(cli): add eval-suite command for automated full-cycle evaluation
+
+New `eval-suite` CLI command that automates the full WAA evaluation cycle: pool-create → pool-wait →
+  SSH tunnel → run task×condition matrix
+
+→ comparison summary → pool-cleanup. Replaces ~20 manual commands with a single invocation.
+
+Features: - Auto-creates Azure VM pool and waits for WAA readiness - Builds eval matrix: ZS for all
+  tasks, DC for tasks with matching demos - Runs evals sequentially, prints comparison table at end
+  - SSH tunnels managed automatically via SSHTunnelManager - Supports
+  --no-pool-create/--no-pool-cleanup for existing VMs - Also adds anthropic as a direct dependency
+
+* fix(agent): improve eval reliability with 6 targeted fixes
+
+- Kill OneDrive notifications during environment reset (dominated a11y tree) - Loop detector: don't
+  substitute Escape for hotkey loops (was destroying Save As dialogs in near-successful DC Notepad
+  runs) - Loop detector: progressive directional offsets instead of fixed +50px - A11y tree: filter
+  notification noise + increase truncation limit to 8000 - Demo discovery: prefer .txt (natural
+  language) over .json (normalized coords) - Pool-wait timeout: increase default from 40 to 50
+  minutes
+
+* fix(agent): pass through raw a11y tree without filtering
+
+Remove _filter_a11y_noise and _A11Y_NOISE_PATTERNS — the a11y data from the WAA /accessibility
+  endpoint is real UIA XML, not server logs. Pass it through as-is instead of trying to
+  heuristically filter notification noise.
+
+* feat(agent): add Qwen3-VL agent with normalized coordinates and thinking mode
+
+Implement Qwen3VLAgent for local inference using Qwen3-VL-8B-Instruct. Supports [0,1000] coordinate
+  normalization, full action space (click, type, press, scroll, drag, wait, finished), optional
+  <think> blocks, and demo-conditioned inference. Register qwen3vl in all CLI commands (mock, run,
+  live, eval-suite) with --model-path and --use-thinking args.
+
+* fix(agent): align training and inference prompt formats
+
+Move system prompt to system role message in _run_inference() instead of cramming it into the user
+  turn. _build_prompt() now returns only the user turn text (instruction + history + output
+  instruction), matching the training data format produced by convert_demos.py.
+
+* feat(agent): add ClaudeComputerUseAgent with screenshot/wait loop fix
+
+Implements ClaudeComputerUseAgent using Anthropic's native computer_use tool (computer_20251124
+  beta). Key features: - Structured tool_use/tool_result protocol (no regex parsing) - Multi-turn
+  conversation maintained across steps - Internal loop for screenshot/wait actions: when Claude
+  requests a screenshot, the agent sends the current screen back and calls the API again, instead of
+  returning "done" to the runner (this was causing premature episode termination after 1 step) -
+  Demo injection for demo-conditioned inference - Coordinate normalization (pixel → [0,1])
+
+Also includes: - 28 unit tests for all action types, conversation management, demo injection,
+  screenshot encoding, and edge cases - VM pool optimization design doc (pre-baked image,
+  deallocate/resume, Windows disk persistence, ACR integration) - Hybrid agent architecture design
+  doc (Track 1: Claude CU, Track 2: Qwen3-VL) - Cleanup: remove .swp files, cost_report.json, update
+  .gitignore
+
+* docs: add eval suite v2 results — 6/6 tasks scored 1.00
+
+Claude Computer Use (Sonnet 4.6) achieves 100% success on all 3 WAA tasks in both zero-shot and
+  demo-conditioned modes after the screenshot/wait internal retry fix (commit 0b185eb).
+
+* feat(pool): add pool-pause and pool-resume for deallocate/resume lifecycle
+
+Phase 1 of VM pool optimization: stop compute billing without destroying VMs. Deallocated VMs keep
+  their disks (~$0.25/day vs $0.38/hr running). Resume takes ~5 min vs ~42 min for full pool-create.
+
+New commands: - `oa-vm pool-pause` — deallocate all pool VMs - `oa-vm pool-resume` — start VMs, wait
+  for WAA readiness
+
+New AzureVMManager methods: deallocate_vm(), start_vm() (SDK + CLI fallback) New PoolManager
+  methods: pause(), resume() Updated resource_tracker for paused pool cost awareness.
+
+* feat(scripts): add WAA API recording, VLM annotation, and DC eval subcommands
+
+Extend record_waa_demos.py with three new fire subcommands: - record-waa: interactive recording via
+  WAA API + VNC with step-by-step screenshot capture, redo support, and prefix-matched task IDs -
+  annotate: VLM annotation of recorded before/after screenshots using the same prompt templates and
+  provider abstraction from openadapt-ml - eval: delegates to eval-suite with --demo-dir for
+  demo-conditioned runs
+
+* feat(infra): add golden image support, ACR pull, and pool lifecycle improvements
+
+- Add image-create/image-list/image-delete CLI commands for Azure Managed Images - Support --image
+  flag on pool-create to skip Docker setup (golden images) - Support --use-acr flag to pull waa-auto
+  from ACR instead of building on VM - Add ACR config settings (acr_name, acr_login_server) - Fix
+  WAA storage path: /home/azureuser/waa-storage instead of /mnt - Add auto-pause timer tracking
+  (auto_pause_at, auto_pause_hours on VMPool) - Add stale pool warnings (7/14 day thresholds) in
+  pool-status and resource tracker - Show accumulated idle cost in pool-status
+
+* chore: update beads local state
+
+* fix: address review findings — drag action type, screenshot error handling, exit code
+
+- Fix drag actions mapped as type="click" instead of type="drag" in ApiAgent - Add
+  raise_for_status() to all screenshot requests in record-waa via helper - Propagate eval-suite
+  subprocess exit code in cmd_eval_dc
+
+* ci: add test workflow for PR checks
+
+Adds GitHub Actions workflow that runs pytest on push to main and on PRs. Excludes tests requiring
+  openadapt-ml (not installed in CI) and tests depending on missing fixture files.
+
+* fix(ci): install dev extras for pytest in test workflow
+
+---------
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.3.3 (2026-02-18)
 
 ### Bug Fixes
