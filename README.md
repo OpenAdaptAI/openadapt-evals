@@ -14,18 +14,18 @@ OpenAdapt Evals is a unified framework for evaluating GUI automation agents agai
 
 ## Benchmark Viewer
 
-![Benchmark Viewer Animation](animations/benchmark-viewer.gif)
+![Benchmark Viewer Animation](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/main/animations/benchmark-viewer.gif)
 
 <details>
 <summary>More screenshots</summary>
 
 **Task Detail View** -- step-by-step replay with screenshots, actions, and execution logs:
 
-![Task Detail View](docs/screenshots/desktop_task_detail.png)
+![Task Detail View](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/main/docs/screenshots/desktop_task_detail.png)
 
 **Cost Tracking Dashboard** -- real-time Azure VM cost monitoring with tiered sizing and spot instances:
 
-![Cost Dashboard](screenshots/cost_dashboard_preview.png)
+![Cost Dashboard](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/main/screenshots/cost_dashboard_preview.png)
 
 </details>
 
@@ -259,7 +259,7 @@ uv sync --extra dev
 uv run pytest tests/ -v
 ```
 
-See [CLAUDE.md](./CLAUDE.md) for development conventions and architecture details.
+See [CLAUDE.md](https://github.com/OpenAdaptAI/openadapt-evals/blob/main/CLAUDE.md) for development conventions and architecture details.
 
 ## Related Projects
 
