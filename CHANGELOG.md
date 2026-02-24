@@ -1,6 +1,25 @@
 # CHANGELOG
 
 
+## v0.5.0 (2026-02-24)
+
+### Features
+
+- **agents**: Implement Qwen3VL agent with demo-conditioned inference
+  ([`b234a42`](https://github.com/OpenAdaptAI/openadapt-evals/commit/b234a425ed95c8676b9cccb5959dcc99d75e25bd))
+
+Full BenchmarkAgent implementation for Qwen3-VL models with: - Action parsing for all 9 action types
+  (click, double_click, right_click, type, press, scroll, drag, wait, finished) - Coordinate
+  denormalization from Qwen [0,1000] to BenchmarkAction [0,1] - Think block extraction and support -
+  Demo injection at every step for demo-conditioned inference - Action history tracking across steps
+  - Lazy model loading via transformers - System prompt aligned with openadapt-ml SFT training data
+
+71 tests covering action parsing, coordinate math, demo injection, think blocks, reset behavior,
+  imports, and edge cases.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.4.3 (2026-02-24)
 
 ### Bug Fixes
