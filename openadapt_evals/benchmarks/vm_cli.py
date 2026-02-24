@@ -339,12 +339,13 @@ def cmd_create(args):
         return 1
     log("CREATE", "SSH ready")
 
-    # Install Docker with /mnt storage
-    log("CREATE", "Installing Docker with /mnt storage...")
+    # Install Docker with persistent storage
+    log("CREATE", "Installing Docker with persistent storage...")
     docker_setup = """
 set -e
-sudo apt-get update -qq
-sudo apt-get install -y -qq docker.io
+export DEBIAN_FRONTEND=noninteractive
+sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io
 sudo systemctl start docker
 sudo systemctl enable docker
 sudo usermod -aG docker $USER
