@@ -380,15 +380,26 @@ class TestLoopDetection:
         assert result is False
 
     def test_generate_alternative_for_click(self, mock_agent):
-        """Test alternative action generation for stuck click."""
+        """Test alternative action generation for stuck click.
+
+        Uses progressive offsets in different directions based on loop count.
+        """
+        mock_agent._loop_count = 1
         alt_action = mock_agent._generate_alternative_action(
             "computer.click(100, 100)", 1920, 1200
         )
 
         assert alt_action is not None
         assert "computer.click" in alt_action
-        # Should be offset from original
+        # Should be offset from original (first loop: up by 60px)
         assert alt_action != "computer.click(100, 100)"
+
+        # Second loop should go in a different direction
+        mock_agent._loop_count = 2
+        alt_action_2 = mock_agent._generate_alternative_action(
+            "computer.click(100, 100)", 1920, 1200
+        )
+        assert alt_action_2 != alt_action  # Different direction each time
 
     def test_generate_alternative_for_type(self, mock_agent):
         """Test alternative action generation for stuck type."""
@@ -399,12 +410,44 @@ class TestLoopDetection:
         assert alt_action == 'computer.press("enter")'
 
     def test_generate_alternative_for_press(self, mock_agent):
-        """Test alternative action generation for stuck press."""
+        """Test alternative action generation for stuck press.
+
+        Press loops let the action through on first 2 loops (returns None),
+        then switch to tab to move focus.
+        """
+        # First loop: let through
+        mock_agent._loop_count = 1
         alt_action = mock_agent._generate_alternative_action(
             'computer.press("tab")', 1920, 1200
         )
+        assert alt_action is None  # Let through on first loop
 
-        assert alt_action == 'computer.press("escape")'
+        # Third loop: switch to tab
+        mock_agent._loop_count = 3
+        alt_action = mock_agent._generate_alternative_action(
+            'computer.press("tab")', 1920, 1200
+        )
+        assert alt_action == 'computer.press("tab")'
+
+    def test_generate_alternative_for_hotkey(self, mock_agent):
+        """Test alternative action generation for stuck hotkey.
+
+        Hotkey loops (e.g. Ctrl+S) should NOT be replaced with Escape,
+        as that destroys dialogs the agent may be interacting with.
+        """
+        # First 2 loops: let through
+        mock_agent._loop_count = 1
+        alt_action = mock_agent._generate_alternative_action(
+            'computer.hotkey("ctrl", "s")', 1920, 1200
+        )
+        assert alt_action is None
+
+        # Third loop: try Enter to confirm a dialog
+        mock_agent._loop_count = 3
+        alt_action = mock_agent._generate_alternative_action(
+            'computer.hotkey("ctrl", "s")', 1920, 1200
+        )
+        assert alt_action == 'computer.press("enter")'
 
 
 class TestActionValidation:

@@ -678,7 +678,6 @@ def _generate_benchmark_viewer_html(
             .step-viewer {{ grid-template-columns: 1fr; }}
         }}
         .screenshot-container {{
-            position: relative;
             background: #000;
             border-radius: 8px;
             overflow: hidden;
@@ -687,10 +686,14 @@ def _generate_benchmark_viewer_html(
             align-items: center;
             justify-content: center;
         }}
-        .screenshot-container img {{
+        .img-wrapper {{
+            position: relative;
+            display: inline-block;
+            line-height: 0;
+        }}
+        .img-wrapper img {{
             max-width: 100%;
             max-height: 70vh;
-            object-fit: contain;
         }}
         .screenshot-placeholder {{
             color: var(--text-muted);
@@ -702,11 +705,7 @@ def _generate_benchmark_viewer_html(
             height: 24px;
             border-radius: 50%;
             transform: translate(-50%, -50%);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 10px;
-            font-weight: bold;
+            display: none;
             pointer-events: none;
             z-index: 100;
             background: rgba(167, 139, 250, 0.4);
@@ -750,6 +749,60 @@ def _generate_benchmark_viewer_html(
             color: var(--text-secondary);
             font-family: "SF Mono", Monaco, monospace;
         }}
+
+        /* Action Timeline */
+        .action-timeline {{
+            display: flex;
+            height: 28px;
+            border-radius: 6px;
+            overflow: hidden;
+            cursor: pointer;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+        }}
+        .timeline-seg {{
+            position: relative;
+            min-width: 4px;
+            transition: opacity 0.15s;
+        }}
+        .timeline-seg:hover {{ opacity: 0.8; }}
+        .timeline-seg.active {{ box-shadow: inset 0 0 0 2px #fff; }}
+        .timeline-seg .tl-tip {{
+            display: none;
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            white-space: nowrap;
+            z-index: 200;
+            border: 1px solid var(--border-color);
+            pointer-events: none;
+        }}
+        .timeline-seg:hover .tl-tip {{ display: block; }}
+
+        /* Heatmap Canvas */
+        .heatmap-canvas {{
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+            z-index: 50;
+        }}
+        .heatmap-toggle {{
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            cursor: pointer;
+            user-select: none;
+        }}
+        .heatmap-toggle input {{ accent-color: var(--accent); }}
 
         /* Step List */
         .step-list {{
@@ -812,6 +865,74 @@ def _generate_benchmark_viewer_html(
         .reasoning-box h4 {{
             margin-bottom: 8px;
         }}
+
+        /* Agent Thinking Panel */
+        .thinking-panel {{
+            margin-top: 12px;
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            overflow: hidden;
+        }}
+        .thinking-header {{
+            padding: 10px 12px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+        }}
+        .thinking-header:hover {{
+            background: var(--bg-tertiary);
+        }}
+        .thinking-header h4 {{
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }}
+        .thinking-body {{
+            padding: 0 12px 12px;
+        }}
+        .thinking-section {{
+            margin-top: 8px;
+        }}
+        .thinking-section h5 {{
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }}
+        .thinking-pre {{
+            font-family: "SF Mono", Monaco, monospace;
+            font-size: 0.75rem;
+            line-height: 1.5;
+            color: var(--text-secondary);
+            background: var(--bg-primary);
+            border-radius: 4px;
+            padding: 8px;
+            max-height: 250px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }}
+        .thinking-prompt-pre {{
+            max-height: 150px;
+        }}
+        .thinking-badge {{
+            display: inline-block;
+            font-size: 0.65rem;
+            padding: 1px 6px;
+            border-radius: 4px;
+            font-weight: 600;
+            text-transform: none;
+            letter-spacing: 0;
+        }}
+        .thinking-badge.parse {{ background: rgba(88,166,255,0.15); color: #58a6ff; }}
+        .thinking-badge.demo {{ background: rgba(63,185,80,0.15); color: #3fb950; }}
+        .thinking-badge.loop {{ background: rgba(248,81,73,0.15); color: #f85149; }}
+        .thinking-badge.tokens {{ background: rgba(210,153,34,0.15); color: #d29922; }}
+        .thinking-badge.time {{ background: rgba(163,113,247,0.15); color: #a371f7; }}
 
         /* Speed Control */
         .speed-control {{
@@ -1317,7 +1438,7 @@ def _generate_benchmark_viewer_html(
             </div>
             <div class="step-viewer">
                 <div class="screenshot-container" id="screenshot-container">
-                    ${{steps.length > 0 ? '<img id="screenshot-img" src="" alt="Step screenshot">' : '<span class="screenshot-placeholder">No screenshots available</span>'}}
+                    ${{steps.length > 0 ? '<div class="img-wrapper" id="img-wrapper"><img id="screenshot-img" src="" alt="Step screenshot"><div class="click-marker" id="click-marker"></div><canvas class="heatmap-canvas" id="heatmap-canvas" style="display:none;"></canvas></div>' : '<span class="screenshot-placeholder">No screenshots available</span>'}}
                 </div>
                 <div class="step-sidebar">
                     <div class="step-controls">
@@ -1338,6 +1459,10 @@ def _generate_benchmark_viewer_html(
                     <div class="progress-bar" onclick="seekStep(event)">
                         <div class="progress" id="step-progress-bar" style="width: 0%"></div>
                     </div>
+                    <div id="action-timeline" class="action-timeline"></div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                        <label class="heatmap-toggle"><input type="checkbox" id="heatmap-toggle" onchange="toggleHeatmap(this.checked)"> Click Heatmap</label>
+                    </div>
                     <div class="step-list" id="step-list"></div>
                     <div class="action-detail" id="action-detail">
                         <h4>Action</h4>
@@ -1346,6 +1471,32 @@ def _generate_benchmark_viewer_html(
                     <div class="reasoning-box" id="reasoning-box" style="display:none;">
                         <h4>Reasoning</h4>
                         <div id="reasoning-content"></div>
+                    </div>
+                    <div class="thinking-panel" id="thinking-panel" style="display:none;">
+                        <div class="thinking-header" onclick="toggleThinkingPanel()">
+                            <h4>
+                                <span class="expand-icon" id="thinking-expand-icon">▶</span>
+                                Agent Thinking
+                                <span id="thinking-badges" style="margin-left:8px;"></span>
+                            </h4>
+                        </div>
+                        <div class="thinking-body" id="thinking-body" style="display:none;">
+                            <div class="thinking-section" id="thinking-timing"></div>
+                            <div class="thinking-section" id="thinking-tokens"></div>
+                            <div class="thinking-section" id="thinking-parse"></div>
+                            <div class="thinking-section" id="thinking-memory" style="display:none;">
+                                <h5>Agent Memory</h5>
+                                <pre class="thinking-pre" id="thinking-memory-content"></pre>
+                            </div>
+                            <div class="thinking-section" id="thinking-response" style="display:none;">
+                                <h5>LLM Response</h5>
+                                <pre class="thinking-pre" id="thinking-response-content"></pre>
+                            </div>
+                            <div class="thinking-section" id="thinking-prompt" style="display:none;">
+                                <h5>Full Prompt Sent</h5>
+                                <pre class="thinking-pre thinking-prompt-pre" id="thinking-prompt-content"></pre>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1370,6 +1521,7 @@ def _generate_benchmark_viewer_html(
         `;
 
         renderStepList();
+        renderActionTimeline();
         renderLogs();
         if (steps.length > 0) {{
             updateStep();
@@ -1411,6 +1563,8 @@ def _generate_benchmark_viewer_html(
 
         // Update screenshot
         const img = document.getElementById('screenshot-img');
+        const marker = document.getElementById('click-marker');
+
         if (img) {{
             if (embedScreenshots && task.embedded_screenshots && task.embedded_screenshots[currentStepIndex]) {{
                 img.src = task.embedded_screenshots[currentStepIndex];
@@ -1418,23 +1572,42 @@ def _generate_benchmark_viewer_html(
                 img.src = screenshots[currentStepIndex];
             }} else if (step.screenshot_path) {{
                 img.src = step.screenshot_path;
-            }} else {{
-                img.src = '';
             }}
         }}
 
-        // Update click marker if action has coordinates
-        const container = document.getElementById('screenshot-container');
-        // Remove existing markers
-        container.querySelectorAll('.click-marker').forEach(m => m.remove());
-
-        if (action.x !== null && action.y !== null && action.x !== undefined && action.y !== undefined) {{
-            const marker = document.createElement('div');
-            marker.className = 'click-marker';
-            marker.style.left = `${{action.x * 100}}%`;
-            marker.style.top = `${{action.y * 100}}%`;
-            marker.textContent = 'AI';
-            container.appendChild(marker);
+        // Position click marker using percentage coordinates inside img-wrapper.
+        // The marker shows where the agent will click on THIS screenshot.
+        if (marker) {{
+            if (action.x != null && action.y != null) {{
+                let normX = action.x;
+                let normY = action.y;
+                // Backward compat: check if stored action.x/y were normalized correctly.
+                // New data (after coordinate fix): action.x * imgWidth ≈ raw pixel x.
+                // Old data (before fix): normalized against wrong resolution, so they diverge.
+                const raw = action.raw_action;
+                if (raw && img && img.naturalWidth > 0) {{
+                    const code = typeof raw === 'string' ? raw : (raw.code || '');
+                    const m = code.match(/computer\\.(?:click|double_click|right_click)\\((\\d+),\\s*(\\d+)\\)/);
+                    if (m) {{
+                        const rawX = parseInt(m[1]);
+                        const rawY = parseInt(m[2]);
+                        const storedPixelX = action.x * img.naturalWidth;
+                        const storedPixelY = action.y * img.naturalHeight;
+                        const tolerance = 5;
+                        if (Math.abs(storedPixelX - rawX) > tolerance || Math.abs(storedPixelY - rawY) > tolerance) {{
+                            // Old data: stored coords are wrong, use raw pixels
+                            normX = rawX / img.naturalWidth;
+                            normY = rawY / img.naturalHeight;
+                        }}
+                        // Otherwise: new data, stored coords are correct, use as-is
+                    }}
+                }}
+                marker.style.left = (normX * 100) + '%';
+                marker.style.top = (normY * 100) + '%';
+                marker.style.display = 'block';
+            }} else {{
+                marker.style.display = 'none';
+            }}
         }}
 
         // Update progress
@@ -1466,10 +1639,115 @@ def _generate_benchmark_viewer_html(
             reasoningBox.style.display = 'none';
         }}
 
+        // Update Agent Thinking panel
+        updateThinkingPanel(step);
+
         // Update step list active state
         document.querySelectorAll('.step-list-item').forEach((item, idx) => {{
             item.classList.toggle('active', idx === currentStepIndex);
         }});
+    }}
+
+    function updateThinkingPanel(step) {{
+        const panel = document.getElementById('thinking-panel');
+        const logs = step.agent_logs;
+        if (!logs) {{
+            panel.style.display = 'none';
+            return;
+        }}
+        panel.style.display = 'block';
+
+        // Badges
+        const badges = document.getElementById('thinking-badges');
+        let badgeHtml = '';
+        if (logs.parse_strategy) badgeHtml += `<span class="thinking-badge parse">${{logs.parse_strategy}}</span> `;
+        if (logs.demo_included) badgeHtml += `<span class="thinking-badge demo">demo:${{logs.demo_length || '?'}}ch</span> `;
+        if (logs.loop_detected) badgeHtml += `<span class="thinking-badge loop">LOOP</span> `;
+        if (logs.token_usage) {{
+            const tu = logs.token_usage;
+            badgeHtml += `<span class="thinking-badge tokens">${{tu.input_tokens || '?'}}→${{tu.output_tokens || '?'}} tok</span> `;
+        }}
+        if (logs.agent_think_ms) {{
+            badgeHtml += `<span class="thinking-badge time">${{(logs.agent_think_ms/1000).toFixed(1)}}s think</span> `;
+        }}
+        if (logs.env_execute_ms) {{
+            badgeHtml += `<span class="thinking-badge time">${{(logs.env_execute_ms/1000).toFixed(1)}}s exec</span> `;
+        }}
+        badges.innerHTML = badgeHtml;
+
+        // Timing section
+        const timingEl = document.getElementById('thinking-timing');
+        if (logs.agent_think_ms || logs.env_execute_ms) {{
+            const think = logs.agent_think_ms ? (logs.agent_think_ms/1000).toFixed(2) + 's' : '-';
+            const exec = logs.env_execute_ms ? (logs.env_execute_ms/1000).toFixed(2) + 's' : '-';
+            timingEl.innerHTML = `<span style="font-size:0.75rem;color:var(--text-muted);">Think: ${{think}} | Execute: ${{exec}}</span>`;
+            timingEl.style.display = 'block';
+        }} else {{
+            timingEl.style.display = 'none';
+        }}
+
+        // Token section
+        const tokenEl = document.getElementById('thinking-tokens');
+        if (logs.token_usage) {{
+            const tu = logs.token_usage;
+            tokenEl.innerHTML = `<span style="font-size:0.75rem;color:var(--text-muted);">Tokens: ${{tu.input_tokens || '?'}} in → ${{tu.output_tokens || '?'}} out</span>`;
+            tokenEl.style.display = 'block';
+        }} else {{
+            tokenEl.style.display = 'none';
+        }}
+
+        // Parse strategy
+        const parseEl = document.getElementById('thinking-parse');
+        if (logs.parse_strategy) {{
+            let parseHtml = `<span style="font-size:0.75rem;color:var(--text-muted);">Parse: ${{logs.parse_strategy}}</span>`;
+            if (logs.loop_detected) parseHtml += ` <span style="color:#f85149;font-size:0.75rem;">⚠ Loop detected → ${{logs.alternative_action || 'no alt'}}</span>`;
+            parseEl.innerHTML = parseHtml;
+            parseEl.style.display = 'block';
+        }} else {{
+            parseEl.style.display = 'none';
+        }}
+
+        // Memory block
+        const memEl = document.getElementById('thinking-memory');
+        const memContent = document.getElementById('thinking-memory-content');
+        if (logs.memory_block_text) {{
+            memContent.textContent = logs.memory_block_text;
+            memEl.style.display = 'block';
+        }} else {{
+            memEl.style.display = 'none';
+        }}
+
+        // LLM Response
+        const respEl = document.getElementById('thinking-response');
+        const respContent = document.getElementById('thinking-response-content');
+        if (logs.plan_result) {{
+            respContent.textContent = logs.plan_result;
+            respEl.style.display = 'block';
+        }} else {{
+            respEl.style.display = 'none';
+        }}
+
+        // Full prompt
+        const promptEl = document.getElementById('thinking-prompt');
+        const promptContent = document.getElementById('thinking-prompt-content');
+        if (logs.user_question) {{
+            promptContent.textContent = logs.user_question;
+            promptEl.style.display = 'block';
+        }} else {{
+            promptEl.style.display = 'none';
+        }}
+    }}
+
+    function toggleThinkingPanel() {{
+        const body = document.getElementById('thinking-body');
+        const icon = document.getElementById('thinking-expand-icon');
+        if (body.style.display === 'none') {{
+            body.style.display = 'block';
+            icon.textContent = '▼';
+        }} else {{
+            body.style.display = 'none';
+            icon.textContent = '▶';
+        }}
     }}
 
     function prevStep() {{
@@ -1540,6 +1818,147 @@ def _generate_benchmark_viewer_html(
             startPlay();
         }}
     }}
+
+    // --- Action Timeline ---
+    const timelineColors = {{ click: '#58a6ff', type: '#3fb950', key: '#d29922', done: '#a371f7', scroll: '#f47067', unknown: '#8b949e' }};
+
+    function renderActionTimeline() {{
+        const tl = document.getElementById('action-timeline');
+        if (!tl) return;
+        const task = tasks[currentTaskIndex];
+        const steps = task?.execution?.steps || [];
+        if (steps.length === 0) {{ tl.innerHTML = ''; return; }}
+
+        // Compute durations; fall back to equal widths
+        const durations = steps.map(s => {{
+            const al = s.agent_logs || {{}};
+            return (al.agent_think_ms || 0) + (al.env_execute_ms || 0);
+        }});
+        const totalDur = durations.reduce((a, b) => a + b, 0);
+        const useDuration = totalDur > 0;
+
+        let html = '';
+        steps.forEach((s, i) => {{
+            const atype = (s.action?.type || 'unknown').toLowerCase();
+            const color = timelineColors[atype] || timelineColors.unknown;
+            const pct = useDuration && totalDur > 0
+                ? Math.max(1, (durations[i] / totalDur) * 100)
+                : (100 / steps.length);
+            const label = `#${{i}} ${{atype.toUpperCase()}}${{useDuration ? ' (' + (durations[i]/1000).toFixed(1) + 's)' : ''}}`;
+            html += `<div class="timeline-seg${{i === currentStepIndex ? ' active' : ''}}" style="width:${{pct}}%;background:${{color}};" onclick="goToStep(${{i}})"><span class="tl-tip">${{label}}</span></div>`;
+        }});
+        tl.innerHTML = html;
+    }}
+
+    function updateTimelineHighlight() {{
+        document.querySelectorAll('.timeline-seg').forEach((seg, i) => {{
+            seg.classList.toggle('active', i === currentStepIndex);
+        }});
+    }}
+
+    // --- Click Heatmap ---
+    let heatmapVisible = false;
+
+    function renderHeatmap() {{
+        const canvas = document.getElementById('heatmap-canvas');
+        const img = document.getElementById('screenshot-img');
+        const wrapper = document.getElementById('img-wrapper');
+        if (!canvas || !img || !wrapper) return;
+
+        const task = tasks[currentTaskIndex];
+        const steps = task?.execution?.steps || [];
+
+        // Size canvas to match the wrapper (which sizes to the rendered image)
+        canvas.width = wrapper.clientWidth;
+        canvas.height = wrapper.clientHeight;
+        canvas.style.width = wrapper.clientWidth + 'px';
+        canvas.style.height = wrapper.clientHeight + 'px';
+
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Collect click positions — use raw pixel coords when available
+        const natW = img.naturalWidth || canvas.width;
+        const natH = img.naturalHeight || canvas.height;
+        const clicks = [];
+        steps.forEach(s => {{
+            const a = s.action || {{}};
+            if (a.x != null && a.y != null && (a.type === 'click' || a.type === 'left_click')) {{
+                let nx = a.x, ny = a.y;
+                const raw = a.raw_action;
+                if (raw && natW > 0) {{
+                    const code = typeof raw === 'string' ? raw : (raw.code || raw.waa_action || '');
+                    const cm = code.match(/computer\\.(?:click|double_click|right_click)\\((\\d+),\\s*(\\d+)\\)/);
+                    if (cm) {{
+                        const rawX = parseInt(cm[1]), rawY = parseInt(cm[2]);
+                        const tol = 5;
+                        if (Math.abs(a.x * natW - rawX) > tol || Math.abs(a.y * natH - rawY) > tol) {{
+                            nx = rawX / natW; ny = rawY / natH;
+                        }}
+                    }}
+                }}
+                clicks.push({{ x: nx * canvas.width, y: ny * canvas.height }});
+            }}
+        }});
+
+        if (clicks.length === 0) return;
+
+        // Count per cell (grid-based)
+        const cellSize = 24;
+        const grid = {{}};
+        let maxCount = 0;
+        clicks.forEach(c => {{
+            const gx = Math.floor(c.x / cellSize);
+            const gy = Math.floor(c.y / cellSize);
+            const key = gx + ',' + gy;
+            grid[key] = (grid[key] || 0) + 1;
+            if (grid[key] > maxCount) maxCount = grid[key];
+        }});
+
+        // Draw heatmap circles
+        Object.entries(grid).forEach(([key, count]) => {{
+            const [gx, gy] = key.split(',').map(Number);
+            const cx = gx * cellSize + cellSize / 2;
+            const cy = gy * cellSize + cellSize / 2;
+            const intensity = count / maxCount;
+            const radius = 12 + intensity * 16;
+
+            const r = Math.round(248 * intensity + 88 * (1 - intensity));
+            const g = Math.round(81 * intensity + 166 * (1 - intensity));
+            const b = Math.round(73 * intensity + 255 * (1 - intensity));
+            const alpha = 0.25 + intensity * 0.45;
+
+            ctx.beginPath();
+            ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(${{r}},${{g}},${{b}},${{alpha}})`;
+            ctx.fill();
+
+            // Draw count
+            if (count > 1) {{
+                ctx.fillStyle = '#fff';
+                ctx.font = 'bold 10px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(count.toString(), cx, cy);
+            }}
+        }});
+    }}
+
+    function toggleHeatmap(checked) {{
+        heatmapVisible = checked;
+        const canvas = document.getElementById('heatmap-canvas');
+        if (!canvas) return;
+        canvas.style.display = heatmapVisible ? 'block' : 'none';
+        if (heatmapVisible) renderHeatmap();
+    }}
+
+    // Update timeline and heatmap when step changes
+    const _origUpdateStep = updateStep;
+    updateStep = function() {{
+        _origUpdateStep();
+        updateTimelineHighlight();
+        if (heatmapVisible) renderHeatmap();
+    }};
 
     // Unified keyboard shortcuts
     {keyboard_shortcuts_js}

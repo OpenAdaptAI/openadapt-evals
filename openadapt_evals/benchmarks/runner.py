@@ -299,7 +299,9 @@ def _run_single_task(
 
             # Get action from agent
             try:
+                think_start = time.perf_counter()
                 action = agent.act(obs, task, history if config.save_trajectories else None)
+                think_end = time.perf_counter()
                 logger.info(f"Step {steps}: Agent chose action: {action.type}")
             except Exception as e:
                 logger.error(f"Step {steps}: Failed to get action from agent: {e}")
@@ -313,9 +315,15 @@ def _run_single_task(
                     if reasoning:
                         logger.info(f"Step {steps}: Agent reasoning: {reasoning[:100]}...")
 
+            # Extract agent logs (from ApiAgent._last_step_logs)
+            agent_logs = getattr(agent, "_last_step_logs", None)
+            if agent_logs:
+                # Add timing data
+                agent_logs["agent_think_ms"] = round((think_end - think_start) * 1000)
+
             # Record step in trace collector
             if trace_collector is not None:
-                trace_collector.record_step(steps, obs, action, reasoning)
+                trace_collector.record_step(steps, obs, action, reasoning, agent_logs=agent_logs)
 
             # Record step in live tracker
             if live_tracker is not None:
@@ -337,7 +345,11 @@ def _run_single_task(
             # Execute action
             try:
                 logger.info(f"Step {steps}: Executing action in environment")
+                exec_start = time.perf_counter()
                 obs, done, info = adapter.step(action)
+                exec_end = time.perf_counter()
+                if agent_logs:
+                    agent_logs["env_execute_ms"] = round((exec_end - exec_start) * 1000)
                 if done:
                     logger.info(f"Step {steps}: Environment signaled task completion")
             except Exception as e:

@@ -92,8 +92,9 @@ from openadapt_evals.benchmarks.data_collection import (
 )
 from openadapt_evals.benchmarks.live_tracker import LiveEvaluationTracker
 
-# Import viewer
+# Import viewers
 from openadapt_evals.benchmarks.viewer import generate_benchmark_viewer
+from openadapt_evals.benchmarks.comparison_viewer import generate_comparison_viewer
 
 # Lazy imports for optional dependencies
 def __getattr__(name: str):
@@ -138,8 +139,9 @@ __all__ = [
     "AzureWAAOrchestrator",
     "AzureMLClient",
     "estimate_cost",
-    # Viewer
+    # Viewers
     "generate_benchmark_viewer",
+    "generate_comparison_viewer",
     # Data collection
     "ExecutionTraceCollector",
     "save_execution_trace",

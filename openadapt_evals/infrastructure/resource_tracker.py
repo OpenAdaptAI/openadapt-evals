@@ -33,6 +33,77 @@ VM_HOURLY_RATES = {
     "Standard_D8as_v5": 0.34,
 }
 
+# Paused pool cost: OS disk (~$0.15/day) + static IP (~$0.10/day) per VM
+PAUSED_POOL_COST_PER_VM_PER_DAY = 0.25
+
+
+STALE_POOL_WARN_DAYS = 7  # Warn after 7 days paused
+STALE_POOL_DELETE_DAYS = 14  # Auto-delete after 14 days paused
+
+
+def get_paused_pool() -> dict | None:
+    """Check if there is a paused VM pool in the registry.
+
+    Returns:
+        Dict with pool info if a paused pool exists, None otherwise.
+        Includes stale pool warnings when applicable.
+    """
+    try:
+        from openadapt_evals.infrastructure.vm_monitor import VMPoolRegistry
+
+        registry = VMPoolRegistry()
+        pool = registry.get_pool()
+        if pool is not None and pool.status == "paused":
+            paused_days = 0.0
+            if pool.paused_since:
+                paused_dt = datetime.fromisoformat(pool.paused_since)
+                paused_days = (datetime.now() - paused_dt).total_seconds() / 86400
+
+            warning = None
+            if paused_days >= STALE_POOL_DELETE_DAYS:
+                warning = f"STALE: Pool paused for {paused_days:.0f} days (>{STALE_POOL_DELETE_DAYS}d limit). Run: oa-vm pool-cleanup -y"
+            elif paused_days >= STALE_POOL_WARN_DAYS:
+                days_left = STALE_POOL_DELETE_DAYS - paused_days
+                warning = f"Pool paused for {paused_days:.0f} days. Will auto-delete in {days_left:.0f} days. Resume: oa-vm pool-resume"
+
+            return {
+                "pool_id": pool.pool_id,
+                "num_workers": len(pool.workers),
+                "paused_since": pool.paused_since,
+                "paused_days": paused_days,
+                "daily_cost": PAUSED_POOL_COST_PER_VM_PER_DAY * len(pool.workers),
+                "accumulated_cost": PAUSED_POOL_COST_PER_VM_PER_DAY * len(pool.workers) * paused_days,
+                "warning": warning,
+            }
+    except Exception:
+        pass
+    return None
+
+
+def get_active_pool_warning() -> str | None:
+    """Check if an active pool is approaching auto-pause time.
+
+    Returns:
+        Warning string if pool will auto-pause soon, None otherwise.
+    """
+    try:
+        from openadapt_evals.infrastructure.vm_monitor import VMPoolRegistry
+
+        registry = VMPoolRegistry()
+        pool = registry.get_pool()
+        if pool is not None and pool.status == "active" and pool.auto_pause_at:
+            auto_pause_dt = datetime.fromisoformat(pool.auto_pause_at)
+            remaining = auto_pause_dt - datetime.now()
+            remaining_minutes = remaining.total_seconds() / 60
+
+            if remaining_minutes <= 0:
+                return f"Pool auto-shutdown time passed ({pool.auto_pause_hours}h). Pool may still be running — check: oa-vm pool-status"
+            elif remaining_minutes <= 30:
+                return f"Pool will auto-shutdown in {remaining_minutes:.0f} minutes"
+    except Exception:
+        pass
+    return None
+
 
 def get_azure_vms() -> list[dict]:
     """Get all VMs in the resource group."""
@@ -109,8 +180,10 @@ def check_resources() -> dict:
         "timestamp": datetime.now().isoformat(),
         "vms": [],
         "compute_instances": [],
+        "paused_pool": None,
         "total_running_cost_per_hour": 0.0,
         "has_running_resources": False,
+        "has_paused_pool": False,
         "warnings": [],
     }
 
@@ -169,6 +242,21 @@ def check_resources() -> dict:
                 f"Azure ML compute '{name}' is RUNNING at ${hourly_rate:.2f}/hr"
             )
 
+    # Check for paused pool
+    paused_pool = get_paused_pool()
+    if paused_pool:
+        status["paused_pool"] = paused_pool
+        status["has_paused_pool"] = True
+        days = paused_pool["paused_days"]
+        daily_cost = paused_pool["daily_cost"]
+        accumulated = paused_pool["accumulated_cost"]
+        status["warnings"].append(
+            f"Paused pool ({paused_pool['num_workers']} VMs) idle for "
+            f"{days:.1f} days. Disk cost: ${daily_cost:.2f}/day "
+            f"(${accumulated:.2f} accumulated). "
+            f"Resume: oa-vm pool-resume | Delete: oa-vm pool-cleanup -y"
+        )
+
     return status
 
 
@@ -226,6 +314,23 @@ def update_resources_file(status: dict) -> None:
             )
         lines.append("")
 
+    # Paused pool section
+    paused_pool = status.get("paused_pool")
+    if paused_pool:
+        lines.extend(["## Paused VM Pool", ""])
+        lines.append(
+            f"- **Pool {paused_pool['pool_id']}**: "
+            f"{paused_pool['num_workers']} VMs paused for "
+            f"{paused_pool['paused_days']:.1f} days"
+        )
+        lines.append(
+            f"  - Daily cost: ${paused_pool['daily_cost']:.2f}/day "
+            f"(accumulated: ${paused_pool['accumulated_cost']:.2f})"
+        )
+        lines.append(f"  - Resume: `oa-vm pool-resume`")
+        lines.append(f"  - Delete: `oa-vm pool-cleanup -y`")
+        lines.append("")
+
     # Commands reference
     lines.extend(
         [
@@ -240,6 +345,12 @@ def update_resources_file(status: dict) -> None:
             "",
             "# Delete VM and all resources",
             "uv run python -m openadapt_evals.benchmarks.cli delete -y",
+            "",
+            "# Pause pool (stop compute, keep disks)",
+            "oa-vm pool-pause",
+            "",
+            "# Resume paused pool (~5 min)",
+            "oa-vm pool-resume",
             "",
             "# Start monitoring dashboard",
             "uv run python -m openadapt_evals.benchmarks.cli vm monitor",
@@ -256,32 +367,59 @@ def format_for_hook(status: dict) -> str:
 
     Output goes to stdout and is injected into Claude's context.
     """
-    if not status["has_running_resources"]:
-        return ""  # No message if nothing running
+    has_running = status["has_running_resources"]
+    has_paused = status.get("has_paused_pool", False)
 
-    lines = [
-        "",
-        "=" * 60,
-        "AZURE RESOURCE ALERT: Running resources detected!",
-        "=" * 60,
-        "",
-    ]
+    if not has_running and not has_paused:
+        return ""  # No message if nothing running or paused
+
+    lines = [""]
+
+    if has_running:
+        lines.extend(
+            [
+                "=" * 60,
+                "AZURE RESOURCE ALERT: Running resources detected!",
+                "=" * 60,
+                "",
+            ]
+        )
+
+    if has_paused and not has_running:
+        lines.extend(
+            [
+                "=" * 60,
+                "AZURE RESOURCE NOTICE: Paused pool detected",
+                "=" * 60,
+                "",
+            ]
+        )
 
     for warning in status["warnings"]:
         lines.append(f"  {warning}")
 
-    lines.extend(
-        [
-            "",
-            f"  Estimated cost: ${status['total_running_cost_per_hour']:.2f}/hour",
-            "",
-            "  To stop billing, run:",
-            "    uv run python -m openadapt_evals.benchmarks.cli deallocate",
-            "",
-            "=" * 60,
-            "",
-        ]
-    )
+    if has_running:
+        lines.extend(
+            [
+                "",
+                f"  Estimated compute cost: ${status['total_running_cost_per_hour']:.2f}/hour",
+                "",
+                "  To stop billing, run:",
+                "    uv run python -m openadapt_evals.benchmarks.cli deallocate",
+                "",
+            ]
+        )
+    elif has_paused:
+        paused_pool = status.get("paused_pool", {})
+        lines.extend(
+            [
+                "",
+                f"  Idle disk cost: ${paused_pool.get('daily_cost', 0.25):.2f}/day",
+                "",
+            ]
+        )
+
+    lines.extend(["=" * 60, ""])
 
     return "\n".join(lines)
 

@@ -32,8 +32,12 @@ class Settings(BaseSettings):
     azure_resource_group: str = "openadapt-agents"
 
     # Azure VM settings (optional overrides)
-    azure_vm_size: str = "Standard_D2_v3"
-    azure_docker_image: str = "docker.io/windowsarena/winarena:latest"
+    azure_vm_size: str = "Standard_D8ds_v5"
+    azure_docker_image: str = "waa-auto:latest"
+
+    # Azure Container Registry (for pre-built Docker images)
+    acr_name: str = "openadaptacr"
+    acr_login_server: str = "openadaptacr.azurecr.io"
 
     # Azure Storage for async inference queue
     azure_storage_connection_string: str | None = None
