@@ -4,6 +4,10 @@ Uses Qwen3-VL-8B-Instruct (or fine-tuned variants) for local GUI agent
 inference. Coordinates use the Qwen normalized [0, 1000] range and are
 denormalized to [0, 1] for BenchmarkAction compatibility.
 
+The prompt format is aligned with the training data produced by
+``openadapt_ml.training.convert_demos`` so that fine-tuned checkpoints
+see the same structure at inference time.
+
 Action space (Qwen3-VL format):
     click(x=500, y=300)
     double_click(x=500, y=300)
@@ -23,11 +27,13 @@ Usage:
 
     # With demo conditioning
     agent = Qwen3VLAgent(demo="Step 0: click(x=450, y=950)...")
+
+    # Fine-tuned checkpoint
+    agent = Qwen3VLAgent(model_path="/path/to/finetuned/checkpoint")
 """
 
 from __future__ import annotations
 
-import base64
 import logging
 import re
 from io import BytesIO
@@ -43,17 +49,25 @@ from openadapt_evals.agents.base import BenchmarkAgent
 
 logger = logging.getLogger("openadapt_evals.agents.qwen3vl")
 
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
 DEFAULT_MODEL = "Qwen/Qwen3-VL-8B-Instruct"
 
+# Coordinate scale used by Qwen3-VL
+QWEN_COORD_SCALE = 1000
+
+# System prompt — MUST match openadapt_ml.training.convert_demos.SYSTEM_PROMPT
 SYSTEM_PROMPT = (
     "You are a GUI agent. You observe screenshots of a desktop and output "
     "exactly one action per step. Use the following action format:\n"
     "click(x=<int>, y=<int>)\n"
     "double_click(x=<int>, y=<int>)\n"
     "right_click(x=<int>, y=<int>)\n"
-    "type(text=\"<string>\")\n"
-    "press(keys=[\"<key1>\", ...])\n"
-    "scroll(direction=\"<up|down|left|right>\", amount=<int>)\n"
+    'type(text="<string>")\n'
+    'press(keys=["<key1>", ...])\n'
+    'scroll(direction="<up|down|left|right>", amount=<int>)\n'
     "drag(from_coord=[<x1>, <y1>], to_coord=[<x2>, <y2>])\n"
     "wait()\n"
     "finished()\n\n"
@@ -61,7 +75,10 @@ SYSTEM_PROMPT = (
     "(1000,1000) is bottom-right."
 )
 
-# Regex patterns for parsing Qwen3-VL action output
+# ---------------------------------------------------------------------------
+# Compiled regex patterns for action parsing
+# ---------------------------------------------------------------------------
+
 _RE_CLICK = re.compile(
     r"(?:click|left_click)\s*\(\s*x\s*=\s*(\d+)\s*,\s*y\s*=\s*(\d+)\s*\)",
     re.IGNORECASE,
@@ -75,15 +92,15 @@ _RE_RIGHT_CLICK = re.compile(
     re.IGNORECASE,
 )
 _RE_TYPE = re.compile(
-    r"type\s*\(\s*text\s*=\s*[\"'](.+?)[\"']\s*\)",
+    r'type\s*\(\s*text\s*=\s*"((?:[^"\\]|\\.)*)"\s*\)',
     re.IGNORECASE,
 )
 _RE_PRESS = re.compile(
-    r"press\s*\(\s*keys\s*=\s*\[([^\]]+)\]\s*\)",
+    r"press\s*\(\s*keys\s*=\s*\[([^\]]*)\]\s*\)",
     re.IGNORECASE,
 )
 _RE_SCROLL = re.compile(
-    r"scroll\s*\(\s*direction\s*=\s*[\"'](\w+)[\"']\s*"
+    r'scroll\s*\(\s*direction\s*=\s*"(\w+)"\s*'
     r"(?:,\s*amount\s*=\s*(\d+)\s*)?\)",
     re.IGNORECASE,
 )
@@ -97,87 +114,152 @@ _RE_FINISHED = re.compile(r"finished\s*\(\s*\)", re.IGNORECASE)
 _RE_THINK = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 
 
-def parse_qwen_action(response: str) -> BenchmarkAction:
-    """Parse a Qwen3-VL action string into BenchmarkAction.
+# ---------------------------------------------------------------------------
+# Action parsing (standalone, used by both agent and tests)
+# ---------------------------------------------------------------------------
 
-    Coordinates remain in [0, 1000] range — caller must denormalize.
+
+def _denorm_coord(x_qwen: int, y_qwen: int) -> tuple[float, float]:
+    """Denormalize coordinates from Qwen [0, 1000] to [0, 1].
 
     Args:
-        response: Raw model output text.
+        x_qwen: X coordinate in [0, 1000] range.
+        y_qwen: Y coordinate in [0, 1000] range.
 
     Returns:
-        BenchmarkAction with coordinates in [0, 1000] range.
+        Tuple of (x_norm, y_norm) in [0, 1] range.
+    """
+    return x_qwen / QWEN_COORD_SCALE, y_qwen / QWEN_COORD_SCALE
+
+
+def _extract_action_string(response: str) -> str | None:
+    """Extract the action string from model response, stripping think blocks.
+
+    Args:
+        response: Raw model response text.
+
+    Returns:
+        Action string (e.g. ``"click(x=500, y=300)"``) or None.
+    """
+    # Strip <think>...</think> blocks
+    text = _RE_THINK.sub("", response).strip()
+    if not text:
+        return None
+
+    # Take the first line that looks like a known action
+    for line in text.splitlines():
+        line = line.strip()
+        if line and re.match(
+            r"(click|left_click|double_click|right_click|type|press"
+            r"|scroll|drag|wait|finished)\s*\(",
+            line,
+            re.IGNORECASE,
+        ):
+            return line
+
+    # Fallback: return entire stripped text
+    return text if text else None
+
+
+def parse_qwen_action(
+    response: str,
+    viewport: tuple[int, int] | None = None,
+) -> BenchmarkAction:
+    """Parse Qwen3-VL action output into BenchmarkAction.
+
+    Handles all action formats from the SYSTEM_PROMPT. Coordinates are
+    denormalized from [0, 1000] to [0, 1] for BenchmarkAction. The
+    original Qwen-scale coordinates are preserved in ``raw_action``.
+
+    Args:
+        response: Raw model output text (may include ``<think>`` blocks).
+        viewport: Optional ``(width, height)`` of the viewport (stored in
+            ``raw_action`` but not used for coordinate conversion since
+            denormalization targets [0, 1] independent of viewport).
+
+    Returns:
+        Parsed BenchmarkAction with coordinates in [0, 1] range.
     """
     raw: dict[str, Any] = {"response": response}
+    if viewport:
+        raw["viewport"] = viewport
 
-    # Strip think blocks
+    # Extract and store thinking content
     think_match = _RE_THINK.search(response)
     if think_match:
         raw["thinking"] = think_match.group(1).strip()
-        response = _RE_THINK.sub("", response).strip()
 
-    # finished()
-    if _RE_FINISHED.search(response):
+    # Get the action string (stripping think blocks)
+    action_str = _extract_action_string(response)
+    if action_str:
+        raw["action_string"] = action_str
+    else:
+        raw["parse_error"] = "No action found in response"
         return BenchmarkAction(type="done", raw_action=raw)
 
-    # wait()
-    if _RE_WAIT.search(response):
+    # --- finished() ---
+    if _RE_FINISHED.search(action_str):
+        return BenchmarkAction(type="done", raw_action=raw)
+
+    # --- wait() ---
+    if _RE_WAIT.search(action_str):
         raw["is_wait"] = True
         return BenchmarkAction(type="done", raw_action=raw)
 
-    # double_click (check before click)
-    m = _RE_DOUBLE_CLICK.search(response)
+    # --- double_click(x=<int>, y=<int>) --- (check before click)
+    m = _RE_DOUBLE_CLICK.search(action_str)
     if m:
+        x_q, y_q = int(m.group(1)), int(m.group(2))
+        x_n, y_n = _denorm_coord(x_q, y_q)
         raw["click_variant"] = "double_click"
+        raw["qwen_coords"] = {"x": x_q, "y": y_q}
         return BenchmarkAction(
-            type="click",
-            x=float(m.group(1)),
-            y=float(m.group(2)),
-            raw_action=raw,
+            type="click", x=x_n, y=y_n, raw_action=raw
         )
 
-    # right_click (check before click)
-    m = _RE_RIGHT_CLICK.search(response)
+    # --- right_click(x=<int>, y=<int>) --- (check before click)
+    m = _RE_RIGHT_CLICK.search(action_str)
     if m:
+        x_q, y_q = int(m.group(1)), int(m.group(2))
+        x_n, y_n = _denorm_coord(x_q, y_q)
         raw["click_variant"] = "right_click"
+        raw["qwen_coords"] = {"x": x_q, "y": y_q}
         return BenchmarkAction(
-            type="click",
-            x=float(m.group(1)),
-            y=float(m.group(2)),
-            raw_action=raw,
+            type="click", x=x_n, y=y_n, raw_action=raw
         )
 
-    # click
-    m = _RE_CLICK.search(response)
+    # --- click(x=<int>, y=<int>) ---
+    m = _RE_CLICK.search(action_str)
     if m:
+        x_q, y_q = int(m.group(1)), int(m.group(2))
+        x_n, y_n = _denorm_coord(x_q, y_q)
+        raw["qwen_coords"] = {"x": x_q, "y": y_q}
         return BenchmarkAction(
-            type="click",
-            x=float(m.group(1)),
-            y=float(m.group(2)),
-            raw_action=raw,
+            type="click", x=x_n, y=y_n, raw_action=raw
         )
 
-    # type
-    m = _RE_TYPE.search(response)
+    # --- type(text="<string>") ---
+    m = _RE_TYPE.search(action_str)
     if m:
-        return BenchmarkAction(type="type", text=m.group(1), raw_action=raw)
+        text = m.group(1).replace('\\"', '"').replace("\\\\", "\\")
+        return BenchmarkAction(type="type", text=text, raw_action=raw)
 
-    # press
-    m = _RE_PRESS.search(response)
+    # --- press(keys=["<key1>", ...]) ---
+    m = _RE_PRESS.search(action_str)
     if m:
         keys_str = m.group(1)
-        keys = [k.strip().strip("\"'") for k in keys_str.split(",")]
+        keys = [k.strip().strip("\"'") for k in keys_str.split(",") if k.strip()]
         if len(keys) == 1:
             return BenchmarkAction(type="key", key=keys[0], raw_action=raw)
-        return BenchmarkAction(
-            type="key",
-            key=keys[-1],
-            modifiers=keys[:-1],
-            raw_action=raw,
-        )
+        elif len(keys) > 1:
+            return BenchmarkAction(
+                type="key", key=keys[-1], modifiers=keys[:-1], raw_action=raw
+            )
+        raw["parse_error"] = "Empty keys list in press()"
+        return BenchmarkAction(type="done", raw_action=raw)
 
-    # scroll
-    m = _RE_SCROLL.search(response)
+    # --- scroll(direction="<dir>", amount=<int>) ---
+    m = _RE_SCROLL.search(action_str)
     if m:
         direction = m.group(1).lower()
         amount = int(m.group(2)) if m.group(2) else 3
@@ -188,73 +270,56 @@ def parse_qwen_action(response: str) -> BenchmarkAction:
             raw_action=raw,
         )
 
-    # drag
-    m = _RE_DRAG.search(response)
+    # --- drag(from_coord=[<x1>, <y1>], to_coord=[<x2>, <y2>]) ---
+    m = _RE_DRAG.search(action_str)
     if m:
+        fx, fy = int(m.group(1)), int(m.group(2))
+        tx, ty = int(m.group(3)), int(m.group(4))
+        fx_n, fy_n = _denorm_coord(fx, fy)
+        tx_n, ty_n = _denorm_coord(tx, ty)
+        raw["qwen_coords"] = {
+            "from": {"x": fx, "y": fy},
+            "to": {"x": tx, "y": ty},
+        }
         return BenchmarkAction(
             type="drag",
-            x=float(m.group(1)),
-            y=float(m.group(2)),
-            end_x=float(m.group(3)),
-            end_y=float(m.group(4)),
+            x=fx_n, y=fy_n,
+            end_x=tx_n, end_y=ty_n,
             raw_action=raw,
         )
 
-    # Could not parse
-    raw["parse_error"] = "No action pattern found"
+    # Unknown action format
+    raw["parse_error"] = f"Unknown action format: {action_str}"
     return BenchmarkAction(type="done", raw_action=raw)
 
 
-def denormalize_action(
-    action: BenchmarkAction, viewport: tuple[int, int]
-) -> BenchmarkAction:
-    """Convert coordinates from [0, 1000] to normalized [0, 1].
-
-    Args:
-        action: Action with coordinates in [0, 1000] range.
-        viewport: (width, height) of the display.
-
-    Returns:
-        New BenchmarkAction with coordinates in [0, 1] range.
-    """
-    x = action.x / 1000.0 if action.x is not None else None
-    y = action.y / 1000.0 if action.y is not None else None
-    end_x = action.end_x / 1000.0 if action.end_x is not None else None
-    end_y = action.end_y / 1000.0 if action.end_y is not None else None
-
-    return BenchmarkAction(
-        type=action.type,
-        x=x,
-        y=y,
-        end_x=end_x,
-        end_y=end_y,
-        text=action.text,
-        key=action.key,
-        modifiers=action.modifiers,
-        scroll_direction=action.scroll_direction,
-        scroll_amount=action.scroll_amount,
-        target_node_id=action.target_node_id,
-        target_bbox=action.target_bbox,
-        target_role=action.target_role,
-        target_name=action.target_name,
-        answer=action.answer,
-        raw_action=action.raw_action,
-    )
+# ---------------------------------------------------------------------------
+# Agent class
+# ---------------------------------------------------------------------------
 
 
 class Qwen3VLAgent(BenchmarkAgent):
     """Agent using Qwen3-VL for local GUI agent inference.
 
-    Loads the model via transformers and runs inference locally.
-    Coordinates use the Qwen normalized [0, 1000] range internally
-    and are converted to [0, 1] for BenchmarkAction output.
+    Loads the model via HuggingFace transformers and runs inference locally.
+    Coordinates use the Qwen normalized [0, 1000] range internally and are
+    converted to [0, 1] for BenchmarkAction output.
+
+    The prompt format matches ``openadapt_ml.training.convert_demos`` so
+    fine-tuned checkpoints see the same structure at inference time.
 
     Args:
         model_path: HuggingFace model ID or local checkpoint path.
+            Defaults to ``Qwen/Qwen3-VL-8B-Instruct``.
         demo: Optional demonstration text for demo-conditioned inference.
-        use_thinking: Enable thinking mode with <think> blocks.
-        device: Torch device ('cuda', 'cpu', 'auto').
+            Included at every step (not just step 0) following the
+            pattern established by ApiAgent.
+        use_thinking: Enable thinking mode with ``<think>`` blocks.
+        device: Torch device (``"cuda"``, ``"cpu"``, ``"auto"``).
         max_new_tokens: Maximum tokens to generate per step.
+        torch_dtype: Torch dtype string (``"auto"``, ``"float16"``, ``"bfloat16"``).
+        min_pixels: Minimum image pixels for Qwen3-VL processor.
+        max_pixels: Maximum image pixels for Qwen3-VL processor.
     """
 
     def __init__(
@@ -264,17 +329,26 @@ class Qwen3VLAgent(BenchmarkAgent):
         use_thinking: bool = False,
         device: str = "auto",
         max_new_tokens: int = 512,
+        torch_dtype: str = "auto",
+        min_pixels: int = 256 * 28 * 28,
+        max_pixels: int = 1280 * 28 * 28,
     ):
         self.model_path = model_path or DEFAULT_MODEL
         self.demo = demo
         self.use_thinking = use_thinking
         self.device = device
         self.max_new_tokens = max_new_tokens
+        self.torch_dtype = torch_dtype
+        self.min_pixels = min_pixels
+        self.max_pixels = max_pixels
 
+        # State across steps within an episode
+        self._previous_actions: list[str] = []
+        self._step_count = 0
+
+        # Lazy-loaded model and processor
         self._model = None
         self._processor = None
-        self._step_count = 0
-        self._action_history: list[str] = []
 
         logger.info(
             f"Qwen3VLAgent initialized: model={self.model_path}, "
@@ -284,45 +358,74 @@ class Qwen3VLAgent(BenchmarkAgent):
             logger.info(f"Demo provided ({len(self.demo)} chars)")
 
     def _load_model(self) -> None:
-        """Lazy-load model and processor on first use."""
+        """Lazy-load model and processor on first inference call.
+
+        Raises:
+            RuntimeError: If transformers/torch is not installed or model
+                loading fails.
+        """
         if self._model is not None:
             return
 
         try:
-            from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
-        except ImportError:
+            import torch
+            from transformers import AutoProcessor
+        except ImportError as e:
             raise RuntimeError(
-                "transformers package required. "
+                "Qwen3VLAgent requires transformers and torch. "
                 "Install with: pip install transformers torch"
-            )
+            ) from e
+
+        # Resolve torch dtype
+        dtype_map = {
+            "auto": "auto",
+            "float16": torch.float16,
+            "fp16": torch.float16,
+            "bfloat16": torch.bfloat16,
+            "bf16": torch.bfloat16,
+            "float32": torch.float32,
+            "fp32": torch.float32,
+        }
+        resolved_dtype = dtype_map.get(self.torch_dtype, "auto")
 
         logger.info(f"Loading model: {self.model_path}")
 
-        # Qwen3-VL uses the same architecture class as Qwen2.5-VL in transformers
-        # The class may be Qwen2_5_VLForConditionalGeneration or
-        # AutoModelForVision2Seq depending on transformers version
+        # Qwen3-VL uses the same architecture class as Qwen2.5-VL in
+        # current transformers versions. Try AutoModelForVision2Seq first
+        # (more generic), then fall back to the specific class.
         try:
             from transformers import AutoModelForVision2Seq
 
             self._model = AutoModelForVision2Seq.from_pretrained(
                 self.model_path,
-                torch_dtype="auto",
+                torch_dtype=resolved_dtype,
                 device_map=self.device,
             )
         except Exception:
+            from transformers import Qwen2_5_VLForConditionalGeneration
+
             self._model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
                 self.model_path,
-                torch_dtype="auto",
+                torch_dtype=resolved_dtype,
                 device_map=self.device,
             )
 
-        self._processor = AutoProcessor.from_pretrained(self.model_path)
+        self._processor = AutoProcessor.from_pretrained(
+            self.model_path,
+            min_pixels=self.min_pixels,
+            max_pixels=self.max_pixels,
+        )
+
         logger.info("Model loaded successfully")
 
     def reset(self) -> None:
-        """Reset agent state between episodes."""
+        """Reset agent state between episodes.
+
+        Note: demo is NOT reset -- it persists across resets if set.
+        """
         self._step_count = 0
-        self._action_history = []
+        self._previous_actions = []
+        logger.debug("Qwen3VLAgent reset")
 
     def act(
         self,
@@ -332,76 +435,102 @@ class Qwen3VLAgent(BenchmarkAgent):
     ) -> BenchmarkAction:
         """Given observation and task, return next action.
 
+        Builds a prompt matching the training format from convert_demos,
+        runs Qwen3-VL inference, and parses the output into a
+        BenchmarkAction with coordinates denormalized to [0, 1].
+
         Args:
             observation: Current observation from the environment.
             task: Task being performed.
             history: Optional list of previous (observation, action) pairs.
 
         Returns:
-            Action to execute with coordinates in [0, 1] range.
+            BenchmarkAction to execute.
         """
         self._load_model()
         self._step_count += 1
 
-        prompt = self._build_prompt(observation, task, history)
+        # Get screenshot as PIL Image
         image = self._get_image(observation)
-        response = self._run_inference(prompt, image)
+        if image is None:
+            logger.error("No screenshot available in observation")
+            return BenchmarkAction(
+                type="done", raw_action={"error": "no_screenshot"}
+            )
 
-        logger.debug(f"Step {self._step_count} response: {response}")
+        # Build user content (aligned with convert_demos training format)
+        user_content = self._build_prompt(task.instruction)
 
-        action = parse_qwen_action(response)
+        # Build chat messages and run inference
+        messages = self._build_messages(user_content)
+        try:
+            response_text = self._run_inference(messages, image)
+        except Exception as e:
+            logger.error(f"Inference failed: {e}")
+            return BenchmarkAction(
+                type="done", raw_action={"error": f"inference_failed: {e}"}
+            )
 
-        # Track action history for next prompt
-        self._action_history.append(response.strip())
+        logger.info(f"Step {self._step_count} raw response: {response_text!r}")
 
-        # Denormalize coordinates from [0, 1000] to [0, 1]
-        viewport = observation.viewport or (1280, 720)
-        if action.type in ("click", "drag") and action.x is not None:
-            action = denormalize_action(action, viewport)
+        # Parse the response into a BenchmarkAction (with denormalization)
+        action = parse_qwen_action(response_text, observation.viewport)
+
+        # Track the parsed action string for history in next prompt
+        action_str = _extract_action_string(response_text)
+        if action_str:
+            self._previous_actions.append(action_str)
+
+        # Annotate raw_action with step number
+        if action.raw_action is None:
+            action.raw_action = {}
+        action.raw_action["step"] = self._step_count
 
         return action
 
-    def _build_prompt(
-        self,
-        observation: BenchmarkObservation,
-        task: BenchmarkTask,
-        history: list[tuple[BenchmarkObservation, BenchmarkAction]] | None = None,
-    ) -> str:
-        """Build the user turn text for inference.
+    def _build_prompt(self, instruction: str) -> str:
+        """Build the user-turn text, aligned with convert_demos.convert_step.
 
-        The format is aligned with the training data produced by
-        convert_demos.py so the model sees the same structure at
-        training and inference time. The system prompt is added
-        separately in _run_inference().
+        The format matches the training data exactly::
+
+            <image>
+            Instruction: {instruction}
+
+            Previous actions:
+              Step 0: {action}
+              Step 1: {action}
+
+            First reason about what you see in <think>...</think> tags,
+            then output exactly one action.
+
+        When a demo is provided, it is injected after the instruction
+        and before the previous actions (demo-conditioned inference).
 
         Args:
-            observation: Current observation.
-            task: Current task.
-            history: Optional action history.
+            instruction: Task instruction text.
 
         Returns:
-            Formatted user turn string.
+            User content string.
         """
-        parts = []
+        parts = ["<image>"]
+        parts.append(f"Instruction: {instruction}")
 
-        # Demo injection (inference-only; not present in training data)
+        # Demo injection (included at every step, not just step 0)
         if self.demo:
-            parts.append(
-                "Here is a demonstration of a similar completed task:\n"
-            )
-            parts.append(self.demo)
             parts.append("")
-            parts.append("Now complete this task:")
+            parts.append(
+                "Demonstration (follow this pattern):\n"
+                f"{self.demo}"
+            )
 
-        parts.append(f"Instruction: {task.instruction}")
-
-        # Action history
-        if self._action_history:
+        # Previous actions
+        if self._previous_actions:
             parts.append("")
             parts.append("Previous actions:")
-            for i, act_str in enumerate(self._action_history):
-                parts.append(f"  Step {i}: {act_str}")
+            for i, act in enumerate(self._previous_actions):
+                parts.append(f"  Step {i}: {act}")
 
+        # Tail instruction
         parts.append("")
         if self.use_thinking:
             parts.append(
@@ -413,6 +542,28 @@ class Qwen3VLAgent(BenchmarkAgent):
 
         return "\n".join(parts)
 
+    def _build_messages(
+        self, user_content: str
+    ) -> list[dict[str, Any]]:
+        """Build chat messages for the Qwen3-VL processor.
+
+        Args:
+            user_content: User message content string (from ``_build_prompt``).
+
+        Returns:
+            List of message dicts for ``apply_chat_template``.
+        """
+        return [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image"},
+                    {"type": "text", "text": user_content},
+                ],
+            },
+        ]
+
     def _get_image(self, observation: BenchmarkObservation):
         """Extract PIL Image from observation.
 
@@ -420,7 +571,7 @@ class Qwen3VLAgent(BenchmarkAgent):
             observation: Current observation.
 
         Returns:
-            PIL Image or None.
+            PIL.Image.Image or None.
         """
         from PIL import Image
 
@@ -434,68 +585,72 @@ class Qwen3VLAgent(BenchmarkAgent):
         if screenshot_bytes is None:
             return None
 
-        return Image.open(BytesIO(screenshot_bytes)).convert("RGB")
+        try:
+            return Image.open(BytesIO(screenshot_bytes)).convert("RGB")
+        except Exception as e:
+            logger.warning(f"Failed to open screenshot: {e}")
+            return None
 
-    def _run_inference(self, prompt: str, image) -> str:
-        """Run model inference.
+    def _run_inference(
+        self,
+        messages: list[dict[str, Any]],
+        image: Any,
+    ) -> str:
+        """Run model inference with the given messages and image.
 
         Args:
-            prompt: User turn text (from _build_prompt).
-            image: PIL Image or None.
+            messages: Chat messages (system + user with image placeholder).
+            image: PIL Image for the current screenshot.
 
         Returns:
             Generated text response.
         """
-        # Build messages in the Qwen VL chat format with system role
-        content: list[dict[str, Any]] = []
-        if image is not None:
-            content.append({"type": "image", "image": image})
-        content.append({"type": "text", "text": prompt})
+        import torch
 
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": content},
-        ]
-
+        # Apply chat template to get the full prompt text
         text = self._processor.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
 
-        if image is not None:
-            from qwen_vl_utils import process_vision_info
-
-            image_inputs, video_inputs = process_vision_info(messages)
-            inputs = self._processor(
-                text=[text],
-                images=image_inputs,
-                videos=video_inputs,
-                padding=True,
-                return_tensors="pt",
-            )
-        else:
-            inputs = self._processor(
-                text=[text],
-                padding=True,
-                return_tensors="pt",
-            )
-
-        inputs = inputs.to(self._model.device)
-
-        generated_ids = self._model.generate(
-            **inputs,
-            max_new_tokens=self.max_new_tokens,
+        # Process inputs (image + text)
+        # The processor handles image embedding via the message format
+        inputs = self._processor(
+            text=[text],
+            images=[image],
+            padding=True,
+            return_tensors="pt",
         )
 
-        # Trim prompt tokens from output
-        generated_ids_trimmed = [
-            out_ids[len(in_ids):]
-            for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
-        ]
+        # Move to model device
+        device = next(self._model.parameters()).device
+        inputs = inputs.to(device)
 
-        output = self._processor.batch_decode(
-            generated_ids_trimmed,
+        # Generate
+        with torch.no_grad():
+            output_ids = self._model.generate(
+                **inputs,
+                max_new_tokens=self.max_new_tokens,
+            )
+
+        # Decode only the generated tokens (trim prompt)
+        input_len = inputs["input_ids"].shape[1]
+        generated_ids = output_ids[:, input_len:]
+        response = self._processor.batch_decode(
+            generated_ids,
             skip_special_tokens=True,
             clean_up_tokenization_spaces=False,
-        )
+        )[0]
 
-        return output[0] if output else ""
+        return response.strip()
+
+    def set_demo(self, demo: str) -> None:
+        """Set or update the demonstration trajectory.
+
+        Allows setting the demo after initialization, useful for
+        dynamic demo retrieval.
+
+        Args:
+            demo: Demonstration text to include at every step.
+        """
+        self.demo = demo
+        logger.info(f"Demo set ({len(demo)} chars) - persists across all steps")
