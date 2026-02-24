@@ -311,6 +311,9 @@ class Qwen3VLAgent(BenchmarkAgent):
     Args:
         model_path: HuggingFace model ID or local checkpoint path.
             Defaults to ``Qwen/Qwen3-VL-8B-Instruct``.
+        model_endpoint: Remote inference endpoint. Set to ``"modal"``
+            to use Modal cloud GPU, or an HTTP URL for a custom server.
+            When set, model is NOT loaded locally.
         demo: Optional demonstration text for demo-conditioned inference.
             Included at every step (not just step 0) following the
             pattern established by ApiAgent.
@@ -325,6 +328,7 @@ class Qwen3VLAgent(BenchmarkAgent):
     def __init__(
         self,
         model_path: str | None = None,
+        model_endpoint: str | None = None,
         demo: str | None = None,
         use_thinking: bool = False,
         device: str = "auto",
@@ -334,6 +338,7 @@ class Qwen3VLAgent(BenchmarkAgent):
         max_pixels: int = 1280 * 28 * 28,
     ):
         self.model_path = model_path or DEFAULT_MODEL
+        self.model_endpoint = model_endpoint
         self.demo = demo
         self.use_thinking = use_thinking
         self.device = device
@@ -352,6 +357,7 @@ class Qwen3VLAgent(BenchmarkAgent):
 
         logger.info(
             f"Qwen3VLAgent initialized: model={self.model_path}, "
+            f"endpoint={self.model_endpoint}, "
             f"thinking={self.use_thinking}, device={self.device}"
         )
         if self.demo:
@@ -480,7 +486,8 @@ class Qwen3VLAgent(BenchmarkAgent):
         Returns:
             BenchmarkAction to execute.
         """
-        self._load_model()
+        if not self.model_endpoint:
+            self._load_model()
         self._step_count += 1
 
         # Get screenshot as PIL Image
@@ -497,7 +504,10 @@ class Qwen3VLAgent(BenchmarkAgent):
         # Build chat messages and run inference
         messages = self._build_messages(user_content)
         try:
-            response_text = self._run_inference(messages, image)
+            if self.model_endpoint:
+                response_text = self._run_remote_inference(messages, image)
+            else:
+                response_text = self._run_inference(messages, image)
         except Exception as e:
             logger.error(f"Inference failed: {e}")
             return BenchmarkAction(
@@ -675,6 +685,84 @@ class Qwen3VLAgent(BenchmarkAgent):
         )[0]
 
         return response.strip()
+
+    def _run_remote_inference(
+        self,
+        messages: list[dict[str, Any]],
+        image: Any,
+    ) -> str:
+        """Run inference via a remote endpoint (Modal or HTTP).
+
+        Args:
+            messages: Chat messages (system + user with image placeholder).
+            image: PIL Image for the current screenshot.
+
+        Returns:
+            Generated text response.
+        """
+        import base64
+        import json
+
+        # Encode image to base64
+        buf = BytesIO()
+        image.save(buf, format="PNG")
+        image_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+
+        # Flatten messages for remote call (strip image dicts, keep text)
+        remote_messages = []
+        for msg in messages:
+            if isinstance(msg.get("content"), list):
+                # User message with image + text parts
+                text_parts = [
+                    p["text"] for p in msg["content"] if p.get("type") == "text"
+                ]
+                remote_messages.append(
+                    {"role": msg["role"], "content": "\n".join(text_parts)}
+                )
+            else:
+                remote_messages.append(msg)
+
+        if self.model_endpoint == "modal":
+            # Use Modal's call_inference function
+            from openadapt_ml.cloud.modal_cloud import call_inference
+
+            # Determine adapter path from model_path if it's a PEFT adapter
+            adapter_path = None
+            adapter_config = Path(self.model_path) / "adapter_config.json"
+            if adapter_config.exists():
+                # Read base model from adapter config
+                with open(adapter_config) as f:
+                    cfg = json.load(f)
+                base_model = cfg.get("base_model_name_or_path", DEFAULT_MODEL)
+                # Adapter is assumed to be uploaded to volume at /training/results/final
+                adapter_path = "/training/results/final"
+            else:
+                base_model = self.model_path
+
+            response = call_inference(
+                messages=remote_messages,
+                image_base64=image_b64,
+                max_new_tokens=self.max_new_tokens,
+                adapter_path=adapter_path,
+                base_model=base_model,
+            )
+            return response
+        else:
+            # HTTP endpoint
+            import requests
+
+            payload = {
+                "messages": remote_messages,
+                "image_base64": image_b64,
+                "max_new_tokens": self.max_new_tokens,
+            }
+            resp = requests.post(
+                f"{self.model_endpoint}/infer",
+                json=payload,
+                timeout=120,
+            )
+            resp.raise_for_status()
+            return resp.json().get("response", "")
 
     def set_demo(self, demo: str) -> None:
         """Set or update the demonstration trajectory.

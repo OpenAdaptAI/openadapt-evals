@@ -635,3 +635,34 @@ class TestPEFTAdapterLoading:
 
         base = cfg.get("base_model_name_or_path", DEFAULT_MODEL)
         assert base == DEFAULT_MODEL
+
+
+# ---------------------------------------------------------------------------
+# Remote inference tests
+# ---------------------------------------------------------------------------
+
+
+class TestRemoteInference:
+    """Test remote inference via model_endpoint."""
+
+    def test_modal_endpoint_skips_local_model_loading(self):
+        """When model_endpoint='modal', _load_model is not called in act."""
+        agent = Qwen3VLAgent(model_endpoint="modal")
+        assert agent.model_endpoint == "modal"
+        # Model should not be loaded
+        assert agent._model is None
+
+    def test_http_endpoint_stored(self):
+        """HTTP endpoint is stored correctly."""
+        agent = Qwen3VLAgent(model_endpoint="http://localhost:8080")
+        assert agent.model_endpoint == "http://localhost:8080"
+
+    def test_no_endpoint_defaults_to_none(self):
+        """Default model_endpoint is None (local inference)."""
+        agent = Qwen3VLAgent()
+        assert agent.model_endpoint is None
+
+    def test_endpoint_in_repr(self):
+        """model_endpoint is included in agent info."""
+        agent = Qwen3VLAgent(model_endpoint="modal")
+        assert agent.model_endpoint == "modal"
