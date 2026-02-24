@@ -1,6 +1,21 @@
 # CHANGELOG
 
 
+## v0.7.0 (2026-02-24)
+
+### Features
+
+- **qwen3vl**: Add remote inference via Modal and HTTP endpoints
+  ([`d85363b`](https://github.com/OpenAdaptAI/openadapt-evals/commit/d85363ba507eafb2350f58dd9997846c0c20018f))
+
+- Add model_endpoint parameter to Qwen3VLAgent for remote inference - Support 'modal' endpoint (uses
+  openadapt_ml.cloud.modal_cloud.call_inference) - Support HTTP endpoint (POST /infer with messages
+  + image_base64) - Add --model-endpoint flag to mock, run, live, eval-suite CLI commands - When
+  using remote endpoint, model is not loaded locally - Encode screenshot as base64 PNG for transport
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.6.0 (2026-02-24)
 
 ### Features
