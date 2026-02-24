@@ -22,3 +22,10 @@ demo_library/index.json
 
 # Live benchmark state (changes during execution)
 benchmark_live.json
+
+# Vim swap files
+*.swp
+*.swo
+
+# Cost reports (generated during evaluation runs)
+cost_report.json

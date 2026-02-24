@@ -23,13 +23,16 @@ Example:
 from __future__ import annotations
 
 import logging
+import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable
 
 from openadapt_evals.infrastructure.azure_vm import (
+    SSH_OPTS,
     AzureVMManager,
     ssh_run,
     wait_for_ssh,
@@ -84,35 +87,43 @@ sudo systemctl start docker
 sudo docker pull dockurr/windows:latest
 sudo docker pull windowsarena/winarena:latest
 
-# Build waa-auto image that has working auto-download
-mkdir -p /tmp/waa-build
-cat > /tmp/waa-build/Dockerfile << 'DOCKERFILE_EOF'
-FROM dockurr/windows:latest
-COPY --from=windowsarena/winarena:latest /entry.sh /entry.sh
-COPY --from=windowsarena/winarena:latest /entry_setup.sh /entry_setup.sh
-COPY --from=windowsarena/winarena:latest /start_client.sh /start_client.sh
-COPY --from=windowsarena/winarena:latest /client /client
-COPY --from=windowsarena/winarena:latest /models /models
-COPY --from=windowsarena/winarena:latest /oem /oem
-COPY --from=windowsarena/winarena:latest /usr/local/bin/python* /usr/local/bin/
-COPY --from=windowsarena/winarena:latest /usr/local/bin/pip* /usr/local/bin/
-COPY --from=windowsarena/winarena:latest /usr/local/lib/python3.9 /usr/local/lib/python3.9
-COPY --from=windowsarena/winarena:latest /usr/local/lib/libpython3.9.so* /usr/local/lib/
-RUN ldconfig && \\
-    ln -sf /usr/local/bin/python3.9 /usr/local/bin/python && \\
-    ln -sf /usr/local/bin/python3.9 /usr/bin/python && \\
-    ln -sf /usr/local/bin/pip3.9 /usr/local/bin/pip
-RUN sed -i '/^return 0$/i cp -r /oem/* /tmp/smb/ 2>/dev/null || true' /run/samba.sh
-RUN printf '#!/bin/bash\\n/usr/bin/tini -s /run/entry.sh\\n' > /start_vm.sh && chmod +x /start_vm.sh
-RUN sed -i 's|20.20.20.21|172.30.0.2|g' /entry_setup.sh /entry.sh /start_client.sh
-RUN find /client -name "*.py" -exec sed -i 's|20.20.20.21|172.30.0.2|g' {} \\;
-RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr libgl1 libglib2.0-0 && rm -rf /var/lib/apt/lists/*
-ENV VERSION="11e" RAM_SIZE="8G" CPU_CORES="4"
-ENTRYPOINT ["/usr/bin/tini", "-s", "/run/entry.sh"]
-DOCKERFILE_EOF
-
+# Build waa-auto image from Dockerfile uploaded via SCP
+# (build context at /tmp/waa-build/ contains Dockerfile + supporting files)
 sudo docker build -t waa-auto:latest /tmp/waa-build/
 rm -rf /tmp/waa-build
+"""
+
+# Docker setup script that pulls pre-built image from ACR instead of building
+DOCKER_SETUP_SCRIPT_WITH_ACR = """
+set -e
+
+# Wait for apt lock (unattended upgrades on fresh VMs)
+echo "Waiting for apt lock..."
+while sudo fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+    sleep 5
+done
+echo "Apt lock released"
+
+sudo apt-get update -qq
+sudo apt-get install -y -qq docker.io
+sudo systemctl start docker
+sudo systemctl enable docker
+sudo usermod -aG docker $USER
+
+# Configure Docker to use /mnt (larger temp disk)
+sudo systemctl stop docker
+sudo mkdir -p /mnt/docker
+sudo bash -c 'echo "{{\\"data-root\\": \\"/mnt/docker\\"}}" > /etc/docker/daemon.json'
+sudo systemctl start docker
+
+# Pull pre-built image from ACR (faster than building)
+echo "Pulling pre-built image from ACR..."
+sudo docker login {acr_login_server} -u {acr_username} -p '{acr_password}'
+sudo docker pull {acr_login_server}/waa-auto:latest
+sudo docker tag {acr_login_server}/waa-auto:latest waa-auto:latest
+
+# Pull base images (needed for WAA container)
+sudo docker pull dockurr/windows:latest
 """
 
 # WAA container start script
@@ -125,23 +136,32 @@ fi
 
 # Container not running, start it
 docker rm -f winarena 2>/dev/null || true
-sudo mkdir -p /mnt/waa-storage
-sudo chown azureuser:azureuser /mnt/waa-storage
+sudo mkdir -p /home/azureuser/waa-storage
+sudo chown azureuser:azureuser /home/azureuser/waa-storage
 docker run -d --name winarena \\
   --device=/dev/kvm \\
   --cap-add NET_ADMIN \\
   --stop-timeout 120 \\
   -p 5000:5000 \\
+  -p 5050:5050 \\
   -p 8006:8006 \\
   -p 7200:7200 \\
-  -v /mnt/waa-storage:/storage \\
+  -v /home/azureuser/waa-storage:/storage \\
   -e VERSION=11e \\
   -e RAM_SIZE=8G \\
   -e CPU_CORES=4 \\
   -e DISK_SIZE=64G \\
+  -e ARGUMENTS="-qmp tcp:0.0.0.0:7200,server,nowait" \\
   --entrypoint /bin/bash \\
   waa-auto:latest \\
-  -c './entry.sh --prepare-image false --start-client false'
+  -c 'cd /client && python /evaluate_server.py > /tmp/evaluate_server.log 2>&1 & /entry.sh --prepare-image false --start-client false'
+
+# Set up socat proxy for evaluate server (Docker port forwarding doesn't work
+# due to QEMU's custom bridge networking with --cap-add NET_ADMIN)
+which socat >/dev/null 2>&1 || sudo apt-get install -y -qq socat
+killall socat 2>/dev/null || true
+sleep 2
+nohup socat TCP-LISTEN:5051,fork,reuseaddr EXEC:"docker exec -i winarena socat - TCP\\:127.0.0.1\\:5050" > /dev/null 2>&1 &
 echo "STARTED"
 """
 
@@ -170,10 +190,25 @@ class PoolManager:
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             print(f"[{timestamp}] [{step}] {message}", end=end, flush=True)
 
+    def _get_acr_password(self, acr_name: str) -> str | None:
+        """Get ACR admin password via az CLI."""
+        try:
+            result = subprocess.run(
+                ["az", "acr", "credential", "show", "--name", acr_name, "--query", "passwords[0].value", "-o", "tsv"],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip()
+        except Exception as e:
+            logger.debug(f"Failed to get ACR password: {e}")
+        return None
+
     def create(
         self,
         workers: int = 3,
         auto_shutdown_hours: int = 4,
+        use_acr: bool = False,
+        image_id: str | None = None,
     ) -> VMPool:
         """Create a pool of VMs for parallel WAA evaluation.
 
@@ -182,6 +217,9 @@ class PoolManager:
         Args:
             workers: Number of worker VMs to create.
             auto_shutdown_hours: Hours until auto-shutdown (safety net).
+            use_acr: If True, pull waa-auto from ACR instead of building.
+            image_id: Azure Managed Image ID. If provided, skip Docker setup
+                (image already has Docker + images pre-baked).
 
         Returns:
             Created VMPool.
@@ -220,6 +258,7 @@ class PoolManager:
                     name=name,
                     region=region,
                     size=vm_size,
+                    image_id=image_id,
                 )
                 ip = vm_info.get("publicIpAddress", "")
                 self.vm_manager.set_auto_shutdown(name, auto_shutdown_hours)
@@ -255,29 +294,68 @@ class PoolManager:
         if not workers_ready:
             raise RuntimeError("No VMs have SSH access")
 
-        # Install Docker on all VMs
-        self._log("POOL", "Installing Docker on all VMs...")
+        # Install Docker on all VMs (skip if using golden image)
+        if image_id:
+            self._log("POOL", "Skipping Docker setup (using golden image)")
+            workers_docker_ok = workers_ready
+        else:
+            self._log("POOL", "Installing Docker on all VMs...")
 
-        def setup_docker(
-            name_ip: tuple[str, str],
-        ) -> tuple[str, bool, str]:
-            name, ip = name_ip
-            result = ssh_run(ip, DOCKER_SETUP_SCRIPT, stream=False, step="DOCKER")
-            error = result.stderr[:200] if result.stderr else ""
-            return (name, result.returncode == 0, error)
+            # Determine which setup script to use
+            docker_script = DOCKER_SETUP_SCRIPT
+            if use_acr:
+                from openadapt_evals.config import settings
+                acr_password = self._get_acr_password(settings.acr_name)
+                if acr_password:
+                    docker_script = DOCKER_SETUP_SCRIPT_WITH_ACR.format(
+                        acr_login_server=settings.acr_login_server,
+                        acr_username=settings.acr_name,
+                        acr_password=acr_password,
+                    )
+                    self._log("POOL", f"Using ACR: {settings.acr_login_server}")
+                else:
+                    self._log("POOL", "WARNING: ACR password not found, falling back to local build")
 
-        with ThreadPoolExecutor(max_workers=min(len(workers_ready), 5)) as executor:
-            futures = {executor.submit(setup_docker, w): w[0] for w in workers_ready}
-            workers_docker_ok: list[tuple[str, str]] = []
-            for future in as_completed(futures):
-                name, success, error = future.result()
-                status = "Docker ready" if success else f"Docker FAILED: {error[:100]}"
-                self._log("POOL", f"  {name}: {status}")
-                if success:
-                    workers_docker_ok.append((name, dict(workers_ready)[name]))
+            def setup_docker(
+                name_ip: tuple[str, str],
+            ) -> tuple[str, bool, str]:
+                name, ip = name_ip
+                if not use_acr:
+                    # Upload Docker build context (Dockerfile + supporting files)
+                    waa_deploy_dir = Path(__file__).parent.parent / "waa_deploy"
+                    subprocess.run(
+                        ["ssh", *SSH_OPTS, f"azureuser@{ip}", "mkdir -p /tmp/waa-build"],
+                        capture_output=True,
+                    )
+                    for fname in [
+                        "Dockerfile",
+                        "evaluate_server.py",
+                        "start_with_evaluate.sh",
+                        "start_waa_server.bat",
+                        "api_agent.py",
+                    ]:
+                        src = waa_deploy_dir / fname
+                        if src.exists():
+                            subprocess.run(
+                                ["scp", *SSH_OPTS, str(src), f"azureuser@{ip}:/tmp/waa-build/"],
+                                capture_output=True,
+                            )
+                result = ssh_run(ip, docker_script, stream=False, step="DOCKER")
+                error = result.stderr[:200] if result.stderr else ""
+                return (name, result.returncode == 0, error)
 
-        if not workers_docker_ok:
-            raise RuntimeError("Docker setup failed on all VMs")
+            with ThreadPoolExecutor(max_workers=min(len(workers_ready), 5)) as executor:
+                futures = {executor.submit(setup_docker, w): w[0] for w in workers_ready}
+                workers_docker_ok: list[tuple[str, str]] = []
+                for future in as_completed(futures):
+                    name, success, error = future.result()
+                    status = "Docker ready" if success else f"Docker FAILED: {error[:100]}"
+                    self._log("POOL", f"  {name}: {status}")
+                    if success:
+                        workers_docker_ok.append((name, dict(workers_ready)[name]))
+
+            if not workers_docker_ok:
+                raise RuntimeError("Docker setup failed on all VMs")
 
         # Register pool
         pool = self.registry.create_pool(
@@ -286,6 +364,14 @@ class PoolManager:
             location=region,
             vm_size=vm_size,
         )
+
+        # Set auto-pause timer
+        if auto_shutdown_hours > 0:
+            from datetime import timedelta
+            auto_pause_at = (datetime.now() + timedelta(hours=auto_shutdown_hours)).isoformat()
+            pool.auto_pause_at = auto_pause_at
+            pool.auto_pause_hours = auto_shutdown_hours
+            self.registry.save()
 
         self._log("POOL", "=" * 60)
         self._log("POOL", f"Pool created: {pool.pool_id}")
@@ -296,6 +382,8 @@ class PoolManager:
             "POOL",
             f"  Est. hourly cost: ${cost * len(workers_docker_ok):.2f}/hr",
         )
+        if auto_shutdown_hours > 0:
+            self._log("POOL", f"  Auto-shutdown: in {auto_shutdown_hours} hours")
         self._log("POOL", "")
         self._log("POOL", "Next steps:")
         self._log("POOL", "  1. Wait for WAA ready: pool-wait")
@@ -372,13 +460,25 @@ class PoolManager:
                     config = VMConfig(
                         name=name,
                         ssh_host=worker.ip,
-                        internal_ip="172.30.0.2",
+                        internal_ip="localhost",
                     )
                     monitor = VMMonitor(config, timeout=5)
                     ready, _response = monitor.check_waa_probe()
 
                     if ready:
-                        self._log("POOL-WAIT", f"  {name}: READY")
+                        # Also check evaluate server (informational)
+                        try:
+                            eval_result = ssh_run(
+                                worker.ip,
+                                "curl -sf http://localhost:5051/probe",
+                                stream=False,
+                                step="EVAL",
+                            )
+                            eval_ok = eval_result.returncode == 0
+                        except Exception:
+                            eval_ok = False
+                        eval_status = ", evaluate: ok" if eval_ok else ", evaluate: not ready"
+                        self._log("POOL-WAIT", f"  {name}: READY{eval_status}")
                         workers_ready.append(worker)
                         del workers_pending[name]
                         self.registry.update_worker(name, waa_ready=True, status="ready")
@@ -497,25 +597,140 @@ class PoolManager:
             return self._run_external_agent(ready_workers, tasks, agent_factory, exp_name)
 
         # Default path: run WAA's built-in agent via docker exec
+        # Uses docker exec -d (detached) + tail -f for streaming.
+        # Process survives SSH drops; tail -f reconnects automatically.
+        stale_timeout = 15 * 60  # Kill if no log activity for 15 minutes
+
         def run_on_worker(
             worker: PoolWorker,
             worker_idx: int,
             total_workers: int,
         ) -> tuple[str, int, int, str | None]:
-            run_cmd = f"""
-docker exec -e OPENAI_API_KEY='{api_key}' winarena bash -c 'cd /client && python run.py \\
-    --agent {agent} \\
-    --model {model} \\
-    --exp_name {exp_name}_{worker.name} \\
-    --worker_id {worker_idx} \\
-    --num_workers {total_workers} \\
-    --emulator_ip 172.30.0.2 2>&1' | tee /home/azureuser/benchmark.log
-"""
-            result = ssh_run(worker.ip, run_cmd, stream=True, step="RUN", log_fn=self.log_fn)
-            if result.returncode == 0:
+            log_file = "/tmp/benchmark.log"
+            exit_file = "/tmp/benchmark.exit"
+
+            # Create a subset test JSON if --tasks limits the count.
+            # WAA's run.py uses --test_all_meta_path to decide which tasks to run.
+            # Without this, it runs ALL 154 tasks regardless of our --tasks flag.
+            test_meta_arg = ""
+            if tasks and tasks < 154:
+                subset_json = "/tmp/test_subset.json"
+                py_cmd = (
+                    f"import json; "
+                    f"data=json.load(open('/client/evaluation_examples_windows/test_all.json')); "
+                    f"pairs=[(d,t) for d in data for t in data[d]][:{tasks}]; "
+                    f"s={{}}; [s.setdefault(d,[]).append(t) for d,t in pairs]; "
+                    f"json.dump(s,open('{subset_json}','w'),indent=2); "
+                    f"print(f'Created subset: {{len(pairs)}} tasks')"
+                )
+                ssh_run(
+                    worker.ip,
+                    f'docker exec winarena python -c "{py_cmd}"',
+                )
+                self._log("RUN", f"  {worker.name}: limited to {tasks} tasks")
+                test_meta_arg = f"--test_all_meta_path {subset_json} "
+
+            # Start benchmark detached inside container (returns immediately)
+            run_cmd = (
+                f"cd /client && python -u run.py "
+                f"--agent {agent} --model {model} "
+                f"--exp_name {exp_name}_{worker.name} "
+                f"--worker_id {worker_idx} --num_workers {total_workers} "
+                f"--emulator_ip 172.30.0.2 {test_meta_arg}"
+                f"> {log_file} 2>&1; echo $? > {exit_file}"
+            )
+            ssh_run(
+                worker.ip,
+                f"docker exec -d -e OPENAI_API_KEY='{api_key}' winarena "
+                f"bash -c '{run_cmd}'",
+            )
+            self._log("RUN", f"  {worker.name}: started (detached), log: {log_file}")
+
+            # Wait for process to start and get its PID
+            time.sleep(3)
+            pid_result = ssh_run(
+                worker.ip,
+                "docker exec winarena pgrep -f 'python.*run.py' || echo ''",
+            )
+            pid = pid_result.stdout.strip().splitlines()[0] if pid_result.stdout.strip() else ""
+            if pid:
+                self._log("RUN", f"  {worker.name}: benchmark PID {pid}")
+                tail_cmd = f"docker exec winarena tail -f --pid={pid} {log_file}"
+            else:
+                self._log("RUN", f"  {worker.name}: could not get PID, using plain tail -f")
+                tail_cmd = f"docker exec winarena tail -f {log_file}"
+
+            # Stream logs via tail -f with auto-reconnect on SSH drop
+            # tail -f --pid exits when the benchmark process dies
+            last_activity = time.time()
+            while True:
+                try:
+                    result = ssh_run(
+                        worker.ip,
+                        tail_cmd,
+                        stream=True,
+                        step="RUN",
+                        log_fn=self.log_fn,
+                    )
+                    # tail -f exited — process likely done
+                    break
+                except KeyboardInterrupt:
+                    self._log("RUN", f"  {worker.name}: interrupted (process continues on VM)")
+                    return (worker.name, 0, 1, "interrupted by user")
+                except Exception as e:
+                    # SSH dropped — check if benchmark is still running
+                    self._log("RUN", f"  {worker.name}: SSH reconnecting ({e})")
+                    time.sleep(5)
+                    try:
+                        check = ssh_run(
+                            worker.ip,
+                            "docker exec winarena pgrep -f run.py > /dev/null "
+                            "&& echo RUNNING || echo DONE",
+                        )
+                        if "DONE" in check.stdout:
+                            break
+                        # Check for stale progress
+                        mtime_result = ssh_run(
+                            worker.ip,
+                            f"docker exec winarena stat -c %Y {log_file} 2>/dev/null || echo 0",
+                        )
+                        now_result = ssh_run(worker.ip, "date +%s")
+                        mtime = int(mtime_result.stdout.strip()) if mtime_result.stdout.strip().isdigit() else 0
+                        now = int(now_result.stdout.strip()) if now_result.stdout.strip().isdigit() else 0
+                        if mtime > 0 and now - mtime > stale_timeout:
+                            self._log(
+                                "RUN",
+                                f"  {worker.name}: no log activity for "
+                                f"{stale_timeout // 60}m — killing",
+                            )
+                            ssh_run(
+                                worker.ip,
+                                "docker exec winarena bash -c "
+                                "'kill -9 $(pgrep -f run.py) 2>/dev/null' || true",
+                            )
+                            return (
+                                worker.name, 0, 1,
+                                f"killed: no activity for {stale_timeout // 60} minutes",
+                            )
+                        last_activity = time.time()
+                    except Exception:
+                        # Can't even check — retry
+                        continue
+
+            # Get exit code
+            try:
+                exit_result = ssh_run(
+                    worker.ip,
+                    f"docker exec winarena cat {exit_file} 2>/dev/null || echo 1",
+                )
+                exit_code = int(exit_result.stdout.strip()) if exit_result.stdout.strip().isdigit() else 1
+            except Exception:
+                exit_code = 1
+
+            if exit_code == 0:
                 return (worker.name, 1, 0, None)
             else:
-                return (worker.name, 0, 1, "benchmark failed")
+                return (worker.name, 0, 1, f"exit code {exit_code}")
 
         self._log("POOL-RUN", "")
         self._log("POOL-RUN", "Starting benchmark on all workers...")
@@ -598,6 +813,142 @@ docker exec -e OPENAI_API_KEY='{api_key}' winarena bash -c 'cd /client && python
             VMPool if a pool exists, None otherwise.
         """
         return self.registry.get_pool()
+
+    def pause(self) -> bool:
+        """Deallocate all pool VMs. Stops compute billing, keeps disks.
+
+        The pool state is saved to the registry so it can be resumed later
+        with resume(). Disk and IP costs (~$0.25/day) continue while paused.
+
+        Returns:
+            True if all VMs were deallocated successfully.
+
+        Raises:
+            RuntimeError: If no pool exists or pool is already paused.
+        """
+        pool = self.registry.get_pool()
+        if pool is None:
+            raise RuntimeError("No active pool. Create one with: pool-create --workers N")
+
+        if pool.status == "paused":
+            raise RuntimeError(
+                "Pool is already paused. Resume with: pool-resume"
+            )
+
+        self._log("POOL-PAUSE", f"Pausing pool {pool.pool_id} ({len(pool.workers)} workers)...")
+        self._log("POOL-PAUSE", "Deallocating VMs (compute billing will stop)...")
+
+        all_ok = True
+        for worker in pool.workers:
+            self._log("POOL-PAUSE", f"  {worker.name}: deallocating...")
+            success = self.vm_manager.deallocate_vm(worker.name)
+            if success:
+                self._log("POOL-PAUSE", f"  {worker.name}: deallocated")
+                self.registry.update_worker(worker.name, status="deallocated", waa_ready=False)
+            else:
+                self._log("POOL-PAUSE", f"  {worker.name}: FAILED to deallocate")
+                all_ok = False
+
+        # Update pool status
+        paused_since = datetime.now().isoformat()
+        self.registry.update_pool_status(status="paused", paused_since=paused_since)
+
+        self._log("POOL-PAUSE", "=" * 60)
+        self._log("POOL-PAUSE", "Pool paused. Compute billing stopped.")
+        self._log("POOL-PAUSE", "  Idle cost: ~$0.25/day (disk + IP)")
+        self._log("POOL-PAUSE", "  Resume with: oa-vm pool-resume")
+        self._log("POOL-PAUSE", "  Delete with: oa-vm pool-cleanup -y")
+        self._log("POOL-PAUSE", "=" * 60)
+
+        return all_ok
+
+    def resume(self, timeout_minutes: int = 10) -> list[PoolWorker]:
+        """Start deallocated pool VMs and wait for WAA ready.
+
+        Starts all VMs in the pool, waits for SSH access, then starts
+        WAA containers and waits for readiness. This is much faster than
+        creating a new pool (~5 min vs ~42 min) because Docker images
+        and Windows disk state are preserved.
+
+        Args:
+            timeout_minutes: Maximum minutes to wait for WAA readiness.
+
+        Returns:
+            List of ready PoolWorker instances.
+
+        Raises:
+            RuntimeError: If no pool exists or pool is not paused.
+        """
+        pool = self.registry.get_pool()
+        if pool is None:
+            raise RuntimeError("No active pool. Create one with: pool-create --workers N")
+
+        if pool.status != "paused":
+            raise RuntimeError(
+                f"Pool is not paused (status: {pool.status}). "
+                "Use pool-pause first, or pool-wait if already running."
+            )
+
+        self._log("POOL-RESUME", f"Resuming pool {pool.pool_id} ({len(pool.workers)} workers)...")
+
+        # Start all VMs
+        self._log("POOL-RESUME", "Starting VMs...")
+        for worker in pool.workers:
+            self._log("POOL-RESUME", f"  {worker.name}: starting...")
+            success = self.vm_manager.start_vm(worker.name)
+            if success:
+                self._log("POOL-RESUME", f"  {worker.name}: started")
+                self.registry.update_worker(worker.name, status="starting")
+            else:
+                self._log("POOL-RESUME", f"  {worker.name}: FAILED to start")
+
+        # Wait for SSH on all workers
+        self._log("POOL-RESUME", "Waiting for SSH access...")
+        workers_ssh_ok: list[PoolWorker] = []
+        for worker in pool.workers:
+            # Re-fetch IP (may have changed after deallocate/start cycle)
+            new_ip = self.vm_manager.get_vm_ip(worker.name)
+            if new_ip and new_ip != worker.ip:
+                self._log(
+                    "POOL-RESUME",
+                    f"  {worker.name}: IP changed {worker.ip} -> {new_ip}",
+                )
+                self.registry.update_worker(worker.name, ip=new_ip)
+                worker.ip = new_ip
+
+            if not worker.ip:
+                self._log("POOL-RESUME", f"  {worker.name}: no IP address, skipping")
+                continue
+
+            if wait_for_ssh(worker.ip, timeout=120):
+                self._log("POOL-RESUME", f"  {worker.name}: SSH ready")
+                workers_ssh_ok.append(worker)
+            else:
+                self._log("POOL-RESUME", f"  {worker.name}: SSH timeout")
+
+        if not workers_ssh_ok:
+            self._log("POOL-RESUME", "ERROR: No VMs have SSH access after start")
+            return []
+
+        # Update pool status back to active
+        self.registry.update_pool_status(status="active", paused_since=None)
+        for worker in workers_ssh_ok:
+            self.registry.update_worker(worker.name, status="ready")
+
+        # Wait for WAA readiness (starts containers, waits for probe)
+        self._log("POOL-RESUME", "Starting WAA containers and waiting for readiness...")
+        ready_workers = self.wait(
+            timeout_minutes=timeout_minutes,
+            start_containers=True,
+        )
+
+        self._log("POOL-RESUME", "=" * 60)
+        self._log("POOL-RESUME", f"Pool resumed: {len(ready_workers)}/{len(pool.workers)} workers ready")
+        if ready_workers:
+            self._log("POOL-RESUME", "  Run benchmark: oa-vm pool-run --tasks 10")
+        self._log("POOL-RESUME", "=" * 60)
+
+        return ready_workers
 
     def cleanup(
         self,

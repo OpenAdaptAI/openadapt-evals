@@ -189,9 +189,29 @@ def cmd_mock(args: argparse.Namespace) -> int:
         except RuntimeError as e:
             print(f"ERROR: {e}")
             return 1
+    elif agent_type in ("api-claude-cu", "claude-cu"):
+        try:
+            from openadapt_evals.agents import ClaudeComputerUseAgent
+            agent = ClaudeComputerUseAgent(demo=demo_text)
+            print(f"Using ClaudeComputerUseAgent (demo={'yes' if agent.demo else 'no'})")
+        except RuntimeError as e:
+            print(f"ERROR: {e}")
+            return 1
+    elif agent_type == "qwen3vl":
+        try:
+            from openadapt_evals.agents import Qwen3VLAgent
+            model_path = getattr(args, "model_path", None)
+            use_thinking = getattr(args, "use_thinking", False)
+            agent = Qwen3VLAgent(
+                model_path=model_path, demo=demo_text, use_thinking=use_thinking,
+            )
+            print(f"Using Qwen3VLAgent (model={agent.model_path}, demo={'yes' if agent.demo else 'no'})")
+        except RuntimeError as e:
+            print(f"ERROR: {e}")
+            return 1
     else:
         print(f"ERROR: Unknown agent type: {agent_type}")
-        print("Available for mock: mock, api-claude, api-openai")
+        print("Available for mock: mock, api-claude, api-openai, api-claude-cu, qwen3vl")
         return 1
 
     # Create config for trace collection
@@ -247,11 +267,13 @@ def cmd_run(args: argparse.Namespace) -> int:
     )
 
     server_url = args.server
+    evaluate_url = getattr(args, "evaluate_url", None)
     print(f"Connecting to WAA server at {server_url}...")
 
     # Create live adapter
     config = WAALiveConfig(
         server_url=server_url,
+        evaluate_url=evaluate_url,
         max_steps=args.max_steps,
     )
     adapter = WAALiveAdapter(config)
@@ -313,9 +335,29 @@ def cmd_run(args: argparse.Namespace) -> int:
         except RuntimeError as e:
             print(f"ERROR: {e}")
             return 1
+    elif agent_type in ("api-claude-cu", "claude-cu"):
+        try:
+            from openadapt_evals.agents import ClaudeComputerUseAgent
+            agent = ClaudeComputerUseAgent(demo=demo_text)
+            print(f"Using ClaudeComputerUseAgent (demo={'yes' if agent.demo else 'no'})")
+        except RuntimeError as e:
+            print(f"ERROR: {e}")
+            return 1
+    elif agent_type == "qwen3vl":
+        try:
+            from openadapt_evals.agents import Qwen3VLAgent
+            model_path = getattr(args, "model_path", None)
+            use_thinking = getattr(args, "use_thinking", False)
+            agent = Qwen3VLAgent(
+                model_path=model_path, demo=demo_text, use_thinking=use_thinking,
+            )
+            print(f"Using Qwen3VLAgent (model={agent.model_path}, demo={'yes' if agent.demo else 'no'})")
+        except RuntimeError as e:
+            print(f"ERROR: {e}")
+            return 1
     else:
         print(f"ERROR: Unknown agent type: {agent_type}")
-        print("Available: noop, mock, api-claude, api-openai")
+        print("Available: noop, mock, api-claude, api-openai, api-claude-cu, qwen3vl")
         return 1
 
     # Create config for trace collection
@@ -364,11 +406,13 @@ def cmd_live(args: argparse.Namespace) -> int:
         compute_metrics,
     )
 
+    evaluate_url = getattr(args, "evaluate_url", None)
     print(f"Connecting to WAA server at {args.server}...")
 
     # Create live adapter
     config = WAALiveConfig(
         server_url=args.server,
+        evaluate_url=evaluate_url,
         max_steps=args.max_steps,
     )
     adapter = WAALiveAdapter(config)
@@ -446,10 +490,30 @@ def cmd_live(args: argparse.Namespace) -> int:
         except Exception as e:
             print(f"ERROR: {e}")
             return 1
+    elif agent_type in ("api-claude-cu", "claude-cu"):
+        try:
+            from openadapt_evals.agents import ClaudeComputerUseAgent
+            agent = ClaudeComputerUseAgent(demo=demo_text)
+            print(f"Using ClaudeComputerUseAgent (demo={'yes' if agent.demo else 'no'})")
+        except RuntimeError as e:
+            print(f"ERROR: {e}")
+            return 1
+    elif agent_type == "qwen3vl":
+        try:
+            from openadapt_evals.agents import Qwen3VLAgent
+            model_path = getattr(args, "model_path", None)
+            use_thinking = getattr(args, "use_thinking", False)
+            agent = Qwen3VLAgent(
+                model_path=model_path, demo=demo_text, use_thinking=use_thinking,
+            )
+            print(f"Using Qwen3VLAgent (model={agent.model_path}, demo={'yes' if agent.demo else 'no'})")
+        except RuntimeError as e:
+            print(f"ERROR: {e}")
+            return 1
     else:
         print(f"ERROR: Unknown agent type: {agent_type}")
         print(
-            "Available: mock, noop, api-claude, api-openai, retrieval-claude, retrieval-openai"
+            "Available: mock, noop, api-claude, api-openai, api-claude-cu, qwen3vl, retrieval-claude, retrieval-openai"
         )
         return 1
 
@@ -828,6 +892,59 @@ def cmd_view(args: argparse.Namespace) -> int:
     if not args.no_open:
         import webbrowser
         webbrowser.open(f"file://{output_path.absolute()}")
+
+    return 0
+
+
+def cmd_compare(args: argparse.Namespace) -> int:
+    """Generate a comparison viewer for multiple evaluation runs."""
+    from openadapt_evals.benchmarks.comparison_viewer import generate_comparison_viewer
+
+    benchmark_dir = Path(args.benchmark_dir or "benchmark_results")
+
+    # Parse runs: "run_name:Label,run_name2:Label2"
+    runs = []
+    for spec in args.runs.split(","):
+        parts = spec.strip().split(":", 1)
+        run_name = parts[0].strip()
+        label = parts[1].strip() if len(parts) > 1 else run_name
+        run_dir = benchmark_dir / run_name
+        if not run_dir.exists():
+            print(f"ERROR: Run directory not found: {run_dir}")
+            return 1
+        runs.append((run_dir, label))
+
+    if len(runs) < 2:
+        print("ERROR: At least 2 runs required for comparison")
+        return 1
+
+    # Demo prompts
+    demo_dir = Path(args.demo_prompts) if args.demo_prompts else None
+
+    # Output path
+    if args.output:
+        output_path = Path(args.output)
+    else:
+        output_path = benchmark_dir / "comparison.html"
+
+    embed = not args.no_embed
+
+    print(f"Comparing {len(runs)} runs: {', '.join(label for _, label in runs)}")
+    print(f"Embed screenshots: {embed}")
+
+    result = generate_comparison_viewer(
+        runs=runs,
+        output_path=output_path,
+        demo_prompts_dir=demo_dir,
+        embed_screenshots=embed,
+    )
+
+    print(f"Comparison viewer generated: {result}")
+    print(f"Size: {result.stat().st_size / 1024:.0f} KB")
+
+    if not args.no_open:
+        import webbrowser
+        webbrowser.open(f"file://{result.absolute()}")
 
     return 0
 
@@ -1809,6 +1926,201 @@ def cmd_azure(args: argparse.Namespace) -> int:
         return 1
 
 
+def _suite_task_short_name(task_id: str) -> str:
+    """Map task UUID prefix to readable short name."""
+    short_names = {
+        "37e10fc4": "settings",
+        "0c9dda13": "archive",
+        "366de66e": "notepad",
+    }
+    return short_names.get(task_id[:8], task_id[:8])
+
+
+def _suite_find_demo(demo_dir: Path, task_id: str) -> Path | None:
+    """Find demo file (.txt preferred, then .json) for a task ID.
+
+    Prefers .txt (natural language) over .json because:
+    - .txt demos describe actions in human-readable terms
+    - .json demos contain normalized coordinates (0-1) that mismatch
+      the agent's pixel coordinate action space
+    """
+    for ext in (".txt", ".json"):
+        p = demo_dir / f"{task_id}{ext}"
+        if p.exists():
+            return p
+    return None
+
+
+def _suite_agent_provider(agent_type: str) -> str:
+    """Map CLI agent type to provider string."""
+    if agent_type in ("api-claude", "claude", "anthropic"):
+        return "anthropic"
+    return "openai"
+
+
+def _suite_print_summary(all_results: dict) -> None:
+    """Print eval suite comparison table."""
+    print("\n" + "=" * 60)
+    print("EVAL SUITE RESULTS")
+    print("=" * 60)
+    print(f"{'Condition':<25} {'Score':>7} {'Steps':>7} {'Success':>9}")
+    print("-" * 60)
+    for cond, metrics in all_results.items():
+        if metrics is None:
+            print(f"{cond:<25} {'ERROR':>7}")
+        else:
+            print(
+                f"{cond:<25} {metrics['avg_score']:>7.2f} "
+                f"{metrics['avg_steps']:>7.1f} "
+                f"{metrics['success_rate']:>8.0%}"
+            )
+    print("=" * 60)
+
+
+def cmd_eval_suite(args: argparse.Namespace) -> int:
+    """Run evaluation suite: pool lifecycle + task x condition matrix."""
+    from datetime import datetime
+
+    from openadapt_evals.adapters import WAALiveAdapter, WAALiveConfig
+    from openadapt_evals.agents import ApiAgent
+    from openadapt_evals.benchmarks import (
+        EvaluationConfig,
+        compute_metrics,
+        evaluate_agent_on_benchmark,
+    )
+
+    task_ids = [t.strip() for t in args.tasks.split(",")]
+    suite_name = getattr(args, "suite_name", None) or (
+        f"suite_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    )
+    output_dir = Path(getattr(args, "output", "benchmark_results"))
+    demo_dir = Path(args.demo_dir) if getattr(args, "demo_dir", None) else None
+
+    # --- Phase 1: Pool lifecycle ---
+    pool_mgr = None
+    tunnel_mgr = None
+    server_url = args.server
+    evaluate_url = args.evaluate_url
+
+    if not args.no_pool_create:
+        from openadapt_evals.infrastructure.pool import PoolManager
+        from openadapt_evals.infrastructure.ssh_tunnel import SSHTunnelManager
+
+        pool_mgr = PoolManager()
+        print("Creating pool with 1 worker...")
+        pool_mgr.create(workers=1)
+
+        timeout = getattr(args, "pool_timeout", 50)
+        print(f"Waiting for WAA (timeout: {timeout}m)...")
+        workers = pool_mgr.wait(timeout_minutes=timeout)
+        if not workers:
+            print("ERROR: Pool wait timed out")
+            return 1
+
+        worker_ip = workers[0].ip
+        print(f"Worker ready: {worker_ip}")
+
+        tunnel_mgr = SSHTunnelManager()
+        tunnel_mgr.start_tunnels_for_vm(vm_ip=worker_ip)
+        server_url = "http://localhost:5001"
+        evaluate_url = "http://localhost:5050"
+        # Give tunnels a moment to establish
+        import time
+        time.sleep(3)
+
+    # --- Phase 2: Build eval matrix ---
+    matrix = []  # list of (task_id, condition_name, demo_text|None)
+    for tid in task_ids:
+        short = _suite_task_short_name(tid)
+        matrix.append((tid, f"zs_{short}", None))
+        if demo_dir:
+            demo_path = _suite_find_demo(demo_dir, tid)
+            if demo_path:
+                demo_text = demo_path.read_text()
+                matrix.append((tid, f"dc_{short}", demo_text))
+
+    print(f"\nEval matrix: {len(matrix)} runs ({len(task_ids)} tasks)")
+    for tid, cond, demo in matrix:
+        print(f"  {cond}: {tid[:12]}... (demo={'yes' if demo else 'no'})")
+
+    # --- Phase 3: Run evals ---
+    all_results = {}
+    try:
+        for i, (tid, cond_name, demo_text) in enumerate(matrix):
+            run_name = f"{suite_name}_{cond_name}"
+            print(f"\n[{i + 1}/{len(matrix)}] {run_name}")
+
+            adapter = WAALiveAdapter(
+                WAALiveConfig(
+                    server_url=server_url,
+                    evaluate_url=evaluate_url,
+                    max_steps=args.max_steps,
+                )
+            )
+            if not adapter.check_connection():
+                print(f"  ERROR: Cannot connect to {server_url}")
+                all_results[cond_name] = None
+                continue
+
+            try:
+                if args.agent in ("api-claude-cu", "claude-cu"):
+                    from openadapt_evals.agents import ClaudeComputerUseAgent
+                    agent = ClaudeComputerUseAgent(demo=demo_text)
+                elif args.agent == "qwen3vl":
+                    from openadapt_evals.agents import Qwen3VLAgent
+                    model_path = getattr(args, "model_path", None)
+                    use_thinking = getattr(args, "use_thinking", False)
+                    agent = Qwen3VLAgent(
+                        model_path=model_path, demo=demo_text,
+                        use_thinking=use_thinking,
+                    )
+                else:
+                    provider = _suite_agent_provider(args.agent)
+                    agent = ApiAgent(provider=provider, demo=demo_text)
+            except RuntimeError as e:
+                print(f"  ERROR creating agent: {e}")
+                all_results[cond_name] = None
+                continue
+
+            config = EvaluationConfig(
+                save_execution_traces=True,
+                output_dir=str(output_dir),
+                run_name=run_name,
+            )
+
+            results = evaluate_agent_on_benchmark(
+                agent=agent,
+                adapter=adapter,
+                max_steps=args.max_steps,
+                task_ids=[tid],
+                config=config,
+            )
+            metrics = compute_metrics(results)
+            all_results[cond_name] = metrics
+            print(
+                f"  Score: {metrics['avg_score']:.2f}, "
+                f"Steps: {metrics['avg_steps']:.0f}, "
+                f"Success: {metrics['success_rate']:.0%}"
+            )
+
+    except KeyboardInterrupt:
+        print("\n\nSuite interrupted by user.")
+
+    finally:
+        # --- Phase 4: Summary ---
+        if all_results:
+            _suite_print_summary(all_results)
+
+        # --- Phase 5: Cleanup ---
+        if tunnel_mgr:
+            tunnel_mgr.stop_all_tunnels()
+        if pool_mgr and not args.no_pool_cleanup:
+            print("\nCleaning up pool...")
+            pool_mgr.cleanup(confirm=False)
+
+    return 0
+
+
 def main() -> int:
     """Main entry point for CLI."""
     parser = argparse.ArgumentParser(
@@ -1822,8 +2134,10 @@ def main() -> int:
     mock_parser.add_argument("--tasks", type=int, default=10, help="Number of tasks")
     mock_parser.add_argument("--max-steps", type=int, default=15, help="Max steps per task")
     mock_parser.add_argument("--agent", type=str, default="mock",
-                            help="Agent type: mock, api-claude, api-openai")
+                            help="Agent type: mock, api-claude, api-openai, api-claude-cu, qwen3vl")
     mock_parser.add_argument("--demo", type=str, help="Demo trajectory file for ApiAgent")
+    mock_parser.add_argument("--model-path", type=str, help="Model path for Qwen3VL agent")
+    mock_parser.add_argument("--use-thinking", action="store_true", help="Enable thinking mode for Qwen3VL")
     mock_parser.add_argument("--output", type=str, help="Output directory for traces")
     mock_parser.add_argument("--run-name", type=str, help="Name for this evaluation run")
 
@@ -1834,14 +2148,18 @@ def main() -> int:
     )
     run_parser.add_argument("--server", type=str, default="http://localhost:5001",
                            help="WAA server URL (default: localhost:5001 for SSH tunnel)")
+    run_parser.add_argument("--evaluate-url", type=str, default="http://localhost:5050",
+                           help="Evaluate server URL (default: localhost:5050)")
     run_parser.add_argument("--agent", type=str, default="api-openai",
-                           help="Agent type: noop, mock, api-claude, api-openai")
+                           help="Agent type: noop, mock, api-claude, api-openai, api-claude-cu, qwen3vl")
     run_parser.add_argument("--task", type=str,
                            help="Single task ID (e.g., notepad_1)")
     run_parser.add_argument("--tasks", type=str,
                            help="Comma-separated task IDs (e.g., notepad_1,notepad_2)")
     run_parser.add_argument("--demo", type=str,
                            help="Demo trajectory file for ApiAgent")
+    run_parser.add_argument("--model-path", type=str, help="Model path for Qwen3VL agent")
+    run_parser.add_argument("--use-thinking", action="store_true", help="Enable thinking mode for Qwen3VL")
     run_parser.add_argument("--max-steps", type=int, default=15,
                            help="Max steps per task")
     run_parser.add_argument("--output", type=str, default="benchmark_results",
@@ -1853,9 +2171,13 @@ def main() -> int:
     live_parser = subparsers.add_parser("live", help="Run live evaluation against WAA server (full control)")
     live_parser.add_argument("--server", type=str, default="http://localhost:5001",
                             help="WAA server URL (default: localhost:5001 for SSH tunnel)")
+    live_parser.add_argument("--evaluate-url", type=str, default="http://localhost:5050",
+                            help="Evaluate server URL (default: localhost:5050)")
     live_parser.add_argument("--agent", type=str, default="mock",
-                            help="Agent type: mock, noop, api-claude, api-openai, retrieval-claude, retrieval-openai")
+                            help="Agent type: mock, noop, api-claude, api-openai, api-claude-cu, qwen3vl, retrieval-claude, retrieval-openai")
     live_parser.add_argument("--demo", type=str, help="Demo trajectory file for ApiAgent")
+    live_parser.add_argument("--model-path", type=str, help="Model path for Qwen3VL agent")
+    live_parser.add_argument("--use-thinking", action="store_true", help="Enable thinking mode for Qwen3VL")
     live_parser.add_argument("--demo-library", type=str,
                             help="Path to demo library for retrieval agents")
     live_parser.add_argument("--task-ids", type=str, help="Comma-separated task IDs")
@@ -1884,6 +2206,26 @@ def main() -> int:
                             help="Embed screenshots as base64")
     view_parser.add_argument("--no-open", action="store_true",
                             help="Don't auto-open browser")
+
+    # Comparison viewer
+    compare_parser = subparsers.add_parser(
+        "compare",
+        help="Generate comparison viewer for multiple runs"
+    )
+    compare_parser.add_argument(
+        "--runs", type=str, required=True,
+        help="Comma-separated run specs: run_name:Label,run_name2:Label2"
+    )
+    compare_parser.add_argument("--benchmark-dir", type=str,
+                                help="Benchmark results directory")
+    compare_parser.add_argument("--output", type=str,
+                                help="Output HTML path")
+    compare_parser.add_argument("--demo-prompts", type=str,
+                                help="Directory containing demo prompt .txt files")
+    compare_parser.add_argument("--no-embed", action="store_true",
+                                help="Use file paths instead of embedding screenshots")
+    compare_parser.add_argument("--no-open", action="store_true",
+                                help="Don't auto-open browser")
 
     # Cost estimation
     estimate_parser = subparsers.add_parser("estimate", help="Estimate Azure costs")
@@ -2091,6 +2433,61 @@ def main() -> int:
     wandb_log_parser.add_argument("--dry-run", action="store_true",
                                   help="Validate data but don't upload")
 
+    # Eval suite (automated full-cycle evaluation)
+    suite_parser = subparsers.add_parser(
+        "eval-suite",
+        help="Run full evaluation suite: create VM, run task x condition matrix, compare, cleanup",
+    )
+    suite_parser.add_argument(
+        "--tasks", type=str, required=True,
+        help="Comma-separated task IDs",
+    )
+    suite_parser.add_argument(
+        "--agent", type=str, default="api-openai",
+        help="Agent type: api-openai, api-claude, api-claude-cu, qwen3vl",
+    )
+    suite_parser.add_argument(
+        "--model-path", type=str,
+        help="Model path for Qwen3VL agent",
+    )
+    suite_parser.add_argument(
+        "--use-thinking", action="store_true",
+        help="Enable thinking mode for Qwen3VL",
+    )
+    suite_parser.add_argument(
+        "--demo-dir", type=str,
+        help="Directory with annotated demos (.json/.txt). Enables DC runs for tasks with matching demos.",
+    )
+    suite_parser.add_argument("--max-steps", type=int, default=15)
+    suite_parser.add_argument(
+        "--output", type=str, default="benchmark_results",
+        help="Output directory for traces",
+    )
+    suite_parser.add_argument(
+        "--suite-name", type=str,
+        help="Name prefix for runs (default: suite_YYYYMMDD_HHMMSS)",
+    )
+    suite_parser.add_argument(
+        "--no-pool-create", action="store_true",
+        help="Skip VM creation (use existing tunnels)",
+    )
+    suite_parser.add_argument(
+        "--no-pool-cleanup", action="store_true",
+        help="Skip VM deletion after evals",
+    )
+    suite_parser.add_argument(
+        "--pool-timeout", type=int, default=50,
+        help="Minutes to wait for WAA ready (default: 50)",
+    )
+    suite_parser.add_argument(
+        "--server", type=str, default="http://localhost:5001",
+        help="WAA server URL (used with --no-pool-create)",
+    )
+    suite_parser.add_argument(
+        "--evaluate-url", type=str, default="http://localhost:5050",
+        help="Evaluate server URL (used with --no-pool-create)",
+    )
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -2105,6 +2502,7 @@ def main() -> int:
         "smoke-live": cmd_smoke_live,
         "probe": cmd_probe,
         "view": cmd_view,
+        "compare": cmd_compare,
         "estimate": cmd_estimate,
         "azure": cmd_azure,
         "azure-monitor": cmd_azure_monitor,
@@ -2119,6 +2517,7 @@ def main() -> int:
         "wandb-demo": cmd_wandb_demo,
         "wandb-report": cmd_wandb_report,
         "wandb-log": cmd_wandb_log,
+        "eval-suite": cmd_eval_suite,
     }
 
     handler = handlers.get(args.command)

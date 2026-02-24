@@ -528,9 +528,36 @@ def cmd_pool_status(args):
         print("No active VM pool. Create one with: create --workers N")
         return 0
 
-    print(f"\n=== VM Pool: {pool.pool_id} ===\n")
+    pool_status_label = pool.status.upper() if hasattr(pool, "status") else "ACTIVE"
+    print(f"\n=== VM Pool: {pool.pool_id} ({pool_status_label}) ===\n")
     print(f"Created: {pool.created_at}")
     print(f"Workers: {len(pool.workers)}")
+    print(f"Status: {pool_status_label}")
+    if hasattr(pool, "paused_since") and pool.paused_since:
+        from datetime import datetime as _dt
+
+        paused_dt = _dt.fromisoformat(pool.paused_since)
+        paused_days = (_dt.now() - paused_dt).total_seconds() / 86400
+        accumulated_cost = 0.25 * len(pool.workers) * paused_days
+        print(f"Paused since: {pool.paused_since} ({paused_days:.1f} days)")
+        print(f"Idle cost: ~${0.25 * len(pool.workers):.2f}/day (accumulated: ${accumulated_cost:.2f})")
+        if paused_days >= 14:
+            print(f"  WARNING: Pool paused for {paused_days:.0f} days! Delete with: oa-vm pool-cleanup -y")
+        elif paused_days >= 7:
+            days_left = 14 - paused_days
+            print(f"  WARNING: Pool idle for {paused_days:.0f} days. Consider deleting in {days_left:.0f} days.")
+    if pool.status == "active" and hasattr(pool, "auto_pause_at") and pool.auto_pause_at:
+        from datetime import datetime as _dt
+        try:
+            auto_pause_dt = _dt.fromisoformat(pool.auto_pause_at)
+            remaining = auto_pause_dt - _dt.now()
+            remaining_min = remaining.total_seconds() / 60
+            if remaining_min > 0:
+                print(f"Auto-shutdown: in {remaining_min:.0f} minutes")
+            else:
+                print(f"Auto-shutdown: OVERDUE (check VM status)")
+        except ValueError:
+            pass
     print(f"Tasks: {pool.completed_tasks}/{pool.total_tasks}")
     print()
 
@@ -618,6 +645,8 @@ def cmd_pool_create(args):
 
     num_workers = getattr(args, "workers", 3)
     auto_shutdown_hours = getattr(args, "auto_shutdown_hours", 4)
+    use_acr = getattr(args, "use_acr", False)
+    image_id = getattr(args, "image", None)
 
     vm_manager = AzureVMManager(resource_group=RESOURCE_GROUP)
     manager = PoolManager(vm_manager=vm_manager, log_fn=log)
@@ -626,6 +655,8 @@ def cmd_pool_create(args):
         manager.create(
             workers=num_workers,
             auto_shutdown_hours=auto_shutdown_hours,
+            use_acr=use_acr,
+            image_id=image_id,
         )
         return 0
     except RuntimeError as e:
@@ -707,6 +738,122 @@ def cmd_pool_cleanup(args):
     confirm = not getattr(args, "yes", False)
     manager.cleanup(confirm=confirm)
     return 0
+
+
+def cmd_pool_auto(args):
+    """Fully automated pool workflow: create → wait → run.
+
+    Creates VMs, installs Docker, builds WAA image, starts containers,
+    waits for WAA server readiness, then runs benchmark tasks — all in
+    one command.
+
+    If a pool already exists, skips creation and resumes from wait → run.
+    """
+    init_logging()
+    from openadapt_evals.infrastructure.azure_vm import AzureVMManager
+    from openadapt_evals.infrastructure.pool import PoolManager
+
+    num_workers = getattr(args, "workers", 1)
+    auto_shutdown_hours = getattr(args, "auto_shutdown_hours", 4)
+    timeout_minutes = getattr(args, "timeout", 45)
+    num_tasks = getattr(args, "tasks", 10)
+    agent = getattr(args, "agent", "navi")
+    model = getattr(args, "model", "gpt-4o-mini")
+    api_key = getattr(args, "api_key", None)
+
+    vm_manager = AzureVMManager(resource_group=RESOURCE_GROUP)
+    manager = PoolManager(vm_manager=vm_manager, log_fn=log)
+
+    try:
+        # Step 1: Create pool (skip if one already exists)
+        pool = manager.status()
+        if pool is not None:
+            log("POOL-AUTO", f"Pool already exists ({len(pool.workers)} workers). Skipping create.")
+        else:
+            log("POOL-AUTO", "=== Step 1/3: Creating pool ===")
+            manager.create(
+                workers=num_workers,
+                auto_shutdown_hours=auto_shutdown_hours,
+            )
+
+        # Step 2: Wait for WAA readiness
+        log("POOL-AUTO", "=== Step 2/3: Waiting for WAA server ===")
+        workers_ready = manager.wait(
+            timeout_minutes=timeout_minutes,
+            start_containers=True,
+        )
+
+        if not workers_ready:
+            log("POOL-AUTO", "ERROR: No workers became ready. Aborting.")
+            return 1
+
+        # Step 3: Run benchmark
+        log("POOL-AUTO", "=== Step 3/3: Running benchmark ===")
+        result = manager.run(
+            tasks=num_tasks,
+            agent=agent,
+            model=model,
+            api_key=api_key,
+        )
+
+        log("POOL-AUTO", "")
+        log("POOL-AUTO", "=== POOL-AUTO COMPLETE ===")
+        log("POOL-AUTO", f"  Workers: {len(workers_ready)}")
+        log("POOL-AUTO", f"  Tasks: {result.completed}/{result.total_tasks}")
+        log("POOL-AUTO", f"  Failed: {result.failed}")
+        log("POOL-AUTO", f"  Time: {result.elapsed_seconds / 60:.1f} minutes")
+        log("POOL-AUTO", "")
+        log("POOL-AUTO", "Next: oa-vm pool-cleanup -y  (to stop billing)")
+
+        return 0 if result.failed == 0 else 1
+    except RuntimeError as e:
+        log("POOL-AUTO", f"ERROR: {e}")
+        return 1
+
+
+def cmd_pool_pause(args):
+    """Pause pool: deallocate all VMs to stop compute billing.
+
+    Keeps disks and IPs so the pool can be quickly resumed (~5 min)
+    instead of recreating from scratch (~42 min). Idle cost ~$0.25/day.
+    """
+    init_logging()
+    from openadapt_evals.infrastructure.azure_vm import AzureVMManager
+    from openadapt_evals.infrastructure.pool import PoolManager
+
+    vm_manager = AzureVMManager(resource_group=RESOURCE_GROUP)
+    manager = PoolManager(vm_manager=vm_manager, log_fn=log)
+
+    try:
+        manager.pause()
+        return 0
+    except RuntimeError as e:
+        log("POOL-PAUSE", f"ERROR: {e}")
+        return 1
+
+
+def cmd_pool_resume(args):
+    """Resume a paused pool: start VMs and wait for WAA readiness.
+
+    Starts all deallocated VMs, waits for SSH, restarts WAA containers,
+    and waits for WAA server readiness. Much faster than pool-create
+    (~5 min vs ~42 min).
+    """
+    init_logging()
+    from openadapt_evals.infrastructure.azure_vm import AzureVMManager
+    from openadapt_evals.infrastructure.pool import PoolManager
+
+    timeout_minutes = getattr(args, "timeout", 10)
+
+    vm_manager = AzureVMManager(resource_group=RESOURCE_GROUP)
+    manager = PoolManager(vm_manager=vm_manager, log_fn=log)
+
+    try:
+        ready_workers = manager.resume(timeout_minutes=timeout_minutes)
+        return 0 if ready_workers else 1
+    except RuntimeError as e:
+        log("POOL-RESUME", f"ERROR: {e}")
+        return 1
 
 
 def cmd_pool_vnc(args):
@@ -1383,6 +1530,121 @@ def cmd_push_acr(args):
 
     log("PUSH-ACR", f"Successfully pushed: {acr_image} ({elapsed:.1f}s)")
     return 0
+
+
+def cmd_image_create(args):
+    """Create a golden image from an existing pool VM.
+
+    The VM is deallocated, generalized, and converted into an Azure Managed
+    Image. Future pool-create --image <id> skips Docker setup entirely.
+
+    WARNING: The source VM is destroyed (cannot be restarted after generalize).
+    """
+    init_logging()
+    from openadapt_evals.infrastructure.azure_vm import AzureVMManager
+    from openadapt_evals.infrastructure.pool import PoolManager
+    from openadapt_evals.infrastructure.vm_monitor import VMPoolRegistry
+
+    vm_manager = AzureVMManager(resource_group=RESOURCE_GROUP)
+    registry = VMPoolRegistry()
+    pool = registry.get_pool()
+
+    if pool is None:
+        log("IMAGE", "ERROR: No active pool. Create one first with: pool-create --workers 1")
+        return 1
+
+    # Use specified worker or first one
+    worker_name = getattr(args, "worker", None) or pool.workers[0].name
+    worker = next((w for w in pool.workers if w.name == worker_name), None)
+    if not worker:
+        log("IMAGE", f"ERROR: Worker {worker_name} not found in pool")
+        return 1
+
+    image_name = getattr(args, "name", None)
+    if not image_name:
+        from datetime import datetime
+        image_name = f"waa-golden-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+
+    log("IMAGE", f"Creating golden image from {worker_name}...")
+    log("IMAGE", f"  Image name: {image_name}")
+    log("IMAGE", "  WARNING: Source VM will be destroyed after generalization")
+
+    # Step 1: Clean up the VM
+    log("IMAGE", "Cleaning up VM state...")
+    from openadapt_evals.infrastructure.azure_vm import ssh_run
+    ssh_run(worker.ip, "docker stop winarena 2>/dev/null || true")
+    ssh_run(worker.ip, "sudo apt-get clean && sudo rm -rf /tmp/* /var/tmp/*")
+    ssh_run(worker.ip, "sudo waagent -deprovision+user -force")
+
+    # Step 2: Deallocate
+    log("IMAGE", "Deallocating VM...")
+    if not vm_manager.deallocate_vm(worker_name):
+        log("IMAGE", "ERROR: Failed to deallocate VM")
+        return 1
+
+    # Step 3: Generalize
+    log("IMAGE", "Generalizing VM...")
+    if not vm_manager.generalize_vm(worker_name):
+        log("IMAGE", "ERROR: Failed to generalize VM")
+        return 1
+
+    # Step 4: Create image
+    log("IMAGE", "Creating managed image (this may take a few minutes)...")
+    image_id = vm_manager.create_image(worker_name, image_name)
+    if not image_id:
+        log("IMAGE", "ERROR: Failed to create image")
+        return 1
+
+    # Step 5: Clean up source VM (can't restart after generalize)
+    log("IMAGE", "Cleaning up source VM (no longer usable)...")
+    vm_manager.delete_vm(worker_name)
+    registry.delete_pool()
+
+    log("IMAGE", "=" * 60)
+    log("IMAGE", f"Golden image created: {image_name}")
+    log("IMAGE", f"  ID: {image_id}")
+    log("IMAGE", "")
+    log("IMAGE", "Use with pool-create:")
+    log("IMAGE", f"  oa-vm pool-create --workers 1 --image {image_id}")
+    log("IMAGE", "=" * 60)
+    return 0
+
+
+def cmd_image_list(args):
+    """List available golden images."""
+    init_logging()
+    from openadapt_evals.infrastructure.azure_vm import AzureVMManager
+
+    vm_manager = AzureVMManager(resource_group=RESOURCE_GROUP)
+    images = vm_manager.list_images(prefix="waa-golden")
+
+    if not images:
+        log("IMAGE", "No golden images found")
+        return 0
+
+    log("IMAGE", f"Found {len(images)} golden image(s):")
+    for img in images:
+        log("IMAGE", f"  {img['name']}")
+        log("IMAGE", f"    ID: {img['id']}")
+        log("IMAGE", f"    Location: {img['location']}")
+    return 0
+
+
+def cmd_image_delete(args):
+    """Delete a golden image."""
+    init_logging()
+    from openadapt_evals.infrastructure.azure_vm import AzureVMManager
+
+    image_name = args.name
+    vm_manager = AzureVMManager(resource_group=RESOURCE_GROUP)
+
+    log("IMAGE", f"Deleting image: {image_name}")
+    if vm_manager.delete_image(image_name):
+        log("IMAGE", "Image deleted")
+        return 0
+    else:
+        log("IMAGE", "ERROR: Failed to delete image")
+        return 1
 
 
 def cmd_start(args):
@@ -7368,6 +7630,15 @@ Examples:
         default=4,
         help="Auto-shutdown VMs after N hours (0 to disable, default: 4)",
     )
+    p_pool_create.add_argument(
+        "--use-acr",
+        action="store_true",
+        help="Pull waa-auto from ACR instead of building on VM (faster)",
+    )
+    p_pool_create.add_argument(
+        "--image",
+        help="Azure Managed Image ID to create VMs from (skips Docker setup)",
+    )
     p_pool_create.set_defaults(func=cmd_pool_create)
 
     # pool-wait
@@ -7408,6 +7679,54 @@ Examples:
     )
     p_pool_cleanup.add_argument("-y", "--yes", action="store_true", help="Skip confirmation")
     p_pool_cleanup.set_defaults(func=cmd_pool_cleanup)
+
+    # pool-auto (end-to-end: create → wait → run)
+    p_pool_auto = subparsers.add_parser(
+        "pool-auto",
+        help="Fully automated: create VMs → wait for WAA → run benchmark",
+    )
+    p_pool_auto.add_argument(
+        "--workers", "-w", type=int, default=1, help="Number of worker VMs (default: 1)"
+    )
+    p_pool_auto.add_argument(
+        "--tasks", "-n", type=int, default=10,
+        help="Number of tasks to run (default: 10, use 154 for full benchmark)",
+    )
+    p_pool_auto.add_argument("--agent", default="navi", help="Agent type (default: navi)")
+    p_pool_auto.add_argument(
+        "--model", default="gpt-4o-mini", help="Model name (default: gpt-4o-mini)"
+    )
+    p_pool_auto.add_argument("--api-key", help="OpenAI API key (default: from .env)")
+    p_pool_auto.add_argument(
+        "--timeout", "-t", type=int, default=45,
+        help="Timeout in minutes for WAA readiness (default: 45)",
+    )
+    p_pool_auto.add_argument(
+        "--auto-shutdown-hours", type=int, default=4,
+        help="Auto-shutdown VMs after N hours (default: 4)",
+    )
+    p_pool_auto.set_defaults(func=cmd_pool_auto)
+
+    # pool-pause
+    p_pool_pause = subparsers.add_parser(
+        "pool-pause",
+        help="Deallocate pool VMs (stops compute billing, keeps disks ~$0.25/day)",
+    )
+    p_pool_pause.set_defaults(func=cmd_pool_pause)
+
+    # pool-resume
+    p_pool_resume = subparsers.add_parser(
+        "pool-resume",
+        help="Resume a paused pool (start VMs, wait for WAA ~5 min)",
+    )
+    p_pool_resume.add_argument(
+        "--timeout",
+        "-t",
+        type=int,
+        default=10,
+        help="Timeout in minutes for WAA readiness (default: 10)",
+    )
+    p_pool_resume.set_defaults(func=cmd_pool_resume)
 
     # pool-logs
     p_pool_logs = subparsers.add_parser(
@@ -7483,6 +7802,31 @@ Examples:
         help="Image to push (default: waa-auto:latest)",
     )
     p_push_acr.set_defaults(func=cmd_push_acr)
+
+    # image-create
+    p_image_create = subparsers.add_parser(
+        "image-create", help="Create golden image from existing pool VM (skips Docker setup on future creates)"
+    )
+    p_image_create.add_argument(
+        "--name", help="Image name (default: waa-golden-YYYYMMDD-HHMMSS)"
+    )
+    p_image_create.add_argument(
+        "--worker", help="Worker VM name to use as source (default: first worker)"
+    )
+    p_image_create.set_defaults(func=cmd_image_create)
+
+    # image-list
+    p_image_list = subparsers.add_parser(
+        "image-list", help="List available golden images"
+    )
+    p_image_list.set_defaults(func=cmd_image_list)
+
+    # image-delete
+    p_image_delete = subparsers.add_parser(
+        "image-delete", help="Delete a golden image"
+    )
+    p_image_delete.add_argument("name", help="Image name to delete")
+    p_image_delete.set_defaults(func=cmd_image_delete)
 
     # start
     p_start = subparsers.add_parser("start", help="Start WAA container")

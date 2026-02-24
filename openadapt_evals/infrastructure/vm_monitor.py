@@ -14,7 +14,7 @@ Usage:
         ssh_host="172.171.112.41",
         ssh_user="azureuser",
         docker_container="winarena",
-        internal_ip="20.20.20.21",
+        internal_ip="localhost",
     )
 
     monitor = VMMonitor(config)
@@ -61,7 +61,7 @@ class VMConfig:
     waa_port: int = 5000
     qmp_port: int = 7200
     docker_container: str = "winarena"
-    internal_ip: str = "20.20.20.21"
+    internal_ip: str = "localhost"
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -371,6 +371,10 @@ class VMPool:
     total_tasks: int = 0
     completed_tasks: int = 0
     failed_tasks: int = 0
+    status: str = "active"  # active, paused
+    paused_since: str | None = None  # ISO timestamp when pool was paused
+    auto_pause_at: str | None = None  # ISO timestamp when pool will auto-pause
+    auto_pause_hours: int = 2  # Hours until auto-pause (0 = disabled)
 
 
 class VMPoolRegistry:
@@ -405,6 +409,10 @@ class VMPoolRegistry:
                         total_tasks=data.get("total_tasks", 0),
                         completed_tasks=data.get("completed_tasks", 0),
                         failed_tasks=data.get("failed_tasks", 0),
+                        status=data.get("status", "active"),
+                        paused_since=data.get("paused_since"),
+                        auto_pause_at=data.get("auto_pause_at"),
+                        auto_pause_hours=data.get("auto_pause_hours", 2),
                     )
             except (json.JSONDecodeError, KeyError) as e:
                 print(f"Warning: Could not load pool registry: {e}")
@@ -483,6 +491,19 @@ class VMPoolRegistry:
             return
         self._pool.completed_tasks += completed
         self._pool.failed_tasks += failed
+        self.save()
+
+    def update_pool_status(self, status: str, paused_since: str | None = None) -> None:
+        """Update pool status (e.g., active, paused).
+
+        Args:
+            status: New pool status string.
+            paused_since: ISO timestamp when pool was paused (None to clear).
+        """
+        if self._pool is None:
+            return
+        self._pool.status = status
+        self._pool.paused_since = paused_since
         self.save()
 
     def delete_pool(self) -> bool:

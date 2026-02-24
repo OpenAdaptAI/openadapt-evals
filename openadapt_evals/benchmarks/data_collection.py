@@ -137,6 +137,7 @@ class ExecutionStep:
     action: dict[str, Any]  # Serialized BenchmarkAction
     reasoning: str | None = None
     timestamp: float | None = None
+    agent_logs: dict[str, Any] | None = None
 
 
 class ExecutionTraceCollector:
@@ -265,6 +266,7 @@ class ExecutionTraceCollector:
         observation: BenchmarkObservation,
         action: BenchmarkAction,
         reasoning: str | None = None,
+        agent_logs: dict[str, Any] | None = None,
     ) -> None:
         """Record a single step in the execution trace.
 
@@ -273,6 +275,8 @@ class ExecutionTraceCollector:
             observation: Observation at this step.
             action: Action taken at this step.
             reasoning: Optional reasoning/thought from the agent.
+            agent_logs: Optional dict of agent metadata (LLM response,
+                parse strategy, timing, token usage, etc.).
         """
         if self._current_task is None:
             raise RuntimeError("No task started. Call start_task() first.")
@@ -292,6 +296,7 @@ class ExecutionTraceCollector:
             action=self._serialize_action(action),
             reasoning=reasoning,
             timestamp=datetime.now().timestamp(),
+            agent_logs=agent_logs,
         )
 
         self._current_steps.append(step)

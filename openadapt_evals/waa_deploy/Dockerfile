@@ -82,6 +82,11 @@ RUN sed -i 's|20.20.20.21|172.30.0.2|g' /entry_setup.sh && \
 RUN find /client -name "*.py" -exec sed -i 's|20.20.20.21|172.30.0.2|g' {} \; && \
     echo "Patched client Python files"
 
+# Add timeout to OpenAI API calls (prevents infinite hangs)
+RUN sed -i 's|openai.OpenAI(api_key=self.api_key)|openai.OpenAI(api_key=self.api_key, timeout=120.0)|' \
+    /client/mm_agents/navi/gpt/gpt4v_oai.py && \
+    echo "Patched OpenAI client with 120s timeout"
+
 # -----------------------------------------------------------------------------
 # Add API-backed agent support (Claude / OpenAI)
 # NOTE: API agents (api-claude, api-openai) are run EXTERNALLY via openadapt-evals CLI
@@ -91,6 +96,21 @@ RUN find /client -name "*.py" -exec sed -i 's|20.20.20.21|172.30.0.2|g' {} \; &&
 
 # Copy api_agent.py for reference (used externally by openadapt-evals)
 COPY api_agent.py /client/mm_agents/api_agent.py
+
+# -----------------------------------------------------------------------------
+# Deploy evaluate server (runs on Docker Linux side, NOT inside Windows)
+# The evaluate server imports WAA evaluator modules from /client/desktop_env/
+# and connects to the Windows VM at 172.30.0.2:5000 via PythonController.
+# It exposes /evaluate and /task/<task_id> endpoints on port 5050.
+# -----------------------------------------------------------------------------
+
+COPY evaluate_server.py /evaluate_server.py
+
+# Install flask for the evaluate server and socat for port forwarding
+RUN pip install flask requests-toolbelt 2>/dev/null || pip3 install flask requests-toolbelt 2>/dev/null || \
+    python -m pip install flask requests-toolbelt 2>/dev/null || \
+    echo "WARNING: flask/requests-toolbelt install failed, evaluate server may not work"
+RUN apt-get update -qq && apt-get install -y -qq socat && rm -rf /var/lib/apt/lists/*
 
 # -----------------------------------------------------------------------------
 # Fix Windows setup for automation
@@ -207,10 +227,15 @@ ENV VERSION="11e"
 ENV ARGUMENTS="-qmp tcp:0.0.0.0:7200,server,nowait"
 
 # Expose ports
-EXPOSE 8006 5000 7200 3389
+EXPOSE 8006 5000 5050 7200 3389
 
-# Default entrypoint - use dockurr/windows's native entry point
-# The OEM files are copied by samba.sh (patched above) when Samba starts
-# dockurr/windows handles: QEMU VM startup, Samba, VNC, Windows boot
-# Our patched autounattend.xml handles: FirstLogonCommands that run install.bat
-ENTRYPOINT ["/usr/bin/tini", "-s", "/run/entry.sh"]
+# -----------------------------------------------------------------------------
+# Entrypoint: start evaluate server + dockurr/windows entry point
+# The evaluate server runs on port 5050 and provides /evaluate + /task/<id>
+# endpoints using WAA's evaluator modules from the Docker Linux side.
+# -----------------------------------------------------------------------------
+
+COPY start_with_evaluate.sh /run/start_with_evaluate.sh
+RUN chmod +x /run/start_with_evaluate.sh
+
+ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/run/start_with_evaluate.sh"]

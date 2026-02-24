@@ -112,6 +112,9 @@ class WAALiveConfig:
 
     Attributes:
         server_url: URL of WAA Flask server (e.g., "http://172.171.112.41:5000").
+        evaluate_url: URL of evaluate server (e.g., "http://localhost:5050").
+            If None, defaults to server_url. The evaluate server runs on the
+            Docker Linux side (port 5050) and has access to WAA evaluator modules.
         a11y_backend: Accessibility backend ("uia" or "win32").
         screen_width: Screen width in pixels.
         screen_height: Screen height in pixels.
@@ -124,6 +127,7 @@ class WAALiveConfig:
     """
 
     server_url: str = "http://localhost:5000"
+    evaluate_url: str | None = None
     a11y_backend: str = "uia"
     screen_width: int = 1920
     screen_height: int = 1200
@@ -154,6 +158,7 @@ class WAALiveAdapter(BenchmarkAdapter):
         self._current_rects: dict[str, list[int]] = {}  # element_id -> [l, t, r, b]
         self._current_screenshot: bytes | None = None
         self._actions: list[BenchmarkAction] = []
+        self._actual_screen_size: tuple[int, int] | None = None
 
     @property
     def name(self) -> str:
@@ -220,17 +225,20 @@ class WAALiveAdapter(BenchmarkAdapter):
 
         import requests
 
-        # Try to load from server first
-        try:
-            resp = requests.get(
-                f"{self.config.server_url}/task/{task_id}",
-                timeout=10.0,
-            )
-            if resp.status_code == 200:
-                config = resp.json()
-                return self._create_task_from_config(task_id, config)
-        except Exception:
-            pass  # Server doesn't support /task endpoint, try other methods
+        # Try to load from evaluate server first (has /task/<id> endpoint
+        # that reads task configs from WAA's evaluation_examples_windows/)
+        evaluate_base = self.config.evaluate_url or self.config.server_url
+        for base_url in [evaluate_base, self.config.server_url]:
+            try:
+                resp = requests.get(
+                    f"{base_url}/task/{task_id}",
+                    timeout=10.0,
+                )
+                if resp.status_code == 200:
+                    config = resp.json()
+                    return self._create_task_from_config(task_id, config)
+            except Exception:
+                continue
 
         # Try to load from local WAA examples directory
         if hasattr(self.config, "waa_examples_path") and self.config.waa_examples_path:
@@ -367,12 +375,15 @@ class WAALiveAdapter(BenchmarkAdapter):
         except Exception as e:
             logger.warning(f"Failed to close windows: {e}")
 
+        # Dismiss system notifications (OneDrive, etc.) that persist through close_all
+        self._dismiss_notifications(requests)
+
         # If task has setup commands in raw_config, execute them
         if task.raw_config:
             self._run_task_setup(task.raw_config)
 
-        # Small delay for UI to settle
-        time.sleep(1.0)
+        # Delay for UI to settle after setup (WAA uses 5s)
+        time.sleep(5.0)
 
         return self._get_observation()
 
@@ -467,10 +478,15 @@ class WAALiveAdapter(BenchmarkAdapter):
             elif last_action.answer:
                 eval_request["agent_last_action"] = last_action.answer
 
+        # Determine evaluate URL: prefer dedicated evaluate server (port 5050),
+        # fall back to WAA server's /evaluate endpoint
+        evaluate_base = self.config.evaluate_url or self.config.server_url
+        evaluate_endpoint = f"{evaluate_base}/evaluate"
+
         # Try the /evaluate endpoint
         try:
             resp = requests.post(
-                f"{self.config.server_url}/evaluate",
+                evaluate_endpoint,
                 json=eval_request,
                 timeout=self.config.timeout,
             )
@@ -485,12 +501,12 @@ class WAALiveAdapter(BenchmarkAdapter):
                     reason=result.get("reason"),
                 )
 
-            elif resp.status_code == 404:
-                # /evaluate endpoint not available - fall back to heuristic
+            elif resp.status_code == 404 or (
+                resp.status_code == 500 and "404 Not Found" in resp.text
+            ):
                 logger.warning(
-                    "/evaluate endpoint not found on WAA server. "
-                    "Deploy openadapt_evals.server.evaluate_endpoint to enable "
-                    "proper evaluation."
+                    f"/evaluate endpoint not found at {evaluate_endpoint}. "
+                    "Ensure the evaluate server is running on port 5050."
                 )
                 return self._evaluate_fallback(task)
 
@@ -591,6 +607,14 @@ class WAALiveAdapter(BenchmarkAdapter):
             if resp.status_code == 200:
                 screenshot = resp.content
                 self._current_screenshot = screenshot
+                # Detect actual screen dimensions from screenshot
+                try:
+                    from io import BytesIO
+                    from PIL import Image
+                    img = Image.open(BytesIO(screenshot))
+                    self._actual_screen_size = img.size
+                except Exception:
+                    pass
                 logger.debug(f"Got screenshot: {len(screenshot)} bytes")
             else:
                 logger.warning(f"Screenshot request failed: {resp.status_code}")
@@ -626,7 +650,7 @@ class WAALiveAdapter(BenchmarkAdapter):
 
         return BenchmarkObservation(
             screenshot=screenshot,
-            viewport=(self.config.screen_width, self.config.screen_height),
+            viewport=self._actual_screen_size or (self.config.screen_width, self.config.screen_height),
             accessibility_tree=a11y_tree,
             window_title=self._extract_window_title(a11y_tree),
         )
@@ -727,7 +751,8 @@ class WAALiveAdapter(BenchmarkAdapter):
             screenshot_b64 = base64.b64encode(self._current_screenshot).decode("utf-8")
 
         # Window rect (full screen for now)
-        window_rect = [0, 0, self.config.screen_width, self.config.screen_height]
+        screen_w, screen_h = self._actual_screen_size or (self.config.screen_width, self.config.screen_height)
+        window_rect = [0, 0, screen_w, screen_h]
 
         payload = {
             "rects": self._current_rects,
@@ -752,40 +777,69 @@ class WAALiveAdapter(BenchmarkAdapter):
     def _run_task_setup(self, raw_config: dict) -> None:
         """Run task setup commands from raw_config.
 
+        WAA tasks use a 'config' array of {type, parameters} objects specifying
+        preconditions (file downloads, app launches, sleeps). We POST this array
+        to the evaluate server's /setup endpoint which processes each entry.
+
         Args:
             raw_config: Task configuration with setup commands.
         """
+        config = raw_config.get("config", [])
+        if not config:
+            return
+
         import requests
 
-        # Handle different setup command formats
-        setup = raw_config.get("setup", raw_config.get("init", {}))
+        evaluate_base = self.config.evaluate_url or self.config.server_url
+        try:
+            resp = requests.post(
+                f"{evaluate_base}/setup",
+                json={"config": config},
+                timeout=120.0,
+            )
+            if resp.status_code == 200:
+                results = resp.json().get("results", [])
+                for r in results:
+                    status = r.get("status", "unknown")
+                    logger.info(f"Setup {r.get('type')}: {status}")
+            else:
+                logger.error(
+                    f"Setup failed: {resp.status_code} {resp.text[:200]}"
+                )
+        except Exception as e:
+            logger.error(f"Setup request failed: {e}")
 
-        if isinstance(setup, dict):
-            # Launch application if specified
-            if "app" in setup or "application" in setup:
-                app = setup.get("app") or setup.get("application")
-                try:
-                    requests.post(
-                        f"{self.config.server_url}/setup/launch",
-                        json={"app": app},
-                        timeout=30.0
-                    )
-                    logger.info(f"Launched app: {app}")
-                except Exception as e:
-                    logger.warning(f"Failed to launch app: {e}")
+    def _dismiss_notifications(self, requests_module) -> None:
+        """Dismiss system notifications that persist through close_all.
 
-            # Run shell commands if specified
-            if "commands" in setup:
-                for cmd in setup["commands"]:
-                    try:
-                        requests.post(
-                            f"{self.config.server_url}/execute_windows",
-                            json={"command": cmd, "shell": "powershell"},
-                            timeout=60.0
-                        )
-                        logger.info(f"Ran setup command: {cmd[:50]}...")
-                    except Exception as e:
-                        logger.warning(f"Setup command failed: {e}")
+        OneDrive "Turn On Windows Backup" and similar toast notifications
+        are not closeable via close_all (they're system toasts, not windows).
+        Kill the notification processes and dismiss via keyboard.
+        """
+        evaluate_base = self.config.evaluate_url or self.config.server_url
+        # Kill OneDrive and related notification processes
+        commands = [
+            "taskkill /F /IM OneDrive.exe /T",
+            "taskkill /F /IM OneDriveStandaloneUpdater.exe /T",
+            # Dismiss any remaining toast notifications via Action Center
+            (
+                "powershell -Command \""
+                "Get-Process -Name 'ShellExperienceHost' -ErrorAction SilentlyContinue | "
+                "ForEach-Object { $_.CloseMainWindow() }\""
+            ),
+        ]
+        for cmd in commands:
+            try:
+                requests_module.post(
+                    f"{evaluate_base}/setup",
+                    json={"config": [
+                        {"type": "execute", "parameters": {"command": cmd, "shell": True}},
+                    ]},
+                    timeout=10.0,
+                )
+            except Exception:
+                pass  # Best-effort; don't fail reset if notification kill fails
+        logger.debug("Dismissed system notifications")
 
     def _translate_action(self, action: BenchmarkAction) -> str | None:
         """Translate BenchmarkAction to element-based command for WAA's Computer.
@@ -843,16 +897,18 @@ class WAALiveAdapter(BenchmarkAdapter):
                     start_x = (rect[0] + rect[2]) // 2
                     start_y = (rect[1] + rect[3]) // 2
             elif action.x is not None and action.y is not None:
-                start_x = action.x if not isinstance(action.x, float) or action.x > 1 else int(action.x * self.config.screen_width)
-                start_y = action.y if not isinstance(action.y, float) or action.y > 1 else int(action.y * self.config.screen_height)
+                screen_w, screen_h = self._actual_screen_size or (self.config.screen_width, self.config.screen_height)
+                start_x = action.x if not isinstance(action.x, float) or action.x > 1 else int(action.x * screen_w)
+                start_y = action.y if not isinstance(action.y, float) or action.y > 1 else int(action.y * screen_h)
 
             # Get end position
+            screen_w, screen_h = self._actual_screen_size or (self.config.screen_width, self.config.screen_height)
             end_x = action.end_x or 0
             end_y = action.end_y or 0
             if isinstance(end_x, float) and 0 <= end_x <= 1:
-                end_x = int(end_x * self.config.screen_width)
+                end_x = int(end_x * screen_w)
             if isinstance(end_y, float) and 0 <= end_y <= 1:
-                end_y = int(end_y * self.config.screen_height)
+                end_y = int(end_y * screen_h)
 
             return f"import pyautogui; pyautogui.moveTo({int(start_x)}, {int(start_y)}); pyautogui.drag({int(end_x - start_x)}, {int(end_y - start_y)}, duration=0.5)"
 
@@ -893,10 +949,11 @@ class WAALiveAdapter(BenchmarkAdapter):
         y = action.y if action.y is not None else 0
 
         # Convert normalized coordinates to pixels
+        screen_w, screen_h = self._actual_screen_size or (self.config.screen_width, self.config.screen_height)
         if isinstance(x, float) and 0 <= x <= 1:
-            x = int(x * self.config.screen_width)
+            x = int(x * screen_w)
         if isinstance(y, float) and 0 <= y <= 1:
-            y = int(y * self.config.screen_height)
+            y = int(y * screen_h)
 
         return f"import pyautogui; pyautogui.{pyautogui_method}({int(x)}, {int(y)})"
 
