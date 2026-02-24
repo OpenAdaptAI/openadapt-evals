@@ -1,6 +1,23 @@
 # CHANGELOG
 
 
+## v0.6.0 (2026-02-24)
+
+### Features
+
+- **qwen3vl**: Add PEFT adapter loading support
+  ([`7ed1629`](https://github.com/OpenAdaptAI/openadapt-evals/commit/7ed1629f152d76264edc31b27042b6a7280b4491))
+
+Qwen3VLAgent._load_model() now detects PEFT adapter directories (containing adapter_config.json) and
+  automatically loads the base model first, then applies the adapter via
+  PeftModel.from_pretrained().
+
+This enables running inference with fine-tuned LoRA checkpoints by simply passing the adapter
+  directory as model_path.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.5.0 (2026-02-24)
 
 ### Features
