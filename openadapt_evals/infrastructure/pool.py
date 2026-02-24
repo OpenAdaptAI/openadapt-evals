@@ -77,10 +77,11 @@ sudo systemctl start docker
 sudo systemctl enable docker
 sudo usermod -aG docker $USER
 
-# Configure Docker to use /mnt (larger temp disk)
+# Configure Docker to use persistent storage (NOT /mnt which is ephemeral
+# and gets wiped on VM deallocate, breaking pool-resume)
 sudo systemctl stop docker
-sudo mkdir -p /mnt/docker
-sudo bash -c 'echo "{\\"data-root\\": \\"/mnt/docker\\"}" > /etc/docker/daemon.json'
+sudo mkdir -p /home/azureuser/docker
+sudo bash -c 'echo "{\\"data-root\\": \\"/home/azureuser/docker\\"}" > /etc/docker/daemon.json'
 sudo systemctl start docker
 
 # Pull base images (use sudo since usermod hasn't taken effect yet)
@@ -110,10 +111,11 @@ sudo systemctl start docker
 sudo systemctl enable docker
 sudo usermod -aG docker $USER
 
-# Configure Docker to use /mnt (larger temp disk)
+# Configure Docker to use persistent storage (NOT /mnt which is ephemeral
+# and gets wiped on VM deallocate, breaking pool-resume)
 sudo systemctl stop docker
-sudo mkdir -p /mnt/docker
-sudo bash -c 'echo "{{\\"data-root\\": \\"/mnt/docker\\"}}" > /etc/docker/daemon.json'
+sudo mkdir -p /home/azureuser/docker
+sudo bash -c 'echo "{{\\"data-root\\": \\"/home/azureuser/docker\\"}}" > /etc/docker/daemon.json'
 sudo systemctl start docker
 
 # Pull pre-built image from ACR (faster than building)

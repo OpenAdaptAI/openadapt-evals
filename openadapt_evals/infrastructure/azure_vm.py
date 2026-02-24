@@ -665,6 +665,7 @@ class AzureVMManager:
                 "image_reference": {"id": image_id} if image_id else _UBUNTU_2204_IMAGE,
                 "os_disk": {
                     "create_option": "FromImage",
+                    "disk_size_gb": 128,
                     "managed_disk": {"storage_account_type": "Premium_LRS"},
                 },
             },
