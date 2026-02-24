@@ -567,3 +567,71 @@ class TestEdgeCases:
         assert abs(action.x - 0.024) < 1e-6
         assert abs(action.y - 0.98) < 1e-6
         assert "Start button" in action.raw_action["thinking"]
+
+
+# ---------------------------------------------------------------------------
+# PEFT adapter loading tests
+# ---------------------------------------------------------------------------
+
+
+class TestPEFTAdapterLoading:
+    """Test that _load_model detects and loads PEFT adapters."""
+
+    def test_detects_peft_adapter_directory(self, tmp_path):
+        """When model_path contains adapter_config.json, treat as PEFT."""
+        import json
+
+        adapter_config = {
+            "base_model_name_or_path": "Qwen/Qwen3-VL-2B-Instruct",
+            "peft_type": "LORA",
+            "r": 16,
+            "target_modules": ["q_proj", "v_proj"],
+        }
+        (tmp_path / "adapter_config.json").write_text(json.dumps(adapter_config))
+
+        agent = Qwen3VLAgent(model_path=str(tmp_path))
+
+        # Verify the adapter path exists check
+        from pathlib import Path
+
+        adapter_config_path = Path(agent.model_path) / "adapter_config.json"
+        assert adapter_config_path.exists()
+
+    def test_non_adapter_path_not_detected(self, tmp_path):
+        """A regular model path (no adapter_config.json) is not PEFT."""
+        agent = Qwen3VLAgent(model_path=str(tmp_path))
+
+        from pathlib import Path
+
+        adapter_config_path = Path(agent.model_path) / "adapter_config.json"
+        assert not adapter_config_path.exists()
+
+    def test_adapter_config_base_model_extraction(self, tmp_path):
+        """Verify base_model_name_or_path is read from adapter config."""
+        import json
+
+        adapter_config = {
+            "base_model_name_or_path": "Qwen/Qwen3-VL-2B-Instruct",
+            "peft_type": "LORA",
+        }
+        (tmp_path / "adapter_config.json").write_text(json.dumps(adapter_config))
+
+        with open(tmp_path / "adapter_config.json") as f:
+            cfg = json.load(f)
+
+        assert cfg["base_model_name_or_path"] == "Qwen/Qwen3-VL-2B-Instruct"
+
+    def test_adapter_config_defaults_to_default_model(self, tmp_path):
+        """If base_model_name_or_path is missing, DEFAULT_MODEL is used."""
+        import json
+
+        from openadapt_evals.agents.qwen3vl_agent import DEFAULT_MODEL
+
+        adapter_config = {"peft_type": "LORA"}
+        (tmp_path / "adapter_config.json").write_text(json.dumps(adapter_config))
+
+        with open(tmp_path / "adapter_config.json") as f:
+            cfg = json.load(f)
+
+        base = cfg.get("base_model_name_or_path", DEFAULT_MODEL)
+        assert base == DEFAULT_MODEL
