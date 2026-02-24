@@ -1,6 +1,29 @@
 # CHANGELOG
 
 
+## v0.4.1 (2026-02-24)
+
+### Bug Fixes
+
+- **docs**: Use absolute URLs for README images and links on PyPI
+  ([#36](https://github.com/OpenAdaptAI/openadapt-evals/pull/36),
+  [`0143911`](https://github.com/OpenAdaptAI/openadapt-evals/commit/01439117c4e822c2ad13cd4f6b92f9cef1d6078b))
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+### Documentation
+
+- Update README with eval-suite, demo pipeline, golden images, and CI badge
+  ([`444d014`](https://github.com/OpenAdaptAI/openadapt-evals/commit/444d014e7104ab90be2ca159eb3f4b5ade5954aa))
+
+- Add Tests CI badge - Add ClaudeComputerUseAgent to agents list - Add demo-conditioned evaluation
+  section (record-waa, annotate, eval) - Add eval-suite to benchmark CLI table - Add pool-pause,
+  pool-resume, image-create, image-list to VM CLI table - Update contributing section to use uv
+  instead of pip
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.4.0 (2026-02-24)
 
 ### Features
