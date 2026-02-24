@@ -28,8 +28,8 @@ Usage:
     # With demo conditioning
     agent = Qwen3VLAgent(demo="Step 0: click(x=450, y=950)...")
 
-    # Fine-tuned checkpoint
-    agent = Qwen3VLAgent(model_path="/path/to/finetuned/checkpoint")
+    # Fine-tuned PEFT adapter (auto-detects base model from adapter_config.json)
+    agent = Qwen3VLAgent(model_path="/path/to/peft/adapter/")
 """
 
 from __future__ import annotations
@@ -360,6 +360,10 @@ class Qwen3VLAgent(BenchmarkAgent):
     def _load_model(self) -> None:
         """Lazy-load model and processor on first inference call.
 
+        If ``model_path`` points to a PEFT adapter directory (contains
+        ``adapter_config.json``), the base model is loaded first and
+        the adapter is applied on top via ``PeftModel.from_pretrained``.
+
         Raises:
             RuntimeError: If transformers/torch is not installed or model
                 loading fails.
@@ -388,7 +392,27 @@ class Qwen3VLAgent(BenchmarkAgent):
         }
         resolved_dtype = dtype_map.get(self.torch_dtype, "auto")
 
-        logger.info(f"Loading model: {self.model_path}")
+        # Check if model_path is a PEFT adapter directory
+        adapter_config_path = Path(self.model_path) / "adapter_config.json"
+        is_peft_adapter = adapter_config_path.exists()
+
+        if is_peft_adapter:
+            import json
+
+            with open(adapter_config_path) as f:
+                adapter_cfg = json.load(f)
+            base_model_id = adapter_cfg.get(
+                "base_model_name_or_path", DEFAULT_MODEL
+            )
+            logger.info(
+                f"PEFT adapter detected at {self.model_path}, "
+                f"base model: {base_model_id}"
+            )
+            hf_model_id = base_model_id
+        else:
+            hf_model_id = self.model_path
+
+        logger.info(f"Loading model: {hf_model_id}")
 
         # Qwen3-VL uses the same architecture class as Qwen2.5-VL in
         # current transformers versions. Try AutoModelForVision2Seq first
@@ -397,7 +421,7 @@ class Qwen3VLAgent(BenchmarkAgent):
             from transformers import AutoModelForVision2Seq
 
             self._model = AutoModelForVision2Seq.from_pretrained(
-                self.model_path,
+                hf_model_id,
                 torch_dtype=resolved_dtype,
                 device_map=self.device,
             )
@@ -405,13 +429,22 @@ class Qwen3VLAgent(BenchmarkAgent):
             from transformers import Qwen2_5_VLForConditionalGeneration
 
             self._model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-                self.model_path,
+                hf_model_id,
                 torch_dtype=resolved_dtype,
                 device_map=self.device,
             )
 
+        # Apply PEFT adapter if detected
+        if is_peft_adapter:
+            from peft import PeftModel
+
+            logger.info(f"Applying PEFT adapter from {self.model_path}")
+            self._model = PeftModel.from_pretrained(
+                self._model, self.model_path
+            )
+
         self._processor = AutoProcessor.from_pretrained(
-            self.model_path,
+            hf_model_id,
             min_pixels=self.min_pixels,
             max_pixels=self.max_pixels,
         )
