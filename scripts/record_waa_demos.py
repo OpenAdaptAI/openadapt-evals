@@ -2,21 +2,39 @@
 """Record WAA task demos with guided workflow.
 
 This script guides you through recording demos for WAA benchmark tasks.
-It handles everything: shows instructions, records, and sends via wormhole.
+Supports local recording (via openadapt-capture), remote interactive recording
+(via WAA API + VNC), VLM annotation, and demo-conditioned evaluation.
 
 Usage:
-    python record_waa_demos.py
+    # Local recording (original workflow)
+    python record_waa_demos.py record
 
-Requirements (auto-installed if missing):
-    - openadapt-capture
-    - magic-wormhole
+    # Interactive recording via WAA API (user performs actions on VNC)
+    python record_waa_demos.py record-waa \
+      --tasks 04d9aeaf,0a0faba3 \
+      --server http://localhost:5001 \
+      --output waa_recordings/
+
+    # VLM annotation of recorded screenshots
+    python record_waa_demos.py annotate \
+      --recordings waa_recordings/ \
+      --output annotated_demos/ \
+      --provider openai
+
+    # Run demo-conditioned eval (wraps eval-suite)
+    python record_waa_demos.py eval \
+      --demo_dir annotated_demos/ \
+      --tasks 04d9aeaf,0a0faba3 \
+      --agent api-openai
 """
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 # WAA tasks to record
@@ -66,6 +84,22 @@ TASKS = [
             "Cut (Ctrl+X), open Archive folder, Paste (Ctrl+V)",
         ],
     },
+]
+
+# 12 harder WAA task IDs for demo-conditioned eval
+HARDER_TASK_IDS = [
+    "04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS",
+    "0a0faba3-5580-44df-965d-f562a99b291c-WOS",
+    "0bf05a7d-b28b-44d2-955a-50b41e24012a-WOS",
+    "0e763496-b6bb-4508-a427-fad0b6c3e195-WOS",
+    "4bcb1253-a636-4df4-8cb0-a35c04dfef31-WOS",
+    "70745df8-f2f5-42bd-8074-fbc10334fcc5-2-WOS",
+    "8b1ce5f2-59d2-4dcc-b0b0-666a714b9a14-WOS",
+    "e2b5e914-ffe1-44d2-8e92-58f8c5d92bb2-WOS",
+    "ec71221e-ac43-46f9-89b8-ee7d80f7e1c5-WOS",
+    "fba2c100-79e8-42df-ae74-b592418d54f4-WOS",
+    "INF-0d95d28a-9587-433b-a805-1fbe5467d598-WOS",
+    "INF-5ac2891a-eacd-4954-b339-98abba077adb-WOS",
 ]
 
 # File names for the docx setup task
@@ -329,5 +363,441 @@ def main() -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# WAA API interactive recording
+# ---------------------------------------------------------------------------
+
+
+def cmd_record_waa(
+    tasks: str = ",".join(HARDER_TASK_IDS),
+    server: str = "http://localhost:5001",
+    evaluate_url: str = "http://localhost:5050",
+    output: str = "waa_recordings",
+) -> None:
+    """Record demos interactively via WAA API while user performs actions on VNC.
+
+    Args:
+        tasks: Comma-separated task IDs (or prefix matches).
+        server: WAA server URL.
+        evaluate_url: Evaluate server URL (for /task/<id> lookups).
+        output: Output directory for recordings.
+    """
+    import requests
+
+    output_dir = Path(output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Parse task IDs — support prefix matching against HARDER_TASK_IDS
+    raw_ids = [t.strip() for t in tasks.split(",") if t.strip()]
+    task_ids = []
+    for raw in raw_ids:
+        # Try exact match first
+        if any(raw == tid for tid in HARDER_TASK_IDS):
+            task_ids.append(raw)
+        else:
+            # Prefix match
+            matches = [tid for tid in HARDER_TASK_IDS if tid.startswith(raw)]
+            if len(matches) == 1:
+                task_ids.append(matches[0])
+            elif len(matches) > 1:
+                print(f"Ambiguous prefix '{raw}' matches: {matches}")
+                return
+            else:
+                # Not in HARDER_TASK_IDS — use as-is (custom task ID)
+                task_ids.append(raw)
+
+    # Verify connection
+    print(f"Connecting to WAA server at {server}...")
+    try:
+        resp = requests.get(f"{server}/probe", timeout=5)
+        resp.raise_for_status()
+        print(f"  Connected ({resp.status_code})")
+    except Exception as e:
+        print(f"  Failed to connect: {e}")
+        print("  Make sure the WAA server is running and SSH tunnels are up.")
+        return
+
+    print(f"Recording {len(task_ids)} task(s) to {output_dir}\n")
+
+    recorded = []
+    for task_num, task_id in enumerate(task_ids, 1):
+        print_header(f"Task {task_num}/{len(task_ids)}: {task_id[:12]}...")
+
+        task_dir = output_dir / task_id
+        task_dir.mkdir(parents=True, exist_ok=True)
+
+        # Load task config from evaluate server
+        instruction = task_id  # fallback
+        task_config = {}
+        try:
+            task_resp = requests.get(
+                f"{evaluate_url}/task/{task_id}", timeout=10
+            )
+            if task_resp.ok:
+                task_config = task_resp.json()
+                instruction = task_config.get(
+                    "instruction", task_config.get("task", task_id)
+                )
+        except Exception as e:
+            print(f"  Warning: could not load task config: {e}")
+
+        # Reset environment
+        print("  Resetting environment...")
+        try:
+            requests.post(f"{server}/setup/close_all", timeout=30)
+            time.sleep(2)
+            setup_config = task_config.get("config")
+            if setup_config:
+                requests.post(
+                    f"{server}/setup", json=setup_config, timeout=30
+                )
+            time.sleep(5)
+        except Exception as e:
+            print(f"  Warning: environment reset failed: {e}")
+
+        # Take initial screenshot
+        print("  Taking initial screenshot...")
+        before_png = requests.get(f"{server}/screenshot", timeout=30).content
+
+        print(f"\n  Task: {instruction}")
+        print("  Open VNC and perform the task step by step.")
+        print("  After each action, come back here and press Enter.\n")
+
+        steps = []
+        step_idx = 0
+        while True:
+            # Save before screenshot
+            (task_dir / f"step_{step_idx:02d}_before.png").write_bytes(
+                before_png
+            )
+
+            action_desc = input(
+                f"  Step {step_idx + 1}: Press Enter after action "
+                "(or 'd' if done, 'r' to redo last): "
+            ).strip()
+
+            if action_desc.lower() == "d":
+                # Save final screenshot as the last after
+                after_png = requests.get(
+                    f"{server}/screenshot", timeout=30
+                ).content
+                (task_dir / f"step_{step_idx:02d}_after.png").write_bytes(
+                    after_png
+                )
+                steps.append({"action_hint": action_desc or None})
+                step_idx += 1
+                break
+
+            if action_desc.lower() == "r" and step_idx > 0:
+                # Redo: go back one step
+                step_idx -= 1
+                steps.pop()
+                # Re-take the before screenshot from current state
+                before_png = requests.get(
+                    f"{server}/screenshot", timeout=30
+                ).content
+                print(f"  Redoing step {step_idx + 1}...")
+                continue
+
+            # Take after screenshot
+            after_png = requests.get(
+                f"{server}/screenshot", timeout=30
+            ).content
+            (task_dir / f"step_{step_idx:02d}_after.png").write_bytes(
+                after_png
+            )
+
+            steps.append({"action_hint": action_desc or None})
+            before_png = after_png  # next step's before = this step's after
+            step_idx += 1
+
+        # Save metadata
+        meta = {
+            "task_id": task_id,
+            "instruction": instruction,
+            "num_steps": len(steps),
+            "steps": steps,
+            "server_url": server,
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+        }
+        (task_dir / "meta.json").write_text(
+            json.dumps(meta, indent=2), encoding="utf-8"
+        )
+
+        recorded.append(task_id)
+        print(f"\n  Saved {len(steps)} step(s) to {task_dir}")
+
+    # Summary
+    print_header("Recording Summary")
+    print(f"  Recorded: {len(recorded)}/{len(task_ids)} tasks")
+    for tid in recorded:
+        print(f"    {tid}")
+    print(f"\n  Output directory: {output_dir}")
+    print(
+        f"\n  Next: python {__file__} annotate "
+        f"--recordings {output_dir} --output annotated_demos/"
+    )
+
+
+# ---------------------------------------------------------------------------
+# VLM annotation of WAA recordings
+# ---------------------------------------------------------------------------
+
+
+def cmd_annotate_waa(
+    recordings: str = "waa_recordings",
+    output: str = "annotated_demos",
+    provider: str = "openai",
+    model: str | None = None,
+    api_key: str | None = None,
+) -> None:
+    """Annotate WAA recordings with VLM to produce structured demo traces.
+
+    Args:
+        recordings: Directory containing task recording subdirectories.
+        output: Output directory for annotated demo JSON/TXT files.
+        provider: VLM provider ("openai", "anthropic", "google").
+        model: Model override (default: provider's default).
+        api_key: API key override.
+    """
+    from PIL import Image
+
+    from openadapt_ml.experiments.demo_prompt.annotate import (
+        ANNOTATION_STEP_PROMPT,
+        ANNOTATION_SYSTEM_PROMPT,
+        AnnotatedDemo,
+        AnnotatedStep,
+        _parse_annotation_response,
+        format_annotated_demo,
+        validate_annotations,
+    )
+    from openadapt_ml.models.providers import get_provider
+
+    recordings_dir = Path(recordings)
+    output_dir = Path(output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Find task directories with meta.json
+    task_dirs = sorted(
+        d for d in recordings_dir.iterdir()
+        if d.is_dir() and (d / "meta.json").exists()
+    )
+
+    if not task_dirs:
+        print(f"No recordings found in {recordings_dir}")
+        return
+
+    print(f"Found {len(task_dirs)} recording(s) to annotate")
+    print(f"Provider: {provider}, Model: {model or 'default'}\n")
+
+    prov = get_provider(provider)
+    if api_key is None:
+        api_key = prov.get_api_key()
+    client = prov.create_client(api_key)
+    resolved_model = model or prov.default_model
+
+    for task_dir in task_dirs:
+        meta = json.loads((task_dir / "meta.json").read_text(encoding="utf-8"))
+        task_id = meta["task_id"]
+        instruction = meta["instruction"]
+        num_steps = meta["num_steps"]
+
+        print(f"{'=' * 60}")
+        print(f"Annotating: {task_id[:40]}... ({num_steps} steps)")
+        print(f"{'=' * 60}")
+
+        annotated_steps = []
+        prev_annotation = None
+
+        for i in range(num_steps):
+            before_path = task_dir / f"step_{i:02d}_before.png"
+            after_path = task_dir / f"step_{i:02d}_after.png"
+
+            if not before_path.exists():
+                print(f"  Step {i}: missing before screenshot, skipping")
+                continue
+
+            img_before = Image.open(before_path)
+            img_after = Image.open(after_path) if after_path.exists() else None
+
+            # Build action_raw from hints if available
+            step_meta = meta.get("steps", [{}])
+            action_hint = ""
+            if i < len(step_meta):
+                action_hint = step_meta[i].get("action_hint") or ""
+            action_raw = action_hint or f"(user action at step {i + 1})"
+
+            # Build previous context
+            previous_context = ""
+            if prev_annotation is not None:
+                previous_context = (
+                    f"Previous step: {prev_annotation.action}\n"
+                    f"Previous result: {prev_annotation.result_observation}\n"
+                )
+
+            no_after_note = ""
+            if img_after is None:
+                no_after_note = (
+                    " (No AFTER image available — describe expected result only.)"
+                )
+
+            prompt_text = ANNOTATION_STEP_PROMPT.format(
+                instruction=instruction,
+                step_num=i + 1,
+                total_steps=num_steps,
+                action_raw=action_raw,
+                previous_context=previous_context,
+                no_after_note=no_after_note,
+            )
+
+            # Build content blocks with images
+            content = [
+                {"type": "text", "text": prompt_text},
+                {"type": "text", "text": "BEFORE image:"},
+                prov.encode_image(img_before),
+            ]
+            if img_after is not None:
+                content.append({"type": "text", "text": "AFTER image:"})
+                content.append(prov.encode_image(img_after))
+
+            print(f"  Step {i + 1}/{num_steps}...", end=" ", flush=True)
+
+            try:
+                response = prov.send_message(
+                    client,
+                    model=resolved_model,
+                    system=ANNOTATION_SYSTEM_PROMPT,
+                    content=content,
+                    max_tokens=512,
+                    temperature=0.1,
+                )
+                parsed = _parse_annotation_response(response)
+            except Exception as e:
+                print(f"error: {e}")
+                parsed = {
+                    "observation": "",
+                    "intent": "",
+                    "action": action_raw,
+                    "result_observation": "",
+                    "expected_result": "",
+                }
+
+            annotated = AnnotatedStep(
+                step_index=i,
+                timestamp_ms=None,
+                observation=parsed.get("observation", ""),
+                intent=parsed.get("intent", ""),
+                action=parsed.get("action", action_raw),
+                action_raw=action_raw,
+                action_px=None,
+                result_observation=parsed.get("result_observation", ""),
+                expected_result=parsed.get("expected_result", ""),
+            )
+            annotated_steps.append(annotated)
+            prev_annotation = annotated
+            print("done")
+
+        demo = AnnotatedDemo(
+            schema_version="0.1",
+            task_id=task_id,
+            instruction=instruction,
+            source="recorded",
+            annotator={"provider": provider, "model": resolved_model},
+            recording_meta={
+                "platform": "windows",
+                "screen_px": None,
+                "source": "waa_api_recording",
+                "raw_step_count": num_steps,
+                "annotated_step_count": len(annotated_steps),
+            },
+            steps=annotated_steps,
+        )
+
+        # Save JSON
+        json_path = output_dir / f"{task_id}.json"
+        demo.save(json_path)
+
+        # Save formatted text for eval-suite
+        txt = format_annotated_demo(demo, compact=True)
+        txt_path = output_dir / f"{task_id}.txt"
+        txt_path.write_text(txt, encoding="utf-8")
+
+        # Validate
+        warnings = validate_annotations(demo)
+        if warnings:
+            print(f"  Warnings ({len(warnings)}):")
+            for w in warnings:
+                print(f"    - {w}")
+        else:
+            print("  Validation: all checks passed")
+
+        print(f"  -> {json_path}")
+        print(f"  -> {txt_path}\n")
+
+    print_header("Annotation Summary")
+    print(f"  Annotated: {len(task_dirs)} recording(s)")
+    print(f"  Output: {output_dir}")
+    print(
+        f"\n  Next: python {__file__} eval "
+        f"--demo_dir {output_dir} --tasks <task_ids>"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Demo-conditioned eval (delegates to eval-suite)
+# ---------------------------------------------------------------------------
+
+
+def cmd_eval_dc(
+    demo_dir: str = "annotated_demos",
+    tasks: str = ",".join(HARDER_TASK_IDS),
+    agent: str = "api-openai",
+    server: str = "http://localhost:5001",
+    evaluate_url: str = "http://localhost:5050",
+    max_steps: int = 15,
+    output: str = "benchmark_results",
+    suite_name: str | None = None,
+) -> None:
+    """Run demo-conditioned evaluation using eval-suite.
+
+    Args:
+        demo_dir: Directory with annotated demos (.json/.txt files).
+        tasks: Comma-separated task IDs.
+        agent: Agent type (api-openai, api-claude, api-claude-cu, qwen3vl).
+        server: WAA server URL.
+        evaluate_url: Evaluate server URL.
+        max_steps: Maximum steps per task.
+        output: Output directory for benchmark results.
+        suite_name: Suite name prefix (default: auto-generated timestamp).
+    """
+    cmd = [
+        sys.executable, "-m", "openadapt_evals.benchmarks.cli",
+        "eval-suite",
+        "--tasks", tasks,
+        "--demo-dir", str(Path(demo_dir).resolve()),
+        "--agent", agent,
+        "--server", server,
+        "--evaluate-url", evaluate_url,
+        "--max-steps", str(max_steps),
+        "--output", output,
+        "--no-pool-create",
+        "--no-pool-cleanup",
+    ]
+    if suite_name:
+        cmd.extend(["--suite-name", suite_name])
+
+    print(f"Running eval-suite with demo-conditioned demos from {demo_dir}")
+    print(f"Command: {' '.join(cmd)}\n")
+
+    subprocess.run(cmd)
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    import fire
+
+    fire.Fire({
+        "record": main,
+        "record-waa": cmd_record_waa,
+        "annotate": cmd_annotate_waa,
+        "eval": cmd_eval_dc,
+    })
