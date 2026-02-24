@@ -368,6 +368,15 @@ def main() -> int:
 # ---------------------------------------------------------------------------
 
 
+def _take_screenshot(server: str) -> bytes:
+    """Take a screenshot from the WAA server, raising on failure."""
+    import requests
+
+    resp = requests.get(f"{server}/screenshot", timeout=30)
+    resp.raise_for_status()
+    return resp.content
+
+
 def cmd_record_waa(
     tasks: str = ",".join(HARDER_TASK_IDS),
     server: str = "http://localhost:5001",
@@ -457,7 +466,7 @@ def cmd_record_waa(
 
         # Take initial screenshot
         print("  Taking initial screenshot...")
-        before_png = requests.get(f"{server}/screenshot", timeout=30).content
+        before_png = _take_screenshot(server)
 
         print(f"\n  Task: {instruction}")
         print("  Open VNC and perform the task step by step.")
@@ -478,9 +487,7 @@ def cmd_record_waa(
 
             if action_desc.lower() == "d":
                 # Save final screenshot as the last after
-                after_png = requests.get(
-                    f"{server}/screenshot", timeout=30
-                ).content
+                after_png = _take_screenshot(server)
                 (task_dir / f"step_{step_idx:02d}_after.png").write_bytes(
                     after_png
                 )
@@ -493,16 +500,12 @@ def cmd_record_waa(
                 step_idx -= 1
                 steps.pop()
                 # Re-take the before screenshot from current state
-                before_png = requests.get(
-                    f"{server}/screenshot", timeout=30
-                ).content
+                before_png = _take_screenshot(server)
                 print(f"  Redoing step {step_idx + 1}...")
                 continue
 
             # Take after screenshot
-            after_png = requests.get(
-                f"{server}/screenshot", timeout=30
-            ).content
+            after_png = _take_screenshot(server)
             (task_dir / f"step_{step_idx:02d}_after.png").write_bytes(
                 after_png
             )
@@ -789,7 +792,9 @@ def cmd_eval_dc(
     print(f"Running eval-suite with demo-conditioned demos from {demo_dir}")
     print(f"Command: {' '.join(cmd)}\n")
 
-    subprocess.run(cmd)
+    result = subprocess.run(cmd)
+    if result.returncode != 0:
+        sys.exit(result.returncode)
 
 
 if __name__ == "__main__":

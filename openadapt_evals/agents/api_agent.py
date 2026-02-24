@@ -1047,11 +1047,11 @@ class ApiAgent(BenchmarkAgent):
             if observation.viewport:
                 w, h = observation.viewport
                 return BenchmarkAction(
-                    type="click", x=x1/w, y=y1/h, end_x=x2/w, end_y=y2/h,
+                    type="drag", x=x1/w, y=y1/h, end_x=x2/w, end_y=y2/h,
                     raw_action=raw_action,
                 )
             return BenchmarkAction(
-                type="click", x=float(x1), y=float(y1),
+                type="drag", x=float(x1), y=float(y1),
                 end_x=float(x2), end_y=float(y2), raw_action=raw_action,
             )
 
