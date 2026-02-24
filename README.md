@@ -1,5 +1,6 @@
 # OpenAdapt Evals
 
+[![Tests](https://github.com/OpenAdaptAI/openadapt-evals/actions/workflows/test.yml/badge.svg)](https://github.com/OpenAdaptAI/openadapt-evals/actions/workflows/test.yml)
 [![Build](https://github.com/OpenAdaptAI/openadapt-evals/actions/workflows/release.yml/badge.svg)](https://github.com/OpenAdaptAI/openadapt-evals/actions/workflows/release.yml)
 [![PyPI](https://img.shields.io/pypi/v/openadapt-evals.svg)](https://pypi.org/project/openadapt-evals/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
@@ -31,7 +32,7 @@ OpenAdapt Evals is a unified framework for evaluating GUI automation agents agai
 ## Key Features
 
 - **Benchmark adapters** for WAA (live, mock, and local modes), with an extensible base for OSWorld, WebArena, and others
-- **Agent interfaces** including `ApiAgent` (Claude / GPT), `RetrievalAugmentedAgent`, `RandomAgent`, and `PolicyAgent`
+- **Agent interfaces** including `ApiAgent` (Claude / GPT), `ClaudeComputerUseAgent`, `RetrievalAugmentedAgent`, `RandomAgent`, and `PolicyAgent`
 - **Azure VM infrastructure** with `AzureVMManager`, `PoolManager`, `SSHTunnelManager`, and `VMMonitor` for running evaluations at scale
 - **CLI tools** -- `oa-vm` for VM and pool management (50+ commands), benchmark CLI for running evals
 - **Cost optimization** -- tiered VM sizing, spot instance support, and real-time cost tracking
@@ -98,6 +99,29 @@ metrics = compute_metrics(results)
 print(f"Success rate: {metrics['success_rate']:.1%}")
 ```
 
+### Demo-conditioned evaluation
+
+Record demos on a remote VM via VNC, annotate with a VLM, then run demo-conditioned eval:
+
+```bash
+# 1. Record demos interactively (perform actions on VNC, press Enter after each step)
+python scripts/record_waa_demos.py record-waa \
+  --tasks 04d9aeaf,0a0faba3 \
+  --server http://localhost:5001 \
+  --output waa_recordings/
+
+# 2. Annotate recordings with VLM
+python scripts/record_waa_demos.py annotate \
+  --recordings waa_recordings/ \
+  --output annotated_demos/ \
+  --provider openai
+
+# 3. Run demo-conditioned eval
+python scripts/record_waa_demos.py eval \
+  --demo_dir annotated_demos/ \
+  --tasks 04d9aeaf,0a0faba3
+```
+
 ### Parallel evaluation on Azure
 
 ```bash
@@ -159,13 +183,14 @@ LOCAL MACHINE                          AZURE VM (Ubuntu)
 
 | Command    | Description                                   |
 |------------|-----------------------------------------------|
-| `run`      | Run live evaluation (localhost:5001 default)   |
-| `mock`     | Run with mock adapter (no VM required)         |
-| `live`     | Run against a WAA server (full control)        |
-| `azure`    | Run parallel evaluation on Azure ML            |
-| `probe`    | Check if a WAA server is ready                 |
-| `view`     | Generate HTML viewer for results               |
-| `estimate` | Estimate Azure costs                           |
+| `run`        | Run live evaluation (localhost:5001 default)   |
+| `mock`       | Run with mock adapter (no VM required)         |
+| `live`       | Run against a WAA server (full control)        |
+| `eval-suite` | Automated full-cycle evaluation (ZS + DC)      |
+| `azure`      | Run parallel evaluation on Azure ML            |
+| `probe`      | Check if a WAA server is ready                 |
+| `view`       | Generate HTML viewer for results               |
+| `estimate`   | Estimate Azure costs                           |
 
 ### VM/Pool CLI (`oa-vm`)
 
@@ -175,7 +200,11 @@ LOCAL MACHINE                          AZURE VM (Ubuntu)
 | `pool-wait`     | Wait until WAA is ready on all workers   |
 | `pool-run`      | Distribute tasks across pool workers     |
 | `pool-status`   | Show status of all pool VMs              |
+| `pool-pause`    | Deallocate pool VMs (stop billing)       |
+| `pool-resume`   | Restart deallocated pool VMs             |
 | `pool-cleanup`  | Delete all pool VMs and resources        |
+| `image-create`  | Create golden image from a pool VM       |
+| `image-list`    | List available golden images             |
 | `vm monitor`    | Dashboard with SSH tunnels               |
 | `vm setup-waa`  | Deploy WAA container on a VM             |
 
@@ -226,8 +255,8 @@ We welcome contributions. To get started:
 ```bash
 git clone https://github.com/OpenAdaptAI/openadapt-evals.git
 cd openadapt-evals
-pip install -e ".[dev]"
-pytest tests/ -v
+uv sync --extra dev
+uv run pytest tests/ -v
 ```
 
 See [CLAUDE.md](./CLAUDE.md) for development conventions and architecture details.
