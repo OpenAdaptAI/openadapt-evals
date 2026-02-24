@@ -836,6 +836,8 @@ class AzureVMManager:
                 "--generate-ssh-keys",
                 "--public-ip-sku",
                 "Standard",
+                "--os-disk-size-gb",
+                "128",
             ]
         )
 

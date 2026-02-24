@@ -63,6 +63,7 @@ class PoolRunResult:
 # Docker setup script for WAA workers
 DOCKER_SETUP_SCRIPT = """
 set -e
+export DEBIAN_FRONTEND=noninteractive
 
 # Wait for apt lock (unattended upgrades on fresh VMs)
 echo "Waiting for apt lock..."
@@ -71,8 +72,8 @@ while sudo fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || sudo fuser /var/lib/
 done
 echo "Apt lock released"
 
-sudo apt-get update -qq
-sudo apt-get install -y -qq docker.io
+sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io
 sudo systemctl start docker
 sudo systemctl enable docker
 sudo usermod -aG docker $USER
@@ -97,6 +98,7 @@ rm -rf /tmp/waa-build
 # Docker setup script that pulls pre-built image from ACR instead of building
 DOCKER_SETUP_SCRIPT_WITH_ACR = """
 set -e
+export DEBIAN_FRONTEND=noninteractive
 
 # Wait for apt lock (unattended upgrades on fresh VMs)
 echo "Waiting for apt lock..."
@@ -105,8 +107,8 @@ while sudo fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || sudo fuser /var/lib/
 done
 echo "Apt lock released"
 
-sudo apt-get update -qq
-sudo apt-get install -y -qq docker.io
+sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io
 sudo systemctl start docker
 sudo systemctl enable docker
 sudo usermod -aG docker $USER
@@ -160,7 +162,7 @@ docker run -d --name winarena \\
 
 # Set up socat proxy for evaluate server (Docker port forwarding doesn't work
 # due to QEMU's custom bridge networking with --cap-add NET_ADMIN)
-which socat >/dev/null 2>&1 || sudo apt-get install -y -qq socat
+which socat >/dev/null 2>&1 || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq socat
 killall socat 2>/dev/null || true
 sleep 2
 nohup socat TCP-LISTEN:5051,fork,reuseaddr EXEC:"docker exec -i winarena socat - TCP\\:127.0.0.1\\:5050" > /dev/null 2>&1 &
