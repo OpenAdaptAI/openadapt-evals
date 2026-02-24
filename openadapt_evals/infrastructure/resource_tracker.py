@@ -37,11 +37,16 @@ VM_HOURLY_RATES = {
 PAUSED_POOL_COST_PER_VM_PER_DAY = 0.25
 
 
+STALE_POOL_WARN_DAYS = 7  # Warn after 7 days paused
+STALE_POOL_DELETE_DAYS = 14  # Auto-delete after 14 days paused
+
+
 def get_paused_pool() -> dict | None:
     """Check if there is a paused VM pool in the registry.
 
     Returns:
         Dict with pool info if a paused pool exists, None otherwise.
+        Includes stale pool warnings when applicable.
     """
     try:
         from openadapt_evals.infrastructure.vm_monitor import VMPoolRegistry
@@ -54,6 +59,13 @@ def get_paused_pool() -> dict | None:
                 paused_dt = datetime.fromisoformat(pool.paused_since)
                 paused_days = (datetime.now() - paused_dt).total_seconds() / 86400
 
+            warning = None
+            if paused_days >= STALE_POOL_DELETE_DAYS:
+                warning = f"STALE: Pool paused for {paused_days:.0f} days (>{STALE_POOL_DELETE_DAYS}d limit). Run: oa-vm pool-cleanup -y"
+            elif paused_days >= STALE_POOL_WARN_DAYS:
+                days_left = STALE_POOL_DELETE_DAYS - paused_days
+                warning = f"Pool paused for {paused_days:.0f} days. Will auto-delete in {days_left:.0f} days. Resume: oa-vm pool-resume"
+
             return {
                 "pool_id": pool.pool_id,
                 "num_workers": len(pool.workers),
@@ -61,7 +73,33 @@ def get_paused_pool() -> dict | None:
                 "paused_days": paused_days,
                 "daily_cost": PAUSED_POOL_COST_PER_VM_PER_DAY * len(pool.workers),
                 "accumulated_cost": PAUSED_POOL_COST_PER_VM_PER_DAY * len(pool.workers) * paused_days,
+                "warning": warning,
             }
+    except Exception:
+        pass
+    return None
+
+
+def get_active_pool_warning() -> str | None:
+    """Check if an active pool is approaching auto-pause time.
+
+    Returns:
+        Warning string if pool will auto-pause soon, None otherwise.
+    """
+    try:
+        from openadapt_evals.infrastructure.vm_monitor import VMPoolRegistry
+
+        registry = VMPoolRegistry()
+        pool = registry.get_pool()
+        if pool is not None and pool.status == "active" and pool.auto_pause_at:
+            auto_pause_dt = datetime.fromisoformat(pool.auto_pause_at)
+            remaining = auto_pause_dt - datetime.now()
+            remaining_minutes = remaining.total_seconds() / 60
+
+            if remaining_minutes <= 0:
+                return f"Pool auto-shutdown time passed ({pool.auto_pause_hours}h). Pool may still be running — check: oa-vm pool-status"
+            elif remaining_minutes <= 30:
+                return f"Pool will auto-shutdown in {remaining_minutes:.0f} minutes"
     except Exception:
         pass
     return None

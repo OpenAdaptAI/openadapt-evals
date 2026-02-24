@@ -237,6 +237,7 @@ class AzureVMManager:
         size: str,
         image: str = "Ubuntu2204",
         admin_username: str = "azureuser",
+        image_id: str | None = None,
     ) -> dict[str, Any]:
         """Create an Azure VM.
 
@@ -246,6 +247,9 @@ class AzureVMManager:
             size: VM size (e.g., "Standard_D4ds_v4").
             image: OS image (used by CLI path; SDK uses Ubuntu 22.04 LTS).
             admin_username: Admin user name.
+            image_id: Azure Managed Image resource ID. When provided, VM is
+                created from this image instead of the default Ubuntu marketplace
+                image. Used for golden images with Docker pre-installed.
 
         Returns:
             VM info dict with at least "publicIpAddress" key.
@@ -254,8 +258,8 @@ class AzureVMManager:
             RuntimeError: If VM creation fails.
         """
         if self._use_sdk:
-            return self._sdk_create_vm(name, region, size, admin_username)
-        return self._cli_create_vm(name, region, size, image, admin_username)
+            return self._sdk_create_vm(name, region, size, admin_username, image_id=image_id)
+        return self._cli_create_vm(name, region, size, image, admin_username, image_id=image_id)
 
     def delete_vm(self, name: str) -> bool:
         """Delete VM and associated resources (NIC, public IP, disk).
@@ -301,6 +305,115 @@ class AzureVMManager:
         if self._use_sdk:
             return self._sdk_start_vm(name)
         return self._cli_start_vm(name)
+
+    def generalize_vm(self, name: str) -> bool:
+        """Generalize a VM for creating a managed image.
+
+        A generalized VM cannot be restarted — it can only be used as the
+        source for creating Azure Managed Images.
+
+        Args:
+            name: VM name.
+
+        Returns:
+            True if generalization succeeded.
+        """
+        if self._use_sdk:
+            try:
+                compute = self._get_compute_client()
+                compute.virtual_machines.generalize(self.resource_group, name)
+                return True
+            except Exception as e:
+                logger.error(f"SDK generalize failed for {name}: {e}")
+                return False
+        result = self._az_run(["vm", "generalize", "-g", self.resource_group, "-n", name])
+        return result.returncode == 0
+
+    def create_image(self, source_vm_name: str, image_name: str) -> str | None:
+        """Create an Azure Managed Image from a generalized VM.
+
+        Args:
+            source_vm_name: Name of the generalized VM.
+            image_name: Name for the new image.
+
+        Returns:
+            Image resource ID, or None on failure.
+        """
+        if self._use_sdk:
+            try:
+                compute = self._get_compute_client()
+                vm = compute.virtual_machines.get(self.resource_group, source_vm_name)
+                image_params = {
+                    "location": vm.location,
+                    "hyper_v_generation": "V2",
+                    "source_virtual_machine": {"id": vm.id},
+                }
+                poller = compute.images.begin_create_or_update(
+                    self.resource_group, image_name, image_params
+                )
+                image = poller.result()
+                return image.id
+            except Exception as e:
+                logger.error(f"SDK create_image failed: {e}")
+                return None
+
+        result = self._az_run([
+            "image", "create",
+            "-g", self.resource_group,
+            "-n", image_name,
+            "--source", source_vm_name,
+            "--hyper-v-generation", "V2",
+            "-o", "json",
+        ])
+        if result.returncode == 0:
+            try:
+                return json.loads(result.stdout).get("id")
+            except (json.JSONDecodeError, KeyError):
+                pass
+        return None
+
+    def list_images(self, prefix: str = "waa-golden") -> list[dict]:
+        """List Azure Managed Images matching a prefix.
+
+        Args:
+            prefix: Image name prefix to filter by.
+
+        Returns:
+            List of image dicts with 'name', 'id', 'location' keys.
+        """
+        result = self._az_run([
+            "image", "list", "-g", self.resource_group, "-o", "json",
+        ])
+        if result.returncode != 0:
+            return []
+        try:
+            images = json.loads(result.stdout)
+            return [
+                {"name": img["name"], "id": img["id"], "location": img["location"]}
+                for img in images if img["name"].startswith(prefix)
+            ]
+        except (json.JSONDecodeError, KeyError):
+            return []
+
+    def delete_image(self, image_name: str) -> bool:
+        """Delete an Azure Managed Image.
+
+        Args:
+            image_name: Name of the image to delete.
+
+        Returns:
+            True if deletion succeeded.
+        """
+        if self._use_sdk:
+            try:
+                compute = self._get_compute_client()
+                compute.images.begin_delete(self.resource_group, image_name).result()
+                return True
+            except Exception as e:
+                logger.error(f"SDK delete_image failed: {e}")
+                return False
+        result = self._az_run(["image", "delete", "-g", self.resource_group, "-n", image_name])
+        return result.returncode == 0
 
     def set_auto_shutdown(
         self,
@@ -481,6 +594,7 @@ class AzureVMManager:
         region: str,
         size: str,
         admin_username: str = "azureuser",
+        image_id: str | None = None,
     ) -> dict[str, Any]:
         """Create VM via Azure SDK."""
         network = self._get_network_client()
@@ -548,7 +662,7 @@ class AzureVMManager:
             "location": region,
             "hardware_profile": {"vm_size": size},
             "storage_profile": {
-                "image_reference": _UBUNTU_2204_IMAGE,
+                "image_reference": {"id": image_id} if image_id else _UBUNTU_2204_IMAGE,
                 "os_disk": {
                     "create_option": "FromImage",
                     "managed_disk": {"storage_account_type": "Premium_LRS"},
@@ -698,8 +812,10 @@ class AzureVMManager:
         size: str,
         image: str,
         admin_username: str,
+        image_id: str | None = None,
     ) -> dict[str, Any]:
         """Create VM via az CLI."""
+        cli_image = image_id if image_id else image
         result = self._az_run(
             [
                 "vm",
@@ -711,7 +827,7 @@ class AzureVMManager:
                 "--location",
                 region,
                 "--image",
-                image,
+                cli_image,
                 "--size",
                 size,
                 "--admin-username",

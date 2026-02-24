@@ -93,6 +93,39 @@ sudo docker build -t waa-auto:latest /tmp/waa-build/
 rm -rf /tmp/waa-build
 """
 
+# Docker setup script that pulls pre-built image from ACR instead of building
+DOCKER_SETUP_SCRIPT_WITH_ACR = """
+set -e
+
+# Wait for apt lock (unattended upgrades on fresh VMs)
+echo "Waiting for apt lock..."
+while sudo fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+    sleep 5
+done
+echo "Apt lock released"
+
+sudo apt-get update -qq
+sudo apt-get install -y -qq docker.io
+sudo systemctl start docker
+sudo systemctl enable docker
+sudo usermod -aG docker $USER
+
+# Configure Docker to use /mnt (larger temp disk)
+sudo systemctl stop docker
+sudo mkdir -p /mnt/docker
+sudo bash -c 'echo "{{\\"data-root\\": \\"/mnt/docker\\"}}" > /etc/docker/daemon.json'
+sudo systemctl start docker
+
+# Pull pre-built image from ACR (faster than building)
+echo "Pulling pre-built image from ACR..."
+sudo docker login {acr_login_server} -u {acr_username} -p '{acr_password}'
+sudo docker pull {acr_login_server}/waa-auto:latest
+sudo docker tag {acr_login_server}/waa-auto:latest waa-auto:latest
+
+# Pull base images (needed for WAA container)
+sudo docker pull dockurr/windows:latest
+"""
+
 # WAA container start script
 WAA_START_SCRIPT = """
 # Check if container already running
@@ -103,8 +136,8 @@ fi
 
 # Container not running, start it
 docker rm -f winarena 2>/dev/null || true
-sudo mkdir -p /mnt/waa-storage
-sudo chown azureuser:azureuser /mnt/waa-storage
+sudo mkdir -p /home/azureuser/waa-storage
+sudo chown azureuser:azureuser /home/azureuser/waa-storage
 docker run -d --name winarena \\
   --device=/dev/kvm \\
   --cap-add NET_ADMIN \\
@@ -113,7 +146,7 @@ docker run -d --name winarena \\
   -p 5050:5050 \\
   -p 8006:8006 \\
   -p 7200:7200 \\
-  -v /mnt/waa-storage:/storage \\
+  -v /home/azureuser/waa-storage:/storage \\
   -e VERSION=11e \\
   -e RAM_SIZE=8G \\
   -e CPU_CORES=4 \\
@@ -157,10 +190,25 @@ class PoolManager:
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             print(f"[{timestamp}] [{step}] {message}", end=end, flush=True)
 
+    def _get_acr_password(self, acr_name: str) -> str | None:
+        """Get ACR admin password via az CLI."""
+        try:
+            result = subprocess.run(
+                ["az", "acr", "credential", "show", "--name", acr_name, "--query", "passwords[0].value", "-o", "tsv"],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip()
+        except Exception as e:
+            logger.debug(f"Failed to get ACR password: {e}")
+        return None
+
     def create(
         self,
         workers: int = 3,
         auto_shutdown_hours: int = 4,
+        use_acr: bool = False,
+        image_id: str | None = None,
     ) -> VMPool:
         """Create a pool of VMs for parallel WAA evaluation.
 
@@ -169,6 +217,9 @@ class PoolManager:
         Args:
             workers: Number of worker VMs to create.
             auto_shutdown_hours: Hours until auto-shutdown (safety net).
+            use_acr: If True, pull waa-auto from ACR instead of building.
+            image_id: Azure Managed Image ID. If provided, skip Docker setup
+                (image already has Docker + images pre-baked).
 
         Returns:
             Created VMPool.
@@ -207,6 +258,7 @@ class PoolManager:
                     name=name,
                     region=region,
                     size=vm_size,
+                    image_id=image_id,
                 )
                 ip = vm_info.get("publicIpAddress", "")
                 self.vm_manager.set_auto_shutdown(name, auto_shutdown_hours)
@@ -242,48 +294,68 @@ class PoolManager:
         if not workers_ready:
             raise RuntimeError("No VMs have SSH access")
 
-        # Install Docker on all VMs
-        self._log("POOL", "Installing Docker on all VMs...")
+        # Install Docker on all VMs (skip if using golden image)
+        if image_id:
+            self._log("POOL", "Skipping Docker setup (using golden image)")
+            workers_docker_ok = workers_ready
+        else:
+            self._log("POOL", "Installing Docker on all VMs...")
 
-        def setup_docker(
-            name_ip: tuple[str, str],
-        ) -> tuple[str, bool, str]:
-            name, ip = name_ip
-            # Upload Docker build context (Dockerfile + supporting files)
-            waa_deploy_dir = Path(__file__).parent.parent / "waa_deploy"
-            subprocess.run(
-                ["ssh", *SSH_OPTS, f"azureuser@{ip}", "mkdir -p /tmp/waa-build"],
-                capture_output=True,
-            )
-            for fname in [
-                "Dockerfile",
-                "evaluate_server.py",
-                "start_with_evaluate.sh",
-                "start_waa_server.bat",
-                "api_agent.py",
-            ]:
-                src = waa_deploy_dir / fname
-                if src.exists():
+            # Determine which setup script to use
+            docker_script = DOCKER_SETUP_SCRIPT
+            if use_acr:
+                from openadapt_evals.config import settings
+                acr_password = self._get_acr_password(settings.acr_name)
+                if acr_password:
+                    docker_script = DOCKER_SETUP_SCRIPT_WITH_ACR.format(
+                        acr_login_server=settings.acr_login_server,
+                        acr_username=settings.acr_name,
+                        acr_password=acr_password,
+                    )
+                    self._log("POOL", f"Using ACR: {settings.acr_login_server}")
+                else:
+                    self._log("POOL", "WARNING: ACR password not found, falling back to local build")
+
+            def setup_docker(
+                name_ip: tuple[str, str],
+            ) -> tuple[str, bool, str]:
+                name, ip = name_ip
+                if not use_acr:
+                    # Upload Docker build context (Dockerfile + supporting files)
+                    waa_deploy_dir = Path(__file__).parent.parent / "waa_deploy"
                     subprocess.run(
-                        ["scp", *SSH_OPTS, str(src), f"azureuser@{ip}:/tmp/waa-build/"],
+                        ["ssh", *SSH_OPTS, f"azureuser@{ip}", "mkdir -p /tmp/waa-build"],
                         capture_output=True,
                     )
-            result = ssh_run(ip, DOCKER_SETUP_SCRIPT, stream=False, step="DOCKER")
-            error = result.stderr[:200] if result.stderr else ""
-            return (name, result.returncode == 0, error)
+                    for fname in [
+                        "Dockerfile",
+                        "evaluate_server.py",
+                        "start_with_evaluate.sh",
+                        "start_waa_server.bat",
+                        "api_agent.py",
+                    ]:
+                        src = waa_deploy_dir / fname
+                        if src.exists():
+                            subprocess.run(
+                                ["scp", *SSH_OPTS, str(src), f"azureuser@{ip}:/tmp/waa-build/"],
+                                capture_output=True,
+                            )
+                result = ssh_run(ip, docker_script, stream=False, step="DOCKER")
+                error = result.stderr[:200] if result.stderr else ""
+                return (name, result.returncode == 0, error)
 
-        with ThreadPoolExecutor(max_workers=min(len(workers_ready), 5)) as executor:
-            futures = {executor.submit(setup_docker, w): w[0] for w in workers_ready}
-            workers_docker_ok: list[tuple[str, str]] = []
-            for future in as_completed(futures):
-                name, success, error = future.result()
-                status = "Docker ready" if success else f"Docker FAILED: {error[:100]}"
-                self._log("POOL", f"  {name}: {status}")
-                if success:
-                    workers_docker_ok.append((name, dict(workers_ready)[name]))
+            with ThreadPoolExecutor(max_workers=min(len(workers_ready), 5)) as executor:
+                futures = {executor.submit(setup_docker, w): w[0] for w in workers_ready}
+                workers_docker_ok: list[tuple[str, str]] = []
+                for future in as_completed(futures):
+                    name, success, error = future.result()
+                    status = "Docker ready" if success else f"Docker FAILED: {error[:100]}"
+                    self._log("POOL", f"  {name}: {status}")
+                    if success:
+                        workers_docker_ok.append((name, dict(workers_ready)[name]))
 
-        if not workers_docker_ok:
-            raise RuntimeError("Docker setup failed on all VMs")
+            if not workers_docker_ok:
+                raise RuntimeError("Docker setup failed on all VMs")
 
         # Register pool
         pool = self.registry.create_pool(
@@ -292,6 +364,14 @@ class PoolManager:
             location=region,
             vm_size=vm_size,
         )
+
+        # Set auto-pause timer
+        if auto_shutdown_hours > 0:
+            from datetime import timedelta
+            auto_pause_at = (datetime.now() + timedelta(hours=auto_shutdown_hours)).isoformat()
+            pool.auto_pause_at = auto_pause_at
+            pool.auto_pause_hours = auto_shutdown_hours
+            self.registry.save()
 
         self._log("POOL", "=" * 60)
         self._log("POOL", f"Pool created: {pool.pool_id}")
@@ -302,6 +382,8 @@ class PoolManager:
             "POOL",
             f"  Est. hourly cost: ${cost * len(workers_docker_ok):.2f}/hr",
         )
+        if auto_shutdown_hours > 0:
+            self._log("POOL", f"  Auto-shutdown: in {auto_shutdown_hours} hours")
         self._log("POOL", "")
         self._log("POOL", "Next steps:")
         self._log("POOL", "  1. Wait for WAA ready: pool-wait")

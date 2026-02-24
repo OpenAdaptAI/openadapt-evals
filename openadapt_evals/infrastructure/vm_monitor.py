@@ -373,6 +373,8 @@ class VMPool:
     failed_tasks: int = 0
     status: str = "active"  # active, paused
     paused_since: str | None = None  # ISO timestamp when pool was paused
+    auto_pause_at: str | None = None  # ISO timestamp when pool will auto-pause
+    auto_pause_hours: int = 2  # Hours until auto-pause (0 = disabled)
 
 
 class VMPoolRegistry:
@@ -409,6 +411,8 @@ class VMPoolRegistry:
                         failed_tasks=data.get("failed_tasks", 0),
                         status=data.get("status", "active"),
                         paused_since=data.get("paused_since"),
+                        auto_pause_at=data.get("auto_pause_at"),
+                        auto_pause_hours=data.get("auto_pause_hours", 2),
                     )
             except (json.JSONDecodeError, KeyError) as e:
                 print(f"Warning: Could not load pool registry: {e}")
