@@ -75,6 +75,27 @@ SYSTEM_PROMPT = (
     "(1000,1000) is bottom-right."
 )
 
+# System prompt with accessibility tree grounding
+SYSTEM_PROMPT_A11Y = (
+    "You are a GUI agent. You observe screenshots and an accessibility tree "
+    "describing UI elements. Output exactly one action per step.\n\n"
+    "PREFERRED — use element IDs from the accessibility tree:\n"
+    'click_element(id="<element_id>")\n'
+    'type_element(id="<element_id>", text="<string>")\n\n'
+    "FALLBACK — use coordinates only when no matching element exists:\n"
+    "click(x=<int>, y=<int>)\n"
+    'type(text="<string>")\n'
+    'press(keys=["<key1>", ...])\n'
+    'scroll(direction="<up|down|left|right>", amount=<int>)\n'
+    "wait()\n"
+    "finished()\n\n"
+    "Coordinates are in [0, 1000] range where (0,0) is top-left and "
+    "(1000,1000) is bottom-right.\n\n"
+    "IMPORTANT: Always prefer click_element/type_element when the target "
+    "element is visible in the accessibility tree. This is more reliable "
+    "than coordinate-based actions."
+)
+
 # ---------------------------------------------------------------------------
 # Compiled regex patterns for action parsing
 # ---------------------------------------------------------------------------
@@ -139,6 +160,16 @@ _RE_WAIT = re.compile(r"wait\s*\(\s*\)", re.IGNORECASE)
 _RE_FINISHED = re.compile(r"finished\s*\(\s*\)", re.IGNORECASE)
 _RE_THINK = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 
+# Element-based actions (accessibility tree grounding)
+_RE_CLICK_ELEMENT = re.compile(
+    r'click_element\s*\(\s*(?:id\s*=\s*)?"([^"]+)"\s*\)',
+    re.IGNORECASE,
+)
+_RE_TYPE_ELEMENT = re.compile(
+    r'type_element\s*\(\s*(?:id\s*=\s*)?"([^"]+)"\s*,\s*(?:text\s*=\s*)?"((?:[^"\\]|\\.)*)"\s*\)',
+    re.IGNORECASE,
+)
+
 
 # ---------------------------------------------------------------------------
 # Action parsing (standalone, used by both agent and tests)
@@ -171,6 +202,38 @@ def _denorm_coord(x_qwen: int, y_qwen: int) -> tuple[float, float]:
     return x_qwen / QWEN_COORD_SCALE, y_qwen / QWEN_COORD_SCALE
 
 
+def _format_a11y_tree(tree: dict, indent: int = 0) -> str:
+    """Format an accessibility tree dict into a compact text representation.
+
+    Each element is shown as ``[id] role "name"`` on its own line, with
+    indentation reflecting the tree structure. Only elements with an ``id``
+    are included (they are the ones the agent can target).
+
+    Args:
+        tree: Accessibility tree dict with optional ``children`` list.
+        indent: Current indentation level (for recursion).
+
+    Returns:
+        Formatted string, one line per element.
+    """
+    lines: list[str] = []
+    prefix = "  " * indent
+
+    role = tree.get("role", "")
+    name = tree.get("name", "")
+    elem_id = tree.get("id")
+
+    if elem_id:
+        lines.append(f'{prefix}[{elem_id}] {role} "{name}"')
+    elif role:
+        lines.append(f"{prefix}{role}: {name}" if name else f"{prefix}{role}")
+
+    for child in tree.get("children", []):
+        lines.append(_format_a11y_tree(child, indent + 1))
+
+    return "\n".join(lines)
+
+
 def _extract_action_string(response: str) -> str | None:
     """Extract the action string from model response, stripping think blocks.
 
@@ -189,8 +252,8 @@ def _extract_action_string(response: str) -> str | None:
     for line in text.splitlines():
         line = line.strip()
         if line and re.match(
-            r"(click|left_click|double_click|right_click|type|press"
-            r"|scroll|drag|wait|finished)\s*\(",
+            r"(click_element|type_element|click|left_click|double_click"
+            r"|right_click|type|press|scroll|drag|wait|finished)\s*\(",
             line,
             re.IGNORECASE,
         ):
@@ -244,6 +307,30 @@ def parse_qwen_action(
     if _RE_WAIT.search(action_str):
         raw["is_wait"] = True
         return BenchmarkAction(type="wait", raw_action=raw)
+
+    # --- click_element(id="<element_id>") --- element-based grounding
+    m = _RE_CLICK_ELEMENT.search(action_str)
+    if m:
+        element_id = m.group(1)
+        raw["element_action"] = "click_element"
+        raw["target_element_id"] = element_id
+        return BenchmarkAction(
+            type="click", target_node_id=element_id, raw_action=raw
+        )
+
+    # --- type_element(id="<element_id>", text="<text>") ---
+    m = _RE_TYPE_ELEMENT.search(action_str)
+    if m:
+        element_id = m.group(1)
+        text = m.group(2).replace('\\"', '"').replace("\\\\", "\\")
+        raw["element_action"] = "type_element"
+        raw["target_element_id"] = element_id
+        return BenchmarkAction(
+            type="type",
+            text=text,
+            target_node_id=element_id,
+            raw_action=raw,
+        )
 
     # --- double_click(x=<int>, y=<int>) --- (check before click)
     m = _RE_DOUBLE_CLICK.search(action_str)
@@ -357,6 +444,9 @@ class Qwen3VLAgent(BenchmarkAgent):
             Included at every step (not just step 0) following the
             pattern established by ApiAgent.
         use_thinking: Enable thinking mode with ``<think>`` blocks.
+        use_accessibility_tree: When True, include the accessibility tree
+            from observations in the prompt and prefer element-based actions
+            (``click_element``, ``type_element``) over coordinate-based ones.
         device: Torch device (``"cuda"``, ``"cpu"``, ``"auto"``).
         max_new_tokens: Maximum tokens to generate per step.
         torch_dtype: Torch dtype string (``"auto"``, ``"float16"``, ``"bfloat16"``).
@@ -370,6 +460,7 @@ class Qwen3VLAgent(BenchmarkAgent):
         model_endpoint: str | None = None,
         demo: str | None = None,
         use_thinking: bool = False,
+        use_accessibility_tree: bool = False,
         device: str = "auto",
         max_new_tokens: int = 512,
         torch_dtype: str = "auto",
@@ -380,6 +471,7 @@ class Qwen3VLAgent(BenchmarkAgent):
         self.model_endpoint = model_endpoint
         self.demo = demo
         self.use_thinking = use_thinking
+        self.use_accessibility_tree = use_accessibility_tree
         self.device = device
         self.max_new_tokens = max_new_tokens
         self.torch_dtype = torch_dtype
@@ -397,7 +489,8 @@ class Qwen3VLAgent(BenchmarkAgent):
         logger.info(
             f"Qwen3VLAgent initialized: model={self.model_path}, "
             f"endpoint={self.model_endpoint}, "
-            f"thinking={self.use_thinking}, device={self.device}"
+            f"thinking={self.use_thinking}, "
+            f"a11y_tree={self.use_accessibility_tree}, device={self.device}"
         )
         if self.demo:
             logger.info(f"Demo provided ({len(self.demo)} chars)")
@@ -538,7 +631,7 @@ class Qwen3VLAgent(BenchmarkAgent):
             )
 
         # Build user content (aligned with convert_demos training format)
-        user_content = self._build_prompt(task.instruction)
+        user_content = self._build_prompt(task.instruction, observation)
 
         # Build chat messages and run inference
         messages = self._build_messages(user_content)
@@ -570,7 +663,11 @@ class Qwen3VLAgent(BenchmarkAgent):
 
         return action
 
-    def _build_prompt(self, instruction: str) -> str:
+    def _build_prompt(
+        self,
+        instruction: str,
+        observation: BenchmarkObservation | None = None,
+    ) -> str:
         """Build the user-turn text, aligned with convert_demos.convert_step.
 
         The format matches the training data exactly::
@@ -588,8 +685,12 @@ class Qwen3VLAgent(BenchmarkAgent):
         When a demo is provided, it is injected after the instruction
         and before the previous actions (demo-conditioned inference).
 
+        When ``use_accessibility_tree`` is True and the observation contains
+        an a11y tree, the tree is formatted and included in the prompt.
+
         Args:
             instruction: Task instruction text.
+            observation: Current observation (for a11y tree extraction).
 
         Returns:
             User content string.
@@ -604,6 +705,18 @@ class Qwen3VLAgent(BenchmarkAgent):
                 "Demonstration (follow this pattern):\n"
                 f"{self.demo}"
             )
+
+        # Accessibility tree (when enabled and available)
+        if self.use_accessibility_tree and observation is not None:
+            a11y_tree = observation.accessibility_tree
+            if a11y_tree:
+                formatted = _format_a11y_tree(a11y_tree)
+                if formatted:
+                    parts.append("")
+                    parts.append(
+                        "Available UI elements (use click_element/type_element "
+                        "with these IDs):\n" + formatted
+                    )
 
         # Previous actions
         if self._previous_actions:
@@ -635,8 +748,9 @@ class Qwen3VLAgent(BenchmarkAgent):
         Returns:
             List of message dicts for ``apply_chat_template``.
         """
+        sys_prompt = SYSTEM_PROMPT_A11Y if self.use_accessibility_tree else SYSTEM_PROMPT
         return [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": sys_prompt},
             {
                 "role": "user",
                 "content": [
