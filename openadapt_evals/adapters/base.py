@@ -176,6 +176,7 @@ class BenchmarkResult:
     # Diagnostics
     error: str | None = None
     reason: str | None = None  # Why success/fail
+    error_type: str | None = None  # "infrastructure", "agent", "evaluation", or None
 
     # Timing
     total_time_seconds: float = 0.0
