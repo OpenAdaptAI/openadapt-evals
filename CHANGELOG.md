@@ -1,6 +1,25 @@
 # CHANGELOG
 
 
+## v0.9.0 (2026-02-25)
+
+### Features
+
+- Add accessibility tree grounding to ApiAgent (Claude)
+  ([#47](https://github.com/OpenAdaptAI/openadapt-evals/pull/47),
+  [`d23ca64`](https://github.com/OpenAdaptAI/openadapt-evals/commit/d23ca645fc0455edb16e6c3e97793aece9f1f7c7))
+
+Add element-based actions (click_element, type_element) to the ApiAgent, enabling Claude to interact
+  with UI elements by accessibility tree ID instead of pixel coordinates.
+
+Changes: - Select SYSTEM_PROMPT_A11Y when a11y tree is present in observation - Add
+  click_element/type_element validation patterns - Add element-based patterns to Strategy 4 (direct
+  pattern matching) - Parse click_element/type_element into BenchmarkAction with target_node_id -
+  Add 12 tests covering validation, parsing, prompt selection, and mock adapter integration
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.8.1 (2026-02-25)
 
 ### Bug Fixes
