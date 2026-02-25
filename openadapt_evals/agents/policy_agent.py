@@ -133,9 +133,8 @@ class PolicyAgent(BenchmarkAgent):
             response = self._run_inference(observation, prompt)
             action = self._parse_response(response, observation)
 
-            # Track action for next step's "Previous actions" section
-            from openadapt_evals.agents.base import action_to_string
-            self._previous_actions.append(action_to_string(action))
+            # Track action in training format for "Previous actions" section
+            self._previous_actions.append(self._format_action_qwen(action))
 
             return action
         except Exception as e:
@@ -192,6 +191,39 @@ class PolicyAgent(BenchmarkAgent):
 
         return "\n".join(parts)
 
+    @staticmethod
+    def _format_action_qwen(action: BenchmarkAction) -> str:
+        """Format action matching convert_demos._format_action_qwen training format.
+
+        Uses [0, 1000] coordinate range and lowercase function-call style
+        to match what the model was trained on.
+        """
+        def _to_1000(v: float | None) -> int:
+            return round((v or 0.0) * 1000)
+
+        if action.type == "click":
+            return f"click(x={_to_1000(action.x)}, y={_to_1000(action.y)})"
+        if action.type == "double_click":
+            return f"double_click(x={_to_1000(action.x)}, y={_to_1000(action.y)})"
+        if action.type == "right_click":
+            return f"right_click(x={_to_1000(action.x)}, y={_to_1000(action.y)})"
+        if action.type == "type":
+            return f'type(text="{action.text or ""}")'
+        if action.type == "key":
+            keys = (action.modifiers or []) + ([action.key] if action.key else [])
+            keys_fmt = ", ".join(f'"{k}"' for k in keys)
+            return f"press(keys=[{keys_fmt}])"
+        if action.type == "scroll":
+            return f'scroll(direction="{action.scroll_direction or "down"}", amount=3)'
+        if action.type == "drag":
+            return (
+                f"drag(from_coord=[{_to_1000(action.x)}, {_to_1000(action.y)}], "
+                f"to_coord=[{_to_1000(action.end_x)}, {_to_1000(action.end_y)}])"
+            )
+        if action.type == "done":
+            return "finished()"
+        return f"# unknown: {action.type}"
+
     def _build_sample(self, observation: BenchmarkObservation, prompt: str) -> dict:
         """Build SFT-style sample matching training format from convert_demos.py.
 
@@ -222,12 +254,22 @@ class PolicyAgent(BenchmarkAgent):
         Returns:
             Model response text.
         """
-        if not observation.screenshot:
+        if not observation.screenshot and not observation.screenshot_path:
             raise ValueError("No screenshot in observation")
 
         sample = self._build_sample(observation, prompt)
 
+        # If screenshot_path is missing but bytes are available, write to temp file
+        if "images" not in sample and observation.screenshot:
+            import tempfile
+            tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+            tmp.write(observation.screenshot)
+            tmp.close()
+            sample["images"] = [tmp.name]
+
         # Use the adapter's generate method (works with both local and remote)
+        # NOTE: QwenVLAdapter.generate() currently drops the system role message
+        # from the sample — both training and inference ignore it consistently.
         response = self._model.generate(sample)
         return response
 

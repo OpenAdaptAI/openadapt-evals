@@ -292,6 +292,7 @@ def _run_single_task(
 
         done = False
         steps = 0
+        action = None
         max_steps = task.time_limit_steps or config.max_steps
 
         while not done and steps < max_steps:
