@@ -134,7 +134,15 @@ sudo docker pull dockurr/windows:latest
 WAA_START_SCRIPT = """
 # Check if container already running
 if docker ps --format '{{.Names}}' | grep -q '^winarena$'; then
-    echo "ALREADY_RUNNING"
+    # Container is up, but socat proxy may be dead (e.g. after docker restart).
+    # Ensure the evaluate-server proxy is running.
+    if ! pgrep -f 'socat.*5051' >/dev/null 2>&1; then
+        which socat >/dev/null 2>&1 || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq socat
+        nohup socat TCP-LISTEN:5051,fork,reuseaddr EXEC:"docker exec -i winarena socat - TCP\\:127.0.0.1\\:5050" > /dev/null 2>&1 &
+        echo "ALREADY_RUNNING (socat proxy restarted)"
+    else
+        echo "ALREADY_RUNNING"
+    fi
     exit 0
 fi
 

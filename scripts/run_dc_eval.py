@@ -78,8 +78,35 @@ def _probe(server: str, timeout: int = 10) -> bool:
         return False
 
 
+def _setup_eval_proxy(vm_user: str, vm_ip: str) -> bool:
+    """(Re-)establish socat proxy for the evaluate server on the VM.
+
+    Docker port forwarding for port 5050 is broken due to QEMU's custom
+    bridge networking (--cap-add NET_ADMIN).  Work around it by running
+    socat on the VM host that pipes through ``docker exec`` into the
+    container's localhost:5050.  The SSH tunnel maps local 5050 → VM 5051.
+    """
+    script = (
+        "killall socat 2>/dev/null || true; sleep 1; "
+        "which socat >/dev/null 2>&1 "
+        "|| sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq socat; "
+        "nohup socat TCP-LISTEN:5051,fork,reuseaddr "
+        "'EXEC:docker exec -i winarena socat - TCP\\:127.0.0.1\\:5050' "
+        "</dev/null >/dev/null 2>&1 &"
+    )
+    result = subprocess.run(
+        ["ssh", "-o", "StrictHostKeyChecking=no", f"{vm_user}@{vm_ip}", script],
+        capture_output=True, timeout=30,
+    )
+    if result.returncode != 0:
+        print(f"  socat proxy setup failed: {result.stderr.decode()}")
+        return False
+    print("  socat proxy for evaluate server established (VM:5051 → container:5050)")
+    return True
+
+
 def _restart_container(vm_user: str, vm_ip: str) -> bool:
-    """Restart the WAA container and wait for Windows + Flask to boot."""
+    """Restart the WAA container and re-establish the evaluate proxy."""
     print("  Restarting WAA container (Windows will reboot)...")
     result = subprocess.run(
         ["ssh", "-o", "StrictHostKeyChecking=no", f"{vm_user}@{vm_ip}",
@@ -89,7 +116,8 @@ def _restart_container(vm_user: str, vm_ip: str) -> bool:
     if result.returncode != 0:
         print(f"  Container restart failed: {result.stderr.decode()}")
         return False
-    print("  Container restarted, waiting for WAA server...")
+    print("  Container restarted, re-establishing evaluate proxy...")
+    _setup_eval_proxy(vm_user, vm_ip)
     return True
 
 
@@ -113,10 +141,11 @@ def ensure_waa_ready(
     if _probe(server) and (evaluate_url is None or _probe(evaluate_url)):
         return True
 
-    # Step 2: Reconnect tunnel
+    # Step 2: Reconnect tunnel + ensure socat proxy
     print("  WAA unreachable, reconnecting tunnel...")
     _kill_tunnels()
     time.sleep(1)
+    _setup_eval_proxy(vm_user, vm_ip)
     if _start_tunnel(vm_user, vm_ip):
         time.sleep(3)
         if _probe(server) and (evaluate_url is None or _probe(evaluate_url)):
