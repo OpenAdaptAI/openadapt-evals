@@ -127,6 +127,53 @@ Think step by step:
 3. What is the next logical action?
 """
 
+# System prompt with element-based grounding (used when a11y tree is available)
+SYSTEM_PROMPT_A11Y = """You are a GUI automation agent controlling a Windows desktop. Given a screenshot, accessibility tree, and task instruction, determine the next action to take.
+
+You must respond with a Python code block. PREFERRED actions use element IDs from the accessibility tree:
+- computer.click_element("element_id") - Click a UI element by its ID (PREFERRED)
+- computer.type_element("element_id", "text") - Click element to focus, then type text (PREFERRED)
+
+FALLBACK actions use pixel coordinates (only when no matching element exists):
+- computer.click(x, y) - Click at pixel coordinates
+- computer.double_click(x, y) - Double-click at pixel coordinates
+- computer.right_click(x, y) - Right-click at pixel coordinates
+- computer.type(text) - Type the given text
+- computer.hotkey(key1, key2, ...) - Press key combination (e.g., 'ctrl', 'c')
+- computer.press(key) - Press a single key (e.g., 'enter', 'tab', 'escape')
+- computer.scroll(direction) - Scroll up (-3) or down (3)
+- computer.drag(x1, y1, x2, y2) - Drag from (x1,y1) to (x2,y2)
+
+IMPORTANT: Always prefer click_element/type_element when the target element appears in the accessibility tree. Element-based actions are far more reliable than coordinate-based ones.
+
+Format your response as:
+
+```memory
+# Your notes about the task state (optional)
+```
+
+```decision
+CONTINUE
+```
+
+```python
+computer.click_element("submit_button")
+```
+
+Important:
+- Use DONE in the decision block when the task is complete
+- Use FAIL if the task cannot be completed
+- Always output exactly one action per response
+- PREFER element IDs over pixel coordinates when available
+- For text input, use type_element with the field's element ID
+
+Think step by step:
+1. What is the current state of the UI?
+2. What elements are available in the accessibility tree?
+3. Which element should I interact with?
+4. What is the next logical action?
+"""
+
 
 def _format_accessibility_tree(tree: dict | str, indent: int = 0, max_depth: int = 5) -> str:
     """Format accessibility tree for prompt.
@@ -286,6 +333,7 @@ class ApiAgent(BenchmarkAgent):
         self.max_parse_retries = 2  # Number of retries on parse failure
         self.loop_detection_threshold = 3  # Trigger alternative strategy after N identical actions
         self._loop_count = 0  # How many consecutive loops detected (for progressive offsets)
+        self._a11y_available = False  # Whether a11y tree was present for current step
 
         logger.info(f"ApiAgent initialized with provider={provider}, model={self.model}")
         if self.demo:
@@ -402,14 +450,17 @@ class ApiAgent(BenchmarkAgent):
             logs["computer_clipboard"] = clipboard
 
         # Add accessibility tree if available and enabled
+        self._a11y_available = False
         if self.use_accessibility_tree:
             a11y_tree = obs.get("accessibility_tree")
             if a11y_tree:
+                self._a11y_available = True
                 tree_str = _format_accessibility_tree(a11y_tree)
                 if len(tree_str) > 8000:
                     tree_str = tree_str[:8000] + "\n... (truncated)"
                 content_parts.append(f"UI Elements:\n{tree_str}")
                 logs["accessibility_tree_len"] = len(tree_str)
+                logs["a11y_grounding"] = True
 
         # Add action history if enabled (enhanced: includes reasoning, not just raw actions)
         if self.use_history and self.history:
@@ -540,10 +591,11 @@ class ApiAgent(BenchmarkAgent):
                 },
             ]
 
+            system_prompt = SYSTEM_PROMPT_A11Y if self._a11y_available else SYSTEM_PROMPT
             resp = self._client.messages.create(
                 model=self.model,
                 max_tokens=self.max_tokens,
-                system=SYSTEM_PROMPT,
+                system=system_prompt,
                 messages=[{"role": "user", "content": content}],
             )
 
@@ -565,8 +617,9 @@ class ApiAgent(BenchmarkAgent):
             return "\n".join([t for t in texts if t]).strip()
 
         elif self.provider == "openai":
+            system_prompt = SYSTEM_PROMPT_A11Y if self._a11y_available else SYSTEM_PROMPT
             messages = [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {
                     "role": "user",
                     "content": [
@@ -765,6 +818,9 @@ class ApiAgent(BenchmarkAgent):
                     r'(computer\.hotkey\s*\(\s*["\'].*?["\']\s*(?:,\s*["\'].*?["\']\s*)*\))',
                     r"(computer\.scroll\s*\(\s*-?\d+\s*\))",
                     r"(computer\.drag\s*\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\))",
+                    # Element-based actions (a11y tree grounding)
+                    r'(computer\.click_element\s*\(\s*["\'].*?["\']\s*\))',
+                    r'(computer\.type_element\s*\(\s*["\'].*?["\']\s*,\s*["\'].*?["\']\s*\))',
                 ]
                 for pattern in computer_patterns:
                     match = re.search(pattern, response_text, re.IGNORECASE)
@@ -881,6 +937,9 @@ class ApiAgent(BenchmarkAgent):
             r'^computer\.hotkey\(["\'].+["\'](?:,\s*["\'].+["\']\s*)*\)$',
             r"^computer\.scroll\(-?\d+\)$",
             r"^computer\.drag\(\d+,\s*\d+,\s*\d+,\s*\d+\)$",
+            # Element-based actions (a11y tree grounding)
+            r'^computer\.click_element\(["\'].+["\']\)$',
+            r'^computer\.type_element\(["\'].+["\']\s*,\s*["\'].*["\']\)$',
         ]
 
         for pattern in valid_patterns:
@@ -997,6 +1056,29 @@ class ApiAgent(BenchmarkAgent):
             BenchmarkAction.
         """
         raw_action = {"code": code}
+
+        # Parse click_element (a11y tree grounding)
+        click_elem_match = re.match(
+            r'computer\.click_element\(["\'](.+?)["\']\)', code
+        )
+        if click_elem_match:
+            elem_id = click_elem_match.group(1)
+            return BenchmarkAction(
+                type="click", x=0.5, y=0.5,
+                target_node_id=elem_id, raw_action=raw_action,
+            )
+
+        # Parse type_element (a11y tree grounding)
+        type_elem_match = re.match(
+            r'computer\.type_element\(["\'](.+?)["\']\s*,\s*["\'](.*)["\']\)', code
+        )
+        if type_elem_match:
+            elem_id = type_elem_match.group(1)
+            text = type_elem_match.group(2)
+            return BenchmarkAction(
+                type="type", text=text,
+                target_node_id=elem_id, raw_action=raw_action,
+            )
 
         # Parse click / double_click / right_click (all map to "click" action type)
         click_match = re.match(
