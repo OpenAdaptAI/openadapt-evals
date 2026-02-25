@@ -1,6 +1,28 @@
 # CHANGELOG
 
 
+## v0.8.0 (2026-02-25)
+
+### Features
+
+- Add accessibility tree grounding to Qwen3VL agent
+  ([#45](https://github.com/OpenAdaptAI/openadapt-evals/pull/45),
+  [`0d7076c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/0d7076c9e7815da65309026fdda75f4cba6afc13))
+
+Sidestep coordinate prediction (the root cause of 0% scores) by supporting element-based actions via
+  the accessibility tree. New actions click_element(id) and type_element(id, text) let the agent
+  target UI elements by ID instead of pixel coordinates. The mock adapter already evaluates
+  target_node_id, so this produces non-zero scores immediately.
+
+- Add click_element/type_element regex patterns and parsing - Add use_accessibility_tree flag to
+  Qwen3VLAgent - Add _format_a11y_tree() for prompt inclusion - Add SYSTEM_PROMPT_A11Y with
+  element-first action instructions - Add --use-a11y-tree CLI flag (mock, run, live, eval-suite) -
+  Add 26 tests (parsing, formatting, prompt integration, mock adapter e2e) - Add
+  docs/agent_improvement_options.md comparing 10 approaches
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.7.2 (2026-02-25)
 
 ### Bug Fixes
