@@ -1,6 +1,21 @@
 # CHANGELOG
 
 
+## v0.7.2 (2026-02-25)
+
+### Bug Fixes
+
+- **qwen3vl**: Accept positional args and float coords in action parser
+  ([#44](https://github.com/OpenAdaptAI/openadapt-evals/pull/44),
+  [`89bd9c5`](https://github.com/OpenAdaptAI/openadapt-evals/commit/89bd9c5ab2f48bea421877dddafe87ca0a768bcc))
+
+Fine-tuned models output positional args like click(589, 965) instead of keyword args click(x=589,
+  y=965). The parser regexes now accept both formats. Also handles float coordinates (0.589) from
+  models trained on 0-1 range data by auto-scaling to 0-1000 via _parse_coord().
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.7.1 (2026-02-25)
 
 ### Bug Fixes
