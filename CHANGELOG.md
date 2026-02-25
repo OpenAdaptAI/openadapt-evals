@@ -1,6 +1,31 @@
 # CHANGELOG
 
 
+## v0.7.1 (2026-02-25)
+
+### Bug Fixes
+
+- **docs**: Require conventional commit format for PR titles
+  ([#43](https://github.com/OpenAdaptAI/openadapt-evals/pull/43),
+  [`3f7a4b2`](https://github.com/OpenAdaptAI/openadapt-evals/commit/3f7a4b2ff055256ae1cef3518c59b6b59d53cc22))
+
+PR titles become squash merge commit messages. Without the fix:/feat: prefix,
+  python-semantic-release skips the release. Document this requirement prominently in CLAUDE.md.
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+### Documentation
+
+- Add mandatory branch/PR rule to CLAUDE.md
+  ([#39](https://github.com/OpenAdaptAI/openadapt-evals/pull/39),
+  [`f0d0c4f`](https://github.com/OpenAdaptAI/openadapt-evals/commit/f0d0c4f15cac490e8881fe53864d5dc2e8c1c940))
+
+Adds explicit instruction that all changes must go through feature branches and pull requests.
+  enforce_admins has been enabled on GitHub to prevent admin bypass of branch protection.
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.7.0 (2026-02-24)
 
 ### Features
