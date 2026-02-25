@@ -34,42 +34,52 @@ class PolicyAgent(BenchmarkAgent):
     benchmark evaluation. The model is expected to be trained using
     the openadapt-ml training pipeline.
 
+    Prompt format is aligned with convert_demos.py training data.
+
     Args:
-        checkpoint_path: Path to model checkpoint.
-        model_name: Name of the model architecture (default: qwen3-vl).
+        checkpoint_path: Path to LoRA adapter weights.
+        model_name: HuggingFace model name (must contain 'Qwen3-VL' or 'Qwen2.5-VL').
         device: Device to run on ('cuda' or 'cpu').
-        use_accessibility_tree: Whether to include a11y tree in prompts.
+        use_thinking: Whether to include <think> instruction in prompts.
     """
 
     def __init__(
         self,
         checkpoint_path: str | None = None,
-        model_name: str = "qwen3-vl",
+        model_name: str = "Qwen/Qwen3-VL-8B-Instruct",
         device: str = "cuda",
-        use_accessibility_tree: bool = True,
+        use_thinking: bool = True,
     ):
         self.checkpoint_path = checkpoint_path
         self.model_name = model_name
         self.device = device
-        self.use_accessibility_tree = use_accessibility_tree
+        self.use_thinking = use_thinking
 
         # Lazy load model to avoid import overhead
         self._model = None
         self._processor = None
+        self._previous_actions: list[str] = []
+        self._temp_files: list[str] = []
 
     def _load_model(self) -> None:
-        """Load the model from checkpoint."""
+        """Load the model adapter from checkpoint."""
         if self._model is not None:
             return
 
         try:
-            # Import from openadapt-ml
-            from openadapt_ml.vlm import load_model_and_processor
+            import torch
+            from openadapt_ml.models.qwen_vl import QwenVLAdapter
 
-            self._model, self._processor = load_model_and_processor(
+            device = torch.device(self.device) if isinstance(self.device, str) else self.device
+            lora_config = (
+                {"weights_path": self.checkpoint_path}
+                if self.checkpoint_path
+                else None
+            )
+            self._model = QwenVLAdapter.from_pretrained(
                 model_name=self.model_name,
-                checkpoint_path=self.checkpoint_path,
-                device=self.device,
+                lora_config=lora_config,
+                device=device,
             )
             logger.info(f"PolicyAgent loaded model from {self.checkpoint_path}")
         except ImportError as e:
@@ -99,13 +109,17 @@ class PolicyAgent(BenchmarkAgent):
         # Ensure model is loaded
         self._load_model()
 
-        # Build prompt
+        # Build prompt (aligned with training format)
         prompt = self._build_prompt(observation, task, history)
 
         # Get model prediction
         try:
             response = self._run_inference(observation, prompt)
             action = self._parse_response(response, observation)
+
+            # Track action in training format for "Previous actions" section
+            self._previous_actions.append(self._format_action_qwen(action))
+
             return action
         except Exception as e:
             logger.error(f"Inference failed: {e}")
@@ -117,7 +131,19 @@ class PolicyAgent(BenchmarkAgent):
         task: BenchmarkTask,
         history: list[tuple[BenchmarkObservation, BenchmarkAction]] | None = None,
     ) -> str:
-        """Build prompt for the model.
+        """Build user-turn text aligned with convert_demos.convert_step.
+
+        Format matches training data exactly::
+
+            <image>
+            Instruction: {instruction}
+
+            Previous actions:
+              Step 0: {action}
+              Step 1: {action}
+
+            First reason about what you see in <think>...</think> tags,
+            then output exactly one action.
 
         Args:
             observation: Current observation.
@@ -127,65 +153,124 @@ class PolicyAgent(BenchmarkAgent):
         Returns:
             Prompt string.
         """
-        parts = [f"TASK: {task.instruction}"]
+        parts = ["<image>"]
+        parts.append(f"Instruction: {task.instruction}")
 
-        # Add context
-        if observation.window_title:
-            parts.append(f"Current window: {observation.window_title}")
+        # Previous actions (matches training format)
+        if self._previous_actions:
+            parts.append("")
+            parts.append("Previous actions:")
+            for i, act in enumerate(self._previous_actions):
+                parts.append(f"  Step {i}: {act}")
 
-        # Add accessibility tree if enabled
-        if self.use_accessibility_tree and observation.accessibility_tree:
-            from openadapt_evals.agents.base import format_accessibility_tree
-            tree_str = format_accessibility_tree(observation.accessibility_tree)
-            if len(tree_str) > 4000:
-                tree_str = tree_str[:4000] + "\n... (truncated)"
-            parts.append(f"UI Elements:\n{tree_str}")
-
-        # Add history
-        if history:
-            from openadapt_evals.agents.base import action_to_string
-            history_str = "\n".join(
-                f"Step {i+1}: {action_to_string(action)}"
-                for i, (_, action) in enumerate(history[-5:])
+        # Tail instruction
+        parts.append("")
+        if self.use_thinking:
+            parts.append(
+                "First reason about what you see in <think>...</think> "
+                "tags, then output exactly one action."
             )
-            parts.append(f"Previous actions:\n{history_str}")
+        else:
+            parts.append("Output exactly one action.")
 
-        parts.append("\nWhat is the next action?")
-        return "\n\n".join(parts)
+        return "\n".join(parts)
 
-    def _run_inference(self, observation: BenchmarkObservation, prompt: str) -> str:
-        """Run model inference.
+    @staticmethod
+    def _format_action_qwen(action: BenchmarkAction) -> str:
+        """Format action matching convert_demos._format_action_qwen training format.
+
+        Uses [0, 1000] coordinate range and lowercase function-call style
+        to match what the model was trained on.
+        """
+        def _to_1000(v: float | None) -> int:
+            return round((v or 0.0) * 1000)
+
+        if action.type == "click":
+            return f"click(x={_to_1000(action.x)}, y={_to_1000(action.y)})"
+        if action.type == "double_click":
+            return f"double_click(x={_to_1000(action.x)}, y={_to_1000(action.y)})"
+        if action.type == "right_click":
+            return f"right_click(x={_to_1000(action.x)}, y={_to_1000(action.y)})"
+        if action.type == "type":
+            return f'type(text="{action.text or ""}")'
+        if action.type == "key":
+            keys = (action.modifiers or []) + ([action.key] if action.key else [])
+            keys_fmt = ", ".join(f'"{k}"' for k in keys)
+            return f"press(keys=[{keys_fmt}])"
+        if action.type == "scroll":
+            return f'scroll(direction="{action.scroll_direction or "down"}", amount=3)'
+        if action.type == "drag":
+            return (
+                f"drag(from_coord=[{_to_1000(action.x)}, {_to_1000(action.y)}], "
+                f"to_coord=[{_to_1000(action.end_x)}, {_to_1000(action.end_y)}])"
+            )
+        if action.type == "done":
+            return "finished()"
+        return f"# unknown: {action.type}"
+
+    def _build_sample(self, observation: BenchmarkObservation, prompt: str) -> dict:
+        """Build SFT-style sample matching training format from convert_demos.py.
+
+        NOTE: No system message is included here because
+        ``QwenVLAdapter.generate()`` only extracts the user role message
+        and drops any system role.  The model was trained under the same
+        conditions (no system prompt), so omitting it at inference keeps
+        behaviour consistent.
 
         Args:
             observation: Observation with screenshot.
-            prompt: Prompt text.
+            prompt: User-turn prompt text (from _build_prompt).
+
+        Returns:
+            SFT sample dict with messages and optional images.
+        """
+        sample = {
+            "messages": [
+                {"role": "user", "content": prompt},
+            ],
+        }
+        if observation.screenshot_path:
+            sample["images"] = [observation.screenshot_path]
+        return sample
+
+    def _run_inference(self, observation: BenchmarkObservation, prompt: str) -> str:
+        """Run model inference using SFT-style message format.
+
+        Args:
+            observation: Observation with screenshot.
+            prompt: User-turn prompt text.
 
         Returns:
             Model response text.
         """
-        from openadapt_ml.vlm import run_inference
-
-        # Get screenshot as PIL Image
-        if observation.screenshot:
-            from PIL import Image
-            from io import BytesIO
-            image = Image.open(BytesIO(observation.screenshot))
-        else:
+        if not observation.screenshot and not observation.screenshot_path:
             raise ValueError("No screenshot in observation")
 
-        response = run_inference(
-            model=self._model,
-            processor=self._processor,
-            image=image,
-            prompt=prompt,
-            device=self.device,
-        )
+        sample = self._build_sample(observation, prompt)
+
+        # If screenshot_path is missing but bytes are available, write to temp file
+        if "images" not in sample and observation.screenshot:
+            import tempfile
+            tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+            tmp.write(observation.screenshot)
+            tmp.close()
+            sample["images"] = [tmp.name]
+            self._temp_files.append(tmp.name)
+
+        # Use the adapter's generate method (works with both local and remote)
+        response = self._model.generate(sample)
         return response
 
     def _parse_response(
         self, response: str, observation: BenchmarkObservation
     ) -> BenchmarkAction:
         """Parse model response into BenchmarkAction.
+
+        Uses ``parse_qwen_action`` from ``qwen3vl_agent`` which handles the
+        lowercase keyword format the trained model outputs (e.g.
+        ``click(x=500, y=300)``).  The base ``parse_action_response`` only
+        recognises UPPERCASE format (``CLICK(0.5, 0.3)``), so every Qwen
+        model output would silently fall through to ``type="done"``.
 
         Args:
             response: Model response text.
@@ -194,10 +279,17 @@ class PolicyAgent(BenchmarkAgent):
         Returns:
             Parsed action.
         """
-        from openadapt_evals.agents.base import parse_action_response
-        return parse_action_response(response, observation)
+        from openadapt_evals.agents.qwen3vl_agent import parse_qwen_action
+        return parse_qwen_action(response, observation.viewport)
 
     def reset(self) -> None:
         """Reset agent state between tasks."""
-        # Nothing to reset for policy agent
-        pass
+        import os
+
+        self._previous_actions = []
+        for path in self._temp_files:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        self._temp_files = []

@@ -228,8 +228,8 @@ class TestActionMapping:
         assert action.type == "done"
         assert "no_tool_use" in action.raw_action.get("reason", "")
 
-    def test_screenshot_action_returns_done(self, agent, mock_anthropic_client):
-        """Screenshot action maps to done (next step sends screenshot back)."""
+    def test_screenshot_action_returns_error_on_exhaustion(self, agent, mock_anthropic_client):
+        """Screenshot action returns error after exhausting retries."""
         response = create_mock_response(
             create_tool_use_block("screenshot")
         )
@@ -237,10 +237,11 @@ class TestActionMapping:
 
         action = agent.act(make_observation(), make_task())
 
-        assert action.type == "done"
+        assert action.type == "error"
+        assert action.raw_action["reason"] == "max_internal_retries_exceeded"
 
-    def test_wait_action_returns_done(self, agent, mock_anthropic_client):
-        """Wait action maps to done."""
+    def test_wait_action_returns_error_on_exhaustion(self, agent, mock_anthropic_client):
+        """Wait action returns error after exhausting retries."""
         response = create_mock_response(
             create_tool_use_block("wait", duration=1.0)
         )
@@ -248,7 +249,8 @@ class TestActionMapping:
 
         action = agent.act(make_observation(), make_task())
 
-        assert action.type == "done"
+        assert action.type == "error"
+        assert action.raw_action["reason"] == "max_internal_retries_exceeded"
 
 
 class TestConversationManagement:
@@ -431,30 +433,28 @@ class TestScreenshotEncoding:
         assert abs(action.x - 0.5) < 0.01  # 960/1920 = 0.5
         assert abs(action.y - 0.5) < 0.01  # 540/1080 = 0.5
 
-    def test_no_screenshot_still_works(self, agent, mock_anthropic_client):
-        """Agent works even without a screenshot."""
-        response = create_mock_response(
-            create_text_block("I cannot see the screen.")
-        )
-        mock_anthropic_client.beta.messages.create.return_value = response
-
+    def test_no_screenshot_returns_error(self, agent, mock_anthropic_client):
+        """Agent returns error when no screenshot is available."""
         obs = BenchmarkObservation(screenshot=None)
         action = agent.act(obs, make_task())
 
-        assert action.type == "done"
+        assert action.type == "error"
+        assert action.raw_action["reason"] == "no_screenshot"
+        assert action.raw_action["error_type"] == "infrastructure"
 
 
 class TestEdgeCases:
     """Test edge cases and error handling."""
 
-    def test_api_error_returns_done(self, agent, mock_anthropic_client):
-        """API error results in done action."""
+    def test_api_error_returns_error(self, agent, mock_anthropic_client):
+        """API error results in error action."""
         mock_anthropic_client.beta.messages.create.side_effect = Exception("API error")
 
         action = agent.act(make_observation(), make_task())
 
-        assert action.type == "done"
-        assert "error" in (action.raw_action or {})
+        assert action.type == "error"
+        assert action.raw_action["reason"] == "api_call_failed"
+        assert action.raw_action["error_type"] == "infrastructure"
 
     def test_unknown_action_returns_done(self, agent, mock_anthropic_client):
         """Unknown action type returns done."""

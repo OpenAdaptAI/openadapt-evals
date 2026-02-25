@@ -640,7 +640,7 @@ class WAAMockAdapter(BenchmarkAdapter):
         if action.type == "type" and action.text:
             self._text_entered = action.text
 
-        done = action.type == "done" or self._step_count >= 15
+        done = action.type in ("done", "error") or self._step_count >= 15
         return self._mock_observation(), done, {"step": self._step_count}
 
     def evaluate(self, task: BenchmarkTask) -> BenchmarkResult:
@@ -700,13 +700,11 @@ class WAAMockAdapter(BenchmarkAdapter):
         # Success criteria:
         # 1. Clicked Submit (ID 4) - primary success path
         # 2. Typed something AND clicked OK (ID 1) - form submission path
-        # 3. Called DONE after at least 2 actions - reasonable completion
         clicked_submit = "4" in clicked_ids
         clicked_ok = "1" in clicked_ids
         form_submitted = typed_text and clicked_ok
-        reasonable_completion = called_done and len(self._actions) >= 2
 
-        success = clicked_submit or form_submitted or reasonable_completion
+        success = clicked_submit or form_submitted
 
         # Calculate partial credit score
         score = 0.0

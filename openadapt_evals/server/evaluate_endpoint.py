@@ -365,6 +365,14 @@ def evaluate_task_state(
             "success": score >= 1.0,
         })
 
+    # Guard empty metric_results (e.g. func_spec was [])
+    if not metric_results:
+        return {
+            "success": False,
+            "score": 0.0,
+            "reason": "No metrics could be computed (empty func spec)",
+        }
+
     # Combine results based on conjunction
     if conjunction == "or":
         final_score = max(r["score"] for r in metric_results)
