@@ -640,7 +640,7 @@ class WAAMockAdapter(BenchmarkAdapter):
         if action.type == "type" and action.text:
             self._text_entered = action.text
 
-        done = action.type == "done" or self._step_count >= 15
+        done = action.type in ("done", "error") or self._step_count >= 15
         return self._mock_observation(), done, {"step": self._step_count}
 
     def evaluate(self, task: BenchmarkTask) -> BenchmarkResult:

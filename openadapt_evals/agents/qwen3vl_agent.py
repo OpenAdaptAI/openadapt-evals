@@ -204,7 +204,7 @@ def parse_qwen_action(
     # --- wait() ---
     if _RE_WAIT.search(action_str):
         raw["is_wait"] = True
-        return BenchmarkAction(type="done", raw_action=raw)
+        return BenchmarkAction(type="wait", raw_action=raw)
 
     # --- double_click(x=<int>, y=<int>) --- (check before click)
     m = _RE_DOUBLE_CLICK.search(action_str)

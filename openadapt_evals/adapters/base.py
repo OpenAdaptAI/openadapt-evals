@@ -116,7 +116,7 @@ class BenchmarkAction:
         raw_action: Original benchmark action (lossless).
     """
 
-    type: str  # "click", "type", "scroll", "key", "drag", "answer", "done"
+    type: str  # "click", "type", "scroll", "key", "drag", "answer", "done", "error"
 
     # Pointer actions - coordinates
     x: float | None = None  # Normalized [0,1] or pixel

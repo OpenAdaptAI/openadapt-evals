@@ -26,23 +26,6 @@ from openadapt_evals.adapters.base import (
 
 logger = logging.getLogger("openadapt_evals.agents.policy")
 
-# System prompt — MUST match openadapt_ml.training.convert_demos.SYSTEM_PROMPT
-SYSTEM_PROMPT = (
-    "You are a GUI agent. You observe screenshots of a desktop and output "
-    "exactly one action per step. Use the following action format:\n"
-    "click(x=<int>, y=<int>)\n"
-    "double_click(x=<int>, y=<int>)\n"
-    "right_click(x=<int>, y=<int>)\n"
-    'type(text="<string>")\n'
-    'press(keys=["<key1>", ...])\n'
-    'scroll(direction="<up|down|left|right>", amount=<int>)\n'
-    "drag(from_coord=[<x1>, <y1>], to_coord=[<x2>, <y2>])\n"
-    "wait()\n"
-    "finished()\n\n"
-    "Coordinates are in [0, 1000] range where (0,0) is top-left and "
-    "(1000,1000) is bottom-right."
-)
-
 
 class PolicyAgent(BenchmarkAgent):
     """Agent that uses a trained policy model from openadapt-ml.
@@ -76,6 +59,7 @@ class PolicyAgent(BenchmarkAgent):
         self._model = None
         self._processor = None
         self._previous_actions: list[str] = []
+        self._temp_files: list[str] = []
 
     def _load_model(self) -> None:
         """Load the model adapter from checkpoint."""
@@ -227,6 +211,12 @@ class PolicyAgent(BenchmarkAgent):
     def _build_sample(self, observation: BenchmarkObservation, prompt: str) -> dict:
         """Build SFT-style sample matching training format from convert_demos.py.
 
+        NOTE: No system message is included here because
+        ``QwenVLAdapter.generate()`` only extracts the user role message
+        and drops any system role.  The model was trained under the same
+        conditions (no system prompt), so omitting it at inference keeps
+        behaviour consistent.
+
         Args:
             observation: Observation with screenshot.
             prompt: User-turn prompt text (from _build_prompt).
@@ -236,7 +226,6 @@ class PolicyAgent(BenchmarkAgent):
         """
         sample = {
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
             ],
         }
@@ -266,10 +255,9 @@ class PolicyAgent(BenchmarkAgent):
             tmp.write(observation.screenshot)
             tmp.close()
             sample["images"] = [tmp.name]
+            self._temp_files.append(tmp.name)
 
         # Use the adapter's generate method (works with both local and remote)
-        # NOTE: QwenVLAdapter.generate() currently drops the system role message
-        # from the sample — both training and inference ignore it consistently.
         response = self._model.generate(sample)
         return response
 
@@ -278,6 +266,12 @@ class PolicyAgent(BenchmarkAgent):
     ) -> BenchmarkAction:
         """Parse model response into BenchmarkAction.
 
+        Uses ``parse_qwen_action`` from ``qwen3vl_agent`` which handles the
+        lowercase keyword format the trained model outputs (e.g.
+        ``click(x=500, y=300)``).  The base ``parse_action_response`` only
+        recognises UPPERCASE format (``CLICK(0.5, 0.3)``), so every Qwen
+        model output would silently fall through to ``type="done"``.
+
         Args:
             response: Model response text.
             observation: Observation for coordinate normalization.
@@ -285,9 +279,17 @@ class PolicyAgent(BenchmarkAgent):
         Returns:
             Parsed action.
         """
-        from openadapt_evals.agents.base import parse_action_response
-        return parse_action_response(response, observation)
+        from openadapt_evals.agents.qwen3vl_agent import parse_qwen_action
+        return parse_qwen_action(response, observation.viewport)
 
     def reset(self) -> None:
         """Reset agent state between tasks."""
+        import os
+
         self._previous_actions = []
+        for path in self._temp_files:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        self._temp_files = []

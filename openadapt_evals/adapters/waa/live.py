@@ -431,9 +431,9 @@ class WAALiveAdapter(BenchmarkAdapter):
         # Wait for UI to settle
         time.sleep(self.config.action_delay)
 
-        # Check if done
+        # Check if done (error actions are also terminal)
         done = (
-            action.type == "done" or
+            action.type in ("done", "error") or
             self._step_count >= self.config.max_steps
         )
 
@@ -859,7 +859,7 @@ class WAALiveAdapter(BenchmarkAdapter):
             Python command string to execute via /execute_windows endpoint,
             or None for actions that don't need execution.
         """
-        if action.type == "done":
+        if action.type in ("done", "error"):
             return None
 
         if action.type == "wait":
