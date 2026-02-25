@@ -734,8 +734,9 @@ class Qwen3VLAgent(BenchmarkAgent):
                 with open(adapter_config) as f:
                     cfg = json.load(f)
                 base_model = cfg.get("base_model_name_or_path", DEFAULT_MODEL)
-                # Adapter is assumed to be uploaded to volume at /training/results/final
-                adapter_path = "/training/results/final"
+                # Adapter is uploaded to volume at /adapter by upload_adapter_to_volume()
+                # Volume mounts at /training, so full path is /training/adapter
+                adapter_path = "/training/adapter"
             else:
                 base_model = self.model_path
 
