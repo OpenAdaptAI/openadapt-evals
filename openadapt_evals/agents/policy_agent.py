@@ -54,8 +54,8 @@ class PolicyAgent(BenchmarkAgent):
     Prompt format is aligned with convert_demos.py training data.
 
     Args:
-        checkpoint_path: Path to model checkpoint.
-        model_name: Name of the model architecture (default: qwen3-vl).
+        checkpoint_path: Path to LoRA adapter weights.
+        model_name: HuggingFace model name (must contain 'Qwen3-VL' or 'Qwen2.5-VL').
         device: Device to run on ('cuda' or 'cpu').
         use_thinking: Whether to include <think> instruction in prompts.
     """
@@ -63,7 +63,7 @@ class PolicyAgent(BenchmarkAgent):
     def __init__(
         self,
         checkpoint_path: str | None = None,
-        model_name: str = "qwen3-vl",
+        model_name: str = "Qwen/Qwen3-VL-8B-Instruct",
         device: str = "cuda",
         use_thinking: bool = True,
     ):
@@ -83,12 +83,19 @@ class PolicyAgent(BenchmarkAgent):
             return
 
         try:
-            from openadapt_ml.models import get_adapter
+            import torch
+            from openadapt_ml.models.qwen_vl import QwenVLAdapter
 
-            self._model = get_adapter(
+            device = torch.device(self.device) if isinstance(self.device, str) else self.device
+            lora_config = (
+                {"weights_path": self.checkpoint_path}
+                if self.checkpoint_path
+                else None
+            )
+            self._model = QwenVLAdapter.from_pretrained(
                 model_name=self.model_name,
-                checkpoint_path=self.checkpoint_path,
-                device=self.device,
+                lora_config=lora_config,
+                device=device,
             )
             logger.info(f"PolicyAgent loaded model from {self.checkpoint_path}")
         except ImportError as e:
