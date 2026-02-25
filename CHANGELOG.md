@@ -1,6 +1,26 @@
 # CHANGELOG
 
 
+## v0.8.1 (2026-02-25)
+
+### Bug Fixes
+
+- Parse XML accessibility tree in live adapter for element grounding
+  ([#46](https://github.com/OpenAdaptAI/openadapt-evals/pull/46),
+  [`49461b3`](https://github.com/OpenAdaptAI/openadapt-evals/commit/49461b3a5e7aab4318a62ae232fee032626725e0))
+
+The WAA server may return the accessibility tree as XML (UIA format) instead of a dict. Previously,
+  XML responses caused rect extraction to be skipped entirely (TODO at line 731), which meant
+  element-based grounding via click_element/type_element could never work on real WAA tasks.
+
+- Add _parse_xml_a11y_tree() to convert UIA XML to dict format - Handle AutomationId and RuntimeId
+  for element identification - Extract BoundingRectangle from XML attributes - Update
+  _extract_window_title() to parse XML - Handle type_element by clicking target element before
+  typing - Add 7 tests for XML parsing including integration with rect extraction
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.8.0 (2026-02-25)
 
 ### Features
