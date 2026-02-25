@@ -198,3 +198,103 @@ class TestComputeMetrics:
         assert metrics["success_rate"] == 0.5
         assert metrics["success_count"] == 2
         assert metrics["fail_count"] == 2
+
+
+# ---------------------------------------------------------------------------
+# XML Accessibility Tree Parsing
+# ---------------------------------------------------------------------------
+
+
+class TestParseXmlA11yTree:
+    """Tests for _parse_xml_a11y_tree in the live adapter."""
+
+    def test_basic_xml(self):
+        from openadapt_evals.adapters.waa.live import _parse_xml_a11y_tree
+
+        xml = (
+            '<Window Name="Notepad" AutomationId="NotepadWindow"'
+            ' BoundingRectangle="0,0,1920,1200">'
+            '<Edit Name="Text Editor" AutomationId="15"'
+            ' BoundingRectangle="0,40,1920,1170"/>'
+            "</Window>"
+        )
+        result = _parse_xml_a11y_tree(xml)
+        assert result is not None
+        assert result["role"] == "Window"
+        assert result["name"] == "Notepad"
+        assert result["id"] == "NotepadWindow"
+        assert result["BoundingRectangle"] == "0,0,1920,1200"
+        assert len(result["children"]) == 1
+        child = result["children"][0]
+        assert child["role"] == "Edit"
+        assert child["name"] == "Text Editor"
+        assert child["id"] == "15"
+
+    def test_nested_xml(self):
+        from openadapt_evals.adapters.waa.live import _parse_xml_a11y_tree
+
+        xml = (
+            '<Window Name="App" AutomationId="app1">'
+            '<Pane Name="Toolbar">'
+            '<Button Name="Save" AutomationId="saveBtn"'
+            ' BoundingRectangle="10,10,60,40"/>'
+            '<Button Name="Open" AutomationId="openBtn"'
+            ' BoundingRectangle="70,10,120,40"/>'
+            "</Pane>"
+            "</Window>"
+        )
+        result = _parse_xml_a11y_tree(xml)
+        assert result["children"][0]["role"] == "Pane"
+        buttons = result["children"][0]["children"]
+        assert len(buttons) == 2
+        assert buttons[0]["id"] == "saveBtn"
+        assert buttons[1]["id"] == "openBtn"
+        assert buttons[0]["BoundingRectangle"] == "10,10,60,40"
+
+    def test_invalid_xml_returns_none(self):
+        from openadapt_evals.adapters.waa.live import _parse_xml_a11y_tree
+
+        result = _parse_xml_a11y_tree("not valid xml <><>")
+        assert result is None
+
+    def test_empty_string_returns_none(self):
+        from openadapt_evals.adapters.waa.live import _parse_xml_a11y_tree
+
+        result = _parse_xml_a11y_tree("")
+        assert result is None
+
+    def test_runtime_id_fallback(self):
+        from openadapt_evals.adapters.waa.live import _parse_xml_a11y_tree
+
+        xml = '<Button Name="OK" RuntimeId="42" BoundingRectangle="100,100,200,140"/>'
+        result = _parse_xml_a11y_tree(xml)
+        assert result["id"] == "42"
+
+    def test_no_id_element(self):
+        from openadapt_evals.adapters.waa.live import _parse_xml_a11y_tree
+
+        xml = '<Pane Name="Content"/>'
+        result = _parse_xml_a11y_tree(xml)
+        assert result is not None
+        assert "id" not in result
+        assert result["name"] == "Content"
+
+    def test_xml_rect_extraction_integration(self):
+        """XML a11y tree should produce usable rects via _extract_rects_from_a11y."""
+        from openadapt_evals.adapters.waa.live import WAALiveAdapter, WAALiveConfig
+
+        xml = (
+            '<Window Name="App" AutomationId="win1" BoundingRectangle="0,0,1920,1200">'
+            '<Button Name="Submit" AutomationId="submitBtn"'
+            ' BoundingRectangle="400,100,500,140"/>'
+            "</Window>"
+        )
+        # Create adapter (won't connect to server)
+        adapter = WAALiveAdapter.__new__(WAALiveAdapter)
+        adapter.config = WAALiveConfig()
+        adapter._current_rects = {}
+
+        rects = adapter._extract_rects_from_a11y(xml)
+        assert "submitBtn" in rects
+        # BoundingRectangle "400,100,500,140" → [400, 100, 500, 140]
+        assert rects["submitBtn"] == [400, 100, 500, 140]
