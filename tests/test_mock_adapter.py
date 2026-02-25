@@ -288,18 +288,18 @@ class TestWAAMockAdapterEvaluation:
         assert result.success is True
         assert result.score == 1.0
 
-    def test_evaluate_success_on_done_with_actions(self, mock_adapter):
-        """Test that calling DONE after 2+ actions results in success."""
+    def test_evaluate_no_false_positive_on_done_with_actions(self, mock_adapter):
+        """Test that calling DONE after non-target actions does NOT count as success."""
         task = mock_adapter.list_tasks()[0]
         mock_adapter.reset(task)
 
-        # Take two meaningful actions
+        # Click random area (not Submit/OK) and call done
         mock_adapter.step(BenchmarkAction(type="click", x=0.5, y=0.5))
         mock_adapter.step(BenchmarkAction(type="done"))
 
         result = mock_adapter.evaluate(task)
-        assert result.success is True
-        assert result.score == 1.0
+        assert result.success is False
+        assert result.score < 1.0
 
     def test_evaluate_partial_score_on_some_actions(self, mock_adapter):
         """Test that partial actions get partial credit."""

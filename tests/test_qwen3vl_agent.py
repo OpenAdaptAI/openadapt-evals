@@ -158,7 +158,7 @@ class TestParseQwenAction:
 
     def test_wait(self):
         action = parse_qwen_action("wait()")
-        assert action.type == "done"
+        assert action.type == "wait"
         assert action.raw_action.get("is_wait") is True
 
     def test_finished(self):

@@ -292,6 +292,7 @@ def _run_single_task(
 
         done = False
         steps = 0
+        action = None
         max_steps = task.time_limit_steps or config.max_steps
 
         while not done and steps < max_steps:
@@ -337,8 +338,11 @@ def _run_single_task(
                 config.on_step(obs, action, steps)
 
             # Check for terminal action
-            if action.type == "done":
-                logger.info(f"Step {steps}: Agent signaled task completion")
+            if action.type in ("done", "error"):
+                if action.type == "error":
+                    logger.error(f"Step {steps}: Agent error: {action.raw_action}")
+                else:
+                    logger.info(f"Step {steps}: Agent signaled task completion")
                 done = True
                 break
 
@@ -364,6 +368,11 @@ def _run_single_task(
         # Evaluate result
         logger.info("Evaluating task result")
         result = adapter.evaluate(task)
+
+        # Propagate error_type from agent error action
+        if action is not None and action.type == "error" and action.raw_action:
+            result.error_type = action.raw_action.get("error_type", "agent")
+            result.error = result.error or action.raw_action.get("reason")
 
         # Update result with trajectory info
         result.steps = history if config.save_trajectories else []

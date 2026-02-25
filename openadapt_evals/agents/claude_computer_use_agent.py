@@ -160,6 +160,13 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
         self._step_count += 1
         screenshot_b64 = self._encode_screenshot(observation)
 
+        if screenshot_b64 is None:
+            logger.warning("No screenshot available from environment")
+            return BenchmarkAction(
+                type="error",
+                raw_action={"reason": "no_screenshot", "error_type": "infrastructure"},
+            )
+
         if self._step_count == 1:
             # First step: send task instruction + initial screenshot
             self._messages = self._build_initial_messages(
@@ -179,7 +186,8 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
             response = self._call_api()
             if response is None:
                 return BenchmarkAction(
-                    type="done", raw_action={"error": "API call failed"}
+                    type="error",
+                    raw_action={"reason": "api_call_failed", "error_type": "infrastructure"},
                 )
 
             # Add assistant response to conversation
@@ -205,14 +213,14 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
             # Real action — return to runner
             return self._process_response(response, observation)
 
-        # Exhausted retries on screenshot/wait — return done
+        # Exhausted retries on screenshot/wait — return error (not done)
         logger.warning(
             f"Exhausted {self.MAX_INTERNAL_RETRIES} internal retries on "
             "screenshot/wait actions"
         )
         return BenchmarkAction(
-            type="done",
-            raw_action={"reason": "max_internal_retries_exceeded"},
+            type="error",
+            raw_action={"reason": "max_internal_retries_exceeded", "error_type": "infrastructure"},
         )
 
     def _build_initial_messages(

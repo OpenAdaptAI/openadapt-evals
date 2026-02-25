@@ -431,9 +431,9 @@ class WAALiveAdapter(BenchmarkAdapter):
         # Wait for UI to settle
         time.sleep(self.config.action_delay)
 
-        # Check if done
+        # Check if done (error actions are also terminal)
         done = (
-            action.type == "done" or
+            action.type in ("done", "error") or
             self._step_count >= self.config.max_steps
         )
 
@@ -530,11 +530,14 @@ class WAALiveAdapter(BenchmarkAdapter):
                 score=0.0,
                 num_steps=self._step_count,
                 reason="Evaluation timed out",
+                error_type="infrastructure",
             )
 
         except requests.RequestException as e:
             logger.error(f"Evaluation request error: {e}")
-            return self._evaluate_fallback(task)
+            result = self._evaluate_fallback(task)
+            result.error_type = "infrastructure"
+            return result
 
     def _evaluate_fallback(self, task: BenchmarkTask) -> BenchmarkResult:
         """Fallback when proper evaluation unavailable - returns failure.
@@ -602,7 +605,7 @@ class WAALiveAdapter(BenchmarkAdapter):
         try:
             resp = requests.get(
                 f"{self.config.server_url}/screenshot",
-                timeout=30.0
+                timeout=self.config.timeout
             )
             if resp.status_code == 200:
                 screenshot = resp.content
@@ -626,7 +629,7 @@ class WAALiveAdapter(BenchmarkAdapter):
             resp = requests.get(
                 f"{self.config.server_url}/accessibility",
                 params={"backend": self.config.a11y_backend},
-                timeout=30.0
+                timeout=self.config.timeout
             )
             if resp.status_code == 200:
                 result = resp.json()
@@ -856,7 +859,7 @@ class WAALiveAdapter(BenchmarkAdapter):
             Python command string to execute via /execute_windows endpoint,
             or None for actions that don't need execution.
         """
-        if action.type == "done":
+        if action.type in ("done", "error"):
             return None
 
         if action.type == "wait":
