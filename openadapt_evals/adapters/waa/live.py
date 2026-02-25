@@ -106,6 +106,78 @@ class SyntheticTaskError(ValueError):
         )
 
 
+def _parse_xml_a11y_tree(xml_str: str) -> dict | None:
+    """Parse a UIA XML accessibility tree string into a dict.
+
+    WAA's /accessibility endpoint may return the tree as XML with elements like::
+
+        <Window Name="Notepad" AutomationId="NotepadWindow"
+                BoundingRectangle="0,0,1920,1200">
+          <Edit Name="Text Editor" AutomationId="15"
+                BoundingRectangle="0,40,1920,1170"/>
+        </Window>
+
+    This function converts it to the dict format expected by
+    ``_extract_rects_from_a11y``::
+
+        {
+            "role": "Window",
+            "name": "Notepad",
+            "id": "NotepadWindow",
+            "BoundingRectangle": "0,0,1920,1200",
+            "children": [
+                {"role": "Edit", "name": "Text Editor", "id": "15",
+                 "BoundingRectangle": "0,40,1920,1170", "children": []}
+            ]
+        }
+
+    Args:
+        xml_str: XML string from WAA /accessibility endpoint.
+
+    Returns:
+        Dict representation of the tree, or None on parse failure.
+    """
+    import xml.etree.ElementTree as ET
+
+    try:
+        root = ET.fromstring(xml_str)
+    except ET.ParseError:
+        logger.debug("Failed to parse a11y XML")
+        return None
+
+    def _elem_to_dict(elem: ET.Element) -> dict:
+        node: dict[str, Any] = {"role": elem.tag}
+
+        # Map common UIA attributes to our field names
+        name = elem.get("Name", "")
+        if name:
+            node["name"] = name
+
+        # Try AutomationId first (more stable), then RuntimeId
+        auto_id = elem.get("AutomationId", "")
+        if auto_id:
+            node["id"] = auto_id
+        else:
+            runtime_id = elem.get("RuntimeId", "")
+            if runtime_id:
+                node["id"] = runtime_id
+
+        # Preserve BoundingRectangle for rect extraction
+        bbox = elem.get("BoundingRectangle", "")
+        if bbox:
+            node["BoundingRectangle"] = bbox
+
+        # Recurse into children
+        children = []
+        for child in elem:
+            children.append(_elem_to_dict(child))
+        node["children"] = children
+
+        return node
+
+    return _elem_to_dict(root)
+
+
 @dataclass
 class WAALiveConfig:
     """Configuration for WAALiveAdapter.
@@ -662,8 +734,11 @@ class WAALiveAdapter(BenchmarkAdapter):
         """Extract window title from accessibility tree."""
         if not a11y_tree:
             return None
-        # Handle XML string - can't extract title easily
+        # Handle XML string - parse to dict first
         if isinstance(a11y_tree, str):
+            parsed = _parse_xml_a11y_tree(a11y_tree)
+            if parsed:
+                return parsed.get("name")
             return None
         # Try common field names
         for key in ["Name", "name", "title", "Title"]:
@@ -728,10 +803,14 @@ class WAALiveAdapter(BenchmarkAdapter):
         if a11y_tree:
             # Handle case where a11y_tree is XML string (WAA returns XML)
             if isinstance(a11y_tree, str):
-                # TODO: Parse XML to dict if needed for element grounding
-                logger.debug("A11y tree is XML string, skipping rect extraction")
-                return rects
-            visit(a11y_tree)
+                parsed = _parse_xml_a11y_tree(a11y_tree)
+                if parsed:
+                    visit(parsed)
+                else:
+                    logger.debug("A11y tree XML could not be parsed")
+                    return rects
+            else:
+                visit(a11y_tree)
 
         logger.debug(f"Extracted {len(rects)} element rects from a11y tree")
         return rects
@@ -878,7 +957,21 @@ class WAALiveAdapter(BenchmarkAdapter):
             text = action.text or ""
             # Escape special characters
             text = text.replace("\\", "\\\\").replace("'", "\\'")
-            # Use pyautogui for typing (no grounding needed)
+            # If target_node_id is set (from type_element), click element first to focus it
+            if action.target_node_id is not None:
+                elem_id = str(action.target_node_id)
+                if elem_id in self._current_rects:
+                    rect = self._current_rects[elem_id]
+                    cx = (rect[0] + rect[2]) // 2
+                    cy = (rect[1] + rect[3]) // 2
+                    return (
+                        f"import pyautogui; "
+                        f"pyautogui.click({cx}, {cy}); "
+                        f"import time; time.sleep(0.2); "
+                        f"pyautogui.write('{text}', interval=0.02)"
+                    )
+                else:
+                    logger.warning(f"Element ID '{elem_id}' not found for type_element, typing without focus")
             return f"import pyautogui; pyautogui.write('{text}', interval=0.02)"
 
         if action.type == "key":
