@@ -26,6 +26,23 @@ from openadapt_evals.adapters.base import (
 
 logger = logging.getLogger("openadapt_evals.agents.policy")
 
+# System prompt — MUST match openadapt_ml.training.convert_demos.SYSTEM_PROMPT
+SYSTEM_PROMPT = (
+    "You are a GUI agent. You observe screenshots of a desktop and output "
+    "exactly one action per step. Use the following action format:\n"
+    "click(x=<int>, y=<int>)\n"
+    "double_click(x=<int>, y=<int>)\n"
+    "right_click(x=<int>, y=<int>)\n"
+    'type(text="<string>")\n'
+    'press(keys=["<key1>", ...])\n'
+    'scroll(direction="<up|down|left|right>", amount=<int>)\n'
+    "drag(from_coord=[<x1>, <y1>], to_coord=[<x2>, <y2>])\n"
+    "wait()\n"
+    "finished()\n\n"
+    "Coordinates are in [0, 1000] range where (0,0) is top-left and "
+    "(1000,1000) is bottom-right."
+)
+
 
 class PolicyAgent(BenchmarkAgent):
     """Agent that uses a trained policy model from openadapt-ml.
@@ -34,11 +51,13 @@ class PolicyAgent(BenchmarkAgent):
     benchmark evaluation. The model is expected to be trained using
     the openadapt-ml training pipeline.
 
+    Prompt format is aligned with convert_demos.py training data.
+
     Args:
         checkpoint_path: Path to model checkpoint.
         model_name: Name of the model architecture (default: qwen3-vl).
         device: Device to run on ('cuda' or 'cpu').
-        use_accessibility_tree: Whether to include a11y tree in prompts.
+        use_thinking: Whether to include <think> instruction in prompts.
     """
 
     def __init__(
@@ -46,27 +65,27 @@ class PolicyAgent(BenchmarkAgent):
         checkpoint_path: str | None = None,
         model_name: str = "qwen3-vl",
         device: str = "cuda",
-        use_accessibility_tree: bool = True,
+        use_thinking: bool = True,
     ):
         self.checkpoint_path = checkpoint_path
         self.model_name = model_name
         self.device = device
-        self.use_accessibility_tree = use_accessibility_tree
+        self.use_thinking = use_thinking
 
         # Lazy load model to avoid import overhead
         self._model = None
         self._processor = None
+        self._previous_actions: list[str] = []
 
     def _load_model(self) -> None:
-        """Load the model from checkpoint."""
+        """Load the model adapter from checkpoint."""
         if self._model is not None:
             return
 
         try:
-            # Import from openadapt-ml
-            from openadapt_ml.vlm import load_model_and_processor
+            from openadapt_ml.models import get_adapter
 
-            self._model, self._processor = load_model_and_processor(
+            self._model = get_adapter(
                 model_name=self.model_name,
                 checkpoint_path=self.checkpoint_path,
                 device=self.device,
@@ -99,13 +118,18 @@ class PolicyAgent(BenchmarkAgent):
         # Ensure model is loaded
         self._load_model()
 
-        # Build prompt
+        # Build prompt (aligned with training format)
         prompt = self._build_prompt(observation, task, history)
 
         # Get model prediction
         try:
             response = self._run_inference(observation, prompt)
             action = self._parse_response(response, observation)
+
+            # Track action for next step's "Previous actions" section
+            from openadapt_evals.agents.base import action_to_string
+            self._previous_actions.append(action_to_string(action))
+
             return action
         except Exception as e:
             logger.error(f"Inference failed: {e}")
@@ -117,7 +141,19 @@ class PolicyAgent(BenchmarkAgent):
         task: BenchmarkTask,
         history: list[tuple[BenchmarkObservation, BenchmarkAction]] | None = None,
     ) -> str:
-        """Build prompt for the model.
+        """Build user-turn text aligned with convert_demos.convert_step.
+
+        Format matches training data exactly::
+
+            <image>
+            Instruction: {instruction}
+
+            Previous actions:
+              Step 0: {action}
+              Step 1: {action}
+
+            First reason about what you see in <think>...</think> tags,
+            then output exactly one action.
 
         Args:
             observation: Current observation.
@@ -127,59 +163,65 @@ class PolicyAgent(BenchmarkAgent):
         Returns:
             Prompt string.
         """
-        parts = [f"TASK: {task.instruction}"]
+        parts = ["<image>"]
+        parts.append(f"Instruction: {task.instruction}")
 
-        # Add context
-        if observation.window_title:
-            parts.append(f"Current window: {observation.window_title}")
+        # Previous actions (matches training format)
+        if self._previous_actions:
+            parts.append("")
+            parts.append("Previous actions:")
+            for i, act in enumerate(self._previous_actions):
+                parts.append(f"  Step {i}: {act}")
 
-        # Add accessibility tree if enabled
-        if self.use_accessibility_tree and observation.accessibility_tree:
-            from openadapt_evals.agents.base import format_accessibility_tree
-            tree_str = format_accessibility_tree(observation.accessibility_tree)
-            if len(tree_str) > 4000:
-                tree_str = tree_str[:4000] + "\n... (truncated)"
-            parts.append(f"UI Elements:\n{tree_str}")
-
-        # Add history
-        if history:
-            from openadapt_evals.agents.base import action_to_string
-            history_str = "\n".join(
-                f"Step {i+1}: {action_to_string(action)}"
-                for i, (_, action) in enumerate(history[-5:])
+        # Tail instruction
+        parts.append("")
+        if self.use_thinking:
+            parts.append(
+                "First reason about what you see in <think>...</think> "
+                "tags, then output exactly one action."
             )
-            parts.append(f"Previous actions:\n{history_str}")
+        else:
+            parts.append("Output exactly one action.")
 
-        parts.append("\nWhat is the next action?")
-        return "\n\n".join(parts)
+        return "\n".join(parts)
 
-    def _run_inference(self, observation: BenchmarkObservation, prompt: str) -> str:
-        """Run model inference.
+    def _build_sample(self, observation: BenchmarkObservation, prompt: str) -> dict:
+        """Build SFT-style sample matching training format from convert_demos.py.
 
         Args:
             observation: Observation with screenshot.
-            prompt: Prompt text.
+            prompt: User-turn prompt text (from _build_prompt).
+
+        Returns:
+            SFT sample dict with messages and optional images.
+        """
+        sample = {
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+        }
+        if observation.screenshot_path:
+            sample["images"] = [observation.screenshot_path]
+        return sample
+
+    def _run_inference(self, observation: BenchmarkObservation, prompt: str) -> str:
+        """Run model inference using SFT-style message format.
+
+        Args:
+            observation: Observation with screenshot.
+            prompt: User-turn prompt text.
 
         Returns:
             Model response text.
         """
-        from openadapt_ml.vlm import run_inference
-
-        # Get screenshot as PIL Image
-        if observation.screenshot:
-            from PIL import Image
-            from io import BytesIO
-            image = Image.open(BytesIO(observation.screenshot))
-        else:
+        if not observation.screenshot:
             raise ValueError("No screenshot in observation")
 
-        response = run_inference(
-            model=self._model,
-            processor=self._processor,
-            image=image,
-            prompt=prompt,
-            device=self.device,
-        )
+        sample = self._build_sample(observation, prompt)
+
+        # Use the adapter's generate method (works with both local and remote)
+        response = self._model.generate(sample)
         return response
 
     def _parse_response(
@@ -199,5 +241,4 @@ class PolicyAgent(BenchmarkAgent):
 
     def reset(self) -> None:
         """Reset agent state between tasks."""
-        # Nothing to reset for policy agent
-        pass
+        self._previous_actions = []
