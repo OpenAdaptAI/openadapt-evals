@@ -79,24 +79,42 @@ SYSTEM_PROMPT = (
 # Compiled regex patterns for action parsing
 # ---------------------------------------------------------------------------
 
+# Accept both keyword (x=100, y=200) and positional (100, 200) args,
+# and both int (500) and float (0.500) coordinate values.
+_COORD = r"[\d.]+"  # matches int or float
+
 _RE_CLICK = re.compile(
-    r"(?:click|left_click)\s*\(\s*x\s*=\s*(\d+)\s*,\s*y\s*=\s*(\d+)\s*\)",
+    r"(?:click|left_click)\s*\(\s*(?:x\s*=\s*)?("
+    + _COORD
+    + r")\s*,\s*(?:y\s*=\s*)?("
+    + _COORD
+    + r")\s*\)",
     re.IGNORECASE,
 )
 _RE_DOUBLE_CLICK = re.compile(
-    r"double_click\s*\(\s*x\s*=\s*(\d+)\s*,\s*y\s*=\s*(\d+)\s*\)",
+    r"double_click\s*\(\s*(?:x\s*=\s*)?("
+    + _COORD
+    + r")\s*,\s*(?:y\s*=\s*)?("
+    + _COORD
+    + r")\s*\)",
     re.IGNORECASE,
 )
 _RE_RIGHT_CLICK = re.compile(
-    r"right_click\s*\(\s*x\s*=\s*(\d+)\s*,\s*y\s*=\s*(\d+)\s*\)",
+    r"right_click\s*\(\s*(?:x\s*=\s*)?("
+    + _COORD
+    + r")\s*,\s*(?:y\s*=\s*)?("
+    + _COORD
+    + r")\s*\)",
     re.IGNORECASE,
 )
+# Accept both keyword (text="...") and positional ("...") args
 _RE_TYPE = re.compile(
-    r'type\s*\(\s*text\s*=\s*"((?:[^"\\]|\\.)*)"\s*\)',
+    r'type\s*\(\s*(?:text\s*=\s*)?"((?:[^"\\]|\\.)*)"\s*\)',
     re.IGNORECASE,
 )
+# Accept both keyword (keys=[...]) and positional ([...]) args
 _RE_PRESS = re.compile(
-    r"press\s*\(\s*keys\s*=\s*\[([^\]]*)\]\s*\)",
+    r"press\s*\(\s*(?:keys\s*=\s*)?\[([^\]]*)\]\s*\)",
     re.IGNORECASE,
 )
 _RE_SCROLL = re.compile(
@@ -105,8 +123,16 @@ _RE_SCROLL = re.compile(
     re.IGNORECASE,
 )
 _RE_DRAG = re.compile(
-    r"drag\s*\(\s*from_coord\s*=\s*\[\s*(\d+)\s*,\s*(\d+)\s*\]\s*,"
-    r"\s*to_coord\s*=\s*\[\s*(\d+)\s*,\s*(\d+)\s*\]\s*\)",
+    r"drag\s*\(\s*from_coord\s*=\s*\[\s*("
+    + _COORD
+    + r")\s*,\s*("
+    + _COORD
+    + r")\s*\]\s*,"
+    r"\s*to_coord\s*=\s*\[\s*("
+    + _COORD
+    + r")\s*,\s*("
+    + _COORD
+    + r")\s*\]\s*\)",
     re.IGNORECASE,
 )
 _RE_WAIT = re.compile(r"wait\s*\(\s*\)", re.IGNORECASE)
@@ -117,6 +143,19 @@ _RE_THINK = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 # ---------------------------------------------------------------------------
 # Action parsing (standalone, used by both agent and tests)
 # ---------------------------------------------------------------------------
+
+
+def _parse_coord(raw: str) -> int:
+    """Parse a coordinate value that may be int (500) or float (0.500).
+
+    If the value is a float <= 1.0 with a decimal point, treat it as 0-1
+    range and scale to 0-1000. Otherwise treat as Qwen 0-1000 int range.
+    """
+    val = float(raw)
+    if val <= 1.0 and "." in raw:
+        # 0-1 range (from fine-tuned model training format) -> scale to 0-1000
+        return int(val * QWEN_COORD_SCALE)
+    return int(val)
 
 
 def _denorm_coord(x_qwen: int, y_qwen: int) -> tuple[float, float]:
@@ -209,7 +248,7 @@ def parse_qwen_action(
     # --- double_click(x=<int>, y=<int>) --- (check before click)
     m = _RE_DOUBLE_CLICK.search(action_str)
     if m:
-        x_q, y_q = int(m.group(1)), int(m.group(2))
+        x_q, y_q = _parse_coord(m.group(1)), _parse_coord(m.group(2))
         x_n, y_n = _denorm_coord(x_q, y_q)
         raw["click_variant"] = "double_click"
         raw["qwen_coords"] = {"x": x_q, "y": y_q}
@@ -220,7 +259,7 @@ def parse_qwen_action(
     # --- right_click(x=<int>, y=<int>) --- (check before click)
     m = _RE_RIGHT_CLICK.search(action_str)
     if m:
-        x_q, y_q = int(m.group(1)), int(m.group(2))
+        x_q, y_q = _parse_coord(m.group(1)), _parse_coord(m.group(2))
         x_n, y_n = _denorm_coord(x_q, y_q)
         raw["click_variant"] = "right_click"
         raw["qwen_coords"] = {"x": x_q, "y": y_q}
@@ -231,7 +270,7 @@ def parse_qwen_action(
     # --- click(x=<int>, y=<int>) ---
     m = _RE_CLICK.search(action_str)
     if m:
-        x_q, y_q = int(m.group(1)), int(m.group(2))
+        x_q, y_q = _parse_coord(m.group(1)), _parse_coord(m.group(2))
         x_n, y_n = _denorm_coord(x_q, y_q)
         raw["qwen_coords"] = {"x": x_q, "y": y_q}
         return BenchmarkAction(
@@ -273,8 +312,8 @@ def parse_qwen_action(
     # --- drag(from_coord=[<x1>, <y1>], to_coord=[<x2>, <y2>]) ---
     m = _RE_DRAG.search(action_str)
     if m:
-        fx, fy = int(m.group(1)), int(m.group(2))
-        tx, ty = int(m.group(3)), int(m.group(4))
+        fx, fy = _parse_coord(m.group(1)), _parse_coord(m.group(2))
+        tx, ty = _parse_coord(m.group(3)), _parse_coord(m.group(4))
         fx_n, fy_n = _denorm_coord(fx, fy)
         tx_n, ty_n = _denorm_coord(tx, ty)
         raw["qwen_coords"] = {
