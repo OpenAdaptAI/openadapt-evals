@@ -203,9 +203,11 @@ def cmd_mock(args: argparse.Namespace) -> int:
             model_path = getattr(args, "model_path", None)
             model_endpoint = getattr(args, "model_endpoint", None)
             use_thinking = getattr(args, "use_thinking", False)
+            use_a11y_tree = getattr(args, "use_a11y_tree", False)
             agent = Qwen3VLAgent(
                 model_path=model_path, model_endpoint=model_endpoint,
                 demo=demo_text, use_thinking=use_thinking,
+                use_accessibility_tree=use_a11y_tree,
             )
             print(f"Using Qwen3VLAgent (model={agent.model_path}, endpoint={agent.model_endpoint}, demo={'yes' if agent.demo else 'no'})")
         except RuntimeError as e:
@@ -351,9 +353,11 @@ def cmd_run(args: argparse.Namespace) -> int:
             model_path = getattr(args, "model_path", None)
             model_endpoint = getattr(args, "model_endpoint", None)
             use_thinking = getattr(args, "use_thinking", False)
+            use_a11y_tree = getattr(args, "use_a11y_tree", False)
             agent = Qwen3VLAgent(
                 model_path=model_path, model_endpoint=model_endpoint,
                 demo=demo_text, use_thinking=use_thinking,
+                use_accessibility_tree=use_a11y_tree,
             )
             print(f"Using Qwen3VLAgent (model={agent.model_path}, endpoint={agent.model_endpoint}, demo={'yes' if agent.demo else 'no'})")
         except RuntimeError as e:
@@ -508,9 +512,11 @@ def cmd_live(args: argparse.Namespace) -> int:
             model_path = getattr(args, "model_path", None)
             model_endpoint = getattr(args, "model_endpoint", None)
             use_thinking = getattr(args, "use_thinking", False)
+            use_a11y_tree = getattr(args, "use_a11y_tree", False)
             agent = Qwen3VLAgent(
                 model_path=model_path, model_endpoint=model_endpoint,
                 demo=demo_text, use_thinking=use_thinking,
+                use_accessibility_tree=use_a11y_tree,
             )
             print(f"Using Qwen3VLAgent (model={agent.model_path}, endpoint={agent.model_endpoint}, demo={'yes' if agent.demo else 'no'})")
         except RuntimeError as e:
@@ -2146,6 +2152,7 @@ def main() -> int:
     mock_parser.add_argument("--model-path", type=str, help="Model path for Qwen3VL agent")
     mock_parser.add_argument("--model-endpoint", type=str, help="Remote endpoint for Qwen3VL ('modal' or HTTP URL)")
     mock_parser.add_argument("--use-thinking", action="store_true", help="Enable thinking mode for Qwen3VL")
+    mock_parser.add_argument("--use-a11y-tree", action="store_true", help="Enable accessibility tree grounding for Qwen3VL")
     mock_parser.add_argument("--output", type=str, help="Output directory for traces")
     mock_parser.add_argument("--run-name", type=str, help="Name for this evaluation run")
 
@@ -2169,6 +2176,7 @@ def main() -> int:
     run_parser.add_argument("--model-path", type=str, help="Model path for Qwen3VL agent")
     run_parser.add_argument("--model-endpoint", type=str, help="Remote endpoint for Qwen3VL ('modal' or HTTP URL)")
     run_parser.add_argument("--use-thinking", action="store_true", help="Enable thinking mode for Qwen3VL")
+    run_parser.add_argument("--use-a11y-tree", action="store_true", help="Enable accessibility tree grounding for Qwen3VL")
     run_parser.add_argument("--max-steps", type=int, default=15,
                            help="Max steps per task")
     run_parser.add_argument("--output", type=str, default="benchmark_results",
@@ -2188,6 +2196,7 @@ def main() -> int:
     live_parser.add_argument("--model-path", type=str, help="Model path for Qwen3VL agent")
     live_parser.add_argument("--model-endpoint", type=str, help="Remote endpoint for Qwen3VL ('modal' or HTTP URL)")
     live_parser.add_argument("--use-thinking", action="store_true", help="Enable thinking mode for Qwen3VL")
+    live_parser.add_argument("--use-a11y-tree", action="store_true", help="Enable accessibility tree grounding for Qwen3VL")
     live_parser.add_argument("--demo-library", type=str,
                             help="Path to demo library for retrieval agents")
     live_parser.add_argument("--task-ids", type=str, help="Comma-separated task IDs")
@@ -2467,6 +2476,10 @@ def main() -> int:
     suite_parser.add_argument(
         "--use-thinking", action="store_true",
         help="Enable thinking mode for Qwen3VL",
+    )
+    suite_parser.add_argument(
+        "--use-a11y-tree", action="store_true",
+        help="Enable accessibility tree grounding for Qwen3VL",
     )
     suite_parser.add_argument(
         "--demo-dir", type=str,

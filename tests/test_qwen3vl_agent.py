@@ -21,9 +21,11 @@ from openadapt_evals.adapters.base import (
 from openadapt_evals.agents.qwen3vl_agent import (
     QWEN_COORD_SCALE,
     SYSTEM_PROMPT,
+    SYSTEM_PROMPT_A11Y,
     Qwen3VLAgent,
     _denorm_coord,
     _extract_action_string,
+    _format_a11y_tree,
     parse_qwen_action,
 )
 
@@ -666,3 +668,298 @@ class TestRemoteInference:
         """model_endpoint is included in agent info."""
         agent = Qwen3VLAgent(model_endpoint="modal")
         assert agent.model_endpoint == "modal"
+
+
+# ---------------------------------------------------------------------------
+# Accessibility tree grounding
+# ---------------------------------------------------------------------------
+
+
+MOCK_A11Y_TREE = {
+    "role": "window",
+    "name": "Mock Window",
+    "children": [
+        {"role": "button", "name": "OK", "id": "1"},
+        {"role": "textfield", "name": "Input", "id": "2"},
+        {"role": "button", "name": "Cancel", "id": "3"},
+        {"role": "button", "name": "Submit", "id": "4"},
+    ],
+}
+
+
+class TestClickElementParsing:
+    """Test parsing click_element and type_element actions."""
+
+    def test_click_element_basic(self):
+        action = parse_qwen_action('click_element(id="4")')
+        assert action.type == "click"
+        assert action.target_node_id == "4"
+        assert action.x is None
+        assert action.y is None
+
+    def test_click_element_string_id(self):
+        action = parse_qwen_action('click_element(id="submit_btn")')
+        assert action.type == "click"
+        assert action.target_node_id == "submit_btn"
+
+    def test_click_element_positional(self):
+        """Positional arg without id= keyword."""
+        action = parse_qwen_action('click_element("4")')
+        assert action.type == "click"
+        assert action.target_node_id == "4"
+
+    def test_click_element_stores_raw(self):
+        action = parse_qwen_action('click_element(id="4")')
+        assert action.raw_action["element_action"] == "click_element"
+        assert action.raw_action["target_element_id"] == "4"
+
+    def test_click_element_case_insensitive(self):
+        action = parse_qwen_action('Click_Element(id="4")')
+        assert action.type == "click"
+        assert action.target_node_id == "4"
+
+    def test_type_element_basic(self):
+        action = parse_qwen_action('type_element(id="2", text="hello")')
+        assert action.type == "type"
+        assert action.target_node_id == "2"
+        assert action.text == "hello"
+
+    def test_type_element_positional(self):
+        action = parse_qwen_action('type_element("2", "hello world")')
+        assert action.type == "type"
+        assert action.target_node_id == "2"
+        assert action.text == "hello world"
+
+    def test_type_element_with_escaped_quotes(self):
+        action = parse_qwen_action(r'type_element(id="2", text="say \"hi\"")')
+        assert action.type == "type"
+        assert action.text == 'say "hi"'
+
+    def test_click_element_takes_priority_over_click(self):
+        """click_element should be parsed before click (with coordinates)."""
+        # This tests that element-based actions are checked first
+        action = parse_qwen_action('click_element(id="4")')
+        assert action.target_node_id == "4"
+        assert action.x is None
+
+    def test_click_element_in_think_response(self):
+        response = (
+            "<think>I should click the Submit button (ID 4).</think>\n"
+            'click_element(id="4")'
+        )
+        action = parse_qwen_action(response)
+        assert action.type == "click"
+        assert action.target_node_id == "4"
+        assert "thinking" in action.raw_action
+
+
+class TestFormatA11yTree:
+    """Test _format_a11y_tree helper."""
+
+    def test_basic_tree(self):
+        formatted = _format_a11y_tree(MOCK_A11Y_TREE)
+        assert '[1] button "OK"' in formatted
+        assert '[2] textfield "Input"' in formatted
+        assert '[3] button "Cancel"' in formatted
+        assert '[4] button "Submit"' in formatted
+
+    def test_root_node_shown(self):
+        formatted = _format_a11y_tree(MOCK_A11Y_TREE)
+        assert "window" in formatted
+
+    def test_indentation(self):
+        formatted = _format_a11y_tree(MOCK_A11Y_TREE)
+        lines = formatted.strip().split("\n")
+        # Root (window) at indent 0, children at indent 1 (2 spaces)
+        assert lines[0].startswith("window")
+        assert lines[1].startswith("  [1]")
+
+    def test_empty_tree(self):
+        formatted = _format_a11y_tree({})
+        assert formatted == ""
+
+    def test_nested_tree(self):
+        tree = {
+            "role": "window",
+            "name": "App",
+            "children": [
+                {
+                    "role": "panel",
+                    "name": "Toolbar",
+                    "children": [
+                        {"role": "button", "name": "Save", "id": "10"},
+                    ],
+                }
+            ],
+        }
+        formatted = _format_a11y_tree(tree)
+        assert '[10] button "Save"' in formatted
+
+
+class TestA11yTreePromptIntegration:
+    """Test that a11y tree is included in prompts when enabled."""
+
+    def test_a11y_tree_in_prompt_when_enabled(self):
+        agent = Qwen3VLAgent(use_accessibility_tree=True)
+        obs = BenchmarkObservation(
+            screenshot=None,
+            viewport=(1920, 1200),
+            accessibility_tree=MOCK_A11Y_TREE,
+        )
+        prompt = agent._build_prompt("Click the Submit button", obs)
+        assert "Available UI elements" in prompt
+        assert '[4] button "Submit"' in prompt
+
+    def test_a11y_tree_not_in_prompt_when_disabled(self):
+        agent = Qwen3VLAgent(use_accessibility_tree=False)
+        obs = BenchmarkObservation(
+            screenshot=None,
+            viewport=(1920, 1200),
+            accessibility_tree=MOCK_A11Y_TREE,
+        )
+        prompt = agent._build_prompt("Click the Submit button", obs)
+        assert "Available UI elements" not in prompt
+
+    def test_a11y_tree_not_in_prompt_when_none(self):
+        agent = Qwen3VLAgent(use_accessibility_tree=True)
+        obs = BenchmarkObservation(screenshot=None, viewport=(1920, 1200))
+        prompt = agent._build_prompt("Click the Submit button", obs)
+        assert "Available UI elements" not in prompt
+
+    def test_a11y_tree_prompt_backward_compatible(self):
+        """Prompt without observation arg still works (backward compat)."""
+        agent = Qwen3VLAgent()
+        prompt = agent._build_prompt("Open Notepad")
+        assert "Instruction: Open Notepad" in prompt
+
+    def test_a11y_system_prompt_used_when_enabled(self):
+        agent = Qwen3VLAgent(use_accessibility_tree=True)
+        messages = agent._build_messages("test")
+        assert messages[0]["content"] == SYSTEM_PROMPT_A11Y
+        assert "click_element" in messages[0]["content"]
+
+    def test_standard_system_prompt_used_when_disabled(self):
+        agent = Qwen3VLAgent(use_accessibility_tree=False)
+        messages = agent._build_messages("test")
+        assert messages[0]["content"] == SYSTEM_PROMPT
+        assert "click_element" not in messages[0]["content"]
+
+    def test_default_a11y_tree_disabled(self):
+        agent = Qwen3VLAgent()
+        assert agent.use_accessibility_tree is False
+
+
+# ---------------------------------------------------------------------------
+# Integration: Mock adapter end-to-end with a11y tree grounding
+# ---------------------------------------------------------------------------
+
+
+class TestA11yTreeMockAdapterIntegration:
+    """End-to-end test: a11y tree grounding through mock adapter evaluation.
+
+    Validates the full flow:
+    1. Mock adapter provides observation with a11y tree
+    2. Agent prompt includes formatted a11y tree
+    3. Agent response uses click_element(id="4") (Submit button)
+    4. Parser sets target_node_id on BenchmarkAction
+    5. Mock adapter scores based on target_node_id → success
+    """
+
+    def test_click_element_scores_success_on_mock_adapter(self):
+        """Clicking Submit via element ID should score 1.0 on mock adapter."""
+        from openadapt_evals.adapters.waa.mock import WAAMockAdapter
+
+        adapter = WAAMockAdapter(num_tasks=1, domains=["notepad"])
+        tasks = adapter.list_tasks()
+        task = tasks[0]
+
+        # Reset adapter
+        obs = adapter.reset(task)
+
+        # Verify observation has a11y tree
+        assert obs.accessibility_tree is not None
+        assert any(
+            child.get("id") == "4" and child.get("name") == "Submit"
+            for child in obs.accessibility_tree.get("children", [])
+        )
+
+        # Simulate agent producing click_element action
+        action = parse_qwen_action('click_element(id="4")')
+        assert action.type == "click"
+        assert action.target_node_id == "4"
+
+        # Step the adapter with this action
+        obs2, done, info = adapter.step(action)
+
+        # Signal done
+        done_action = parse_qwen_action("finished()")
+        obs3, done2, info2 = adapter.step(done_action)
+        assert done2 is True
+
+        # Evaluate
+        result = adapter.evaluate(task)
+        assert result.success is True
+        assert result.score == 1.0
+
+    def test_type_then_click_ok_scores_success(self):
+        """Type in field + click OK via element IDs → success."""
+        from openadapt_evals.adapters.waa.mock import WAAMockAdapter
+
+        adapter = WAAMockAdapter(num_tasks=1, domains=["notepad"])
+        task = adapter.list_tasks()[0]
+        adapter.reset(task)
+
+        # Type text in field
+        type_action = parse_qwen_action('type_element(id="2", text="hello")')
+        assert type_action.type == "type"
+        assert type_action.target_node_id == "2"
+        adapter.step(type_action)
+
+        # Click OK
+        ok_action = parse_qwen_action('click_element(id="1")')
+        assert ok_action.target_node_id == "1"
+        adapter.step(ok_action)
+
+        # Finish
+        adapter.step(parse_qwen_action("finished()"))
+
+        result = adapter.evaluate(task)
+        assert result.success is True
+        assert result.score == 1.0
+
+    def test_coordinate_click_still_works(self):
+        """Coordinate-based clicks (fallback) still work for scoring."""
+        from openadapt_evals.adapters.waa.mock import WAAMockAdapter
+
+        adapter = WAAMockAdapter(num_tasks=1, domains=["notepad"])
+        task = adapter.list_tasks()[0]
+        adapter.reset(task)
+
+        # Click Submit button area with coordinates
+        # Submit button is at (350, 80)-(450, 160) in mock adapter
+        # Normalized: (350/1920, 100/1200) ≈ (0.182, 0.083)
+        action = parse_qwen_action("click(x=208, y=100)")  # Qwen coords -> ~0.208, 0.1 -> pixels ~399, 120
+        adapter.step(action)
+        adapter.step(parse_qwen_action("finished()"))
+
+        result = adapter.evaluate(task)
+        # Coordinate click should also work
+        assert result.score > 0
+
+    def test_full_prompt_contains_a11y_elements(self):
+        """Verify the prompt built from a mock observation has the a11y tree."""
+        from openadapt_evals.adapters.waa.mock import WAAMockAdapter
+
+        adapter = WAAMockAdapter(num_tasks=1, domains=["notepad"])
+        task = adapter.list_tasks()[0]
+        obs = adapter.reset(task)
+
+        agent = Qwen3VLAgent(use_accessibility_tree=True)
+        prompt = agent._build_prompt(task.instruction, obs)
+
+        # Verify all 4 mock elements are in the prompt
+        assert '[1] button "OK"' in prompt
+        assert '[2] textfield "Input"' in prompt
+        assert '[3] button "Cancel"' in prompt
+        assert '[4] button "Submit"' in prompt
+        assert "click_element/type_element" in prompt
