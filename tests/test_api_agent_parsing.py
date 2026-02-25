@@ -557,3 +557,163 @@ class TestIntegration:
                 assert len(actions) == 1
                 assert expected_action in actions[0] or actions[0] == expected_action, \
                     f"Expected '{expected_action}' but got '{actions[0]}' for response: {response_text[:50]}..."
+
+
+class TestElementBasedActions:
+    """Tests for accessibility-tree element-based action parsing."""
+
+    @pytest.fixture
+    def mock_agent(self):
+        """Create a mock ApiAgent for testing."""
+        mock_client = Mock()
+        mock_client.messages.create.return_value = create_mock_response(
+            '```python\ncomputer.click_element("submitBtn")\n```'
+        )
+
+        with patch('anthropic.Anthropic', return_value=mock_client):
+            from openadapt_evals.agents.api_agent import ApiAgent
+
+            agent = ApiAgent(
+                provider="anthropic",
+                api_key="test-key",
+            )
+            return agent
+
+    def test_validate_click_element(self, mock_agent):
+        """Test validation of click_element action."""
+        assert mock_agent._validate_action('computer.click_element("submitBtn")', 1920, 1200)
+        assert mock_agent._validate_action("computer.click_element('saveBtn')", 1920, 1200)
+
+    def test_validate_type_element(self, mock_agent):
+        """Test validation of type_element action."""
+        assert mock_agent._validate_action('computer.type_element("textField", "hello")', 1920, 1200)
+        assert mock_agent._validate_action('computer.type_element("input1", "")', 1920, 1200)
+
+    def test_reject_invalid_element_actions(self, mock_agent):
+        """Test rejection of malformed element actions."""
+        assert not mock_agent._validate_action("computer.click_element()", 1920, 1200)
+        assert not mock_agent._validate_action("computer.click_element", 1920, 1200)
+
+    def test_parse_click_element_code_block(self, mock_agent):
+        """Test parsing click_element from python code block."""
+        response = '```python\ncomputer.click_element("submitBtn")\n```'
+        logs = {}
+        result = mock_agent._parse_api_response(response, 1920, 1200, logs)
+
+        assert result["status"] == "success"
+        assert result["action"] == 'computer.click_element("submitBtn")'
+        assert logs["parse_strategy"] == "python_code_block"
+
+    def test_parse_type_element_code_block(self, mock_agent):
+        """Test parsing type_element from python code block."""
+        response = '```python\ncomputer.type_element("textField", "hello world")\n```'
+        logs = {}
+        result = mock_agent._parse_api_response(response, 1920, 1200, logs)
+
+        assert result["status"] == "success"
+        assert result["action"] == 'computer.type_element("textField", "hello world")'
+        assert logs["parse_strategy"] == "python_code_block"
+
+    def test_parse_click_element_direct_pattern(self, mock_agent):
+        """Test parsing click_element from direct text pattern (Strategy 4)."""
+        response = 'I will click the submit button: computer.click_element("submitBtn")'
+        logs = {}
+        result = mock_agent._parse_api_response(response, 1920, 1200, logs)
+
+        assert result["status"] == "success"
+        assert 'click_element' in result["action"]
+        assert 'submitBtn' in result["action"]
+
+    def test_parse_type_element_direct_pattern(self, mock_agent):
+        """Test parsing type_element from direct text pattern (Strategy 4)."""
+        response = 'I will type in the field: computer.type_element("input1", "test text")'
+        logs = {}
+        result = mock_agent._parse_api_response(response, 1920, 1200, logs)
+
+        assert result["status"] == "success"
+        assert 'type_element' in result["action"]
+        assert 'input1' in result["action"]
+
+    def test_parse_computer_action_click_element(self, mock_agent):
+        """Test _parse_computer_action with click_element."""
+        from openadapt_evals.adapters.base import BenchmarkObservation
+
+        obs = BenchmarkObservation(viewport=(1920, 1200))
+        action = mock_agent._parse_computer_action(
+            'computer.click_element("submitBtn")', obs
+        )
+
+        assert action.type == "click"
+        assert action.target_node_id == "submitBtn"
+        assert action.x == 0.5
+        assert action.y == 0.5
+
+    def test_parse_computer_action_type_element(self, mock_agent):
+        """Test _parse_computer_action with type_element."""
+        from openadapt_evals.adapters.base import BenchmarkObservation
+
+        obs = BenchmarkObservation(viewport=(1920, 1200))
+        action = mock_agent._parse_computer_action(
+            'computer.type_element("textField", "hello world")', obs
+        )
+
+        assert action.type == "type"
+        assert action.target_node_id == "textField"
+        assert action.text == "hello world"
+
+    def test_a11y_prompt_selection_with_tree(self, mock_agent):
+        """Test that SYSTEM_PROMPT_A11Y is used when a11y tree present."""
+        mock_agent.use_accessibility_tree = True
+        mock_agent._a11y_available = False  # reset
+
+        obs = {
+            "screenshot": create_test_screenshot(),
+            "accessibility_tree": {"role": "Window", "name": "Test", "children": []},
+        }
+
+        mock_agent.predict("Click button", obs)
+
+        # After predict, _a11y_available should be True
+        assert mock_agent._a11y_available is True
+
+    def test_a11y_prompt_selection_without_tree(self, mock_agent):
+        """Test that SYSTEM_PROMPT is used when no a11y tree."""
+        mock_agent.use_accessibility_tree = True
+        mock_agent._a11y_available = True  # set to True first
+
+        obs = {"screenshot": create_test_screenshot()}
+
+        mock_agent.predict("Click button", obs)
+
+        # After predict without tree, _a11y_available should be False
+        assert mock_agent._a11y_available is False
+
+    def test_click_element_scores_success_on_mock_adapter(self, mock_agent):
+        """Integration: click_element action with target_node_id scores on mock adapter."""
+        from openadapt_evals.adapters.base import BenchmarkObservation, BenchmarkAction
+
+        obs = BenchmarkObservation(viewport=(1920, 1200))
+        action = mock_agent._parse_computer_action(
+            'computer.click_element("4")', obs
+        )
+
+        # Should produce a BenchmarkAction with target_node_id
+        assert action.target_node_id == "4"
+        assert action.type == "click"
+
+        # Now test with mock adapter
+        from openadapt_evals.adapters.waa.mock import WAAMockAdapter
+        adapter = WAAMockAdapter(num_tasks=1, domains=["notepad"])
+        task = adapter.list_tasks()[0]
+        adapter.reset(task)
+
+        # Step with element-based action
+        obs2, done, info = adapter.step(action)
+
+        # Finish
+        done_action = BenchmarkAction(type="done")
+        obs3, done2, info2 = adapter.step(done_action)
+
+        result = adapter.evaluate(task)
+        assert result.success is True
+        assert result.score == 1.0
