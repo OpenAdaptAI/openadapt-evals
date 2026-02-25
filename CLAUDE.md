@@ -12,6 +12,32 @@
 
 This is a hard rule with NO exceptions, even for "small" changes.
 
+### PR Titles MUST Use Conventional Commit Format
+
+PR titles become the squash merge commit message on main. `python-semantic-release` parses these to decide version bumps. **If the PR title doesn't follow the format, no release is created.**
+
+```
+fix: short description          → patch bump (0.0.x)
+feat: short description         → minor bump (0.x.0)
+fix(scope): short description   → patch bump with scope
+feat!: breaking change          → major bump (x.0.0)
+```
+
+**Types**: feat, fix, docs, style, refactor, perf, test, chore, ci
+
+**Rules**: Lowercase type, colon+space, imperative mood, no period, max 72 chars.
+
+**Examples**:
+- `fix: guard empty metric_results in evaluate endpoint`
+- `feat: add demo-conditioned evaluation script`
+- `fix(agent): return error instead of done on CU agent failures`
+
+**Wrong** (will NOT trigger a release):
+- `Fix scoring and agent error handling` (no `fix:` prefix)
+- `Update PolicyAgent` (no type prefix)
+
+When merging with `gh pr merge --squash`, GitHub uses the PR title as the commit message — so the title format is what matters.
+
 ---
 
 ## Project Status
