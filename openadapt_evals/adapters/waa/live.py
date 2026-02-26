@@ -1073,6 +1073,12 @@ class WAALiveAdapter(BenchmarkAdapter):
                 return f"import pyautogui; pyautogui.{pyautogui_method}({cx}, {cy})"
             else:
                 logger.warning(f"Element ID '{elem_id}' not found in rects, falling back to coordinates")
+                # If no coordinates were provided alongside the element ID,
+                # skip the click entirely rather than clicking (0,0) which
+                # triggers PyAutoGUI fail-safe.
+                if action.x is None and action.y is None:
+                    logger.warning(f"No fallback coordinates for '{elem_id}', skipping click")
+                    return "pass  # element not found and no coordinates"
 
         # Fallback: use coordinates if provided
         x = action.x if action.x is not None else 0
