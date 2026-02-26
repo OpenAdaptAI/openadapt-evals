@@ -346,3 +346,62 @@ class TestParseXmlA11yTree:
         assert "submitBtn" in rects
         # BoundingRectangle "400,100,500,140" → [400, 100, 500, 140]
         assert rects["submitBtn"] == [400, 100, 500, 140]
+
+
+class TestFormatAccessibilityTree:
+    """Tests for _format_accessibility_tree in api_agent."""
+
+    def test_format_parsed_atspi_dict(self):
+        """Parsed AT-SPI dict should produce [ID] role: name format."""
+        from openadapt_evals.agents.api_agent import _format_accessibility_tree
+
+        tree = {
+            "role": "desktop",
+            "name": "",
+            "id": "",
+            "children": [
+                {
+                    "role": "togglebutton",
+                    "name": "Start",
+                    "id": "Start",
+                    "BoundingRectangle": "418,672,463,720",
+                    "children": [],
+                },
+                {
+                    "role": "togglebutton",
+                    "name": "Search",
+                    "id": "Search",
+                    "BoundingRectangle": "465,680,685,712",
+                    "children": [],
+                },
+            ],
+        }
+        result = _format_accessibility_tree(tree)
+        assert "[Start] togglebutton: Start" in result
+        assert "[Search] togglebutton: Search" in result
+        assert "[418,672,463,720]" in result
+        assert "[465,680,685,712]" in result
+
+    def test_format_uia_dict(self):
+        """UIA-style dict should also format correctly."""
+        from openadapt_evals.agents.api_agent import _format_accessibility_tree
+
+        tree = {
+            "role": "Window",
+            "name": "Notepad",
+            "id": "NotepadWindow",
+            "BoundingRectangle": "0,0,1920,1200",
+            "children": [
+                {
+                    "role": "Edit",
+                    "name": "Text Editor",
+                    "id": "15",
+                    "BoundingRectangle": "0,40,1920,1170",
+                    "children": [],
+                },
+            ],
+        }
+        result = _format_accessibility_tree(tree)
+        assert "[NotepadWindow] Window: Notepad" in result
+        assert "[15] Edit: Text Editor" in result
+        assert "[0,0,1920,1200]" in result
