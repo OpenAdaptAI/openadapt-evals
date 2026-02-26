@@ -130,23 +130,39 @@ Think step by step:
 # System prompt with element-based grounding (used when a11y tree is available)
 SYSTEM_PROMPT_A11Y = """You are a GUI automation agent controlling a Windows desktop. Given a screenshot, accessibility tree, and task instruction, determine the next action to take.
 
-You must respond with a Python code block. PREFERRED actions use element IDs from the accessibility tree:
-- computer.click_element("element_id") - Click a UI element by its ID (PREFERRED)
-- computer.type_element("element_id", "text") - Click element to focus, then type text (PREFERRED)
+## Accessibility Tree & Element IDs
 
-FALLBACK actions use pixel coordinates (only when no matching element exists):
-- computer.click(x, y) - Click at pixel coordinates
-- computer.double_click(x, y) - Double-click at pixel coordinates
-- computer.right_click(x, y) - Right-click at pixel coordinates
-- computer.type(text) - Type the given text
-- computer.hotkey(key1, key2, ...) - Press key combination (e.g., 'ctrl', 'c')
-- computer.press(key) - Press a single key (e.g., 'enter', 'tab', 'escape')
-- computer.scroll(direction) - Scroll up (-3) or down (3)
-- computer.drag(x1, y1, x2, y2) - Drag from (x1,y1) to (x2,y2)
+The "UI Elements" section lists every visible element in this format:
 
-IMPORTANT: Always prefer click_element/type_element when the target element appears in the accessibility tree. Element-based actions are far more reliable than coordinate-based ones.
+  [ELEMENT_ID] Role: Display Name [left,top,right,bottom]
 
-Format your response as:
+For example:
+  [NotepadWindow] Window: Notepad [0,0,1920,1200]
+    [15] Edit: Text Editor [0,40,1920,1170]
+    [saveBtn] Button: Save [400,100,500,140]
+    [Start] togglebutton: Start [418,672,463,720]
+
+The value in square brackets [ELEMENT_ID] at the start of each line is the element ID. Use EXACTLY that string (e.g., "NotepadWindow", "15", "saveBtn", "Start") when calling click_element or type_element.
+
+CRITICAL: The element ID is the short identifier in brackets, NOT the full line, NOT the role, and NOT the display name with extra attributes.
+
+## Actions
+
+PREFERRED — use element IDs from the tree:
+- computer.click_element("element_id") — Click a UI element by its ID
+- computer.type_element("element_id", "text") — Click element to focus, then type text
+
+FALLBACK — only when no matching element exists in the tree:
+- computer.click(x, y) — Click at pixel coordinates
+- computer.double_click(x, y) — Double-click at pixel coordinates
+- computer.right_click(x, y) — Right-click at pixel coordinates
+- computer.type(text) — Type the given text
+- computer.hotkey(key1, key2, ...) — Press key combination (e.g., 'ctrl', 'c')
+- computer.press(key) — Press a single key (e.g., 'enter', 'tab', 'escape')
+- computer.scroll(direction) — Scroll up (-3) or down (3)
+- computer.drag(x1, y1, x2, y2) — Drag from (x1,y1) to (x2,y2)
+
+## Response Format
 
 ```memory
 # Your notes about the task state (optional)
@@ -157,26 +173,36 @@ CONTINUE
 ```
 
 ```python
-computer.click_element("submit_button")
+computer.click_element("Start")
 ```
 
-Important:
+## Rules
+
 - Use DONE in the decision block when the task is complete
 - Use FAIL if the task cannot be completed
 - Always output exactly one action per response
-- PREFER element IDs over pixel coordinates when available
+- ALWAYS prefer click_element/type_element when the target element appears in the UI Elements list
+- The element_id argument must be the EXACT string from the [brackets] — e.g., "Start", "15", "saveBtn"
 - For text input, use type_element with the field's element ID
 
 Think step by step:
 1. What is the current state of the UI?
 2. What elements are available in the accessibility tree?
-3. Which element should I interact with?
+3. Which element ID (from the [brackets]) matches my target?
 4. What is the next logical action?
 """
 
 
 def _format_accessibility_tree(tree: dict | str, indent: int = 0, max_depth: int = 5) -> str:
     """Format accessibility tree for prompt.
+
+    Produces a clean indented list like::
+
+        [NotepadWindow] Window: Notepad
+          [15] Edit: Text Editor
+          [SaveBtn] Button: Save
+
+    Each ``[ID]`` is the element ID used with ``click_element("ID")``.
 
     Args:
         tree: Accessibility tree dict from WAA, or XML string.
@@ -186,9 +212,10 @@ def _format_accessibility_tree(tree: dict | str, indent: int = 0, max_depth: int
     Returns:
         Formatted string representation.
     """
-    # Handle XML string input (WAA returns XML from /accessibility endpoint)
+    # Handle XML string input — shouldn't normally happen since the live
+    # adapter now parses XML to dict, but keep as safety fallback.
     if isinstance(tree, str):
-        return tree  # Return as-is; caller should truncate if needed
+        return tree
 
     if indent >= max_depth:
         return ""
@@ -200,9 +227,11 @@ def _format_accessibility_tree(tree: dict | str, indent: int = 0, max_depth: int
     name = tree.get("name", "")
     node_id = tree.get("id", tree.get("node_id", ""))
 
-    # Get bounding box if available
+    # Get bounding box — supports both parsed dict and UIA dict formats
     bbox_str = ""
-    if "bounding_rectangle" in tree:
+    if "BoundingRectangle" in tree:
+        bbox_str = f" [{tree['BoundingRectangle']}]"
+    elif "bounding_rectangle" in tree:
         br = tree["bounding_rectangle"]
         bbox_str = f" [{br.get('left', 0)},{br.get('top', 0)},{br.get('right', 0)},{br.get('bottom', 0)}]"
 
