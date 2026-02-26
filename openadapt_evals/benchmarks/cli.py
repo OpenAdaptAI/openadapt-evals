@@ -433,6 +433,7 @@ def cmd_live(args: argparse.Namespace) -> int:
     )
 
     evaluate_url = getattr(args, "evaluate_url", None)
+    waa_examples_path = getattr(args, "waa_examples_path", None)
     print(f"Connecting to WAA server at {args.server}...")
 
     # Create live adapter
@@ -440,6 +441,7 @@ def cmd_live(args: argparse.Namespace) -> int:
         server_url=args.server,
         evaluate_url=evaluate_url,
         max_steps=args.max_steps,
+        waa_examples_path=waa_examples_path,
     )
     adapter = WAALiveAdapter(config)
 

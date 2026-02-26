@@ -739,6 +739,12 @@ class WAALiveAdapter(BenchmarkAdapter):
                 else:
                     a11y_tree = result  # String (XML) or other format
                 self._current_a11y = a11y_tree
+                # Parse XML strings into structured dicts so agents see
+                # a clean "[ID] role: name" format instead of raw XML
+                if isinstance(a11y_tree, str):
+                    parsed = _parse_xml_a11y_tree(a11y_tree)
+                    if parsed:
+                        a11y_tree = parsed
                 # Extract rects for element-based grounding
                 self._current_rects = self._extract_rects_from_a11y(a11y_tree)
                 logger.debug("Got accessibility tree with %d elements", len(self._current_rects))
@@ -1067,6 +1073,12 @@ class WAALiveAdapter(BenchmarkAdapter):
                 return f"import pyautogui; pyautogui.{pyautogui_method}({cx}, {cy})"
             else:
                 logger.warning(f"Element ID '{elem_id}' not found in rects, falling back to coordinates")
+                # If no coordinates were provided alongside the element ID,
+                # skip the click entirely rather than clicking (0,0) which
+                # triggers PyAutoGUI fail-safe.
+                if action.x is None and action.y is None:
+                    logger.warning(f"No fallback coordinates for '{elem_id}', skipping click")
+                    return "pass  # element not found and no coordinates"
 
         # Fallback: use coordinates if provided
         x = action.x if action.x is not None else 0
