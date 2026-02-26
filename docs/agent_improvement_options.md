@@ -10,8 +10,105 @@
 
 **Root cause**: Every agent we've tried outputs raw pixel coordinates. Coordinate
 prediction from screenshots is the hardest part of GUI automation. We're solving the
-hardest subproblem first and failing. The infrastructure already supports element-based
-grounding (accessibility tree, target_node_id) but no agent uses it.
+hardest subproblem first and failing.
+
+**What's changed since v1 of this doc (Feb 25)**:
+- Element-based action space shipped for all agents (PRs #45-47, v0.7.2-v0.9.0)
+- `click_element(id)` / `type_element(id, text)` with `target_node_id` on BenchmarkAction
+- XML a11y tree parsing in live adapter — element rects extractable from WAA
+- Mock adapter scores 1.0 on element-based actions end-to-end
+- **Not yet tested on live WAA** — need to validate both SoM and a11y quality
+
+---
+
+## The Core Thesis
+
+**PC Agent-E achieved a 141% improvement from just 312 demo trajectories** — going from
+~15% to 36% on WAA-V2. This is the single strongest validation of the OpenAdapt bet:
+demos dramatically improve GUI agents, and you don't need millions of them.
+
+Similarly, LearnAct showed a single demonstration can take success rate from 19.3% to
+51.7%, and ShowUI-Aloha reached 60.1% with demo-conditioned planning.
+
+The question isn't whether demos help — they clearly do. The question is how to
+*generate enough quality demos autonomously* to feed the flywheel.
+
+---
+
+## Element Grounding Strategy
+
+The core strategy is **element grounding** — the model selects from detected interactive
+elements instead of predicting raw pixel coordinates. This is what separates Navi (19.5%)
+from our 0% agents: Navi uses Set-of-Mark (SoM) to turn coordinate prediction into
+element selection. Whether to use SoM, UIA, or both is an empirical question that Phase 0
+answers.
+
+### Element sources
+
+| Source | How | Pros | Cons |
+|--------|-----|------|------|
+| **SoM (visual detection)** | Detection model (OmniParser/GroundingDINO) finds elements in screenshot, overlays numbered marks | Universal — works on any screen, no platform dependency | Needs detection model, extra latency, mark quality varies |
+| **A11y tree (programmatic)** | OS accessibility API (UIA on Windows) provides element hierarchy with rects | Free, exact rects, rich metadata (type, state, enabled) | Platform-specific, incomplete for custom UIs/games |
+| **Hybrid** | SoM as primary source; a11y for verification/enrichment | Best coverage + richest signal | Most complex |
+
+**Which source to use is an empirical question — Phase 0 answers it.**
+We don't yet know SoM detection quality on real WAA Windows screenshots (OmniParser's
+99.3% was on synthetic benchmarks; real-world accuracy is likely lower). We also don't
+know UIA coverage for WAA's specific apps. The decision rule:
+
+- **UIA-first** if UIA coverage >= 75% of required targets AND median candidate
+  ambiguity <= 3 per step. UIA is free, exact, deterministic — no detection model needed.
+- **SoM-first** if UIA coverage < 75% or custom UIs dominate. SoM is universal but
+  adds latency and detection noise.
+- **Hybrid** if UIA covers most targets but has gaps. Use UIA rects where available,
+  SoM only for uncovered regions.
+
+**A11y as verification/enrichment** (regardless of primary source):
+- Confirms an element is actually interactive (Invokable/Focusable UIA patterns)
+- Provides control type (Button vs static text that looks like a button)
+- Reports enabled/disabled state
+- Disambiguates when multiple candidates look identical
+
+### Candidate set builder
+
+Even with good element detection, models fail by picking the wrong element among many
+plausible ones. A deterministic candidate set builder before the model chooses:
+1. **Detect broadly**: SoM detection or UIA enumeration produces all elements
+2. **Filter** by control types relevant to the action (Button/Edit/ListItem/MenuItem)
+3. **Filter** by enabled/focusable (via a11y when available)
+4. **Rank** by text match (exact > contains > fuzzy) to instruction keywords
+5. **Rank** by spatial priors (dialogs: primary button bottom-right)
+6. **Present top-K** candidates to the model (K = 10 initially, tune later)
+7. *(Optional)* Re-render screenshot with marks only on the K candidates to reduce clutter
+
+This turns an open-ended generation problem into a bounded selection problem. Build this
+as part of Phase 0 instrumentation — it's small engineering with high leverage.
+
+### Action space
+
+| Action Space | Example | When to use |
+|-------------|---------|-------------|
+| **Element selection** | `click(mark_7)` or `click_element("submitBtn")` | Primary — whenever candidates are available |
+| **Coordinate fallback** | `click(589, 965)` | Fallback — when no candidate matches intent |
+
+**Current implementation**: Hybrid element/coordinate in both Qwen3VLAgent and ApiAgent,
+with `target_node_id` on BenchmarkAction. Adapter resolves to pixel coordinates at
+execution time. Works with both SoM mark numbers and a11y IDs.
+
+**For training data generation**: Element-based labels are strictly better. The teacher
+(Claude) is excellent at UI semantic reasoning ("click the Submit button") but poor at
+coordinate prediction. Matching teacher capabilities to label format is critical — this
+is why Option K works where Option B fails.
+
+### Target architecture (not blocking, but directional)
+
+Separate intent from resolution:
+```
+Model outputs:  {action: "click", query: "Submit", constraints: {role: "Button", window: "active_dialog"}}
+Executor resolves:  query → candidate set → top match → pixel coordinates → click
+```
+This pushes disambiguation into code (testable, deterministic) rather than the model.
+Not required for v1, but the right long-term design.
 
 ---
 
@@ -63,56 +160,36 @@ writes as training data. Train on Modal. Repeat.
 
 ---
 
-### C. Accessibility Tree Grounding: Use Element IDs Instead of Coordinates
+### C. Element Grounding (SoM, A11y, or Hybrid)
 
-**What**: Include the a11y tree in the agent's prompt. Agent outputs `click_id("Submit")`
-instead of `click(x=589, y=965)`. The adapter already maps element IDs to coordinates.
+**What**: Agent selects from detected elements instead of predicting pixel coordinates.
+Element source is determined empirically in Phase 0 (UIA, SoM, or hybrid).
+This is what Navi uses to get 19.5% on WAA (SoM + GPT-4V).
 
 **Pros**:
 - **Sidesteps coordinate prediction entirely** — the hardest part
-- Infrastructure already exists (WAA adapter extracts a11y tree + element rects)
 - BenchmarkAction already has `target_node_id` field
-- Mock adapter scores based on element IDs — instant validation
 - Works with any base model without fine-tuning (in-context learning)
-- Fast iteration: prompt engineering, no training needed
+- Navi proves element selection works on WAA specifically (19.5%)
+- WAA paper showed SoM gives up to 57% improvement
 
 **Cons**:
-- A11y trees are often incomplete/incorrect in real Windows apps
-- Custom-drawn UI elements invisible to accessibility APIs
-- Large a11y trees may overwhelm small models (token budget)
-- Base Qwen3-VL wasn't trained on element-ID actions (may need fine-tuning)
-- Platform-dependent (UIA for Windows, different for web/Linux)
+- SoM: requires detection model, adds latency, quality unknown on real WAA screenshots
+  (OmniParser's 99.3% was on synthetic benchmarks — real-world likely lower)
+- A11y: platform-specific, incomplete for custom UIs, unknown coverage on WAA apps
+- Both: need candidate set builder to manage ambiguity (many elements look similar)
 
-**Estimated effort**: 4-6 hours for basic implementation
-**Expected outcome**: Non-zero scores on mock tasks immediately; real WAA depends on
-a11y tree quality for specific tasks
-**Ralph-loopable**: Yes — iterate on prompt format, tree formatting, element selection
+**Detection backend options**:
+- **OmniParser** (Microsoft): Wrapped in `openadapt-grounding` repo (PyPI published,
+  `OmniParserClient`). FastAPI server on GPU (~$1/hr). Could co-deploy on WAA Azure VM.
+  Skip temporal smoothing, ElementLocator, VLM providers — just use the HTTP client.
+- **GroundingDINO**: Open-vocabulary object detection, text-promptable. More flexible.
+- **UIA only**: Free, exact, deterministic. No detection model needed. But coverage
+  unknown for WAA's apps — Phase 0 answers this.
 
----
-
-### D. Set-of-Mark (SoM) Visual Prompting
-
-**What**: Overlay numbered labels on UI elements in the screenshot. Model picks a number
-instead of predicting coordinates. This is what WAA's Navi baseline uses (19.5%).
-
-**Pros**:
-- **Proven on WAA**: Navi achieves 19.5% with SoM + GPT-4V
-- Combines visual + semantic information (up to 57% improvement in WAA paper)
-- OmniParser already exists in `openadapt-grounding` repo
-- Works with any VLM — no special fine-tuning needed
-- Visual marks are more intuitive for models than raw a11y tree text
-
-**Cons**:
-- Adds preprocessing step (detection model inference per screenshot)
-- Visual clutter can confuse smaller models
-- OmniParser deployment adds infrastructure complexity
-- Mark quality depends on detection model — small/overlapping elements problematic
-- Additional latency per step
-
-**Estimated effort**: 1-2 days (deploy OmniParser, integrate into eval pipeline)
-**Expected outcome**: Significant improvement if using GPT-4V/Claude; uncertain for 2B
-**Ralph-loopable**: Partially — Claude Code can iterate on SoM configuration, mark
-filtering, prompt format
+**Estimated effort**: 1-2 days (deploy detection model + integrate, or test UIA-only)
+**Expected outcome**: Non-zero scores likely — Navi proves the approach works on WAA
+**Ralph-loopable**: Yes — iterate on detection config, candidate filtering, prompt format
 
 ---
 
@@ -289,49 +366,296 @@ scores as the objective function. Not generating training data — modifying the
 
 ---
 
+### K. Element-Based DAgger: Claude Labels Elements, Not Coordinates
+
+**What**: Combine Option B (DAgger) with Option C (element grounding). Claude sees a
+SoM-marked screenshot (+ optional a11y metadata), picks the correct *element*, and that
+becomes training data for the small model. The teacher is no longer being asked a question
+it can't answer.
+
+**Why this fixes Option B's fatal flaw**: Option B failed because Claude can't predict
+pixel coordinates any better than the student. But Claude is excellent at UI semantic
+reasoning — "click mark 7 (the Submit button)" — which is exactly what element selection
+requires. Teacher and student operate in the same action space. The distribution shift
+that killed coordinate DAgger disappears.
+
+**The loop**:
+```
+1. Run eval: Claude + SoM-marked screenshots on WAA task
+2. For each step where Claude chose correctly (task advanced):
+   - Record (screenshot, marks, instruction) → element_action as training example
+3. Filter: only keep examples that pass the verification gate
+4. Train small model on accumulated element-based examples
+5. Eval small model → new score
+6. Repeat
+```
+
+**Bootstrap with micro-tasks**: Full task completion is hard. But individual *verified
+transitions* are easy — "click File menu," "type in search box," "press Enter." Include
+trivially-solvable micro-tasks to seed hundreds of verified steps fast. Treat "task
+success" as optional; you mainly need verified local transitions to train the student's
+grounding/execution policy.
+
+**Verification gate** (critical): Claude will sometimes pick the wrong element for the
+right reasons — ambiguous UI, multiple similar marks, mislabeling. Training on
+confident-but-wrong labels is worse than obviously noisy ones.
+
+Gate hierarchy (strongest to weakest):
+1. **Environment signal** (best): WAA step reward / task-advanced flag if available
+2. **A11y delta**: a11y tree changed meaningfully — new window, focus moved to expected
+   control, text value in target field changed, new control appeared
+3. **State predicates** (per task type): file exists, window title changed, specific text
+   present — defer unless a11y delta proves too noisy
+4. **Screenshot diff** (weakest fallback): only use if nothing else available
+
+Also log **negative examples** (teacher action that *didn't* advance) for future use:
+contrastive learning, rejection sampling in GRPO, or filtering heuristic training.
+
+**Pros**:
+- **Fully ralph-loopable** — entire pipeline is autonomous
+- **Teacher is competent** — Claude's UI reasoning is strong when freed from coordinates
+- **Distribution-aligned** — student trains on the same action space it uses at inference
+- **Self-improving** — more eval runs → more training data → better student → harder tasks
+- **Builds on shipped infrastructure** — a11y tree grounding already in all agents
+- **Cheap** — Claude API cost per label is low (one API call per step)
+
+**Cons**:
+- Depends on element detection quality (SoM or UIA — Phase 0 validates this)
+- Verification gate adds complexity and may discard many examples — track pass rate
+  (if only 5% of steps pass, economics change: need thousands of eval runs)
+- Claude's element selections may cluster on easy/obvious elements (selection bias)
+- Still needs enough verified transitions to generate meaningful training data
+- Risk of training on superficially correct but strategically wrong actions
+  (clicked the right element but wrong plan)
+
+**No-op blacklist** (critical for verification gate):
+- Reject transitions where only focus/hover/caret changed with no structural delta
+- Reject repeated action on same target with no downstream change
+- Log rejected examples as potential negatives for contrastive learning
+
+**Estimated effort**: 2-3 days (pipeline), builds on existing eval infrastructure
+**Expected outcome**: Compounding data flywheel if element detection is decent.
+If detection is garbage, reveals this early and we pivot.
+**Ralph-loopable**: Yes — this is designed as a ralph loop from the ground up
+
+---
+
 ## Comparison Matrix
 
 | Option | Expected Impact | Time to First Result | Cost | Ralph-Loopable | Addresses Root Cause |
 |--------|----------------|---------------------|------|----------------|---------------------|
 | A. More demos | Low | Days | Low | No | No (still coordinates) |
-| B. DAgger | Low | Days | High | Yes | No (noisy teacher) |
-| C. A11y tree | Medium | Hours | Zero | Yes | Yes (sidesteps coords) |
-| D. SoM | Medium-High | 1-2 days | Low | Partial | Yes (visual grounding) |
+| B. DAgger (coords) | Low | Days | High | Yes | No (noisy teacher) |
+| C. Element grounding | Medium-High | 1-2 days | Low | Yes | Yes (sidesteps coords) |
 | E. Two-stage SFT | High | 3-5 days | Medium | Partial | Yes (grounding training) |
 | F. RL (GRPO) | Very High | 5-7 days | Medium | Yes | Yes (self-improvement) |
 | G. Use existing agents | Medium-High | 1-2 days | Low | Yes | Yes (pre-trained grounding) |
 | H. Hybrid planner | High | 3-5 days | Medium | Yes | Yes (separation of concerns) |
 | I. Self-play | High (if bootstrapped) | 2-3 days | Low | Yes | Partially |
 | J. Code iteration | Variable | Hours | Low | Yes | Discovers the answer |
+| **K. Element DAgger** | **High** | **2-3 days** | **Low-Med** | **Yes** | **Yes (competent teacher + right action space)** |
 
 ---
 
-## Recommended Strategy
+## Recommended Strategy (v3)
 
-**Phase 0 — Validate the loop (Today, hours)**:
-Option J (code iteration) + Option C (a11y tree) on mock tasks. Claude Code modifies
-the Qwen3VL agent to use the accessibility tree, runs mock eval, iterates until score > 0.
-This proves the ralph loop works and gets first non-zero score. Zero infrastructure cost.
+### Phase 0 — Validate element grounding on live WAA [NEXT]
 
-**Phase 1 — Real capability (This week, 1-2 days)**:
-Option G (use Smol2Operator or UI-TARS-1.5-7B as base model). These already have
-grounding Stage 1 baked in. Wrap them in a BenchmarkAgent, run WAA eval. Add
-demo-conditioning on top. This likely produces non-zero WAA scores immediately.
+**Goal**: Measure **Recall@K** — can the candidate set builder surface the correct target
+element? This single metric dominates everything downstream. If the right element isn't
+in the top-K candidates, no amount of prompting or training fixes it.
 
-**Phase 2 — The OpenAdapt differentiator (Next week)**:
-Option I (self-play) bootstrapped from Phase 1 successes. Agent succeeds at easy tasks →
-trajectories become demo library → demo-conditioned agent attempts harder tasks →
-successes compound. This validates the core OpenAdapt thesis (demos improve agents)
-with a self-sustaining data flywheel.
+**Headline metric**: Recall@10 for candidate builder (UIA-only, SoM-only, hybrid).
 
-**Phase 3 — Push to SOTA (Ongoing)**:
-Option E (two-stage SFT) + Option F (GRPO) on our own 2B model, trained on the demo
-library accumulated from Phase 2. Small, fast, cheap model that rivals 72B models
-through targeted training. SE-GUI showed 3K samples + GRPO can beat UI-TARS-72B.
+**Target set definition**: "Required targets" must be operationally defined or the
+coverage numbers are hand-wavy. Source the target set from:
+- WAA task metadata (if it exposes target elements per step) — check first
+- Else: human-label a 50-step mini-eval across 5 WAA tasks (cheap, do once)
+- Else: use UIA oracle (closest matching UIA node) as proxy
+
+**Instrumentation** (measure per-step on the target set):
+- Recall@K: is the correct element in top-K candidates? (K=5, 10)
+- Ambiguity: average # of candidates per step (if median > 5, need tighter filtering)
+- Rect fidelity: rects non-empty, on-screen, non-jittering
+- Actionability: % of candidates actually interactive (via a11y when available)
+- Detection backend comparison: UIA vs SoM vs hybrid on same screenshots
+
+Also build the candidate set builder (filter → rank → top-K) as part of this phase.
+It's small engineering with high leverage and directly improves both Claude's element
+selection (for K) and any existing agent's performance (for G).
+
+**Go/no-go**: Recall@10 >= 0.8 on any backend → proceed with that backend.
+Recall@10 < 0.6 on all backends → investigate per-app breakdown, consider coordinate
+approaches, or re-evaluate the element grounding strategy entirely.
+
+**Time bound**: 1 day. This is a gate, not a phase. Don't build detection model
+deployment infra until you've checked UIA coverage (free, instant).
+
+**Status of shipped infrastructure**: Element-based action space (PRs #45-47) works with
+both SoM marks and a11y IDs via `target_node_id`. Adapter resolves to pixel coords at
+execution time.
+
+---
+
+### Phase 0.5 — Wrap an existing agent (Option G) [PARALLEL]
+
+**In parallel with Phase 0**, wrap Smol2Operator-2.2B or UI-TARS-1.5-7B in a
+BenchmarkAgent. These already have visual grounding Stage 1 baked in. If one scores > 0%,
+it provides:
+- Immediate movement (baseline to improve upon)
+- Successful transitions for self-play data (Phase 2)
+- Diverse screen states for K-style training data
+
+**Format integration** (define upfront or you'll burn a day on glue):
+- Input to agent: raw screenshot (these models do their own visual grounding)
+- Output from agent: model-native format (e.g., Smol2Operator outputs `click(x, y)`,
+  UI-TARS outputs `click <point>`)
+- Mapping to BenchmarkAction: parse coordinates, normalize to viewport, set
+  `type="click"`, `x=norm_x`, `y=norm_y`. No `target_node_id` needed — these models
+  predict coordinates directly (that's their grounding strength).
+
+Only attempt this if the wrapper plugs into BenchmarkAgent in < 2 hours. If format
+conversion is a slog, deprioritize until the candidate builder from Phase 0 is solid.
+
+**Go/no-go**: Any agent > 0% within 2 days → use its outputs as seed data.
+
+---
+
+### Phase 1 — Element DAgger flywheel (Option K) [PRIMARY PATH]
+
+Once Phase 0 confirms element grounding is viable (Recall@10 >= 0.8):
+
+1. Run Claude + element candidates on WAA tasks (easiest first + micro-tasks)
+2. Record every step that passes the verification gate
+3. Accumulate element-based training data
+4. If Phase 0.5 agent is running: capture its successful transitions too
+5. Train Qwen3-VL-2B on accumulated element-based examples (Modal)
+6. Eval small model → new score
+7. Repeat
+
+**Micro-task source**: Use the first 3-5 steps of the easiest WAA tasks as micro-tasks —
+"open Notepad," "click File menu," "type in text area," "click Save," "confirm dialog."
+These are trivially UIA-visible and solvable, generating hundreds of verified
+transitions fast. Full task completion is not required for grounding training — verified
+local transitions are the real training signal.
+
+**Go/no-go** (gate on leading indicators, not raw success rate — success rate is noisy
+and depends on task difficulty mix):
+- Recall@K >= 0.8 on micro-task suite → candidate builder is working
+- Student matches teacher on verified transitions >= 0.7 → training is transferring
+- Loop rate < 20% → agent isn't stuck
+- Verification gate pass rate > 15% → enough data to sustain the flywheel
+  (if < 5%, need thousands of eval runs — economics don't work)
+
+**Time bound**: 4 days max before hard re-evaluation. If leading indicators are bad
+after 2 days → switch base model (Smol2Operator) or fall back to Option E.
+
+---
+
+### Phase 2 — Self-play + demo library (Option I)
+
+Once Phase 1 produces a model with >= 10% success rate:
+
+1. Run model on all WAA tasks
+2. Capture successful trajectories as demo library
+3. Demo-condition the model on related tasks
+4. Train on the expanded success set
+5. Repeat
+
+This is where the OpenAdapt thesis gets validated: *do demos improve the agent's
+success rate on new tasks?* PC Agent-E says yes (141% improvement from 312 demos).
+
+**Go/no-go**: Demo-conditioned agent outperforms zero-shot by > 20% on held-out tasks →
+proceed. No improvement → demos aren't helping at this quality level, focus on Phase 3.
+
+**Time bound**: 1 week. If the flywheel isn't spinning by then, pivot to Phase 3 directly.
+
+---
+
+### Phase 3 — Push to SOTA (Option E + F)
+
+Two-stage SFT (grounding pre-training + agentic fine-tuning) followed by GRPO on the
+demo library from Phase 2. This is the heavy investment that produces a small, fast,
+cheap model competitive with 72B models.
+
+**Prerequisites**: Demo library of >= 100 successful trajectories from Phase 2, or
+fall back to open-source grounding datasets (OS-Atlas, Jedi).
+
+---
+
+### Fallback paths
+
+```
+Phase 0 fails (SoM coverage < 60%)
+  → Check per-app breakdown: if 80% of tasks use 3 well-covered apps, filter to those
+  → Try GroundingDINO instead of OmniParser (different detection strengths)
+  → Hybrid: UIA-first rects + SoM only for gaps
+  → Pure a11y for apps with good UIA + coordinate fallback for the rest
+
+Phase 0.5 stalls (no existing agent > 0%)
+  → Check action format adaptation — may need action space conversion, not model issue
+  → Try a different base model
+  → Fall back to Claude + SoM as the sole data generator for Phase 1
+
+Phase 1 stalls (< 5% after 4 days)
+  → Switch base model (Smol2Operator-2.2B, UI-TARS-1.5-7B)
+  → Option H (hybrid): Claude plans, small model grounds
+  → Option E (two-stage SFT): Skip DAgger flywheel, train grounding directly on
+    open-source data (OS-Atlas, Jedi)
+
+Phase 2 stalls (demos don't help)
+  → Examine demo quality — are the trajectories too narrow/repetitive?
+  → Try retrieval-augmented demos instead of training-time injection
+  → Skip to Phase 3 with open-source grounding data
+```
+
+---
+
+## Metrics to Track Every Run
+
+Without these, you're chasing vibes.
+
+**Step-level**:
+- Invalid action rate (unparseable model output)
+- Stuck-loop rate (3+ identical actions)
+- Recovery success rate (after loop detection, did alternative action help?)
+
+**Grounding** (the most important category):
+- **Recall@K**: is the correct target in top-K candidates? (K=5, 10) — headline metric
+- Top-1 pick accuracy given candidates (did model choose correctly?)
+
+**Element quality**:
+- SoM coverage: % of targets detected by visual model
+- A11y coverage: % of targets with a11y nodes
+- Ambiguity: median # of candidates per intent
+- Rect stability: jitter across consecutive frames
+
+**Training data (K loop)**:
+- Steps attempted → steps passed verification gate → unique examples added per iteration
+- Gate pass rate (if < 5%, economics don't work — need too many eval runs)
+- Teacher-student match rate on verified transitions
+
+**Efficiency**:
+- Prompt size (tokens) — monitor for bloat as candidates grow
+- Candidate count per step
+- Action parse failure rate
 
 ---
 
 ## Key Research References
+
+### Demo-conditioned results (validates OpenAdapt thesis)
+
+| Paper/System | Scale | Result | Key Insight |
+|-------------|-------|--------|-------------|
+| **PC Agent-E** | — | **36% WAA-V2** | **141% improvement from just 312 demo trajectories** |
+| **LearnAct** | Gemini-1.5-Pro | **51.7%** (from 19.3%) | **Single demonstration → 168% improvement** |
+| **ShowUI-Aloha** | — | **60.1%** | Demo-conditioned planning |
+
+These three results are the strongest evidence for the OpenAdapt bet. You don't need
+millions of demos. Hundreds — or even one — can dramatically change outcomes.
+
+### Grounding and training approaches
 
 | Paper/System | Scale | Result | Key Technique |
 |-------------|-------|--------|---------------|
@@ -341,7 +665,4 @@ through targeted training. SE-GUI showed 3K samples + GRPO can beat UI-TARS-72B.
 | UI-TARS-1.5 | 7B | 40% OSWorld | SFT + RL + DPO |
 | GTA1 | 7B grounder | 45.2% OSWorld | Separate planner + RL grounder |
 | Navi (WAA baseline) | GPT-4V | 19.5% WAA | SoM + CoT |
-| PC Agent-E | — | 36% WAA-V2 | 312 demo trajectories (141% improvement) |
-| LearnAct | Gemini-1.5-Pro | 51.7% (from 19.3%) | Single demonstration |
-| ShowUI-Aloha | — | 60.1% | Demo-conditioned planning |
 | Jedi dataset | — | 23%→51% OSWorld | Grounding data alone |
