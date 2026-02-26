@@ -276,8 +276,56 @@ class TestParseXmlA11yTree:
         xml = '<Pane Name="Content"/>'
         result = _parse_xml_a11y_tree(xml)
         assert result is not None
-        assert "id" not in result
+        # Name is used as fallback ID when AutomationId/RuntimeId are absent
+        assert result["id"] == "Content"
         assert result["name"] == "Content"
+
+    def test_atspi_format_parsing(self):
+        """AT-SPI format with lowercase name and cp:screencoord/cp:size."""
+        from openadapt_evals.adapters.waa.live import _parse_xml_a11y_tree
+
+        xml = (
+            '<desktop xmlns:cp="uri:deskat:component.at-spi.gnome.org"'
+            ' xmlns:st="uri:deskat:state.at-spi.gnome.org">'
+            '<togglebutton name="Start" st:enabled="true" st:visible="true"'
+            ' cp:screencoord="(418, 672)" cp:size="(45, 48)"/>'
+            '<togglebutton name="Search" st:enabled="true" st:visible="true"'
+            ' cp:screencoord="(465, 680)" cp:size="(220, 32)"/>'
+            '</desktop>'
+        )
+        result = _parse_xml_a11y_tree(xml)
+        assert result is not None
+        assert len(result["children"]) == 2
+        start = result["children"][0]
+        assert start["name"] == "Start"
+        assert start["id"] == "Start"
+        assert start["BoundingRectangle"] == "418,672,463,720"
+        search = result["children"][1]
+        assert search["name"] == "Search"
+        assert search["id"] == "Search"
+        assert search["BoundingRectangle"] == "465,680,685,712"
+
+    def test_atspi_rect_extraction(self):
+        """AT-SPI XML should produce usable rects for element grounding."""
+        from openadapt_evals.adapters.waa.live import WAALiveAdapter, WAALiveConfig
+
+        xml = (
+            '<desktop xmlns:cp="uri:deskat:component.at-spi.gnome.org">'
+            '<togglebutton name="Start"'
+            ' cp:screencoord="(418, 672)" cp:size="(45, 48)"/>'
+            '<togglebutton name="Search"'
+            ' cp:screencoord="(465, 680)" cp:size="(220, 32)"/>'
+            '</desktop>'
+        )
+        adapter = WAALiveAdapter.__new__(WAALiveAdapter)
+        adapter.config = WAALiveConfig()
+        adapter._current_rects = {}
+
+        rects = adapter._extract_rects_from_a11y(xml)
+        assert "Start" in rects
+        assert rects["Start"] == [418, 672, 463, 720]
+        assert "Search" in rects
+        assert rects["Search"] == [465, 680, 685, 712]
 
     def test_xml_rect_extraction_integration(self):
         """XML a11y tree should produce usable rects via _extract_rects_from_a11y."""
