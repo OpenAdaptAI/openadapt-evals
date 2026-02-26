@@ -1,6 +1,38 @@
 # CHANGELOG
 
 
+## v0.10.2 (2026-02-26)
+
+### Bug Fixes
+
+- Improve element ID prompt and parse XML to dict for a11y tree
+  ([#51](https://github.com/OpenAdaptAI/openadapt-evals/pull/51),
+  [`5d30c56`](https://github.com/OpenAdaptAI/openadapt-evals/commit/5d30c562e42453b64bc8349d9111208116337af8))
+
+* fix: improve element ID prompt and parse XML to dict for a11y tree
+
+- Parse XML a11y tree to structured dict before passing to agents, so they see clean "[ID] role:
+  name" format instead of raw XML - Rewrite SYSTEM_PROMPT_A11Y with explicit element ID
+  documentation showing the [ELEMENT_ID] bracket format and examples - Add BoundingRectangle support
+  in _format_accessibility_tree for parsed dict trees (in addition to existing bounding_rectangle
+  dict) - Wire waa_examples_path argument through cmd_live (was only in cmd_run) - Add tests for
+  _format_accessibility_tree with both AT-SPI and UIA dicts
+
+Eliminates the failure mode where Claude used full XML element strings (e.g., 'togglebutton
+  name="Start" st:enabled="true"...') as click_element IDs instead of just the short name ("Start").
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* fix: skip click when element not found and no fallback coordinates
+
+When click_element("id") fails to find the element in rects and no pixel coordinates were provided,
+  skip the click entirely instead of defaulting to (0,0) which triggers PyAutoGUI fail-safe.
+
+---------
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.10.1 (2026-02-26)
 
 ### Bug Fixes
