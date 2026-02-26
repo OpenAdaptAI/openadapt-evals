@@ -1,6 +1,29 @@
 # CHANGELOG
 
 
+## v0.10.1 (2026-02-26)
+
+### Bug Fixes
+
+- Resolve element grounding for AT-SPI a11y tree format
+  ([#50](https://github.com/OpenAdaptAI/openadapt-evals/pull/50),
+  [`d4bbb6a`](https://github.com/OpenAdaptAI/openadapt-evals/commit/d4bbb6aeb8158c6b97db319e1d1ca3e6c00c201e))
+
+The WAA live adapter's XML parser only handled UIA format (uppercase Name, AutomationId,
+  BoundingRectangle) but the actual a11y tree from WAA uses AT-SPI format (lowercase name,
+  cp:screencoord/cp:size with namespaced attributes). This caused all element ID lookups to fail
+  with "Element ID not found in rects" since the rects dict was empty.
+
+Changes: - Parse AT-SPI namespaced coordinates (cp:screencoord + cp:size) into BoundingRectangle
+  format - Support lowercase `name` attribute (AT-SPI) alongside uppercase `Name` (UIA) - Use
+  element name as fallback ID when AutomationId/RuntimeId absent - First-match-wins for duplicate
+  element names in rects dict - Add recursive glob fallback in _load_task_from_disk for UUID task
+  IDs - Add --waa-examples-path CLI arg for local task config loading - Fix waa_server_patch.py
+  evaluator paths and default port
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.10.0 (2026-02-26)
 
 ### Documentation
