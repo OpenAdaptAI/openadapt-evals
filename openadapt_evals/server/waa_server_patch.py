@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 # WAA evaluator paths to search
 WAA_EVALUATOR_PATHS = [
+    "/client/desktop_env",
     "/home/azureuser/WindowsAgentArena/src/win-arena-container/client/desktop_env",
     "C:/WAA/client/desktop_env",
     "/waa/client/desktop_env",
@@ -57,13 +58,19 @@ def find_waa_evaluators() -> tuple[Any, Any] | None:
     for path in WAA_EVALUATOR_PATHS:
         path = Path(path)
         if path.exists() and (path / "evaluators").exists():
+            # Add parent to sys.path so `desktop_env.evaluators` is importable
+            parent = str(path.parent)
+            if parent not in sys.path:
+                sys.path.insert(0, parent)
+            # Also add path itself for direct `evaluators` imports
             if str(path) not in sys.path:
                 sys.path.insert(0, str(path))
             try:
                 from evaluators import getters, metrics
                 logger.info(f"Found WAA evaluators at {path}")
                 return getters, metrics
-            except ImportError:
+            except ImportError as e:
+                logger.debug(f"Import failed from {path}: {e}")
                 continue
     return None
 
@@ -239,8 +246,8 @@ def main():
 
     parser = argparse.ArgumentParser(description="WAA Server Evaluate Endpoint")
     parser.add_argument(
-        "--port", type=int, default=5001,
-        help="Port to run standalone server (default: 5001)"
+        "--port", type=int, default=5050,
+        help="Port to run standalone server (default: 5050)"
     )
     parser.add_argument(
         "--host", type=str, default="0.0.0.0",
@@ -278,7 +285,7 @@ def main():
     print(f"  GET  http://{args.host}:{args.port}/evaluate/health")
     print()
 
-    app.run(host=args.host, port=args.port, debug=True)
+    app.run(host=args.host, port=args.port, debug=False)
 
 
 # Code to copy into WAA's main.py

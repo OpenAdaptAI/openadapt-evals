@@ -280,6 +280,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     server_url = args.server
     evaluate_url = getattr(args, "evaluate_url", None)
+    waa_examples_path = getattr(args, "waa_examples_path", None)
     print(f"Connecting to WAA server at {server_url}...")
 
     # Create live adapter
@@ -287,6 +288,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         server_url=server_url,
         evaluate_url=evaluate_url,
         max_steps=args.max_steps,
+        waa_examples_path=waa_examples_path,
     )
     adapter = WAALiveAdapter(config)
 
@@ -2228,6 +2230,8 @@ def main() -> int:
                             help="Path to demo library for retrieval agents")
     live_parser.add_argument("--task-ids", type=str, help="Comma-separated task IDs")
     live_parser.add_argument("--max-steps", type=int, default=15, help="Max steps per task")
+    live_parser.add_argument("--waa-examples-path", type=str,
+                            help="Path to WAA evaluation_examples_windows directory for task configs")
     live_parser.add_argument("--output", type=str, help="Output directory for traces")
     live_parser.add_argument("--run-name", type=str, help="Name for this evaluation run")
 

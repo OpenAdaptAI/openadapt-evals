@@ -145,15 +145,18 @@ def _parse_xml_a11y_tree(xml_str: str) -> dict | None:
         logger.debug("Failed to parse a11y XML")
         return None
 
+    # Namespace for AT-SPI component coordinates
+    CP_NS = "{uri:deskat:component.at-spi.gnome.org}"
+
     def _elem_to_dict(elem: ET.Element) -> dict:
         node: dict[str, Any] = {"role": elem.tag}
 
-        # Map common UIA attributes to our field names
-        name = elem.get("Name", "")
+        # Map common UIA attributes — support both UIA (Name) and AT-SPI (name)
+        name = elem.get("Name", "") or elem.get("name", "")
         if name:
             node["name"] = name
 
-        # Try AutomationId first (more stable), then RuntimeId
+        # Try AutomationId first (most stable), then RuntimeId, then name
         auto_id = elem.get("AutomationId", "")
         if auto_id:
             node["id"] = auto_id
@@ -161,11 +164,26 @@ def _parse_xml_a11y_tree(xml_str: str) -> dict | None:
             runtime_id = elem.get("RuntimeId", "")
             if runtime_id:
                 node["id"] = runtime_id
+            elif name:
+                # Use element name as ID — this is what Claude sees in the
+                # a11y tree and uses with click_element()/type_element()
+                node["id"] = name
 
         # Preserve BoundingRectangle for rect extraction
         bbox = elem.get("BoundingRectangle", "")
         if bbox:
             node["BoundingRectangle"] = bbox
+        else:
+            # AT-SPI format: cp:screencoord="(x, y)" + cp:size="(w, h)"
+            screencoord = elem.get(f"{CP_NS}screencoord", "")
+            size = elem.get(f"{CP_NS}size", "")
+            if screencoord and size:
+                try:
+                    x, y = [int(v.strip()) for v in screencoord.strip("()").split(",")]
+                    w, h = [int(v.strip()) for v in size.strip("()").split(",")]
+                    node["BoundingRectangle"] = f"{x},{y},{x + w},{y + h}"
+                except (ValueError, IndexError):
+                    pass
 
         # Recurse into children
         children = []
@@ -386,30 +404,40 @@ class WAALiveAdapter(BenchmarkAdapter):
         base = Path(base_path)
 
         # Parse task_id to get domain and task file name
-        # Format: domain_taskname or domain_uuid
+        # Format: domain_taskname or domain_uuid (or bare UUID)
         parts = task_id.split("_", 1)
-        if len(parts) < 2:
-            return None
+        if len(parts) >= 2:
+            domain = parts[0]
+            task_name = parts[1]
 
-        domain = parts[0]
-        task_name = parts[1]
+            # Try different file locations
+            candidates = [
+                base / "examples" / domain / f"{task_name}.json",
+                base / domain / f"{task_name}.json",
+                base / "examples" / domain / f"{task_id}.json",
+            ]
 
-        # Try different file locations
-        candidates = [
-            base / "examples" / domain / f"{task_name}.json",
-            base / domain / f"{task_name}.json",
-            base / "examples" / domain / f"{task_id}.json",
-        ]
+            for task_file in candidates:
+                if task_file.exists():
+                    try:
+                        with open(task_file, encoding="utf-8") as f:
+                            config = json.load(f)
+                        logger.info(f"Loaded task config from {task_file}")
+                        return self._create_task_from_config(task_id, config)
+                    except Exception as e:
+                        logger.warning(f"Failed to load {task_file}: {e}")
 
-        for task_file in candidates:
-            if task_file.exists():
-                try:
-                    with open(task_file, encoding="utf-8") as f:
-                        config = json.load(f)
-                    logger.info(f"Loaded task config from {task_file}")
-                    return self._create_task_from_config(task_id, config)
-                except Exception as e:
-                    logger.warning(f"Failed to load {task_file}: {e}")
+        # Fallback: recursive glob search for {task_id}.json
+        # Handles UUID task IDs that don't follow domain_taskname format
+        matches = list(base.rglob(f"{task_id}.json"))
+        if matches:
+            try:
+                with open(matches[0], encoding="utf-8") as f:
+                    config = json.load(f)
+                logger.info(f"Loaded task config from {matches[0]}")
+                return self._create_task_from_config(task_id, config)
+            except Exception as e:
+                logger.warning(f"Failed to load {matches[0]}: {e}")
 
         return None
 
@@ -761,9 +789,9 @@ class WAALiveAdapter(BenchmarkAdapter):
         rects: dict[str, list[int]] = {}
 
         def visit(node: dict) -> None:
-            # Get element ID
+            # Get element ID — try explicit IDs first, then fall back to name
             elem_id = None
-            for id_field in ["id", "Id", "ID", "AutomationId"]:
+            for id_field in ["id", "Id", "ID", "AutomationId", "name", "Name"]:
                 if id_field in node and node[id_field]:
                     elem_id = str(node[id_field])
                     break
@@ -775,8 +803,8 @@ class WAALiveAdapter(BenchmarkAdapter):
                     bbox = node[bbox_field]
                     break
 
-            # Store if we have both ID and bbox
-            if elem_id is not None and bbox is not None:
+            # Store if we have both ID and bbox (first match wins for duplicate names)
+            if elem_id is not None and bbox is not None and elem_id not in rects:
                 # Normalize bbox to [left, top, right, bottom]
                 if isinstance(bbox, list) and len(bbox) == 4:
                     # Could be [l, t, r, b] or [l, t, w, h] - assume [l, t, r, b]
