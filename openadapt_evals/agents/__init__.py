@@ -11,6 +11,7 @@ Available agents:
     - ApiAgent: Uses Claude/GPT APIs directly (for WAA)
     - ClaudeComputerUseAgent: Uses Claude's native computer_use tool
     - Qwen3VLAgent: Uses Qwen3-VL for local inference
+    - SmolOperatorAgent: Uses SmolVLM2-2.2B for local inference
     - PolicyAgent: Uses local trained policy model
     - RetrievalAugmentedAgent: Automatically retrieves demos from a library
     - BaselineAgent: Unified baselines using openadapt-ml (Claude/GPT/Gemini)
@@ -71,6 +72,9 @@ def __getattr__(name: str):
     if name == "Qwen3VLAgent":
         from openadapt_evals.agents.qwen3vl_agent import Qwen3VLAgent
         return Qwen3VLAgent
+    if name == "SmolOperatorAgent":
+        from openadapt_evals.agents.smol_agent import SmolOperatorAgent
+        return SmolOperatorAgent
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
@@ -83,6 +87,7 @@ __all__ = [
     "ApiAgent",
     "ClaudeComputerUseAgent",
     "Qwen3VLAgent",
+    "SmolOperatorAgent",
     "PolicyAgent",
     "RetrievalAugmentedAgent",
     "BaselineAgent",
