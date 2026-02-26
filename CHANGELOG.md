@@ -1,6 +1,45 @@
 # CHANGELOG
 
 
+## v0.10.0 (2026-02-26)
+
+### Documentation
+
+- Update agent improvement strategy to v3 with element grounding focus
+  ([#48](https://github.com/OpenAdaptAI/openadapt-evals/pull/48),
+  [`e170006`](https://github.com/OpenAdaptAI/openadapt-evals/commit/e17000682cc56ea865008b1e84fe89020729565b))
+
+* docs: update agent improvement strategy to v3 with element grounding focus
+
+Synthesizes multiple rounds of expert feedback into actionable strategy: - Add Core Thesis section
+  (PC Agent-E 141% improvement from 312 demos) - Add Element Grounding Strategy with candidate set
+  builder and action space design - Add Option K (Element-Based DAgger) with verification gate
+  hierarchy - Merge Options C+D into single "Element Grounding" option - Rewrite Recommended
+  Strategy with falsifiable go/no-go criteria and time bounds - Make SoM-vs-UIA decision empirical
+  (Phase 0 determines via Recall@K) - Add Metrics section, fallback paths, and no-op blacklist -
+  Caveat OmniParser 99.3% as synthetic benchmark accuracy
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* chore: sync beads state
+
+---------
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+### Features
+
+- Add SmolOperatorAgent wrapping SmolVLM2-2.2B for GUI automation
+  ([#49](https://github.com/OpenAdaptAI/openadapt-evals/pull/49),
+  [`c886173`](https://github.com/OpenAdaptAI/openadapt-evals/commit/c8861730107af44292faf26ebeddadc2292cdd19))
+
+Wraps smolagents/SmolVLM2-2.2B-Instruct-Agentic-GUI as a BenchmarkAgent. Coordinates are natively
+  [0,1] — no conversion needed. Supports click, double_click, long_press, type, press, scroll, drag,
+  swipe, final_answer. Registered in CLI as 'smol' agent type. 37 tests passing.
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.9.0 (2026-02-25)
 
 ### Features
