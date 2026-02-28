@@ -47,6 +47,51 @@ COPY --from=windowsarena/winarena:latest /models /models
 # Copy Windows setup scripts (install.bat, setup.ps1, etc.)
 COPY --from=windowsarena/winarena:latest /oem /oem
 
+# Pre-download LibreOffice MSI into /oem so it's available on the Samba share
+# during first boot.  The WAA setup.ps1 downloads from mirrors at runtime which
+# frequently times out (or 404s when version is removed), leaving LibreOffice
+# uninstalled.  By placing the MSI in /oem it gets shared via Samba to
+# \\host.lan\Data\, and we patch setup.ps1 to try the local copy first.
+#
+# Version discovery: scrapes the stable directory listing at build time so we
+# always get whatever version is currently on mirrors.
+RUN LO_VER=$(curl -fsSL https://download.documentfoundation.org/libreoffice/stable/ | \
+      grep -oP 'href="\K[0-9]+\.[0-9]+\.[0-9]+(?=/")' | sort -V | tail -1) && \
+    MSI="LibreOffice_${LO_VER}_Win_x86-64.msi" && \
+    echo "Discovered LibreOffice version: $LO_VER ($MSI)" && \
+    for url in \
+      "https://mirror.raiolanetworks.com/tdf/libreoffice/stable/${LO_VER}/win/x86_64/${MSI}" \
+      "https://mirrors.iu13.net/tdf/libreoffice/stable/${LO_VER}/win/x86_64/${MSI}" \
+      "https://download.documentfoundation.org/libreoffice/stable/${LO_VER}/win/x86_64/${MSI}"; do \
+      echo "Trying $url ..." && \
+      curl -fSL --connect-timeout 30 --max-time 300 -o "/oem/${MSI}" "$url" && break || true; \
+    done && \
+    if ls /oem/LibreOffice_*_Win_x86-64.msi 1>/dev/null 2>&1; then \
+      echo "LibreOffice MSI pre-downloaded ($(du -h /oem/${MSI} | cut -f1))"; \
+    else \
+      echo "WARNING: LibreOffice MSI download failed from all mirrors (install will retry at first boot)"; \
+    fi
+
+# Patch setup.ps1 to install LibreOffice from the pre-downloaded MSI on the
+# Samba share if it exists, falling through to the original mirror download
+# otherwise.  Uses a glob to find the MSI regardless of exact version.
+RUN if grep -q "libreOffice_installer" /oem/setup.ps1; then \
+      sed -i '/\$libreOfficeInstallerFilePath = "\$env:TEMP\\libreOffice_installer.exe"/a\
+    # Try pre-downloaded MSI from Samba share first (baked into Docker image)\
+    $predownloadedMsi = Get-ChildItem "\\\\host.lan\\Data\\LibreOffice_*_Win_x86-64.msi" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName\
+    if ($predownloadedMsi) {\
+        Write-Host "Installing LibreOffice from pre-downloaded MSI: $predownloadedMsi"\
+        Start-Process "msiexec.exe" -ArgumentList "/i `\"$predownloadedMsi`\" /quiet" -Wait -NoNewWindow\
+        Write-Host "LibreOffice installed from pre-downloaded MSI."\
+        Add-ToEnvPath -NewPath "C:\\Program Files\\LibreOffice\\program"\
+    } else {' /oem/setup.ps1 && \
+      sed -i '/Add-ToEnvPath -NewPath "C:\\Program Files\\LibreOffice\\program"/,/^}/{/^}/a\
+    }' /oem/setup.ps1 && \
+      echo "Patched setup.ps1 with pre-downloaded MSI fallback"; \
+    else \
+      echo "WARNING: Could not patch setup.ps1 (pattern not found)"; \
+    fi
+
 # Copy OEM files AFTER dockurr/samba starts (which wipes /tmp/smb)
 # Copy IMMEDIATELY (no delay) and SYNCHRONOUSLY (not backgrounded) to ensure
 # files are available before Windows boots and runs FirstLogonCommands

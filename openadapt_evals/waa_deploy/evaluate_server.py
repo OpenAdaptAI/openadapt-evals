@@ -222,6 +222,331 @@ def _setup_clear_task_files(**_kwargs):
         logger.warning(f"Clear task files failed ({resp.status_code})")
 
 
+def _setup_verify_apps(apps, **_kwargs):
+    """Verify required apps are installed on Windows. Raises if any missing."""
+    import re
+    import requests as req
+
+    APP_CHECKS = {
+        "libreoffice_calc": (
+            'powershell -Command "Test-Path'
+            " 'C:\\Program Files\\LibreOffice\\program\\scalc.exe'\""
+        ),
+        "libreoffice_writer": (
+            'powershell -Command "Test-Path'
+            " 'C:\\Program Files\\LibreOffice\\program\\swriter.exe'\""
+        ),
+        "vlc": (
+            'powershell -Command "Test-Path'
+            " 'C:\\Program Files\\VideoLAN\\VLC\\vlc.exe'\""
+        ),
+        "vs_code": (
+            'powershell -Command "Test-Path'
+            " 'C:\\Users\\Docker\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe'\""
+        ),
+        "chrome": (
+            'powershell -Command "Test-Path'
+            " 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'\""
+        ),
+        "notepad": (
+            'powershell -Command "Test-Path'
+            " 'C:\\Windows\\System32\\notepad.exe'\""
+        ),
+    }
+    # Normalize variant app names from task configs to canonical keys.
+    # Task configs use inconsistent names: "libreoffice-calc", "libreoffice calc",
+    # "vscode", etc. Canonicalize by lowercasing and replacing hyphens/spaces
+    # with underscores, then apply explicit aliases for remaining mismatches.
+    ALIASES = {
+        "vscode": "vs_code",
+        "vs_code": "vs_code",
+        "libreoffice": "libreoffice_calc",  # bare "libreoffice" → calc
+    }
+
+    def _normalize(name: str) -> str:
+        key = re.sub(r"[\s\-]+", "_", name.strip().lower())
+        return ALIASES.get(key, key)
+
+    missing = []
+    for app in apps:
+        canonical = _normalize(app)
+        check_cmd = APP_CHECKS.get(canonical)
+        if not check_cmd:
+            logger.info(f"verify_apps: no check for '{app}' (canonical='{canonical}', assumed built-in), skipping")
+            continue
+        try:
+            resp = req.post(
+                f"{WAA_SERVER}/setup/execute",
+                json={"command": check_cmd},
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                output = resp.json().get("output", "").strip().lower()
+                if output != "true":
+                    missing.append(app)
+                    logger.warning(f"verify_apps: '{app}' (canonical='{canonical}') NOT found")
+                else:
+                    logger.info(f"verify_apps: '{app}' (canonical='{canonical}') found")
+            else:
+                missing.append(app)
+                logger.warning(f"verify_apps: check for '{app}' returned {resp.status_code}")
+        except Exception as e:
+            missing.append(app)
+            logger.warning(f"verify_apps: check for '{app}' failed: {e}")
+    if missing:
+        raise RuntimeError(
+            f"Missing apps: {', '.join(missing)}. "
+            "Run install.bat or rebuild image."
+        )
+    logger.info(f"verify_apps: all {len(apps)} app(s) present")
+
+
+def _setup_install_apps(apps=None, **_kwargs):
+    """Install missing apps on Windows.
+
+    If *apps* is given, only those apps are installed. Otherwise, runs the
+    full WAA ``install.bat`` from the OEM directory.
+
+    Each app has a self-contained install recipe: download the installer,
+    run it silently, then verify the executable exists.
+    """
+    import requests as req
+
+    # Per-app install configuration.
+    #
+    # Each app has:
+    # - download: list of (mirror_url, local_filename) to download on the Docker
+    #   Linux side (via /tmp/smb → \\host.lan\Data\ Samba share).  Downloads
+    #   happen on the Linux side to avoid WAA server's ~120s command timeout.
+    # - install_script: PowerShell script that installs from the local Samba
+    #   share.  Written to /tmp/smb/ and executed via the WAA server.
+    #
+    # The version discovery and download happen in Python (no quoting issues),
+    # and only the msiexec/installer invocation runs on Windows.
+    INSTALL_CONFIGS = {
+        "libreoffice_calc": {
+            "discover_and_download": "_download_libreoffice",
+            "install_script": r"""
+$ErrorActionPreference = 'Stop'
+$msi = Get-ChildItem '\\host.lan\Data\LibreOffice_*_Win_x86-64.msi' -ErrorAction SilentlyContinue |
+    Select-Object -First 1 -ExpandProperty FullName
+if (-not $msi) { throw 'LibreOffice MSI not found on Samba share' }
+Write-Host "Installing from $msi ..."
+Start-Process msiexec.exe -ArgumentList '/i', $msi, '/quiet' -Wait -NoNewWindow
+Write-Host 'LibreOffice installed.'
+""",
+        },
+        # libreoffice_writer is installed by the same MSI as calc
+        "libreoffice_writer": None,  # sentinel — handled by libreoffice_calc
+        "vlc": {
+            "discover_and_download": None,  # small enough to download on Windows side
+            "install_script": r"""
+$ErrorActionPreference = 'Stop'
+$smb = Get-ChildItem '\\host.lan\Data\vlc-*.exe' -ErrorAction SilentlyContinue |
+    Select-Object -First 1 -ExpandProperty FullName
+if ($smb) {
+    Write-Host "Installing VLC from $smb ..."
+    Start-Process $smb -ArgumentList '/S' -Wait
+} else {
+    Write-Host 'Downloading VLC...'
+    Invoke-WebRequest -Uri 'https://get.videolan.org/vlc/3.0.21/win64/vlc-3.0.21-win64.exe' `
+        -OutFile "$env:TEMP\vlc.exe" -UseBasicParsing -TimeoutSec 120
+    Start-Process "$env:TEMP\vlc.exe" -ArgumentList '/S' -Wait
+    Remove-Item "$env:TEMP\vlc.exe" -ErrorAction SilentlyContinue
+}
+Write-Host 'VLC installed.'
+""",
+        },
+        "vs_code": {
+            "discover_and_download": None,
+            "install_script": r"""
+$ErrorActionPreference = 'Stop'
+$smb = Get-ChildItem '\\host.lan\Data\VSCode*.exe' -ErrorAction SilentlyContinue |
+    Select-Object -First 1 -ExpandProperty FullName
+if ($smb) {
+    Write-Host "Installing VS Code from $smb ..."
+    Start-Process $smb -ArgumentList '/VERYSILENT', '/mergetasks=!runcode' -Wait
+} else {
+    Write-Host 'Downloading VS Code...'
+    Invoke-WebRequest -Uri 'https://update.code.visualstudio.com/latest/win32-x64/stable' `
+        -OutFile "$env:TEMP\vscode.exe" -UseBasicParsing -TimeoutSec 120
+    Start-Process "$env:TEMP\vscode.exe" -ArgumentList '/VERYSILENT', '/mergetasks=!runcode' -Wait
+    Remove-Item "$env:TEMP\vscode.exe" -ErrorAction SilentlyContinue
+}
+Write-Host 'VS Code installed.'
+""",
+        },
+        "chrome": {
+            "discover_and_download": None,
+            "install_script": r"""
+$ErrorActionPreference = 'Stop'
+$smb = Get-ChildItem '\\host.lan\Data\chrome_*.exe' -ErrorAction SilentlyContinue |
+    Select-Object -First 1 -ExpandProperty FullName
+if ($smb) {
+    Write-Host "Installing Chrome from $smb ..."
+    Start-Process $smb -ArgumentList '/silent', '/install' -Wait
+} else {
+    Write-Host 'Downloading Chrome...'
+    Invoke-WebRequest -Uri 'https://dl.google.com/chrome/install/latest/chrome_installer.exe' `
+        -OutFile "$env:TEMP\chrome.exe" -UseBasicParsing -TimeoutSec 120
+    Start-Process "$env:TEMP\chrome.exe" -ArgumentList '/silent', '/install' -Wait
+    Remove-Item "$env:TEMP\chrome.exe" -ErrorAction SilentlyContinue
+}
+Write-Host 'Chrome installed.'
+""",
+        },
+    }
+
+    def _download_libreoffice():
+        """Discover latest LibreOffice version and download MSI to Samba share."""
+        import re as _re
+        import subprocess
+
+        # Check if already downloaded
+        import glob
+        existing = glob.glob("/tmp/smb/LibreOffice_*_Win_x86-64.msi")
+        if existing:
+            logger.info(f"install_apps: LibreOffice MSI already present: {existing[0]}")
+            return
+
+        # Discover latest stable version
+        logger.info("install_apps: discovering latest LibreOffice version...")
+        resp = req.get(
+            "https://download.documentfoundation.org/libreoffice/stable/",
+            timeout=15,
+        )
+        resp.raise_for_status()
+        versions = _re.findall(r'href="(\d+\.\d+\.\d+)/"', resp.text)
+        if not versions:
+            raise RuntimeError("Cannot discover LibreOffice version from mirror listing")
+        latest = sorted(versions, key=lambda v: tuple(int(x) for x in v.split(".")))[-1]
+        msi = f"LibreOffice_{latest}_Win_x86-64.msi"
+        logger.info(f"install_apps: latest LibreOffice version: {latest} ({msi})")
+
+        mirrors = [
+            f"https://mirror.raiolanetworks.com/tdf/libreoffice/stable/{latest}/win/x86_64/{msi}",
+            f"https://mirrors.iu13.net/tdf/libreoffice/stable/{latest}/win/x86_64/{msi}",
+            f"https://download.documentfoundation.org/libreoffice/stable/{latest}/win/x86_64/{msi}",
+        ]
+        dest = f"/tmp/smb/{msi}"
+        for url in mirrors:
+            logger.info(f"install_apps: trying {url} ...")
+            try:
+                subprocess.run(
+                    ["curl", "-fSL", "--connect-timeout", "30", "--max-time", "600",
+                     "-o", dest, url],
+                    check=True, capture_output=True, timeout=620,
+                )
+                logger.info(f"install_apps: downloaded {msi} to Samba share")
+                return
+            except Exception as e:
+                logger.warning(f"install_apps: download from {url} failed: {e}")
+        raise RuntimeError(f"All LibreOffice mirrors failed for {msi}")
+
+    DOWNLOAD_FUNCTIONS = {
+        "_download_libreoffice": _download_libreoffice,
+    }
+
+    import re
+
+    ALIASES = {
+        "vscode": "vs_code",
+        "vs_code": "vs_code",
+        "libreoffice": "libreoffice_calc",
+    }
+
+    def _normalize(name: str) -> str:
+        key = re.sub(r"[\s\-]+", "_", name.strip().lower())
+        return ALIASES.get(key, key)
+
+    if apps is None:
+        # Fallback: try running install.bat from C:\oem (Windows-local path)
+        logger.info("install_apps: running C:\\oem\\install.bat (full install)...")
+        resp = req.post(
+            f"{WAA_SERVER}/setup/execute",
+            json={"command": 'cmd /c "C:\\oem\\install.bat"'},
+            timeout=600,
+        )
+        if resp.status_code != 200:
+            raise RuntimeError(f"install.bat failed: {resp.text[:200]}")
+        result = resp.json()
+        if result.get("returncode", 1) != 0:
+            raise RuntimeError(
+                f"install.bat exited with code {result.get('returncode')}: "
+                f"{result.get('error', '')[:200]}"
+            )
+        logger.info("install_apps: install.bat completed")
+        return
+
+    # Targeted install for specific apps (two-phase approach)
+    already_handled = set()
+    failed = []
+    for app in apps:
+        canonical = _normalize(app)
+        if canonical in already_handled:
+            continue
+        # libreoffice_writer is installed by the libreoffice_calc MSI
+        if canonical == "libreoffice_writer":
+            canonical = "libreoffice_calc"
+            if canonical in already_handled:
+                continue
+        config = INSTALL_CONFIGS.get(canonical)
+        if config is None:
+            continue
+        logger.info(f"install_apps: installing '{app}' (canonical='{canonical}')...")
+        try:
+            # Phase 1: Download installer on Linux side (no timeout constraint)
+            download_fn_name = config.get("discover_and_download")
+            if download_fn_name:
+                fn = DOWNLOAD_FUNCTIONS.get(download_fn_name)
+                if fn:
+                    logger.info(f"install_apps: running {download_fn_name}...")
+                    fn()
+
+            # Phase 2: Write install script to Samba share
+            script_name = f"install_{canonical}.ps1"
+            host_path = f"/tmp/smb/{script_name}"
+            # UNC path needs extra escaping: Python string → JSON → cmd.exe
+            # Each layer eats one level of backslash escaping.
+            win_path = f"\\\\\\\\host.lan\\\\Data\\\\{script_name}"
+            try:
+                with open(host_path, "w", encoding="utf-8") as f:
+                    f.write(config["install_script"].strip() + "\n")
+            except Exception as e:
+                logger.error(f"install_apps: failed to write {host_path}: {e}")
+                failed.append(app)
+                already_handled.add(canonical)
+                continue
+
+            # Phase 3: Execute install script on Windows via WAA server
+            resp = req.post(
+                f"{WAA_SERVER}/setup/execute",
+                json={"command": f'powershell -ExecutionPolicy Bypass -File "{win_path}"'},
+                timeout=600,
+            )
+            if resp.status_code == 200:
+                result = resp.json()
+                rc = result.get("returncode", -1)
+                if rc != 0:
+                    logger.error(
+                        f"install_apps: '{canonical}' install exited {rc}: "
+                        f"{result.get('error', '')[:200]}"
+                    )
+                    failed.append(app)
+                else:
+                    logger.info(f"install_apps: '{canonical}' installed successfully")
+            else:
+                logger.error(f"install_apps: '{canonical}' POST failed: {resp.status_code}")
+                failed.append(app)
+        except Exception as e:
+            logger.error(f"install_apps: '{canonical}' failed: {e}")
+            failed.append(app)
+        already_handled.add(canonical)
+
+    if failed:
+        raise RuntimeError(f"Failed to install: {', '.join(failed)}")
+
+
 SETUP_HANDLERS = {
     "download": _setup_download,
     "launch": _setup_launch,
@@ -234,6 +559,8 @@ SETUP_HANDLERS = {
     "create_folder": _setup_create_folder,
     "create_file": _setup_create_file,
     "clear_task_files": _setup_clear_task_files,
+    "verify_apps": _setup_verify_apps,
+    "install_apps": _setup_install_apps,
 }
 
 
@@ -258,7 +585,9 @@ def run_setup():
             logger.error(f"Setup {cfg_type} failed: {e}")
             traceback.print_exc()
             results.append({"type": cfg_type, "status": "error", "error": str(e)})
-    return jsonify({"status": "ok", "results": results})
+    has_errors = any(r.get("status") == "error" for r in results)
+    status_code = 422 if has_errors else 200
+    return jsonify({"status": "error" if has_errors else "ok", "results": results}), status_code
 
 
 @app.route("/evaluate", methods=["POST"])
