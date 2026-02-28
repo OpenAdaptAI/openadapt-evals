@@ -82,17 +82,27 @@ def _setup_eval_proxy(vm_user: str, vm_ip: str) -> bool:
     """(Re-)establish socat proxy for the evaluate server on the VM.
 
     Docker port forwarding for port 5050 is broken due to QEMU's custom
-    bridge networking (--cap-add NET_ADMIN).  Work around it by running
-    socat on the VM host that pipes through ``docker exec`` into the
-    container's localhost:5050.  The SSH tunnel maps local 5050 → VM 5051.
+    bridge networking (--cap-add NET_ADMIN).  Work around it by restarting
+    the socat-waa-evaluate systemd service on the VM host.  The service is
+    installed during pool creation (see DOCKER_SETUP_SCRIPT in pool.py).
+    The SSH tunnel maps local 5050 -> VM 5051.
+
+    Falls back to the legacy nohup socat approach if the systemd service
+    is not installed (e.g. on older VMs provisioned before this change).
     """
+    # Try systemd service first (preferred: auto-restarts on failure)
     script = (
-        "killall socat 2>/dev/null || true; sleep 1; "
-        "which socat >/dev/null 2>&1 "
-        "|| sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq socat; "
-        "nohup socat TCP-LISTEN:5051,fork,reuseaddr "
-        "'EXEC:docker exec -i winarena socat - TCP\\:127.0.0.1\\:5050' "
-        "</dev/null >/dev/null 2>&1 &"
+        "if systemctl list-unit-files socat-waa-evaluate.service "
+        "| grep -q socat-waa-evaluate; then "
+        "  sudo systemctl restart socat-waa-evaluate.service; "
+        "else "
+        "  killall socat 2>/dev/null || true; sleep 1; "
+        "  which socat >/dev/null 2>&1 "
+        "  || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq socat; "
+        "  nohup socat TCP-LISTEN:5051,fork,reuseaddr "
+        "  'EXEC:docker exec -i winarena socat - TCP\\:127.0.0.1\\:5050' "
+        "  </dev/null >/dev/null 2>&1 &; "
+        "fi"
     )
     result = subprocess.run(
         ["ssh", "-o", "StrictHostKeyChecking=no", f"{vm_user}@{vm_ip}", script],
@@ -101,7 +111,7 @@ def _setup_eval_proxy(vm_user: str, vm_ip: str) -> bool:
     if result.returncode != 0:
         print(f"  socat proxy setup failed: {result.stderr.decode()}")
         return False
-    print("  socat proxy for evaluate server established (VM:5051 → container:5050)")
+    print("  socat proxy for evaluate server established (VM:5051 -> container:5050)")
     return True
 
 
