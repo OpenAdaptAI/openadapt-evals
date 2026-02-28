@@ -1,6 +1,41 @@
 # CHANGELOG
 
 
+## v0.11.0 (2026-02-28)
+
+### Features
+
+- Add two-phase app install pipeline with verify/install handlers
+  ([#52](https://github.com/OpenAdaptAI/openadapt-evals/pull/52),
+  [`3896869`](https://github.com/OpenAdaptAI/openadapt-evals/commit/389686901c570f628f809a192fb3ca9ff4e8eb5d))
+
+* feat: add two-phase app install pipeline with verify/install handlers
+
+- Add verify_apps handler: checks app executables on Windows via Test-Path with name normalization
+  (hyphens, aliases) - Add install_apps handler: two-phase approach that downloads installers on
+  Linux side (no timeout), writes .ps1 to Samba share, executes on Windows via WAA server - Fix
+  three bugs: INSTALL_RECIPES→INSTALL_CONFIGS NameError, dict.strip() AttributeError, download
+  function never called - Pre-download LibreOffice MSI at Docker build time with dynamic version
+  discovery; patch setup.ps1 to try local MSI first - Return HTTP 422 from /setup on handler errors
+  (was always 200) - Prepend verify_apps step in _run_task_setup when related_apps present - Add
+  --verify pre-flight to record_waa_demos.py - 23 unit tests + E2E verified on live VM
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* fix: add flask to dev deps, extract shared normalization, harden json parsing
+
+- Add flask and requests-toolbelt to [dev] dependencies so test_setup_handlers.py can import
+  evaluate_server in CI - Extract duplicated _normalize/_ALIASES from verify_apps and install_apps
+  into module-level _normalize_app_name/_APP_ALIASES - Guard resp.json() in record_waa_demos.py
+  pre-flight against non-JSON error responses - Add TODO for hardcoded VLC version
+
+* docs: update README with WAA task setup, two-phase install pipeline, and architecture diagram
+
+---------
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.10.2 (2026-02-26)
 
 ### Bug Fixes
