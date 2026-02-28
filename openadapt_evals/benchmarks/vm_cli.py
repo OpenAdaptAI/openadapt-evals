@@ -2807,6 +2807,30 @@ def cmd_vm_start(args):
         return 1
 
 
+def cmd_windows_restart(args):
+    """Restart Windows inside QEMU via the monitor interface."""
+    from openadapt_evals.infrastructure.qemu_reset import QEMUResetManager
+
+    init_logging()
+
+    ip = args.vm_ip or get_vm_ip()
+    if not ip:
+        log("WIN-RESTART", "ERROR: VM not found. Specify --vm-ip or ensure VM is running.")
+        return 1
+
+    log("WIN-RESTART", f"Restarting Windows on {ip} via QEMU monitor...")
+
+    mgr = QEMUResetManager(
+        vm_ip=ip,
+        ssh_user="azureuser",
+        timeout_seconds=args.timeout,
+    )
+
+    success, message = mgr.restart_windows(server_url=args.server)
+    log("WIN-RESTART", message)
+    return 0 if success else 1
+
+
 def cmd_exec(args):
     """Run command on VM host."""
     ip = get_vm_ip()
@@ -7940,6 +7964,27 @@ Examples:
     # vm-start
     p_vmstart = subparsers.add_parser("vm-start", help="Start a deallocated VM")
     p_vmstart.set_defaults(func=cmd_vm_start)
+
+    # windows-restart
+    p_winrestart = subparsers.add_parser(
+        "windows-restart",
+        help="Restart Windows inside QEMU via monitor (hard reset)",
+    )
+    p_winrestart.add_argument(
+        "--vm-ip", default=None, help="VM IP (default: auto-detect from Azure)"
+    )
+    p_winrestart.add_argument(
+        "--server",
+        default="http://localhost:5001",
+        help="WAA server URL for readiness probe (default: http://localhost:5001)",
+    )
+    p_winrestart.add_argument(
+        "--timeout",
+        type=int,
+        default=300,
+        help="Timeout in seconds to wait for WAA server after reset (default: 300)",
+    )
+    p_winrestart.set_defaults(func=cmd_windows_restart)
 
     # logs
     p_logs = subparsers.add_parser("logs", help="Show WAA status and logs")

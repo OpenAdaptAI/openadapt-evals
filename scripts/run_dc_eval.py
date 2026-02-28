@@ -116,8 +116,30 @@ def _setup_eval_proxy(vm_user: str, vm_ip: str) -> bool:
 
 
 def _restart_container(vm_user: str, vm_ip: str) -> bool:
-    """Restart the WAA container and re-establish the evaluate proxy."""
-    print("  Restarting WAA container (Windows will reboot)...")
+    """Restart Windows via QEMU monitor reset, falling back to docker restart.
+
+    The QEMU monitor approach (``system_reset`` on port 7100) is preferred
+    because it performs a reliable hard reset without killing the container.
+    Falls back to ``docker restart winarena`` if the QEMU monitor is
+    unreachable (e.g. ``nc`` not installed in the container).
+    """
+    from openadapt_evals.infrastructure.qemu_reset import QEMUResetManager
+
+    mgr = QEMUResetManager(vm_ip=vm_ip, ssh_user=vm_user, timeout_seconds=300)
+
+    # Try QEMU monitor reset first (preferred)
+    if mgr.is_qemu_monitor_reachable():
+        print("  Resetting Windows via QEMU monitor (system_reset)...")
+        if mgr.reset_windows():
+            print("  QEMU reset sent, re-establishing evaluate proxy...")
+            _setup_eval_proxy(vm_user, vm_ip)
+            return True
+        print("  QEMU reset command failed, falling back to docker restart...")
+    else:
+        print("  QEMU monitor unreachable, falling back to docker restart...")
+
+    # Fallback: docker restart
+    print("  Restarting WAA container (docker restart winarena)...")
     result = subprocess.run(
         ["ssh", "-o", "StrictHostKeyChecking=no", f"{vm_user}@{vm_ip}",
          "docker restart winarena"],
