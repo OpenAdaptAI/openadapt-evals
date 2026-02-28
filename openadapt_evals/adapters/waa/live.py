@@ -897,10 +897,22 @@ class WAALiveAdapter(BenchmarkAdapter):
         preconditions (file downloads, app launches, sleeps). We POST this array
         to the evaluate server's /setup endpoint which processes each entry.
 
+        If the task has ``related_apps``, a ``verify_apps`` step is prepended so
+        missing applications are caught before the rest of setup runs.
+
         Args:
             raw_config: Task configuration with setup commands.
         """
         config = raw_config.get("config", [])
+
+        related_apps = raw_config.get("related_apps", [])
+        if related_apps:
+            verify_step = {
+                "type": "verify_apps",
+                "parameters": {"apps": related_apps},
+            }
+            config = [verify_step] + config
+
         if not config:
             return
 

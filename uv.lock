@@ -1370,7 +1370,7 @@ wheels = [
 
 [[package]]
 name = "openadapt-evals"
-version = "0.3.3"
+version = "0.10.1"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
@@ -1396,6 +1396,7 @@ all = [
     { name = "openadapt-retrieval" },
     { name = "pytest" },
     { name = "requests" },
+    { name = "requests-toolbelt" },
     { name = "ruff" },
     { name = "wandb" },
 ]
@@ -1407,7 +1408,9 @@ azure = [
     { name = "azure-mgmt-resource" },
 ]
 dev = [
+    { name = "flask" },
     { name = "pytest" },
+    { name = "requests-toolbelt" },
     { name = "ruff" },
 ]
 retrieval = [
@@ -1436,6 +1439,7 @@ requires-dist = [
     { name = "azure-mgmt-compute", marker = "extra == 'azure'", specifier = ">=33.0.0" },
     { name = "azure-mgmt-network", marker = "extra == 'azure'", specifier = ">=27.0.0" },
     { name = "azure-mgmt-resource", marker = "extra == 'azure'", specifier = ">=23.2.0" },
+    { name = "flask", marker = "extra == 'dev'", specifier = ">=3.0.0" },
     { name = "flask", marker = "extra == 'viewer'", specifier = ">=3.0.0" },
     { name = "flask-cors", marker = "extra == 'viewer'", specifier = ">=4.0.0" },
     { name = "httpx", specifier = ">=0.25.0" },
@@ -1449,6 +1453,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "requests", specifier = ">=2.28.0" },
     { name = "requests", marker = "extra == 'waa'", specifier = ">=2.28.0" },
+    { name = "requests-toolbelt", marker = "extra == 'dev'", specifier = ">=1.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
     { name = "tenacity", specifier = ">=8.2.0" },
     { name = "wandb", marker = "extra == 'wandb'", specifier = ">=0.16.0" },
@@ -2345,6 +2350,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/42/f2/05f29bc3913aea15eb670be136045bf5c5bbf4b99ecb839da9b422bb2c85/requests-oauthlib-2.0.0.tar.gz", hash = "sha256:b3dffaebd884d8cd778494369603a9e7b58d29111bf6b41bdc2dcd87203af4e9", size = 55650 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/3b/5d/63d4ae3b9daea098d5d6f5da83984853c1bbacd5dc826764b249fe119d24/requests_oauthlib-2.0.0-py2.py3-none-any.whl", hash = "sha256:7dd8a5c40426b779b0868c404bdef9768deccf22749cde15852df527e6269b36", size = 24179 },
+]
+
+[[package]]
+name = "requests-toolbelt"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f3/61/d7545dafb7ac2230c70d38d31cbfe4cc64f7144dc41f6e4e4b78ecd9f5bb/requests-toolbelt-1.0.0.tar.gz", hash = "sha256:7681a0a3d047012b5bdc0ee37d7f8f07ebe76ab08caeccfc3921ce23c88d5bc6", size = 206888 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3f/51/d4db610ef29373b879047326cbf6fa98b6c1969d6f6dc423279de2b1be2c/requests_toolbelt-1.0.0-py2.py3-none-any.whl", hash = "sha256:cccfdd665f0a24fcf4726e690f65639d272bb0637b9b92dfd91a5568ccf6bd06", size = 54481 },
 ]
 
 [[package]]

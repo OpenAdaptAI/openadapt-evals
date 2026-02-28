@@ -37,6 +37,10 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Load .env for API keys
+from dotenv import load_dotenv
+load_dotenv()
+
 # WAA tasks to record
 TASKS = [
     {
@@ -377,11 +381,89 @@ def _take_screenshot(server: str) -> bytes:
     return resp.content
 
 
+def _generate_steps(
+    screenshot_png: bytes,
+    instruction: str,
+    task_config: dict,
+) -> str:
+    """Use a VLM to generate step-by-step instructions from the current screen.
+
+    Returns plain-text numbered steps, or a fallback message on error.
+    """
+    import base64
+    import os
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return "(No OPENAI_API_KEY set — skipping AI step generation)"
+
+    import requests as _req
+
+    b64 = base64.b64encode(screenshot_png).decode()
+
+    setup_desc = ""
+    for entry in task_config.get("config", []):
+        t = entry.get("type", "")
+        p = entry.get("parameters", {})
+        if t == "download":
+            for f in p.get("files", []):
+                setup_desc += f"  - File downloaded: {f['path']}\n"
+        elif t == "open":
+            setup_desc += f"  - File opened: {p.get('path', '?')}\n"
+        elif t == "launch":
+            setup_desc += f"  - App launched: {p.get('command', '?')}\n"
+
+    prompt = f"""You are helping a human perform a task on a Windows desktop via VNC.
+
+TASK: {instruction}
+
+ENVIRONMENT SETUP (already done automatically):
+{setup_desc if setup_desc else "  (none)"}
+
+Look at the screenshot and give step-by-step instructions to complete the task.
+Be specific about what to click, what to type, and what menus to use.
+If a file should already be open but isn't visible, say how to open it.
+Keep each step to one action. Use plain text, numbered list.
+Be concise — the user will read this on a phone screen."""
+
+    try:
+        resp = _req.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "model": "gpt-4o",
+                "max_tokens": 800,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/png;base64,{b64}",
+                                    "detail": "high",
+                                },
+                            },
+                        ],
+                    }
+                ],
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        return f"(AI step generation failed: {e})"
+
+
 def cmd_record_waa(
     tasks: str = ",".join(HARDER_TASK_IDS),
     server: str = "http://localhost:5001",
     evaluate_url: str = "http://localhost:5050",
     output: str = "waa_recordings",
+    vnc_url: str = "http://localhost:8006",
+    verify: bool = True,
 ) -> None:
     """Record demos interactively via WAA API while user performs actions on VNC.
 
@@ -390,6 +472,8 @@ def cmd_record_waa(
         server: WAA server URL.
         evaluate_url: Evaluate server URL (for /task/<id> lookups).
         output: Output directory for recordings.
+        vnc_url: VNC URL for the user to open in a browser.
+        verify: Pre-flight check that all required apps are installed (default True).
     """
     import requests
 
@@ -426,7 +510,45 @@ def cmd_record_waa(
         print("  Make sure the WAA server is running and SSH tunnels are up.")
         return
 
-    print(f"Recording {len(task_ids)} task(s) to {output_dir}\n")
+    # Pre-flight: verify all required apps are installed
+    if verify:
+        print("Verifying required apps across all tasks...")
+        all_apps: set[str] = set()
+        for task_id in task_ids:
+            try:
+                resp = requests.get(f"{evaluate_url}/task/{task_id}", timeout=10)
+                if resp.ok:
+                    all_apps.update(resp.json().get("related_apps", []))
+            except Exception:
+                pass
+        if all_apps:
+            resp = requests.post(
+                f"{evaluate_url}/setup",
+                json={"config": [{"type": "verify_apps", "parameters": {"apps": list(all_apps)}}]},
+                timeout=30,
+            )
+            if resp.status_code != 200:
+                try:
+                    errors = [
+                        r for r in resp.json().get("results", [])
+                        if r.get("status") == "error"
+                    ]
+                except (ValueError, KeyError):
+                    errors = [{"error": f"Server returned {resp.status_code}: {resp.text[:200]}"}]
+                for err in errors:
+                    print(f"  ERROR: {err.get('error', '?')}")
+                answer = input("  Missing apps detected. Continue anyway? [y/N] ").strip().lower()
+                if answer not in ("y", "yes"):
+                    print("  Aborting. Install missing apps and retry.")
+                    return
+            else:
+                print(f"  All {len(all_apps)} required app(s) present.")
+        else:
+            print("  No app checks needed (no related_apps in task configs).")
+        print()
+
+    print(f"Recording {len(task_ids)} task(s) to {output_dir}")
+    print(f"\n  VNC (open in browser): {vnc_url}\n")
 
     recorded = []
     for task_num, task_id in enumerate(task_ids, 1):
@@ -453,24 +575,50 @@ def cmd_record_waa(
         # Reset environment
         print("  Resetting environment...")
         try:
-            requests.post(f"{server}/setup/close_all", timeout=30)
+            resp = requests.post(f"{server}/setup/close_all", timeout=30)
+            print(f"    close_all: {resp.status_code}")
             time.sleep(2)
-            setup_config = task_config.get("config")
+            setup_config = task_config.get("config", [])
+            related_apps = task_config.get("related_apps", [])
+            if related_apps:
+                setup_config = [
+                    {"type": "verify_apps", "parameters": {"apps": related_apps}}
+                ] + setup_config
             if setup_config:
-                requests.post(
-                    f"{server}/setup", json=setup_config, timeout=30
+                resp = requests.post(
+                    f"{evaluate_url}/setup",
+                    json={"config": setup_config},
+                    timeout=120,
                 )
-            time.sleep(5)
+                resp.raise_for_status()
+                results = resp.json().get("results", [])
+                for r in results:
+                    status = r.get("status", "?")
+                    stype = r.get("type", "?")
+                    print(f"    setup {stype}: {status}")
+            time.sleep(3)
         except Exception as e:
-            print(f"  Warning: environment reset failed: {e}")
+            print(f"  WARNING: environment setup failed: {e}")
+            print(f"  The task app may not be open. Check VNC.")
 
         # Take initial screenshot
         print("  Taking initial screenshot...")
         before_png = _take_screenshot(server)
 
-        print(f"\n  Task: {instruction}")
-        print("  Open VNC and perform the task step by step.")
-        print("  After each action, come back here and press Enter.\n")
+        print(f"\n  VNC: {vnc_url}")
+        print(f"  Task: {instruction}\n")
+
+        # Generate AI step-by-step guidance from screenshot
+        print("  Generating suggested steps...")
+        suggested = _generate_steps(before_png, instruction, task_config)
+        print()
+        print("  ┌─ SUGGESTED STEPS ──────────────────────────────")
+        for line in suggested.splitlines():
+            print(f"  │ {line}")
+        print("  └────────────────────────────────────────────────")
+        print()
+        print("  Perform each action in VNC, then press Enter here.")
+        print("  Press 'd' when done, 'r' to redo last step.\n")
 
         steps = []
         step_idx = 0

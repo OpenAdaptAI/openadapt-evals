@@ -32,6 +32,7 @@ OpenAdapt Evals is a unified framework for evaluating GUI automation agents agai
 ## Key Features
 
 - **Benchmark adapters** for WAA (live, mock, and local modes), with an extensible base for OSWorld, WebArena, and others
+- **Task setup handlers** -- `verify_apps` and `install_apps` ensure required applications are present on the Windows VM before evaluation begins
 - **Agent interfaces** including `ApiAgent` (Claude / GPT), `ClaudeComputerUseAgent`, `RetrievalAugmentedAgent`, `RandomAgent`, and `PolicyAgent`
 - **Azure VM infrastructure** with `AzureVMManager`, `PoolManager`, `SSHTunnelManager`, and `VMMonitor` for running evaluations at scale
 - **CLI tools** -- `oa-vm` for VM and pool management (50+ commands), benchmark CLI for running evals
@@ -104,19 +105,25 @@ print(f"Success rate: {metrics['success_rate']:.1%}")
 Record demos on a remote VM via VNC, annotate with a VLM, then run demo-conditioned eval:
 
 ```bash
-# 1. Record demos interactively (perform actions on VNC, press Enter after each step)
+# 1. Pre-flight check: verify all required apps are installed
+python scripts/record_waa_demos.py record-waa \
+  --tasks 04d9aeaf,0a0faba3 \
+  --server http://localhost:5001 \
+  --verify
+
+# 2. Record demos interactively (perform actions on VNC, press Enter after each step)
 python scripts/record_waa_demos.py record-waa \
   --tasks 04d9aeaf,0a0faba3 \
   --server http://localhost:5001 \
   --output waa_recordings/
 
-# 2. Annotate recordings with VLM
+# 3. Annotate recordings with VLM
 python scripts/record_waa_demos.py annotate \
   --recordings waa_recordings/ \
   --output annotated_demos/ \
   --provider openai
 
-# 3. Run demo-conditioned eval
+# 4. Run demo-conditioned eval
 python scripts/record_waa_demos.py eval \
   --demo_dir annotated_demos/ \
   --tasks 04d9aeaf,0a0faba3
@@ -158,7 +165,10 @@ openadapt_evals/
 │   ├── viewer.py         #   HTML results viewer
 │   ├── pool_viewer.py    #   Pool results viewer
 │   └── trace_export.py   #   Training data export
-├── waa_deploy/           # Docker agent deployment
+├── waa_deploy/           # WAA Docker image & task setup
+│   ├── evaluate_server.py#   Flask server (port 5050): /setup, /evaluate, /task
+│   ├── Dockerfile        #   QEMU + Windows 11 + pre-downloaded apps
+│   └── tools_config.json #   App installer URLs and configs
 ├── server/               # WAA server extensions
 ├── config.py             # Settings (pydantic-settings, .env)
 └── __init__.py
@@ -168,14 +178,49 @@ openadapt_evals/
 
 ```
 LOCAL MACHINE                          AZURE VM (Ubuntu)
-┌─────────────────────┐                ┌──────────────────────┐
-│  oa-vm CLI          │   SSH Tunnel   │  Docker              │
-│  (pool management)  │ ─────────────> │  └─ QEMU (Win 11)   │
-│                     │  :5001 → :5000 │     ├─ WAA Flask API │
-│  openadapt-evals    │  :8006 → :8006 │     └─ Agent         │
-│  (benchmark runner) │                │                      │
-└─────────────────────┘                └──────────────────────┘
+┌─────────────────────┐                ┌──────────────────────────────┐
+│  oa-vm CLI          │   SSH Tunnel   │  Docker                      │
+│  (pool management)  │ ─────────────> │  ├─ evaluate_server (:5050)  │
+│                     │  :5001 → :5000 │  │  └─ /setup, /evaluate     │
+│  openadapt-evals    │  :5051 → :5050 │  ├─ Samba share (/tmp/smb/)  │
+│  (benchmark runner) │  :8006 → :8006 │  └─ QEMU (Win 11)           │
+│                     │                │     ├─ WAA Flask API (:5000) │
+│                     │                │     ├─ \\host.lan\Data\      │
+│                     │                │     └─ Agent                 │
+└─────────────────────┘                └──────────────────────────────┘
 ```
+
+## WAA Task Setup & App Management
+
+The evaluate server (`waa_deploy/evaluate_server.py`) runs on the Docker Linux side (port 5050) and orchestrates task setup on the Windows VM. The `/setup` endpoint accepts a list of setup handlers:
+
+```bash
+# Check if required apps are installed on the Windows VM
+curl -X POST http://localhost:5051/setup \
+  -H "Content-Type: application/json" \
+  -d '{"config": [{"type": "verify_apps", "parameters": {"apps": ["libreoffice-calc"]}}]}'
+# → 200 if all present, 422 if any missing
+
+# Install missing apps via two-phase pipeline
+curl -X POST http://localhost:5051/setup \
+  -H "Content-Type: application/json" \
+  -d '{"config": [{"type": "install_apps", "parameters": {"apps": ["libreoffice-calc"]}}]}'
+```
+
+### Two-phase install pipeline
+
+Large installers (e.g. LibreOffice 350MB MSI) can't be downloaded within the WAA server's 120s command timeout. The `install_apps` handler solves this with a two-phase approach:
+
+1. **Download on Linux** -- the evaluate server downloads the installer to the Samba share (`/tmp/smb/` = `\\host.lan\Data\` on Windows), with no timeout constraint
+2. **Install on Windows** -- a small PowerShell script is written to the Samba share and executed via the WAA server, running only `msiexec` (fast, no download)
+
+The Dockerfile also pre-downloads LibreOffice at build time with dynamic version discovery, so first-boot installs work without depending on mirror availability.
+
+### Automatic app verification
+
+When a task config includes `related_apps`, the live adapter automatically prepends a `verify_apps` step before the task's setup config. The `--verify` flag on `record_waa_demos.py` provides a pre-flight check across all tasks before starting a recording session.
+
+![LibreOffice Calc installed on Windows 11 VM](https://github.com/OpenAdaptAI/openadapt-evals/releases/download/untagged-42f27f1e47214aae8358/waa_libreoffice.png)
 
 ## CLI Reference
 

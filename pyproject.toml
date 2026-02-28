@@ -46,6 +46,8 @@ dependencies = [
 dev = [
     "pytest>=8.0.0",
     "ruff>=0.1.0",
+    "flask>=3.0.0",
+    "requests-toolbelt>=1.0.0",
 ]
 waa = [
     # Windows Agent Arena dependencies
