@@ -419,12 +419,16 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     no_open = getattr(args, "no_open", False)
     if sys.stdout.isatty() and not no_open:
-        from openadapt_evals.benchmarks import generate_benchmark_viewer
-        import webbrowser
-        viewer_path = benchmark_dir / "viewer.html"
-        generate_benchmark_viewer(benchmark_dir=benchmark_dir, output_path=viewer_path)
-        print(f"Viewer generated: {viewer_path}")
-        webbrowser.open(f"file://{viewer_path.absolute()}")
+        try:
+            from openadapt_evals.benchmarks import generate_benchmark_viewer
+            import webbrowser
+            viewer_path = benchmark_dir / "viewer.html"
+            generate_benchmark_viewer(benchmark_dir=benchmark_dir, output_path=viewer_path)
+            print(f"Viewer generated: {viewer_path}")
+            webbrowser.open(f"file://{viewer_path.absolute()}")
+        except Exception as e:
+            logger.warning(f"Could not auto-open viewer: {e}")
+            print(f"\nView results: openadapt-evals view --run-name {eval_config.run_name}")
     else:
         print(f"\nView results: openadapt-evals view --run-name {eval_config.run_name}")
 

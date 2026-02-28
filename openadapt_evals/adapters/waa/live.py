@@ -212,12 +212,7 @@ def _is_failsafe_error(text: str) -> bool:
         True if the text indicates a fail-safe trigger, False otherwise.
     """
     lower = text.lower()
-    return (
-        "failsafeexception" in lower
-        or "fail-safe" in lower
-        or "pyautogui.failsafeexception" in lower
-        or "pyautogui fail-safe" in lower
-    )
+    return "failsafeexception" in lower
 
 
 @dataclass
@@ -585,7 +580,8 @@ class WAALiveAdapter(BenchmarkAdapter):
                                 "Fail-safe recovery failed; step will proceed "
                                 "with degraded state"
                             )
-                    logger.debug(f"Executed: {command}")
+                    else:
+                        logger.debug(f"Executed: {command}")
             except Exception as e:
                 logger.error(f"Execute request failed: {e}")
 
@@ -610,8 +606,7 @@ class WAALiveAdapter(BenchmarkAdapter):
         """Move mouse away from corner to clear PyAutoGUI fail-safe.
 
         Sends a recovery command via the /execute endpoint on the WAA server
-        (Linux Docker host side, port 5001) using the ``python -c "..."``
-        wrapper format required by that endpoint.
+        using the ``python -c "..."`` wrapper format required by that endpoint.
 
         The command disables the fail-safe flag and moves the mouse to a safe
         position (500, 400) near the center of the screen.

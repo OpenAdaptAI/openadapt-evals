@@ -2,6 +2,24 @@
 
 Runs WAA evaluators locally, making HTTP calls to the WAA server's /execute endpoint.
 This approach follows WAA's own design pattern and eliminates the need for a sidecar service.
+
+NOTE: Eval path divergence (see docs/designs/01-code-health-architecture.md, Issue 3)
+------
+This module's ``_fallback_metric("fuzzy_match", ...)`` (word-set overlap) diverges from
+``server/evaluate_endpoint.py`` ``StandaloneMetrics.fuzzy_match`` (rapidfuzz character-level
+Levenshtein ratio with 0.8 threshold fallback).  Specifically:
+
+  - evaluate_endpoint.py: uses ``rapidfuzz.fuzz.ratio`` (char-level edit distance),
+    returns 1.0 if score >= threshold else the raw ratio.  Falls back to substring
+    containment returning 0.8 when rapidfuzz is unavailable.
+
+  - This file (_fallback_metric): uses word-set intersection ratio
+    ``len(actual_words & expected_words) / len(expected_words)``.  No external dependency,
+    no threshold, purely token-level.
+
+These two implementations can give materially different scores for the same (actual, expected)
+pair.  The planned fix is to unify both behind a shared ``evaluation/core.py`` module
+(design doc Issue 3).  Do NOT add new metric logic here until that refactor lands.
 """
 
 import sys
