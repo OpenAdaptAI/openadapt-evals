@@ -414,8 +414,19 @@ def cmd_run(args: argparse.Namespace) -> int:
     print(f"Success rate: {metrics['success_rate']:.1%}")
     print(f"Avg score:    {metrics['avg_score']:.3f}")
     print(f"Avg steps:    {metrics['avg_steps']:.1f}")
-    print(f"\nResults saved to: {eval_config.output_dir}/{eval_config.run_name}")
-    print(f"\nView results: uv run python -m openadapt_evals.benchmarks.cli view --run-name {eval_config.run_name}")
+    benchmark_dir = Path(eval_config.output_dir) / eval_config.run_name
+    print(f"\nResults saved to: {benchmark_dir}")
+
+    no_open = getattr(args, "no_open", False)
+    if sys.stdout.isatty() and not no_open:
+        from openadapt_evals.benchmarks import generate_benchmark_viewer
+        import webbrowser
+        viewer_path = benchmark_dir / "viewer.html"
+        generate_benchmark_viewer(benchmark_dir=benchmark_dir, output_path=viewer_path)
+        print(f"Viewer generated: {viewer_path}")
+        webbrowser.open(f"file://{viewer_path.absolute()}")
+    else:
+        print(f"\nView results: openadapt-evals view --run-name {eval_config.run_name}")
 
     return 0
 
@@ -2214,6 +2225,8 @@ def main() -> int:
                            help="Output directory for traces")
     run_parser.add_argument("--run-name", type=str, default="live_eval",
                            help="Name for this evaluation run")
+    run_parser.add_argument("--no-open", action="store_true",
+                           help="Don't auto-open browser after evaluation")
 
     # Live evaluation (full control)
     live_parser = subparsers.add_parser("live", help="Run live evaluation against WAA server (full control)")

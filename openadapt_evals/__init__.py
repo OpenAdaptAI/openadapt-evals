@@ -61,7 +61,12 @@ For benchmark viewer:
     ```
 """
 
-__version__ = "0.1.0"
+from importlib.metadata import version, PackageNotFoundError
+
+try:
+    __version__ = version("openadapt-evals")
+except PackageNotFoundError:
+    __version__ = "0.0.0+unknown"
 
 # Import from canonical locations
 from openadapt_evals.agents import (

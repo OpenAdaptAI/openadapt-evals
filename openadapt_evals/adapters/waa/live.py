@@ -196,6 +196,30 @@ def _parse_xml_a11y_tree(xml_str: str) -> dict | None:
     return _elem_to_dict(root)
 
 
+def _is_failsafe_error(text: str) -> bool:
+    """Return True if *text* contains a PyAutoGUI fail-safe error message.
+
+    PyAutoGUI raises ``FailSafeException`` when the mouse is moved to a
+    screen corner while ``FAILSAFE`` is enabled.  The exception propagates
+    through WAA's /execute_windows endpoint and appears in the ``stderr`` or
+    ``stdout`` of the response.  We detect it by looking for the canonical
+    substrings that PyAutoGUI includes in the exception message and traceback.
+
+    Args:
+        text: Combined stderr + stdout string from the execute response.
+
+    Returns:
+        True if the text indicates a fail-safe trigger, False otherwise.
+    """
+    lower = text.lower()
+    return (
+        "failsafeexception" in lower
+        or "fail-safe" in lower
+        or "pyautogui.failsafeexception" in lower
+        or "pyautogui fail-safe" in lower
+    )
+
+
 @dataclass
 class WAALiveConfig:
     """Configuration for WAALiveAdapter.
@@ -496,6 +520,10 @@ class WAALiveAdapter(BenchmarkAdapter):
         are translated to computer.mouse.move_id(id) commands that WAA executes
         using the rects we POSTed to /update_computer.
 
+        If PyAutoGUI's fail-safe is triggered (mouse at screen corner), recovery
+        is attempted automatically via the /execute endpoint before retrying the
+        command once.
+
         Args:
             action: Action to execute.
 
@@ -522,8 +550,41 @@ class WAALiveAdapter(BenchmarkAdapter):
                     logger.error(f"Execute failed ({resp.status_code}): {resp.text}")
                 else:
                     result = resp.json()
-                    if result.get("stderr"):
-                        logger.warning(f"Command stderr: {result['stderr']}")
+                    stderr = result.get("stderr", "")
+                    stdout = result.get("stdout", "")
+                    response_text = stderr + stdout
+                    if stderr:
+                        logger.warning(f"Command stderr: {stderr}")
+                    # Detect PyAutoGUI fail-safe and attempt recovery (once per step)
+                    if _is_failsafe_error(response_text):
+                        logger.warning(
+                            "PyAutoGUI fail-safe detected; attempting recovery..."
+                        )
+                        if self._recover_failsafe():
+                            logger.info(
+                                "Fail-safe cleared; retrying command: %s", command
+                            )
+                            retry_resp = requests.post(
+                                f"{self.config.server_url}/execute_windows",
+                                json={"command": command},
+                                timeout=self.config.timeout,
+                            )
+                            if retry_resp.status_code == 200:
+                                retry_result = retry_resp.json()
+                                if retry_result.get("stderr"):
+                                    logger.warning(
+                                        f"Retry stderr: {retry_result['stderr']}"
+                                    )
+                            else:
+                                logger.error(
+                                    f"Retry failed ({retry_resp.status_code}): "
+                                    f"{retry_resp.text}"
+                                )
+                        else:
+                            logger.error(
+                                "Fail-safe recovery failed; step will proceed "
+                                "with degraded state"
+                            )
                     logger.debug(f"Executed: {command}")
             except Exception as e:
                 logger.error(f"Execute request failed: {e}")
@@ -544,6 +605,47 @@ class WAALiveAdapter(BenchmarkAdapter):
         }
 
         return obs, done, info
+
+    def _recover_failsafe(self) -> bool:
+        """Move mouse away from corner to clear PyAutoGUI fail-safe.
+
+        Sends a recovery command via the /execute endpoint on the WAA server
+        (Linux Docker host side, port 5001) using the ``python -c "..."``
+        wrapper format required by that endpoint.
+
+        The command disables the fail-safe flag and moves the mouse to a safe
+        position (500, 400) near the center of the screen.
+
+        Returns:
+            True if the recovery request succeeded (HTTP 200), False otherwise.
+        """
+        import requests
+
+        recovery_command = (
+            'python -c "'
+            "import pyautogui; "
+            "pyautogui.FAILSAFE=False; "
+            "pyautogui.moveTo(500, 400)"
+            '"'
+        )
+        try:
+            resp = requests.post(
+                f"{self.config.server_url}/execute",
+                json={"command": recovery_command},
+                timeout=10.0,
+            )
+            if resp.status_code == 200:
+                logger.info("Fail-safe recovery command succeeded")
+                return True
+            else:
+                logger.error(
+                    f"Fail-safe recovery request returned HTTP {resp.status_code}: "
+                    f"{resp.text}"
+                )
+                return False
+        except Exception as e:
+            logger.error(f"Fail-safe recovery request failed: {e}")
+            return False
 
     def evaluate(self, task: BenchmarkTask) -> BenchmarkResult:
         """Evaluate current state against task success criteria.
