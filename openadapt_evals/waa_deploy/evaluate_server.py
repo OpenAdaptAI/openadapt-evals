@@ -14,6 +14,7 @@ Then SSH tunnel: ssh -N -L 5050:localhost:5050 azureuser@<VM_IP>
 import json
 import logging
 import os
+import re
 import sys
 import time
 import traceback
@@ -79,6 +80,19 @@ def get_task(task_id):
 WAA_SERVER = "http://172.30.0.2:5000"
 SETUP_CACHE = "/tmp/setup_cache"
 os.makedirs(SETUP_CACHE, exist_ok=True)
+
+# Shared app-name normalization used by both verify_apps and install_apps.
+_APP_ALIASES = {
+    "vscode": "vs_code",
+    "vs_code": "vs_code",
+    "libreoffice": "libreoffice_calc",  # bare "libreoffice" → calc
+}
+
+
+def _normalize_app_name(name: str) -> str:
+    """Canonicalize app names from task configs (hyphens, spaces, aliases)."""
+    key = re.sub(r"[\s\-]+", "_", name.strip().lower())
+    return _APP_ALIASES.get(key, key)
 
 
 def _setup_download(files, **_kwargs):
@@ -224,7 +238,6 @@ def _setup_clear_task_files(**_kwargs):
 
 def _setup_verify_apps(apps, **_kwargs):
     """Verify required apps are installed on Windows. Raises if any missing."""
-    import re
     import requests as req
 
     APP_CHECKS = {
@@ -253,23 +266,10 @@ def _setup_verify_apps(apps, **_kwargs):
             " 'C:\\Windows\\System32\\notepad.exe'\""
         ),
     }
-    # Normalize variant app names from task configs to canonical keys.
-    # Task configs use inconsistent names: "libreoffice-calc", "libreoffice calc",
-    # "vscode", etc. Canonicalize by lowercasing and replacing hyphens/spaces
-    # with underscores, then apply explicit aliases for remaining mismatches.
-    ALIASES = {
-        "vscode": "vs_code",
-        "vs_code": "vs_code",
-        "libreoffice": "libreoffice_calc",  # bare "libreoffice" → calc
-    }
-
-    def _normalize(name: str) -> str:
-        key = re.sub(r"[\s\-]+", "_", name.strip().lower())
-        return ALIASES.get(key, key)
 
     missing = []
     for app in apps:
-        canonical = _normalize(app)
+        canonical = _normalize_app_name(app)
         check_cmd = APP_CHECKS.get(canonical)
         if not check_cmd:
             logger.info(f"verify_apps: no check for '{app}' (canonical='{canonical}', assumed built-in), skipping")
@@ -338,6 +338,8 @@ Write-Host 'LibreOffice installed.'
         },
         # libreoffice_writer is installed by the same MSI as calc
         "libreoffice_writer": None,  # sentinel — handled by libreoffice_calc
+        # TODO: add dynamic version discovery for VLC (like LibreOffice) to avoid
+        # 404s when 3.0.21 is removed from mirrors.
         "vlc": {
             "discover_and_download": None,  # small enough to download on Windows side
             "install_script": r"""
@@ -447,18 +449,6 @@ Write-Host 'Chrome installed.'
         "_download_libreoffice": _download_libreoffice,
     }
 
-    import re
-
-    ALIASES = {
-        "vscode": "vs_code",
-        "vs_code": "vs_code",
-        "libreoffice": "libreoffice_calc",
-    }
-
-    def _normalize(name: str) -> str:
-        key = re.sub(r"[\s\-]+", "_", name.strip().lower())
-        return ALIASES.get(key, key)
-
     if apps is None:
         # Fallback: try running install.bat from C:\oem (Windows-local path)
         logger.info("install_apps: running C:\\oem\\install.bat (full install)...")
@@ -482,7 +472,7 @@ Write-Host 'Chrome installed.'
     already_handled = set()
     failed = []
     for app in apps:
-        canonical = _normalize(app)
+        canonical = _normalize_app_name(app)
         if canonical in already_handled:
             continue
         # libreoffice_writer is installed by the libreoffice_calc MSI

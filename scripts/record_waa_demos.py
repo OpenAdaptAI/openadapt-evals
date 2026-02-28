@@ -528,10 +528,13 @@ def cmd_record_waa(
                 timeout=30,
             )
             if resp.status_code != 200:
-                errors = [
-                    r for r in resp.json().get("results", [])
-                    if r.get("status") == "error"
-                ]
+                try:
+                    errors = [
+                        r for r in resp.json().get("results", [])
+                        if r.get("status") == "error"
+                    ]
+                except (ValueError, KeyError):
+                    errors = [{"error": f"Server returned {resp.status_code}: {resp.text[:200]}"}]
                 for err in errors:
                     print(f"  ERROR: {err.get('error', '?')}")
                 answer = input("  Missing apps detected. Continue anyway? [y/N] ").strip().lower()
