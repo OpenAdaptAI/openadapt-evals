@@ -1,6 +1,47 @@
 # CHANGELOG
 
 
+## v0.12.0 (2026-02-28)
+
+### Features
+
+- Version fix, fail-safe recovery, auto-open viewer, socat systemd service
+  ([#54](https://github.com/OpenAdaptAI/openadapt-evals/pull/54),
+  [`ed47b7c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/ed47b7ca703a742388c7d78eb6a471ce0a6bad92))
+
+* fix: version from importlib.metadata, fail-safe recovery, auto-open viewer
+
+Three Tier 1 improvements:
+
+- Replace hardcoded __version__ = "0.1.0" with importlib.metadata.version() so the version stays in
+  sync with pyproject.toml after semantic-release bumps.
+
+- Add _is_failsafe_error() detection and _recover_failsafe() to WAALiveAdapter. When PyAutoGUI's
+  fail-safe triggers (mouse at screen corner), the adapter now automatically sends a recovery
+  command via /execute and retries the step once.
+
+- Auto-open HTML results viewer in browser after evaluation runs on TTY. Add --no-open flag to skip.
+  Non-TTY (CI/piped) prints the view command instead.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* fix: tighten failsafe detection, add socat systemd service, wrap viewer in try/except
+
+- Narrow _is_failsafe_error to only match "failsafeexception" (avoids false positives on generic
+  "fail-safe" text) - Move logger.debug into else branch so it only fires on non-failsafe success -
+  Fix _recover_failsafe docstring (remove incorrect port reference) - Wrap auto-open viewer in
+  try/except to prevent CLI crash on corrupt results - Replace fragile nohup socat with systemd
+  service for WAA evaluate proxy - Update run_dc_eval.py to prefer systemd service with nohup
+  fallback - Document eval path divergence between fuzzy_match implementations - Add unit tests for
+  _is_failsafe_error
+
+* chore: sync beads state
+
+---------
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.11.0 (2026-02-28)
 
 ### Features
