@@ -405,3 +405,29 @@ class TestFormatAccessibilityTree:
         assert "[NotepadWindow] Window: Notepad" in result
         assert "[15] Edit: Text Editor" in result
         assert "[0,0,1920,1200]" in result
+
+
+class TestFailsafeDetection:
+    """Tests for _is_failsafe_error in the live adapter."""
+
+    def test_detects_failsafe_exception(self):
+        from openadapt_evals.adapters.waa.live import _is_failsafe_error
+
+        assert _is_failsafe_error("pyautogui.FailSafeException: blah")
+
+    def test_detects_lowercase(self):
+        from openadapt_evals.adapters.waa.live import _is_failsafe_error
+
+        assert _is_failsafe_error("failsafeexception occurred")
+
+    def test_no_false_positive_on_normal_stderr(self):
+        from openadapt_evals.adapters.waa.live import _is_failsafe_error
+
+        assert not _is_failsafe_error("Command completed successfully")
+        assert not _is_failsafe_error("Warning: file not found")
+        assert not _is_failsafe_error("")
+
+    def test_no_false_positive_on_generic_fail_safe_text(self):
+        from openadapt_evals.adapters.waa.live import _is_failsafe_error
+
+        assert not _is_failsafe_error("The application has a fail-safe mechanism")

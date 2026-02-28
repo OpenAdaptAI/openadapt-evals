@@ -93,6 +93,30 @@ sudo docker pull windowsarena/winarena:latest
 # (build context at /tmp/waa-build/ contains Dockerfile + supporting files)
 sudo docker build -t waa-auto:latest /tmp/waa-build/
 rm -rf /tmp/waa-build
+
+# Install socat and register systemd unit for the evaluate proxy
+# (replaces the fragile nohup socat background process with a supervised service
+# that auto-restarts on failure and survives container/VM restarts)
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq socat
+
+sudo tee /etc/systemd/system/socat-waa-evaluate.service > /dev/null << 'UNIT'
+[Unit]
+Description=socat proxy for WAA /evaluate endpoint (VM:5051 -> container:5050)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/socat TCP-LISTEN:5051,fork,reuseaddr EXEC:"docker exec -i winarena socat STDIO TCP:localhost:5050"
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+sudo systemctl daemon-reload
+sudo systemctl enable socat-waa-evaluate.service
 """
 
 # Docker setup script that pulls pre-built image from ACR instead of building
@@ -128,21 +152,41 @@ sudo docker tag {acr_login_server}/waa-auto:latest waa-auto:latest
 
 # Pull base images (needed for WAA container)
 sudo docker pull dockurr/windows:latest
+
+# Install socat and register systemd unit for the evaluate proxy
+# (replaces the fragile nohup socat background process with a supervised service
+# that auto-restarts on failure and survives container/VM restarts)
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq socat
+
+sudo tee /etc/systemd/system/socat-waa-evaluate.service > /dev/null << 'UNIT'
+[Unit]
+Description=socat proxy for WAA /evaluate endpoint (VM:5051 -> container:5050)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/socat TCP-LISTEN:5051,fork,reuseaddr EXEC:"docker exec -i winarena socat STDIO TCP:localhost:5050"
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+sudo systemctl daemon-reload
+sudo systemctl enable socat-waa-evaluate.service
 """
 
 # WAA container start script
 WAA_START_SCRIPT = """
 # Check if container already running
 if docker ps --format '{{.Names}}' | grep -q '^winarena$'; then
-    # Container is up, but socat proxy may be dead (e.g. after docker restart).
-    # Ensure the evaluate-server proxy is running.
-    if ! pgrep -f 'socat.*5051' >/dev/null 2>&1; then
-        which socat >/dev/null 2>&1 || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq socat
-        nohup socat TCP-LISTEN:5051,fork,reuseaddr EXEC:"docker exec -i winarena socat - TCP\\:127.0.0.1\\:5050" > /dev/null 2>&1 &
-        echo "ALREADY_RUNNING (socat proxy restarted)"
-    else
-        echo "ALREADY_RUNNING"
-    fi
+    # Container is up — ensure the socat proxy systemd service is running.
+    # The service auto-restarts on failure, but we explicitly restart it here
+    # in case the container was restarted externally.
+    sudo systemctl restart socat-waa-evaluate.service 2>/dev/null || true
+    echo "ALREADY_RUNNING"
     exit 0
 fi
 
@@ -168,12 +212,11 @@ docker run -d --name winarena \\
   waa-auto:latest \\
   -c 'cd /client && python /evaluate_server.py > /tmp/evaluate_server.log 2>&1 & /entry.sh --prepare-image false --start-client false'
 
-# Set up socat proxy for evaluate server (Docker port forwarding doesn't work
-# due to QEMU's custom bridge networking with --cap-add NET_ADMIN)
-which socat >/dev/null 2>&1 || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq socat
-killall socat 2>/dev/null || true
-sleep 2
-nohup socat TCP-LISTEN:5051,fork,reuseaddr EXEC:"docker exec -i winarena socat - TCP\\:127.0.0.1\\:5050" > /dev/null 2>&1 &
+# Start the socat proxy via systemd (installed during Docker setup).
+# The systemd service auto-restarts on failure and survives reboots.
+# Docker port forwarding for 5050 is broken by QEMU's --cap-add NET_ADMIN
+# tap networking, so we proxy VM:5051 -> docker exec -> container:5050.
+sudo systemctl restart socat-waa-evaluate.service
 echo "STARTED"
 """
 
