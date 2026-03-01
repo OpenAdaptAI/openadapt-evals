@@ -79,14 +79,21 @@ def _vlm_call(
     in Stage-1-only mode (skip_review) for fast multi-model consensus.
     Falls back to single-model OpenAI if consilium is unavailable.
     """
-    # Extract text prompt and optional images for consilium path
-    prompt_text = ""
+    # Extract system prompt, all text blocks, and images from messages
+    system_text = ""
+    text_parts: list[str] = []
     image_bytes_list: list[bytes] | None = None
     for msg in messages:
+        if msg.get("role") == "system":
+            # System prompt — capture separately
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                system_text = content
+            continue
         if isinstance(msg.get("content"), list):
             for block in msg["content"]:
                 if block.get("type") == "text":
-                    prompt_text = block["text"]
+                    text_parts.append(block["text"])
                 elif block.get("type") == "image_url":
                     url = block["image_url"]["url"]
                     if url.startswith("data:image/png;base64,"):
@@ -95,7 +102,12 @@ def _vlm_call(
                             image_bytes_list = []
                         image_bytes_list.append(raw)
         elif isinstance(msg.get("content"), str):
-            prompt_text = msg["content"]
+            text_parts.append(msg["content"])
+
+    # Combine system prompt + all text blocks into one prompt for consilium
+    prompt_text = "\n\n".join(
+        ([system_text] if system_text else []) + text_parts
+    )
 
     if use_council:
         try:
