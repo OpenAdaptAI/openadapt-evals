@@ -805,7 +805,6 @@ def _refine_steps(
     user's feedback back to the VLM for a revised set of steps.
     """
     import base64
-    import os
 
     b64 = base64.b64encode(screenshot_png).decode()
     setup_desc = _build_setup_desc(task_config)
