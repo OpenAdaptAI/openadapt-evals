@@ -1,6 +1,63 @@
 # CHANGELOG
 
 
+## v0.13.0 (2026-03-01)
+
+### Features
+
+- Add QEMU monitor restart for Windows VM
+  ([#55](https://github.com/OpenAdaptAI/openadapt-evals/pull/55),
+  [`42b3847`](https://github.com/OpenAdaptAI/openadapt-evals/commit/42b384738af4dd4447938464043878db97d5c58e))
+
+* feat: add QEMU monitor restart for Windows VM
+
+Add QEMUResetManager that sends system_reset via the QEMU monitor telnet interface (port 7100) for
+  reliable Windows hard resets inside the dockur container. This is more reliable than shutdown /r
+  /t 0 via the WAA /execute endpoint, which dies before Windows actually restarts.
+
+Changes: - New module: openadapt_evals/infrastructure/qemu_reset.py - CLI command: oa-vm
+  windows-restart --vm-ip <ip> --timeout 300 - Updated scripts/run_dc_eval.py _restart_container()
+  to use QEMU reset as primary approach, falling back to docker restart if monitor is unreachable -
+  15 unit tests with mocked SSH/HTTP calls
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* fix: handle QEMU monitor binary output and add recording script improvements
+
+- Fix UnicodeDecodeError in qemu_reset.py by using bytes mode instead of text=True for
+  subprocess.run (QEMU monitor returns telnet control chars) - Add fire dependency to pyproject.toml
+  for recording script CLI - Add --vm-ip parameter and QEMU hard reset on script startup for clean
+  state - Add 'R' command to restart task from scratch via QEMU reset - Add LibreOffice recovery
+  data cleanup and auto-recovery disabling after each hard reset (deletes backup files, removes
+  RecoveryList entries, sets AutoSave=false in registrymodifications.xcu) - Add --tasks type guard
+  with clear error message when Fire passes bool - Add TestRecordWaaArgParsing tests for argument
+  validation - Fix test mocks to use bytes instead of strings for subprocess output
+
+* fix: only print recovery cleanup success when it actually succeeds
+
+The "Cleared LibreOffice recovery data." message was outside the try/except block, printing even
+  when the cleanup request failed. Move it inside the success branch and add a warning for non-OK
+  responses.
+
+* refactor: extract HARDER_TASK_IDS to shared constants and fix regex
+
+- Move duplicated HARDER_TASK_IDS list from record_waa_demos.py and run_dc_eval.py into
+  openadapt_evals/constants.py - Add re.DOTALL to LibreOffice cleanup regex so it handles multi-line
+  XML entries in registrymodifications.xcu
+
+* refactor: remove redundant import and move fire to dev dependency
+
+- Remove duplicate QEMUResetManager import in _hard_reset_task_env (already imported in enclosing
+  cmd_record_waa scope) - Move fire from core dependencies to dev extras since it's only used in
+  scripts/__main__ guards, not as a library dependency
+
+* chore: remove unused pytest import in test_qemu_reset
+
+---------
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.12.0 (2026-02-28)
 
 ### Features
