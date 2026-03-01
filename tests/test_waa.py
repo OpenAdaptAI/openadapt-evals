@@ -426,7 +426,7 @@ class TestRecordWaaArgParsing:
 
     def test_tasks_prefix_matching(self):
         """Prefix matching should resolve short IDs to full HARDER_TASK_IDS."""
-        from scripts.record_waa_demos import HARDER_TASK_IDS
+        from openadapt_evals.constants import HARDER_TASK_IDS
 
         # "04d9aeaf" should match "04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS"
         full = [t for t in HARDER_TASK_IDS if t.startswith("04d9aeaf")]
