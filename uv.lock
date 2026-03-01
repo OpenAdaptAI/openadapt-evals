@@ -1386,7 +1386,6 @@ version = "0.12.0"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
-    { name = "fire" },
     { name = "httpx" },
     { name = "open-clip-torch" },
     { name = "openai" },
@@ -1404,6 +1403,7 @@ all = [
     { name = "azure-mgmt-compute" },
     { name = "azure-mgmt-network" },
     { name = "azure-mgmt-resource" },
+    { name = "fire" },
     { name = "flask" },
     { name = "flask-cors" },
     { name = "openadapt-retrieval" },
@@ -1421,6 +1421,7 @@ azure = [
     { name = "azure-mgmt-resource" },
 ]
 dev = [
+    { name = "fire" },
     { name = "flask" },
     { name = "pytest" },
     { name = "requests-toolbelt" },
@@ -1452,7 +1453,7 @@ requires-dist = [
     { name = "azure-mgmt-compute", marker = "extra == 'azure'", specifier = ">=33.0.0" },
     { name = "azure-mgmt-network", marker = "extra == 'azure'", specifier = ">=27.0.0" },
     { name = "azure-mgmt-resource", marker = "extra == 'azure'", specifier = ">=23.2.0" },
-    { name = "fire", specifier = ">=0.5.0" },
+    { name = "fire", marker = "extra == 'dev'", specifier = ">=0.5.0" },
     { name = "flask", marker = "extra == 'dev'", specifier = ">=3.0.0" },
     { name = "flask", marker = "extra == 'viewer'", specifier = ">=3.0.0" },
     { name = "flask-cors", marker = "extra == 'viewer'", specifier = ">=4.0.0" },

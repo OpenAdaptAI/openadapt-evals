@@ -727,8 +727,6 @@ def cmd_record_waa(
 
         def _hard_reset_task_env() -> bytes:
             """Hard reset: QEMU system_reset + wait for boot + clear recovery + setup + screenshot."""
-            from openadapt_evals.infrastructure.qemu_reset import QEMUResetManager
-
             print("  Restarting Windows (QEMU hard reset)...")
             mgr = QEMUResetManager(vm_ip=vm_ip, timeout_seconds=300)
             success, msg = mgr.restart_windows(server_url=server)
