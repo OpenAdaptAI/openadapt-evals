@@ -470,6 +470,97 @@ def _take_screenshot(server: str) -> bytes:
     return resp.content
 
 
+def _compare_screenshots(png_a: bytes, png_b: bytes) -> float:
+    """Compare two PNG screenshots and return pixel similarity (0.0–1.0).
+
+    Uses raw RGB pixel comparison.  Returns 1.0 for identical images.
+    The 99.5% threshold used by ``_wait_for_stable_screen`` tolerates
+    minor differences like the taskbar clock updating (~0.14% of pixels)
+    or cursor blink.
+    """
+    import io
+
+    from PIL import Image
+
+    img_a = Image.open(io.BytesIO(png_a)).convert("RGB")
+    img_b = Image.open(io.BytesIO(png_b)).convert("RGB")
+
+    if img_a.size != img_b.size:
+        return 0.0
+
+    bytes_a = img_a.tobytes()
+    bytes_b = img_b.tobytes()
+
+    if bytes_a == bytes_b:
+        return 1.0  # fast path: identical raw bytes
+
+    # Vectorized comparison via numpy (already a transitive dep via open-clip-torch)
+    import numpy as np
+
+    arr_a = np.frombuffer(bytes_a, dtype=np.uint8).reshape(-1, 3)
+    arr_b = np.frombuffer(bytes_b, dtype=np.uint8).reshape(-1, 3)
+    matching = int(np.all(arr_a == arr_b, axis=1).sum())
+    return matching / arr_a.shape[0]
+
+
+def _wait_for_stable_screen(
+    server: str,
+    poll_interval: float = 2.0,
+    stability_timeout: float = 30.0,
+    similarity_threshold: float = 0.995,
+    required_stable_checks: int = 3,
+) -> bytes:
+    """Wait for the VM screen to stabilize, then return the screenshot.
+
+    Polls the QEMU framebuffer (free — local HTTP call) until
+    ``required_stable_checks`` consecutive screenshot pairs exceed
+    ``similarity_threshold``.  With the defaults (3 checks at 2s
+    intervals), the screen must be stable for 6 seconds before
+    proceeding.
+
+    Args:
+        server: WAA server URL (``/screenshot`` endpoint).
+        poll_interval: Seconds between screenshots.
+        stability_timeout: Maximum seconds to wait.  If exceeded, the
+            last screenshot is returned with a warning.
+        similarity_threshold: Pixel-match fraction (0.0–1.0).  0.995
+            tolerates taskbar clock and cursor blink.
+        required_stable_checks: Consecutive stable pairs required.
+            With poll_interval=2 and required_stable_checks=3, the
+            screen must be unchanged for 6 seconds.
+
+    Returns:
+        PNG screenshot bytes of the stable screen.
+    """
+    prev_png = _take_screenshot(server)
+    stable_count = 0
+    deadline = time.time() + stability_timeout
+
+    while time.time() < deadline:
+        time.sleep(poll_interval)
+        curr_png = _take_screenshot(server)
+
+        similarity = _compare_screenshots(prev_png, curr_png)
+
+        if similarity >= similarity_threshold:
+            stable_count += 1
+            if stable_count >= required_stable_checks:
+                elapsed = stability_timeout - (deadline - time.time())
+                print(f"    Screen stable after {elapsed:.0f}s "
+                      f"({stable_count} checks, {similarity:.4f} similarity)")
+                return curr_png
+        else:
+            if stable_count > 0:
+                print(f"    Screen changed ({similarity:.3f}), resetting stability count")
+            stable_count = 0
+
+        prev_png = curr_png
+
+    print(f"    WARNING: Screen did not stabilize within {stability_timeout:.0f}s. "
+          "Using last screenshot.")
+    return prev_png
+
+
 def _generate_steps(
     screenshot_png: bytes,
     instruction: str,
@@ -552,7 +643,7 @@ def cmd_record_waa(
     evaluate_url: str = "http://localhost:5050",
     output: str = "waa_recordings",
     vnc_url: str = "http://localhost:8006",
-    vm_ip: str = "172.173.66.131",
+    vm_ip: str | None = None,
     verify: bool = True,
 ) -> None:
     """Record demos interactively via WAA API while user performs actions on VNC.
@@ -564,8 +655,13 @@ def cmd_record_waa(
         output: Output directory for recordings.
         vnc_url: VNC URL for the user to open in a browser.
         vm_ip: Azure VM IP for QEMU reset on task restart.
+            Auto-detected from pool registry or Azure if omitted.
         verify: Pre-flight check that all required apps are installed (default True).
     """
+    from openadapt_evals.infrastructure.vm_ip import resolve_vm_ip
+
+    vm_ip = resolve_vm_ip(vm_ip)
+
     import requests
 
     # Guard: Fire may pass True if --tasks is used without a value
@@ -709,10 +805,9 @@ def cmd_record_waa(
                     status = r.get("status", "?")
                     stype = r.get("type", "?")
                     print(f"    setup {stype}: {status}")
-            time.sleep(3)
 
         def _soft_reset_task_env() -> bytes:
-            """Soft reset: close_all + re-run setup + screenshot."""
+            """Soft reset: close_all + re-run setup + wait for stable screen."""
             print("  Resetting environment (soft)...")
             try:
                 resp = requests.post(f"{server}/setup/close_all", timeout=30)
@@ -722,11 +817,11 @@ def cmd_record_waa(
             except Exception as e:
                 print(f"  WARNING: environment setup failed: {e}")
                 print(f"  The task app may not be open. Check VNC.")
-            print("  Taking initial screenshot...")
-            return _take_screenshot(server)
+            print("  Waiting for screen to stabilize...")
+            return _wait_for_stable_screen(server)
 
         def _hard_reset_task_env() -> bytes:
-            """Hard reset: QEMU system_reset + wait for boot + clear recovery + setup + screenshot."""
+            """Hard reset: QEMU system_reset + wait for boot + clear recovery + setup + stable screen."""
             print("  Restarting Windows (QEMU hard reset)...")
             mgr = QEMUResetManager(vm_ip=vm_ip, timeout_seconds=300)
             success, msg = mgr.restart_windows(server_url=server)
@@ -742,8 +837,8 @@ def cmd_record_waa(
             except Exception as e:
                 print(f"  WARNING: environment setup failed: {e}")
                 print(f"  The task app may not be open. Check VNC.")
-            print("  Taking initial screenshot...")
-            return _take_screenshot(server)
+            print("  Waiting for screen to stabilize...")
+            return _wait_for_stable_screen(server)
 
         before_png = _soft_reset_task_env()
 
