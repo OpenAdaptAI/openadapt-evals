@@ -761,14 +761,11 @@ ENVIRONMENT SETUP (already done automatically):
 
 TARGET: {efficiency_guidance}
 
-First, briefly describe what you see on the screenshot (2-3 sentences).
-Then draft step-by-step instructions, then review your draft:
-- Can any steps be combined using bulk/drag/fill operations?
-- Are there unnecessary intermediate steps?
-- Is the total step count reasonable for this task?
-
-Output ONLY the final optimized steps as a numbered list. Be specific about
-what to click, type, or drag. Reference actual values visible on screen."""
+Look at the screenshot carefully. Output ONLY a numbered list of steps.
+Each step = one action (click, type, drag, keyboard shortcut).
+Be specific: reference actual UI elements, cell references, and values visible on screen.
+Combine actions where possible (bulk select, fill handle, Ctrl+D).
+Do NOT include drafts, commentary, or explanations — just the final steps."""
 
     messages = [
         {
@@ -1675,8 +1672,9 @@ def cmd_record_waa(
             try:
                 resp = requests.post(f"{server}/setup/close_all", timeout=30)
                 print(f"    close_all: {resp.status_code}")
-                time.sleep(2)
+                time.sleep(3)
                 _setup_task_env()
+                time.sleep(5)  # Give the app time to open after setup
             except Exception as e:
                 print(f"  WARNING: environment setup failed: {e}")
                 print(f"  The task app may not be open. Check VNC.")
