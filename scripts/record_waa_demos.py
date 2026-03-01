@@ -468,10 +468,11 @@ def _clear_recovery_data(server: str) -> None:
                 for line in output.splitlines():
                     if line.strip():
                         print(f"    {line}")
+            print("  Cleared LibreOffice recovery data.")
+        else:
+            print(f"  WARNING: recovery cleanup returned {resp.status_code}")
     except Exception as e:
         print(f"  WARNING: recovery cleanup failed: {e}")
-
-    print("  Cleared LibreOffice recovery data.")
 
 
 def _take_screenshot(server: str) -> bytes:
