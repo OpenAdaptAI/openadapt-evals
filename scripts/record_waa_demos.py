@@ -1575,23 +1575,46 @@ def cmd_record_waa(
     print(f"Recording {len(task_ids)} task(s) to {output_dir}")
     print(f"\n  VNC (open in browser): {vnc_url}\n")
 
-    print("  WARNING: This tool uses QEMU hard resets between tasks.")
-    print("  LibreOffice document recovery is cleared automatically")
-    print("  after each reset. Any unsaved work in the VM will be lost.\n")
-
-    # Hard reset Windows once at startup to guarantee clean slate
     from openadapt_evals.infrastructure.qemu_reset import QEMUResetManager
 
-    print("Resetting Windows to clean state before recording...")
-    mgr = QEMUResetManager(vm_ip=vm_ip, timeout_seconds=300)
-    success, msg = mgr.restart_windows(server_url=server)
-    if success:
-        print(f"  {msg}")
-    else:
-        print(f"  WARNING: QEMU reset failed: {msg}")
-        print("  Continuing anyway — desktop may have stale state.")
+    # Check if any task has a resumable checkpoint BEFORE resetting
+    resumable_task = None
+    for _tid in task_ids:
+        _tdir = output_dir / _tid
+        _ckpt = _load_checkpoint(_tdir)
+        if _ckpt is not None:
+            n_done = len(_ckpt["completed_steps"])
+            n_left = len(_ckpt["remaining_steps"])
+            ts = _ckpt.get("timestamp", "unknown")
+            next_step = _ckpt["remaining_steps"][0] if _ckpt["remaining_steps"] else "(done)"
+            print(f"  Checkpoint found for {_tid[:12]}...")
+            print(f"    {n_done} step(s) done, {n_left} remaining (saved {ts})")
+            print(f"    Next step: {next_step}")
+            print(f"\n  Check VNC ({vnc_url}) — is the VM still where you left off?")
+            print(f"  If yes, we can skip the hard reset and resume recording.")
+            answer = input("  Resume from checkpoint? [y/N] ").strip().lower()
+            if answer in ("y", "yes"):
+                resumable_task = _tid
+            break  # Only offer the first checkpoint found
 
-    _clear_recovery_data(server)
+    if resumable_task is None:
+        # No resume — hard reset Windows for clean slate
+        print("\n  WARNING: This tool uses QEMU hard resets between tasks.")
+        print("  LibreOffice document recovery is cleared automatically")
+        print("  after each reset. Any unsaved work in the VM will be lost.\n")
+
+        print("Resetting Windows to clean state before recording...")
+        mgr = QEMUResetManager(vm_ip=vm_ip, timeout_seconds=300)
+        success, msg = mgr.restart_windows(server_url=server)
+        if success:
+            print(f"  {msg}")
+        else:
+            print(f"  WARNING: QEMU reset failed: {msg}")
+            print("  Continuing anyway — desktop may have stale state.")
+
+        _clear_recovery_data(server)
+    else:
+        print("  Skipping hard reset (resuming from checkpoint).")
     print()
 
     recorded = []
@@ -1678,25 +1701,14 @@ def cmd_record_waa(
             print("  Waiting for screen to stabilize...")
             return _wait_for_stable_screen(server)
 
-        # Check for existing checkpoint (resume support).
-        # Resume is only meaningful if the VM state is intact (e.g. after a
-        # tunnel drop or script crash).  If the VM was rebooted, resuming
-        # would put the recording out of sync with the actual screen.
-        checkpoint = _load_checkpoint(task_dir)
-        resuming = False
-        if checkpoint is not None:
-            n_done = len(checkpoint["completed_steps"])
-            n_left = len(checkpoint["remaining_steps"])
-            ts = checkpoint.get("timestamp", "unknown")
-            next_step = checkpoint["remaining_steps"][0] if checkpoint["remaining_steps"] else "(done)"
-            print(f"\n  Checkpoint found: {n_done} step(s) completed, "
-                  f"{n_left} remaining (saved {ts})")
-            print(f"  Next step would be: {next_step}")
-            print(f"\n  Check VNC ({vnc_url}) — does the VM match where you left off?")
-            print(f"  Resume is only valid if the VM was NOT rebooted since the checkpoint.")
-            answer = input("  Resume from checkpoint? [y/N] ").strip().lower()
-            if answer in ("y", "yes"):
-                resuming = True
+        # Resume decision was already made at startup (before hard reset).
+        # If the user chose to resume, we skipped the reset and the VM state
+        # should be intact.  Otherwise, the VM was rebooted and any checkpoint
+        # is stale.
+        resuming = (resumable_task == task_id)
+        checkpoint = _load_checkpoint(task_dir) if resuming else None
+        if not resuming:
+            _delete_checkpoint(task_dir)
 
         if resuming:
             # Restore state from checkpoint
