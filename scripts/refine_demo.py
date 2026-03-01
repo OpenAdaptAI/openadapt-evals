@@ -146,6 +146,50 @@ def _vlm_call(
     return resp.json()["choices"][0]["message"]["content"]
 
 
+import re as _re
+
+
+def _extract_json(text: str):
+    """Extract a JSON array or object from LLM output.
+
+    Handles common cases:
+    - Pure JSON
+    - JSON wrapped in ```json ... ``` fences
+    - Preamble text before the JSON / fence
+    - Trailing commentary after the JSON
+    """
+    text = text.strip()
+
+    # Try direct parse first
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # Try extracting from markdown code fences
+    fence_match = _re.search(r"```(?:json)?\s*\n?([\s\S]*?)```", text)
+    if fence_match:
+        try:
+            return json.loads(fence_match.group(1).strip())
+        except json.JSONDecodeError:
+            pass
+
+    # Try finding the first [ ... ] or { ... } in the text
+    for opener, closer in [("[", "]"), ("{", "}")]:
+        start = text.find(opener)
+        if start == -1:
+            continue
+        # Walk from the end to find the matching closer
+        end = text.rfind(closer)
+        if end > start:
+            try:
+                return json.loads(text[start : end + 1])
+            except json.JSONDecodeError:
+                pass
+
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Screenshot helpers
 # ---------------------------------------------------------------------------
@@ -348,16 +392,9 @@ def run_holistic_review(
         max_tokens=MAX_TOKENS_HOLISTIC,
         use_council=use_council,
     )
-    # Parse JSON from response (strip markdown fences if present)
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
-        if raw.endswith("```"):
-            raw = raw[:-3]
-        raw = raw.strip()
-    try:
-        flagged = json.loads(raw)
-    except json.JSONDecodeError:
+    # Parse JSON from response — handle markdown fences and preamble text
+    flagged = _extract_json(raw)
+    if flagged is None:
         print(f"  WARNING: Could not parse holistic review response as JSON.")
         print(f"  Raw response:\n{raw[:500]}")
         return []
@@ -461,15 +498,8 @@ def run_per_step_review(
         max_tokens=MAX_TOKENS_PER_STEP,
         use_council=use_council,
     )
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
-        if raw.endswith("```"):
-            raw = raw[:-3]
-        raw = raw.strip()
-    try:
-        correction = json.loads(raw)
-    except json.JSONDecodeError:
+    correction = _extract_json(raw)
+    if correction is None:
         print(f"    WARNING: Could not parse per-step response as JSON.")
         print(f"    Raw response:\n{raw[:300]}")
         return None

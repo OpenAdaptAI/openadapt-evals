@@ -99,6 +99,7 @@ Documentation = "https://github.com/OpenAdaptAI/openadapt-evals#readme"
 
 [tool.uv.sources]
 consilium = { git = "https://github.com/abrichr/consilium.git" }
+openadapt-ml = { path = "../openadapt-ml", editable = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["openadapt_evals"]
