@@ -1763,7 +1763,8 @@ def cmd_record_waa(
             _display_current_step(step_num, total, remaining_steps[0])
 
             user_input = input(
-                "  [Enter]=done  [d]=task done  [r]=redo  [R]=restart  [s]=refresh steps\n"
+                "  [Enter]=step done  [d]=task done  [u]=undo step  [s]=refresh steps\n"
+                "  [r]=restart task (soft)  [R]=restart task (hard/reboot)\n"
                 "  Or type feedback to correct remaining steps: "
             ).strip()
 
@@ -1819,18 +1820,18 @@ def cmd_record_waa(
                 )
                 break
 
-            elif user_input.lower() == "r":
-                # REDO: go back one step
+            elif user_input.lower() == "u":
+                # UNDO: go back one step
                 if not completed_steps:
-                    print("  Nothing to redo (already at step 1).")
+                    print("  Nothing to undo (already at step 1).")
                     continue
                 step_idx -= 1
                 remaining_steps.insert(0, completed_steps.pop())
                 steps_meta.pop()
                 before_png = _take_screenshot(server)
-                print(f"  Redoing step {len(completed_steps) + 1}...")
+                print(f"  Undid last step. Now at step {len(completed_steps) + 1}.")
 
-                # Checkpoint after redo
+                # Checkpoint after undo
                 _save_checkpoint(
                     task_dir, task_id, instruction,
                     completed_steps, remaining_steps,
@@ -1838,9 +1839,45 @@ def cmd_record_waa(
                     steps_meta, step_idx,
                 )
 
+            elif user_input == "r":
+                # RESTART (soft): close all apps, re-run setup, regenerate steps
+                print("  Restarting task (soft reset — closing apps, re-running setup)...")
+                for f in task_dir.glob("step_*.png"):
+                    f.unlink()
+                before_png = _soft_reset_task_env()
+                print(f"\n  VNC: {vnc_url}")
+                print(f"  Task: {instruction}\n")
+
+                print("  Generating suggested steps...")
+                new_suggested = _generate_steps(before_png, instruction, task_config)
+                _display_steps(new_suggested)
+                new_suggested = _interactive_step_review(
+                    before_png, instruction, task_config, new_suggested,
+                )
+
+                completed_steps = []
+                remaining_steps = _parse_step_list(new_suggested)
+                step_plans.append({
+                    "at_step_idx": 0,
+                    "trigger": "soft_restart",
+                    "steps": list(remaining_steps),
+                })
+                refined_indices = set()
+                steps_meta = []
+                step_idx = 0
+
+                _save_checkpoint(
+                    task_dir, task_id, instruction,
+                    completed_steps, remaining_steps,
+                    step_plans, refined_indices,
+                    steps_meta, step_idx,
+                )
+                print()
+                print("  Task restarted (soft). Continue recording.\n")
+
             elif user_input == "R":
-                # RESTART: QEMU hard reset + re-generate everything
-                print("  Restarting task from scratch (QEMU hard reset)...")
+                # RESTART (hard): QEMU hard reset + re-generate everything
+                print("  Restarting task (hard reset — QEMU reboot)...")
                 for f in task_dir.glob("step_*.png"):
                     f.unlink()
                 before_png = _hard_reset_task_env()
