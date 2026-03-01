@@ -1777,12 +1777,22 @@ def cmd_record_waa(
             _display_current_step(step_num, total, remaining_steps[0])
 
             user_input = input(
-                "  [Enter]=step done  [d]=task done  [u]=undo step  [s]=refresh steps\n"
-                "  [r]=restart task (soft)  [R]=restart task (hard/reboot)\n"
-                "  Or type feedback to correct remaining steps: "
+                "  [Enter] next step   [x] retry step   [u] undo prev step\n"
+                "  [d] task complete   [s] refresh steps from screenshot\n"
+                "  [r] restart task    [R] restart task (reboot VM)\n"
+                "  Or type correction: "
             ).strip()
 
-            if user_input == "":
+            if user_input.lower() == "x":
+                # RETRY: discard this attempt, take fresh before screenshot
+                print("  Retrying step (taking fresh screenshot)...")
+                before_png = _take_screenshot(server)
+                (task_dir / f"step_{step_idx:02d}_before.png").write_bytes(
+                    before_png
+                )
+                continue
+
+            elif user_input == "":
                 # ADVANCE: action done, move to next step
                 after_png = _take_screenshot(server)
                 (task_dir / f"step_{step_idx:02d}_after.png").write_bytes(
