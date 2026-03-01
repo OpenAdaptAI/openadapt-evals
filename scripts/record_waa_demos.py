@@ -714,6 +714,48 @@ one action per step, concise."""
         return current_steps
 
 
+def _parse_step_list(steps_text: str) -> list[str]:
+    """Parse numbered VLM output into a list of step strings.
+
+    Handles formats like "1. Do X", "1) Do X", "1: Do X".
+    Falls back to non-empty lines if no numbered items are found.
+    """
+    import re
+
+    lines = steps_text.strip().splitlines()
+    steps: list[str] = []
+    current_step: list[str] = []
+
+    for line in lines:
+        # Check if this line starts a new numbered step
+        m = re.match(r"^\s*\d+[\.\)\:]\s+(.*)", line)
+        if m:
+            if current_step:
+                steps.append(" ".join(current_step))
+            current_step = [m.group(1).strip()]
+        elif current_step:
+            # Continuation line for the current step
+            stripped = line.strip()
+            if stripped:
+                current_step.append(stripped)
+
+    if current_step:
+        steps.append(" ".join(current_step))
+
+    # Fallback: if no numbered items found, split on non-empty lines
+    if not steps:
+        steps = [line.strip() for line in lines if line.strip()]
+
+    return steps
+
+
+def _format_step_list(steps: list[str], start_num: int = 1) -> str:
+    """Format a list of step strings back into numbered text."""
+    return "\n".join(
+        f"{i}. {step}" for i, step in enumerate(steps, start=start_num)
+    )
+
+
 def _display_steps(steps_text: str) -> None:
     """Pretty-print suggested steps in a box."""
     print()
@@ -722,6 +764,16 @@ def _display_steps(steps_text: str) -> None:
         print(f"  │ {line}")
     print("  └────────────────────────────────────────────────")
     print()
+
+
+def _display_current_step(step_num: int, total: int, step_text: str) -> None:
+    """Display the current step in a box before the action prompt."""
+    header = f" Step {step_num} of {total} "
+    width = max(len(header) + 4, len(step_text) + 6, 50)
+    bar = "─" * (width - len(header) - 2)
+    print(f"\n  ──{header}{bar}")
+    print(f"  │ {step_text}")
+    print(f"  └{'─' * (width)}")
 
 
 def _interactive_step_review(
@@ -749,6 +801,136 @@ def _interactive_step_review(
         _display_steps(current)
 
 
+def _refine_remaining_steps(
+    screenshot_png: bytes,
+    instruction: str,
+    task_config: dict,
+    completed_steps: list[str],
+    remaining_steps: list[str],
+    feedback: str,
+) -> str:
+    """Refine remaining steps based on user feedback mid-recording.
+
+    Takes a FRESH screenshot (current screen state after completed steps)
+    and sends it along with the context of what's been done and what remains.
+    Returns the raw VLM text for remaining steps.
+    """
+    import base64
+    import os
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return _format_step_list(remaining_steps)
+
+    b64 = base64.b64encode(screenshot_png).decode()
+    setup_desc = _build_setup_desc(task_config)
+
+    completed_text = (
+        _format_step_list(completed_steps)
+        if completed_steps
+        else "(none)"
+    )
+    remaining_text = _format_step_list(remaining_steps)
+    current_step_num = len(completed_steps) + 1
+
+    prompt = f"""You are helping a human perform a task on a Windows desktop via VNC.
+
+TASK: {instruction}
+
+ENVIRONMENT SETUP (already done automatically):
+{setup_desc}
+
+The user has already completed these steps:
+{completed_text}
+
+You previously suggested these REMAINING steps (not yet performed):
+{remaining_text}
+
+The user is currently on step {current_step_num} and says:
+"{feedback}"
+
+Look at the CURRENT screenshot (taken just now, after the completed steps)
+and produce CORRECTED remaining steps that address the user's feedback.
+Only output the remaining steps (do not repeat completed steps).
+Keep the same format: plain text, numbered list starting from 1,
+one action per step, concise."""
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{b64}",
+                        "detail": "high",
+                    },
+                },
+            ],
+        }
+    ]
+
+    try:
+        return _vlm_call(messages, api_key)
+    except Exception as e:
+        print(f"  (Refinement failed: {e})")
+        return _format_step_list(remaining_steps)
+
+
+def _interactive_remaining_review(
+    server: str,
+    instruction: str,
+    task_config: dict,
+    completed_steps: list[str],
+    remaining_steps: list[str],
+    initial_feedback: str,
+) -> list[str]:
+    """Mini review loop for mid-recording step refinement.
+
+    Takes a fresh screenshot for each refinement round.
+    Returns the accepted list of remaining steps.
+    """
+    # First refinement using the initial feedback
+    fresh_png = _take_screenshot(server)
+    refined_text = _refine_remaining_steps(
+        fresh_png, instruction, task_config,
+        completed_steps, remaining_steps, initial_feedback,
+    )
+    new_steps = _parse_step_list(refined_text)
+
+    if not new_steps:
+        print("  WARNING: VLM returned no steps. Keeping previous plan.")
+        return remaining_steps
+
+    while True:
+        # Display corrected remaining steps
+        print()
+        print("  ┌─ CORRECTED REMAINING STEPS ─────────────────────")
+        for line in _format_step_list(new_steps).splitlines():
+            print(f"  │ {line}")
+        print("  └─────────────────────────────────────────────────")
+        print()
+
+        correction = input(
+            "  Press Enter to accept, or type another correction: "
+        ).strip()
+        if not correction:
+            return new_steps
+
+        print("  Taking fresh screenshot and refining...")
+        fresh_png = _take_screenshot(server)
+        refined_text = _refine_remaining_steps(
+            fresh_png, instruction, task_config,
+            completed_steps, new_steps, correction,
+        )
+        parsed = _parse_step_list(refined_text)
+        if parsed:
+            new_steps = parsed
+        else:
+            print("  WARNING: VLM returned no steps. Keeping previous plan.")
+
+
 def cmd_record_waa(
     tasks: str = ",".join(HARDER_TASK_IDS),
     server: str = "http://localhost:5001",
@@ -770,18 +952,18 @@ def cmd_record_waa(
             Auto-detected from pool registry or Azure if omitted.
         verify: Pre-flight check that all required apps are installed (default True).
     """
-    from openadapt_evals.infrastructure.vm_ip import resolve_vm_ip
-
-    vm_ip = resolve_vm_ip(vm_ip)
-
-    import requests
-
     # Guard: Fire may pass True if --tasks is used without a value
     if not isinstance(tasks, str):
         print(f"ERROR: --tasks must be a string of comma-separated task IDs.")
         print(f"  Got: {tasks!r} (type {type(tasks).__name__})")
         print(f"  Hint: use --tasks=\"id1,id2,...\" (with = and no space)")
         return
+
+    from openadapt_evals.infrastructure.vm_ip import resolve_vm_ip
+
+    vm_ip = resolve_vm_ip(vm_ip)
+
+    import requests
 
     output_dir = Path(output)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -964,82 +1146,138 @@ def cmd_record_waa(
         suggested = _interactive_step_review(
             before_png, instruction, task_config, suggested,
         )
-        print()
-        print("  Perform each action in VNC, then press Enter here.")
-        print("  Press 'd' when done, 'r' to redo last step,")
-        print("  'R' to restart task from scratch.\n")
 
-        steps = []
+        # Parse accepted steps into a structured list
+        completed_steps: list[str] = []
+        remaining_steps = _parse_step_list(suggested)
+        step_plans = [{
+            "at_step_idx": 0,
+            "trigger": "initial",
+            "steps": list(remaining_steps),
+        }]
+        refined_indices: set[int] = set()
+        steps_meta: list[dict] = []
         step_idx = 0
-        while True:
+
+        print()
+        print("  Perform each action in VNC. You can provide feedback")
+        print("  at any point to correct the remaining steps.\n")
+
+        while remaining_steps:
             # Save before screenshot
             (task_dir / f"step_{step_idx:02d}_before.png").write_bytes(
                 before_png
             )
 
-            action_desc = input(
-                f"  Step {step_idx + 1}: Press Enter after action "
-                "(or 'd'=done, 'r'=redo last, 'R'=restart task): "
+            # Display current step
+            total = len(completed_steps) + len(remaining_steps)
+            step_num = len(completed_steps) + 1
+            _display_current_step(step_num, total, remaining_steps[0])
+
+            user_input = input(
+                "  [Enter]=done  [d]=task done  [r]=redo  [R]=restart\n"
+                "  Or type feedback to correct remaining steps: "
             ).strip()
 
-            if action_desc == "R":
-                # Restart: QEMU hard reset + re-run setup, clear all steps
-                print("  Restarting task from scratch (QEMU hard reset)...")
-                # Clean recorded step files
-                for f in task_dir.glob("step_*.png"):
-                    f.unlink()
-                before_png = _hard_reset_task_env()
-                steps = []
-                step_idx = 0
-                print(f"\n  VNC: {vnc_url}")
-                print(f"  Task: {instruction}\n")
-
-                # Re-generate steps from the new stable screenshot
-                print("  Generating suggested steps...")
-                suggested = _generate_steps(before_png, instruction, task_config)
-                _display_steps(suggested)
-                suggested = _interactive_step_review(
-                    before_png, instruction, task_config, suggested,
-                )
-                print()
-                print("  Task restarted. Continue recording.\n")
-                continue
-
-            if action_desc.lower() == "d":
-                # Save final screenshot as the last after
+            if user_input == "":
+                # ADVANCE: action done, move to next step
                 after_png = _take_screenshot(server)
                 (task_dir / f"step_{step_idx:02d}_after.png").write_bytes(
                     after_png
                 )
-                steps.append({"action_hint": action_desc or None})
+                done_step = remaining_steps.pop(0)
+                completed_steps.append(done_step)
+                steps_meta.append({
+                    "action_hint": None,
+                    "suggested_step": done_step,
+                    "step_was_refined": step_idx in refined_indices,
+                })
+                before_png = after_png
                 step_idx += 1
+                print(f"  Step {step_num} recorded.")
+
+                if not remaining_steps:
+                    print(f"\n  All {total} steps completed. Finishing recording.")
+
+            elif user_input.lower() == "d":
+                # DONE: task finished (possibly before all steps)
+                after_png = _take_screenshot(server)
+                (task_dir / f"step_{step_idx:02d}_after.png").write_bytes(
+                    after_png
+                )
+                steps_meta.append({
+                    "action_hint": "d",
+                    "suggested_step": remaining_steps[0],
+                    "step_was_refined": step_idx in refined_indices,
+                })
+                step_idx += 1
+                total = len(completed_steps) + len(remaining_steps)
+                print(f"\n  Task marked done at step {step_num} of {total}. Finishing recording.")
                 break
 
-            if action_desc.lower() == "r" and step_idx > 0:
-                # Redo: go back one step
+            elif user_input.lower() == "r":
+                # REDO: go back one step
+                if not completed_steps:
+                    print("  Nothing to redo (already at step 1).")
+                    continue
                 step_idx -= 1
-                steps.pop()
-                # Re-take the before screenshot from current state
+                remaining_steps.insert(0, completed_steps.pop())
+                steps_meta.pop()
                 before_png = _take_screenshot(server)
-                print(f"  Redoing step {step_idx + 1}...")
-                continue
+                print(f"  Redoing step {len(completed_steps) + 1}...")
 
-            # Take after screenshot
-            after_png = _take_screenshot(server)
-            (task_dir / f"step_{step_idx:02d}_after.png").write_bytes(
-                after_png
-            )
+            elif user_input == "R":
+                # RESTART: QEMU hard reset + re-generate everything
+                print("  Restarting task from scratch (QEMU hard reset)...")
+                for f in task_dir.glob("step_*.png"):
+                    f.unlink()
+                before_png = _hard_reset_task_env()
+                print(f"\n  VNC: {vnc_url}")
+                print(f"  Task: {instruction}\n")
 
-            steps.append({"action_hint": action_desc or None})
-            before_png = after_png  # next step's before = this step's after
-            step_idx += 1
+                print("  Generating suggested steps...")
+                new_suggested = _generate_steps(before_png, instruction, task_config)
+                _display_steps(new_suggested)
+                new_suggested = _interactive_step_review(
+                    before_png, instruction, task_config, new_suggested,
+                )
+
+                completed_steps = []
+                remaining_steps = _parse_step_list(new_suggested)
+                step_plans.append({
+                    "at_step_idx": 0,
+                    "trigger": "restart",
+                    "steps": list(remaining_steps),
+                })
+                refined_indices = set()
+                steps_meta = []
+                step_idx = 0
+                print()
+                print("  Task restarted. Continue recording.\n")
+
+            else:
+                # FEEDBACK: mid-recording step correction
+                print("  Taking fresh screenshot and refining remaining steps...")
+                remaining_steps = _interactive_remaining_review(
+                    server, instruction, task_config,
+                    completed_steps, remaining_steps, user_input,
+                )
+                step_plans.append({
+                    "at_step_idx": step_idx,
+                    "trigger": f"feedback: {user_input}",
+                    "steps": list(remaining_steps),
+                })
+                for i in range(step_idx, step_idx + len(remaining_steps)):
+                    refined_indices.add(i)
+                # No action taken — loop re-displays the (possibly new) current step
 
         # Save metadata
         meta = {
             "task_id": task_id,
             "instruction": instruction,
-            "num_steps": len(steps),
-            "steps": steps,
+            "num_steps": len(steps_meta),
+            "steps": steps_meta,
+            "step_plans": step_plans,
             "server_url": server,
             "recorded_at": datetime.now(timezone.utc).isoformat(),
         }
