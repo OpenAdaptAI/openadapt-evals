@@ -407,6 +407,33 @@ class TestFormatAccessibilityTree:
         assert "[0,0,1920,1200]" in result
 
 
+# ---------------------------------------------------------------------------
+# Recording Script Argument Parsing
+# ---------------------------------------------------------------------------
+
+
+class TestRecordWaaArgParsing:
+    """Tests for cmd_record_waa argument validation."""
+
+    def test_tasks_bool_rejected(self, capsys):
+        """Fire passes True when --tasks has no value; should print error."""
+        from scripts.record_waa_demos import cmd_record_waa
+
+        cmd_record_waa(tasks=True, server="http://fake", verify=False)
+        captured = capsys.readouterr()
+        assert "ERROR" in captured.out
+        assert "--tasks" in captured.out
+
+    def test_tasks_prefix_matching(self):
+        """Prefix matching should resolve short IDs to full HARDER_TASK_IDS."""
+        from openadapt_evals.constants import HARDER_TASK_IDS
+
+        # "04d9aeaf" should match "04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS"
+        full = [t for t in HARDER_TASK_IDS if t.startswith("04d9aeaf")]
+        assert len(full) == 1
+        assert full[0].startswith("04d9aeaf-")
+
+
 class TestFailsafeDetection:
     """Tests for _is_failsafe_error in the live adapter."""
 
