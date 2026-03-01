@@ -1513,17 +1513,40 @@ def cmd_record_waa(
     if not connected:
         return
 
+    # Pre-fetch all task configs BEFORE QEMU reset.  The evaluate server
+    # (localhost:5050) goes through a socat bridge that can become stale
+    # after container/VM restarts.  Fetching early ensures we have the
+    # human-readable instructions cached even if the bridge dies later.
+    print("Pre-fetching task configs from evaluate server...")
+    task_configs_cache: dict[str, dict] = {}
+    fetch_failures = 0
+    for task_id in task_ids:
+        try:
+            resp = requests.get(f"{evaluate_url}/task/{task_id}", timeout=10)
+            if resp.ok:
+                task_configs_cache[task_id] = resp.json()
+        except Exception:
+            fetch_failures += 1
+    if task_configs_cache:
+        print(f"  Cached {len(task_configs_cache)}/{len(task_ids)} task config(s).")
+    if fetch_failures:
+        print(f"  WARNING: {fetch_failures} task config(s) failed to fetch from {evaluate_url}.")
+        print(f"  Step generation will use task IDs instead of instructions for those tasks.")
+        print(f"  (Is the evaluate server / socat proxy running?)")
+    if not task_configs_cache and len(task_ids) > 0:
+        print(f"  ERROR: Could not fetch ANY task configs from {evaluate_url}.")
+        print(f"  The evaluate server may be down. Check socat proxy on the VM.")
+        answer = input("  Continue anyway? [y/N] ").strip().lower()
+        if answer not in ("y", "yes"):
+            return
+    print()
+
     # Pre-flight: verify all required apps are installed
     if verify:
         print("Verifying required apps across all tasks...")
         all_apps: set[str] = set()
-        for task_id in task_ids:
-            try:
-                resp = requests.get(f"{evaluate_url}/task/{task_id}", timeout=10)
-                if resp.ok:
-                    all_apps.update(resp.json().get("related_apps", []))
-            except Exception:
-                pass
+        for tc in task_configs_cache.values():
+            all_apps.update(tc.get("related_apps", []))
         if all_apps:
             resp = requests.post(
                 f"{evaluate_url}/setup",
@@ -1579,26 +1602,27 @@ def cmd_record_waa(
         task_dir = output_dir / task_id
         task_dir.mkdir(parents=True, exist_ok=True)
 
-        # Load task config from evaluate server (retry on transient errors)
-        instruction = task_id  # fallback
-        task_config = {}
-        for _attempt in range(3):
-            try:
-                task_resp = requests.get(
-                    f"{evaluate_url}/task/{task_id}", timeout=10
-                )
-                if task_resp.ok:
-                    task_config = task_resp.json()
-                    instruction = task_config.get(
-                        "instruction", task_config.get("task", task_id)
+        # Load task config — prefer pre-fetched cache, fall back to live fetch
+        task_config = task_configs_cache.get(task_id, {})
+        if not task_config:
+            # Try live fetch (cache miss or evaluate server was down earlier)
+            for _attempt in range(3):
+                try:
+                    task_resp = requests.get(
+                        f"{evaluate_url}/task/{task_id}", timeout=10
                     )
-                    break
-            except Exception as e:
-                if _attempt < 2:
-                    print(f"  Warning: task config fetch failed ({e}), retrying...")
-                    time.sleep(2)
-                else:
-                    print(f"  Warning: could not load task config after 3 attempts: {e}")
+                    if task_resp.ok:
+                        task_config = task_resp.json()
+                        break
+                except Exception as e:
+                    if _attempt < 2:
+                        print(f"  Warning: task config fetch failed ({e}), retrying...")
+                        time.sleep(2)
+                    else:
+                        print(f"  Warning: could not load task config after 3 attempts: {e}")
+        instruction = task_config.get(
+            "instruction", task_config.get("task", task_id)
+        )
 
         def _setup_task_env() -> None:
             """Run task setup config (download files, open apps, etc.)."""
