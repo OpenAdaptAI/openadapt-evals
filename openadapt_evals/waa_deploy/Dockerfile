@@ -216,6 +216,11 @@ RUN if grep -q "</FirstLogonCommands>" /run/assets/win11x64.xml; then \
           <CommandLine>\\\\\\\\host.lan\\\\Data\\\\start_waa_server.bat</CommandLine>\n\
           <Description>Start WAA server immediately</Description>\n\
         </SynchronousCommand>\n\
+        <SynchronousCommand wcm:action=\"add\">\n\
+          <Order>$((N6 + 3))</Order>\n\
+          <CommandLine>bcdedit /set {default} recoveryenabled No</CommandLine>\n\
+          <Description>Disable Windows Automatic Repair to prevent recovery loops after dirty shutdown</Description>\n\
+        </SynchronousCommand>\n\
       </FirstLogonCommands>|" /run/assets/win11x64.xml; \
     fi
 

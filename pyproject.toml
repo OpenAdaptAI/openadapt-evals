@@ -40,6 +40,7 @@ dependencies = [
     "httpx>=0.25.0",
     "openai>=1.0.0",
     "anthropic>=0.76.0",
+    "consilium>=0.1.0",
 ]
 
 [project.optional-dependencies]
@@ -95,6 +96,9 @@ Homepage = "https://github.com/OpenAdaptAI/openadapt-evals"
 Repository = "https://github.com/OpenAdaptAI/openadapt-evals"
 Documentation = "https://github.com/OpenAdaptAI/openadapt-evals#readme"
 "Bug Tracker" = "https://github.com/OpenAdaptAI/openadapt-evals/issues"
+
+[tool.uv.sources]
+consilium = { git = "https://github.com/abrichr/consilium.git" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["openadapt_evals"]
