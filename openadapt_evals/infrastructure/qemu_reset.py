@@ -110,7 +110,6 @@ class QEMUResetManager:
             result = subprocess.run(
                 ssh_cmd,
                 capture_output=True,
-                text=True,
                 timeout=30,
             )
         except subprocess.TimeoutExpired:
@@ -118,10 +117,11 @@ class QEMUResetManager:
             return False
 
         if result.returncode != 0:
+            stderr = result.stderr.decode("utf-8", errors="replace").strip()
             logger.error(
                 "QEMU monitor reset failed (rc=%d): %s",
                 result.returncode,
-                result.stderr.strip(),
+                stderr,
             )
             return False
 
@@ -222,14 +222,14 @@ class QEMUResetManager:
             result = subprocess.run(
                 ssh_cmd,
                 capture_output=True,
-                text=True,
                 timeout=15,
             )
-            reachable = result.returncode == 0 and "QEMU" in result.stdout
+            stdout = result.stdout.decode("utf-8", errors="replace")
+            reachable = result.returncode == 0 and "QEMU" in stdout
             logger.debug(
                 "QEMU monitor reachable: %s (stdout: %s)",
                 reachable,
-                result.stdout.strip()[:100],
+                stdout.strip()[:100],
             )
             return reachable
         except subprocess.TimeoutExpired:

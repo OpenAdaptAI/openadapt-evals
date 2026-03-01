@@ -16,7 +16,7 @@ class TestResetWindows:
         mgr = QEMUResetManager(vm_ip="10.0.0.1")
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="", stderr=""
+                args=[], returncode=0, stdout=b"", stderr=b""
             )
             assert mgr.reset_windows() is True
 
@@ -36,7 +36,7 @@ class TestResetWindows:
         mgr = QEMUResetManager(vm_ip="10.0.0.1")
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
-                args=[], returncode=1, stdout="", stderr="Connection refused"
+                args=[], returncode=1, stdout=b"", stderr=b"Connection refused"
             )
             assert mgr.reset_windows() is False
 
@@ -52,7 +52,7 @@ class TestResetWindows:
         mgr = QEMUResetManager(vm_ip="10.0.0.1", container_name="my-container")
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="", stderr=""
+                args=[], returncode=0, stdout=b"", stderr=b""
             )
             mgr.reset_windows()
 
@@ -64,7 +64,7 @@ class TestResetWindows:
         mgr = QEMUResetManager(vm_ip="10.0.0.1", qemu_monitor_port=9999)
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="", stderr=""
+                args=[], returncode=0, stdout=b"", stderr=b""
             )
             mgr.reset_windows()
 
@@ -157,7 +157,7 @@ class TestIsQemuMonitorReachable:
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0,
-                stdout="QEMU 8.2.2 monitor", stderr=""
+                stdout=b"QEMU 8.2.2 monitor", stderr=b""
             )
             assert mgr.is_qemu_monitor_reachable() is True
 
@@ -166,7 +166,7 @@ class TestIsQemuMonitorReachable:
         mgr = QEMUResetManager(vm_ip="10.0.0.1")
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="", stderr=""
+                args=[], returncode=0, stdout=b"", stderr=b""
             )
             assert mgr.is_qemu_monitor_reachable() is False
 
@@ -175,7 +175,7 @@ class TestIsQemuMonitorReachable:
         mgr = QEMUResetManager(vm_ip="10.0.0.1")
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
-                args=[], returncode=1, stdout="", stderr="Connection refused"
+                args=[], returncode=1, stdout=b"", stderr=b"Connection refused"
             )
             assert mgr.is_qemu_monitor_reachable() is False
 
