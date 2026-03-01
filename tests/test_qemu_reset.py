@@ -3,8 +3,6 @@
 import subprocess
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from openadapt_evals.infrastructure.qemu_reset import QEMUResetManager
 
 
