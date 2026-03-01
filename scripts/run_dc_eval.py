@@ -26,20 +26,7 @@ from pathlib import Path
 
 import requests
 
-HARDER_TASK_IDS = [
-    "04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS",
-    "0a0faba3-5580-44df-965d-f562a99b291c-WOS",
-    "0bf05a7d-b28b-44d2-955a-50b41e24012a-WOS",
-    "0e763496-b6bb-4508-a427-fad0b6c3e195-WOS",
-    "4bcb1253-a636-4df4-8cb0-a35c04dfef31-WOS",
-    "70745df8-f2f5-42bd-8074-fbc10334fcc5-2-WOS",
-    "8b1ce5f2-59d2-4dcc-b0b0-666a714b9a14-WOS",
-    "e2b5e914-ffe1-44d2-8e92-58f8c5d92bb2-WOS",
-    "ec71221e-ac43-46f9-89b8-ee7d80f7e1c5-WOS",
-    "fba2c100-79e8-42df-ae74-b592418d54f4-WOS",
-    "INF-0d95d28a-9587-433b-a805-1fbe5467d598-WOS",
-    "INF-5ac2891a-eacd-4954-b339-98abba077adb-WOS",
-]
+from openadapt_evals.constants import HARDER_TASK_IDS
 
 
 def short_id(task_id: str) -> str:
@@ -116,8 +103,30 @@ def _setup_eval_proxy(vm_user: str, vm_ip: str) -> bool:
 
 
 def _restart_container(vm_user: str, vm_ip: str) -> bool:
-    """Restart the WAA container and re-establish the evaluate proxy."""
-    print("  Restarting WAA container (Windows will reboot)...")
+    """Restart Windows via QEMU monitor reset, falling back to docker restart.
+
+    The QEMU monitor approach (``system_reset`` on port 7100) is preferred
+    because it performs a reliable hard reset without killing the container.
+    Falls back to ``docker restart winarena`` if the QEMU monitor is
+    unreachable (e.g. ``nc`` not installed in the container).
+    """
+    from openadapt_evals.infrastructure.qemu_reset import QEMUResetManager
+
+    mgr = QEMUResetManager(vm_ip=vm_ip, ssh_user=vm_user, timeout_seconds=300)
+
+    # Try QEMU monitor reset first (preferred)
+    if mgr.is_qemu_monitor_reachable():
+        print("  Resetting Windows via QEMU monitor (system_reset)...")
+        if mgr.reset_windows():
+            print("  QEMU reset sent, re-establishing evaluate proxy...")
+            _setup_eval_proxy(vm_user, vm_ip)
+            return True
+        print("  QEMU reset command failed, falling back to docker restart...")
+    else:
+        print("  QEMU monitor unreachable, falling back to docker restart...")
+
+    # Fallback: docker restart
+    print("  Restarting WAA container (docker restart winarena)...")
     result = subprocess.run(
         ["ssh", "-o", "StrictHostKeyChecking=no", f"{vm_user}@{vm_ip}",
          "docker restart winarena"],

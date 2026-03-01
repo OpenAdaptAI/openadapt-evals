@@ -90,21 +90,7 @@ TASKS = [
     },
 ]
 
-# 12 harder WAA task IDs for demo-conditioned eval
-HARDER_TASK_IDS = [
-    "04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS",
-    "0a0faba3-5580-44df-965d-f562a99b291c-WOS",
-    "0bf05a7d-b28b-44d2-955a-50b41e24012a-WOS",
-    "0e763496-b6bb-4508-a427-fad0b6c3e195-WOS",
-    "4bcb1253-a636-4df4-8cb0-a35c04dfef31-WOS",
-    "70745df8-f2f5-42bd-8074-fbc10334fcc5-2-WOS",
-    "8b1ce5f2-59d2-4dcc-b0b0-666a714b9a14-WOS",
-    "e2b5e914-ffe1-44d2-8e92-58f8c5d92bb2-WOS",
-    "ec71221e-ac43-46f9-89b8-ee7d80f7e1c5-WOS",
-    "fba2c100-79e8-42df-ae74-b592418d54f4-WOS",
-    "INF-0d95d28a-9587-433b-a805-1fbe5467d598-WOS",
-    "INF-5ac2891a-eacd-4954-b339-98abba077adb-WOS",
-]
+from openadapt_evals.constants import HARDER_TASK_IDS
 
 # File names for the docx setup task
 DOCX_FILES = ["report.docx", "meeting_notes.docx", "proposal.docx"]
@@ -372,6 +358,109 @@ def main() -> int:
 # ---------------------------------------------------------------------------
 
 
+_LO_CLEANUP_SCRIPT = r"""
+import os, re, shutil
+
+home = os.path.expanduser("~")
+lo_user = os.path.join(home, "AppData", "Roaming", "LibreOffice", "4", "user")
+
+# 1. Delete backup/recovery files
+backup_dir = os.path.join(lo_user, "backup")
+if os.path.exists(backup_dir):
+    files = os.listdir(backup_dir)
+    if files:
+        shutil.rmtree(backup_dir)
+        os.makedirs(backup_dir)
+        print(f"Cleared {len(files)} backup file(s)")
+    else:
+        print("Backup dir empty")
+else:
+    print("No backup dir")
+
+# 2. Modify registrymodifications.xcu
+xcu = os.path.join(lo_user, "registrymodifications.xcu")
+if os.path.exists(xcu):
+    with open(xcu, "r", encoding="utf-8") as f:
+        content = f.read()
+    changed = False
+    if "RecoveryList" in content:
+        content = re.sub(
+            r'<item oor:path="/org.openoffice.Office.Recovery/RecoveryList">.*?</item>',
+            '', content, flags=re.DOTALL
+        )
+        changed = True
+        print("Removed RecoveryList entries")
+    autosave_line = '<item oor:path="/org.openoffice.Office.Recovery/AutoSave"><prop oor:name="Enabled" oor:op="fuse"><value>false</value></prop></item>'
+    if "AutoSave" not in content:
+        content = content.replace("</oor:items>", autosave_line + "\n</oor:items>")
+        changed = True
+        print("Added AutoSave=false")
+    elif ">true<" in content.split("AutoSave")[1].split("</item>")[0]:
+        content = re.sub(
+            r'<item oor:path="/org.openoffice.Office.Recovery/AutoSave">.*?</item>',
+            autosave_line, content, flags=re.DOTALL
+        )
+        changed = True
+        print("Changed AutoSave to false")
+    else:
+        print("AutoSave already disabled")
+    if changed:
+        with open(xcu, "w", encoding="utf-8") as f:
+            f.write(content)
+        print("Updated registrymodifications.xcu")
+else:
+    print(f"No xcu found at {xcu}")
+"""
+
+
+def _clear_recovery_data(server: str) -> None:
+    """Clear LibreOffice recovery/backup data and disable auto-recovery.
+
+    After a QEMU hard reset, LibreOffice leaves behind recovery files that
+    trigger a "Document Recovery" dialog on next launch. This function:
+    1. Deletes existing backup/recovery files
+    2. Removes stale RecoveryList entries from the config
+    3. Disables auto-recovery so it won't create recovery data in the future
+
+    WARNING: This is intentional for the recording workflow — there is no
+    user work to preserve on these eval VMs.
+    """
+    import base64
+
+    import requests
+
+    b64 = base64.b64encode(_LO_CLEANUP_SCRIPT.encode()).decode()
+    cmd = (
+        f"python -c \""
+        f"import base64,tempfile,os,subprocess;"
+        f"d=base64.b64decode('{b64}');"
+        f"p=os.path.join(tempfile.gettempdir(),'lo_cleanup.py');"
+        f"open(p,'wb').write(d);"
+        f"r=subprocess.run(['python',p],capture_output=True,text=True);"
+        f"print(r.stdout);"
+        f"print(r.stderr)"
+        f"\""
+    )
+
+    try:
+        resp = requests.post(
+            f"{server}/execute",
+            json={"command": cmd},
+            timeout=15,
+        )
+        if resp.ok:
+            output = resp.json().get("output", "").strip()
+            if output:
+                for line in output.splitlines():
+                    if line.strip():
+                        print(f"    {line}")
+            print("  Cleared LibreOffice recovery data.")
+        else:
+            print(f"  WARNING: recovery cleanup returned {resp.status_code}")
+    except Exception as e:
+        print(f"  WARNING: recovery cleanup failed: {e}")
+
+
 def _take_screenshot(server: str) -> bytes:
     """Take a screenshot from the WAA server, raising on failure."""
     import requests
@@ -463,6 +552,7 @@ def cmd_record_waa(
     evaluate_url: str = "http://localhost:5050",
     output: str = "waa_recordings",
     vnc_url: str = "http://localhost:8006",
+    vm_ip: str = "172.173.66.131",
     verify: bool = True,
 ) -> None:
     """Record demos interactively via WAA API while user performs actions on VNC.
@@ -473,9 +563,17 @@ def cmd_record_waa(
         evaluate_url: Evaluate server URL (for /task/<id> lookups).
         output: Output directory for recordings.
         vnc_url: VNC URL for the user to open in a browser.
+        vm_ip: Azure VM IP for QEMU reset on task restart.
         verify: Pre-flight check that all required apps are installed (default True).
     """
     import requests
+
+    # Guard: Fire may pass True if --tasks is used without a value
+    if not isinstance(tasks, str):
+        print(f"ERROR: --tasks must be a string of comma-separated task IDs.")
+        print(f"  Got: {tasks!r} (type {type(tasks).__name__})")
+        print(f"  Hint: use --tasks=\"id1,id2,...\" (with = and no space)")
+        return
 
     output_dir = Path(output)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -550,6 +648,25 @@ def cmd_record_waa(
     print(f"Recording {len(task_ids)} task(s) to {output_dir}")
     print(f"\n  VNC (open in browser): {vnc_url}\n")
 
+    print("  WARNING: This tool uses QEMU hard resets between tasks.")
+    print("  LibreOffice document recovery is cleared automatically")
+    print("  after each reset. Any unsaved work in the VM will be lost.\n")
+
+    # Hard reset Windows once at startup to guarantee clean slate
+    from openadapt_evals.infrastructure.qemu_reset import QEMUResetManager
+
+    print("Resetting Windows to clean state before recording...")
+    mgr = QEMUResetManager(vm_ip=vm_ip, timeout_seconds=300)
+    success, msg = mgr.restart_windows(server_url=server)
+    if success:
+        print(f"  {msg}")
+    else:
+        print(f"  WARNING: QEMU reset failed: {msg}")
+        print("  Continuing anyway — desktop may have stale state.")
+
+    _clear_recovery_data(server)
+    print()
+
     recorded = []
     for task_num, task_id in enumerate(task_ids, 1):
         print_header(f"Task {task_num}/{len(task_ids)}: {task_id[:12]}...")
@@ -572,12 +689,8 @@ def cmd_record_waa(
         except Exception as e:
             print(f"  Warning: could not load task config: {e}")
 
-        # Reset environment
-        print("  Resetting environment...")
-        try:
-            resp = requests.post(f"{server}/setup/close_all", timeout=30)
-            print(f"    close_all: {resp.status_code}")
-            time.sleep(2)
+        def _setup_task_env() -> None:
+            """Run task setup config (download files, open apps, etc.)."""
             setup_config = task_config.get("config", [])
             related_apps = task_config.get("related_apps", [])
             if related_apps:
@@ -597,13 +710,42 @@ def cmd_record_waa(
                     stype = r.get("type", "?")
                     print(f"    setup {stype}: {status}")
             time.sleep(3)
-        except Exception as e:
-            print(f"  WARNING: environment setup failed: {e}")
-            print(f"  The task app may not be open. Check VNC.")
 
-        # Take initial screenshot
-        print("  Taking initial screenshot...")
-        before_png = _take_screenshot(server)
+        def _soft_reset_task_env() -> bytes:
+            """Soft reset: close_all + re-run setup + screenshot."""
+            print("  Resetting environment (soft)...")
+            try:
+                resp = requests.post(f"{server}/setup/close_all", timeout=30)
+                print(f"    close_all: {resp.status_code}")
+                time.sleep(2)
+                _setup_task_env()
+            except Exception as e:
+                print(f"  WARNING: environment setup failed: {e}")
+                print(f"  The task app may not be open. Check VNC.")
+            print("  Taking initial screenshot...")
+            return _take_screenshot(server)
+
+        def _hard_reset_task_env() -> bytes:
+            """Hard reset: QEMU system_reset + wait for boot + clear recovery + setup + screenshot."""
+            print("  Restarting Windows (QEMU hard reset)...")
+            mgr = QEMUResetManager(vm_ip=vm_ip, timeout_seconds=300)
+            success, msg = mgr.restart_windows(server_url=server)
+            if not success:
+                print(f"  WARNING: QEMU reset failed: {msg}")
+                print("  Falling back to soft reset...")
+                return _soft_reset_task_env()
+            print(f"    {msg}")
+            _clear_recovery_data(server)
+            print("  Running task setup...")
+            try:
+                _setup_task_env()
+            except Exception as e:
+                print(f"  WARNING: environment setup failed: {e}")
+                print(f"  The task app may not be open. Check VNC.")
+            print("  Taking initial screenshot...")
+            return _take_screenshot(server)
+
+        before_png = _soft_reset_task_env()
 
         print(f"\n  VNC: {vnc_url}")
         print(f"  Task: {instruction}\n")
@@ -618,7 +760,8 @@ def cmd_record_waa(
         print("  └────────────────────────────────────────────────")
         print()
         print("  Perform each action in VNC, then press Enter here.")
-        print("  Press 'd' when done, 'r' to redo last step.\n")
+        print("  Press 'd' when done, 'r' to redo last step,")
+        print("  'R' to restart task from scratch.\n")
 
         steps = []
         step_idx = 0
@@ -630,8 +773,22 @@ def cmd_record_waa(
 
             action_desc = input(
                 f"  Step {step_idx + 1}: Press Enter after action "
-                "(or 'd' if done, 'r' to redo last): "
+                "(or 'd'=done, 'r'=redo last, 'R'=restart task): "
             ).strip()
+
+            if action_desc == "R":
+                # Restart: QEMU hard reset + re-run setup, clear all steps
+                print("  Restarting task from scratch (QEMU hard reset)...")
+                # Clean recorded step files
+                for f in task_dir.glob("step_*.png"):
+                    f.unlink()
+                before_png = _hard_reset_task_env()
+                steps = []
+                step_idx = 0
+                print(f"\n  VNC: {vnc_url}")
+                print(f"  Task: {instruction}\n")
+                print("  Task restarted. Continue recording.\n")
+                continue
 
             if action_desc.lower() == "d":
                 # Save final screenshot as the last after
