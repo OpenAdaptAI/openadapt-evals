@@ -882,6 +882,16 @@ def cmd_record_waa(
                 step_idx = 0
                 print(f"\n  VNC: {vnc_url}")
                 print(f"  Task: {instruction}\n")
+
+                # Re-generate steps from the new stable screenshot
+                print("  Generating suggested steps...")
+                suggested = _generate_steps(before_png, instruction, task_config)
+                print()
+                print("  ┌─ SUGGESTED STEPS ──────────────────────────────")
+                for line in suggested.splitlines():
+                    print(f"  │ {line}")
+                print("  └────────────────────────────────────────────────")
+                print()
                 print("  Task restarted. Continue recording.\n")
                 continue
 
