@@ -1678,17 +1678,24 @@ def cmd_record_waa(
             print("  Waiting for screen to stabilize...")
             return _wait_for_stable_screen(server)
 
-        # Check for existing checkpoint (resume support)
+        # Check for existing checkpoint (resume support).
+        # Resume is only meaningful if the VM state is intact (e.g. after a
+        # tunnel drop or script crash).  If the VM was rebooted, resuming
+        # would put the recording out of sync with the actual screen.
         checkpoint = _load_checkpoint(task_dir)
         resuming = False
         if checkpoint is not None:
             n_done = len(checkpoint["completed_steps"])
             n_left = len(checkpoint["remaining_steps"])
             ts = checkpoint.get("timestamp", "unknown")
+            next_step = checkpoint["remaining_steps"][0] if checkpoint["remaining_steps"] else "(done)"
             print(f"\n  Checkpoint found: {n_done} step(s) completed, "
                   f"{n_left} remaining (saved {ts})")
-            answer = input("  Resume from checkpoint? [Y/n] ").strip().lower()
-            if answer in ("", "y", "yes"):
+            print(f"  Next step would be: {next_step}")
+            print(f"\n  Check VNC ({vnc_url}) — does the VM match where you left off?")
+            print(f"  Resume is only valid if the VM was NOT rebooted since the checkpoint.")
+            answer = input("  Resume from checkpoint? [y/N] ").strip().lower()
+            if answer in ("y", "yes"):
                 resuming = True
 
         if resuming:
