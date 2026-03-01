@@ -561,6 +561,41 @@ def _wait_for_stable_screen(
     return prev_png
 
 
+def _build_setup_desc(task_config: dict) -> str:
+    """Build a human-readable description of the task setup actions."""
+    parts = []
+    for entry in task_config.get("config", []):
+        t = entry.get("type", "")
+        p = entry.get("parameters", {})
+        if t == "download":
+            for f in p.get("files", []):
+                parts.append(f"  - File downloaded: {f['path']}")
+        elif t == "open":
+            parts.append(f"  - File opened: {p.get('path', '?')}")
+        elif t == "launch":
+            parts.append(f"  - App launched: {p.get('command', '?')}")
+    return "\n".join(parts) if parts else "  (none)"
+
+
+def _vlm_call(
+    messages: list[dict],
+    api_key: str,
+    model: str = "gpt-4o",
+    max_tokens: int = 800,
+) -> str:
+    """Send a chat completion request to OpenAI. Returns the text response."""
+    import requests as _req
+
+    resp = _req.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}"},
+        json={"model": model, "max_tokens": max_tokens, "messages": messages},
+        timeout=60,
+    )
+    resp.raise_for_status()
+    return resp.json()["choices"][0]["message"]["content"]
+
+
 def _generate_steps(
     screenshot_png: bytes,
     instruction: str,
@@ -577,28 +612,15 @@ def _generate_steps(
     if not api_key:
         return "(No OPENAI_API_KEY set — skipping AI step generation)"
 
-    import requests as _req
-
     b64 = base64.b64encode(screenshot_png).decode()
-
-    setup_desc = ""
-    for entry in task_config.get("config", []):
-        t = entry.get("type", "")
-        p = entry.get("parameters", {})
-        if t == "download":
-            for f in p.get("files", []):
-                setup_desc += f"  - File downloaded: {f['path']}\n"
-        elif t == "open":
-            setup_desc += f"  - File opened: {p.get('path', '?')}\n"
-        elif t == "launch":
-            setup_desc += f"  - App launched: {p.get('command', '?')}\n"
+    setup_desc = _build_setup_desc(task_config)
 
     prompt = f"""You are helping a human perform a task on a Windows desktop via VNC.
 
 TASK: {instruction}
 
 ENVIRONMENT SETUP (already done automatically):
-{setup_desc if setup_desc else "  (none)"}
+{setup_desc}
 
 Look at the screenshot and give step-by-step instructions to complete the task.
 Be specific about what to click, what to type, and what menus to use.
@@ -606,35 +628,125 @@ If a file should already be open but isn't visible, say how to open it.
 Keep each step to one action. Use plain text, numbered list.
 Be concise — the user will read this on a phone screen."""
 
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{b64}",
+                        "detail": "high",
+                    },
+                },
+            ],
+        }
+    ]
+
     try:
-        resp = _req.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}"},
-            json={
-                "model": "gpt-4o",
-                "max_tokens": 800,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/png;base64,{b64}",
-                                    "detail": "high",
-                                },
-                            },
-                        ],
-                    }
-                ],
-            },
-            timeout=30,
-        )
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
+        return _vlm_call(messages, api_key)
     except Exception as e:
         return f"(AI step generation failed: {e})"
+
+
+def _refine_steps(
+    screenshot_png: bytes,
+    instruction: str,
+    task_config: dict,
+    current_steps: str,
+    feedback: str,
+) -> str:
+    """Refine suggested steps based on user feedback.
+
+    Sends the original screenshot, instruction, current steps, and the
+    user's correction back to the VLM for a revised set of steps.
+    """
+    import base64
+    import os
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return current_steps
+
+    b64 = base64.b64encode(screenshot_png).decode()
+    setup_desc = _build_setup_desc(task_config)
+
+    prompt = f"""You are helping a human perform a task on a Windows desktop via VNC.
+
+TASK: {instruction}
+
+ENVIRONMENT SETUP (already done automatically):
+{setup_desc}
+
+You previously suggested these steps:
+
+{current_steps}
+
+The user says this is wrong and provides this feedback:
+
+"{feedback}"
+
+Look at the screenshot again and produce CORRECTED step-by-step instructions
+that address the user's feedback. Keep the same format: plain text, numbered list,
+one action per step, concise."""
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{b64}",
+                        "detail": "high",
+                    },
+                },
+            ],
+        }
+    ]
+
+    try:
+        return _vlm_call(messages, api_key)
+    except Exception as e:
+        print(f"  (Refinement failed: {e})")
+        return current_steps
+
+
+def _display_steps(steps_text: str) -> None:
+    """Pretty-print suggested steps in a box."""
+    print()
+    print("  ┌─ SUGGESTED STEPS ──────────────────────────────")
+    for line in steps_text.splitlines():
+        print(f"  │ {line}")
+    print("  └────────────────────────────────────────────────")
+    print()
+
+
+def _interactive_step_review(
+    screenshot_png: bytes,
+    instruction: str,
+    task_config: dict,
+    initial_steps: str,
+) -> str:
+    """Let the user review and iteratively correct the suggested steps.
+
+    The user can press Enter to accept, or type feedback to refine.
+    Returns the final accepted steps text.
+    """
+    current = initial_steps
+    while True:
+        correction = input(
+            "  Press Enter to accept steps, or type correction: "
+        ).strip()
+        if not correction:
+            return current
+        print("  Refining steps...")
+        current = _refine_steps(
+            screenshot_png, instruction, task_config, current, correction,
+        )
+        _display_steps(current)
 
 
 def cmd_record_waa(
@@ -848,11 +960,10 @@ def cmd_record_waa(
         # Generate AI step-by-step guidance from screenshot
         print("  Generating suggested steps...")
         suggested = _generate_steps(before_png, instruction, task_config)
-        print()
-        print("  ┌─ SUGGESTED STEPS ──────────────────────────────")
-        for line in suggested.splitlines():
-            print(f"  │ {line}")
-        print("  └────────────────────────────────────────────────")
+        _display_steps(suggested)
+        suggested = _interactive_step_review(
+            before_png, instruction, task_config, suggested,
+        )
         print()
         print("  Perform each action in VNC, then press Enter here.")
         print("  Press 'd' when done, 'r' to redo last step,")
@@ -886,11 +997,10 @@ def cmd_record_waa(
                 # Re-generate steps from the new stable screenshot
                 print("  Generating suggested steps...")
                 suggested = _generate_steps(before_png, instruction, task_config)
-                print()
-                print("  ┌─ SUGGESTED STEPS ──────────────────────────────")
-                for line in suggested.splitlines():
-                    print(f"  │ {line}")
-                print("  └────────────────────────────────────────────────")
+                _display_steps(suggested)
+                suggested = _interactive_step_review(
+                    before_png, instruction, task_config, suggested,
+                )
                 print()
                 print("  Task restarted. Continue recording.\n")
                 continue
