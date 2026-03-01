@@ -1756,7 +1756,7 @@ def cmd_record_waa(
             _display_current_step(step_num, total, remaining_steps[0])
 
             user_input = input(
-                "  [Enter]=done  [d]=task done  [r]=redo  [R]=restart\n"
+                "  [Enter]=done  [d]=task done  [r]=redo  [R]=restart  [s]=refresh steps\n"
                 "  Or type feedback to correct remaining steps: "
             ).strip()
 
@@ -1867,6 +1867,35 @@ def cmd_record_waa(
                 )
                 print()
                 print("  Task restarted. Continue recording.\n")
+
+            elif user_input.lower() == "s":
+                # REFRESH: regenerate remaining steps from current screenshot
+                print("  Taking fresh screenshot and regenerating remaining steps...")
+                before_png = _take_screenshot(server)
+                new_suggested = _generate_steps(before_png, instruction, task_config)
+                new_steps = _parse_step_list(new_suggested)
+                if new_steps:
+                    _display_steps(new_suggested)
+                    new_suggested = _interactive_step_review(
+                        before_png, instruction, task_config, new_suggested,
+                    )
+                    remaining_steps = _parse_step_list(new_suggested)
+                    step_plans.append({
+                        "at_step_idx": step_idx,
+                        "trigger": "screenshot_refresh",
+                        "steps": list(remaining_steps),
+                    })
+                    for i in range(step_idx, step_idx + len(remaining_steps)):
+                        refined_indices.add(i)
+
+                    _save_checkpoint(
+                        task_dir, task_id, instruction,
+                        completed_steps, remaining_steps,
+                        step_plans, refined_indices,
+                        steps_meta, step_idx,
+                    )
+                else:
+                    print("  WARNING: VLM returned no steps. Keeping previous plan.")
 
             else:
                 # FEEDBACK: mid-recording step correction
