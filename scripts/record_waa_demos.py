@@ -1040,11 +1040,13 @@ def _interactive_remaining_review(
         print("  WARNING: VLM returned no steps. Keeping previous plan.")
         return remaining_steps
 
+    start_num = len(completed_steps) + 1
     while True:
-        # Display corrected remaining steps
+        # Display corrected remaining steps (numbered from where we left off)
+        total = len(completed_steps) + len(new_steps)
         print()
-        print("  ┌─ CORRECTED REMAINING STEPS ─────────────────────")
-        for line in _format_step_list(new_steps).splitlines():
+        print(f"  ┌─ CORRECTED REMAINING STEPS ({start_num}-{total} of {total}) ──")
+        for line in _format_step_list(new_steps, start_num=start_num).splitlines():
             print(f"  │ {line}")
         print("  └─────────────────────────────────────────────────")
         print()
