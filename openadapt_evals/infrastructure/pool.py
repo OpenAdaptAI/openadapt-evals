@@ -208,9 +208,8 @@ docker run -d --name winarena \\
   -e CPU_CORES=4 \\
   -e DISK_SIZE=64G \\
   -e ARGUMENTS="-qmp tcp:0.0.0.0:7200,server,nowait" \\
-  --entrypoint /bin/bash \\
   waa-auto:latest \\
-  -c 'cd /client && python /evaluate_server.py > /tmp/evaluate_server.log 2>&1 & /entry.sh --prepare-image false --start-client false'
+  /entry.sh --prepare-image false --start-client false
 
 # Start the socat proxy via systemd (installed during Docker setup).
 # The systemd service auto-restarts on failure and survives reboots.
@@ -382,19 +381,24 @@ class PoolManager:
                         ["ssh", *SSH_OPTS, f"azureuser@{ip}", "mkdir -p /tmp/waa-build"],
                         capture_output=True,
                     )
-                    for fname in [
+                    required_files = [
                         "Dockerfile",
                         "evaluate_server.py",
                         "start_with_evaluate.sh",
                         "start_waa_server.bat",
                         "api_agent.py",
-                    ]:
+                    ]
+                    for fname in required_files:
                         src = waa_deploy_dir / fname
-                        if src.exists():
-                            subprocess.run(
-                                ["scp", *SSH_OPTS, str(src), f"azureuser@{ip}:/tmp/waa-build/"],
-                                capture_output=True,
-                            )
+                        if not src.exists():
+                            return (name, False, f"Missing build file: {fname}")
+                        scp_result = subprocess.run(
+                            ["scp", *SSH_OPTS, str(src), f"azureuser@{ip}:/tmp/waa-build/"],
+                            capture_output=True,
+                            text=True,
+                        )
+                        if scp_result.returncode != 0:
+                            return (name, False, f"SCP failed for {fname}: {scp_result.stderr[:100]}")
                 result = ssh_run(ip, docker_script, stream=False, step="DOCKER")
                 error = result.stderr[:200] if result.stderr else ""
                 return (name, result.returncode == 0, error)

@@ -151,6 +151,27 @@ COPY api_agent.py /client/mm_agents/api_agent.py
 
 COPY evaluate_server.py /evaluate_server.py
 
+# Verify evaluate_server.py was copied correctly (not a symlink or empty file).
+# A symlink to /proc/self/fd/0 has been observed when the build context is
+# missing the file or Docker copies from stdin.  Catch this at build time.
+RUN set -e && \
+    if [ -L /evaluate_server.py ]; then \
+        echo "FATAL: /evaluate_server.py is a symlink ($(readlink /evaluate_server.py)), not a regular file." >&2; \
+        echo "This means the Docker build context was missing evaluate_server.py." >&2; \
+        exit 1; \
+    fi && \
+    if [ ! -s /evaluate_server.py ]; then \
+        echo "FATAL: /evaluate_server.py is empty or missing." >&2; \
+        exit 1; \
+    fi && \
+    for route in '/probe' '/task/' '/setup' '/evaluate'; do \
+        if ! grep -q "$route" /evaluate_server.py; then \
+            echo "FATAL: /evaluate_server.py missing expected route: $route" >&2; \
+            exit 1; \
+        fi; \
+    done && \
+    echo "evaluate_server.py verified: $(wc -l < /evaluate_server.py) lines, all routes present"
+
 # Install flask for the evaluate server and socat for port forwarding
 RUN pip install flask requests-toolbelt 2>/dev/null || pip3 install flask requests-toolbelt 2>/dev/null || \
     python -m pip install flask requests-toolbelt 2>/dev/null || \
