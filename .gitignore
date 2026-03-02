@@ -30,6 +30,8 @@ benchmark_live.json
 # Cost reports (generated during evaluation runs)
 cost_report.json
 
-# WAA recordings (PNGs + meta.json from record-waa sessions)
-# Gitignored to protect from `git stash -u` and `git clean -f`
-waa_recordings/
+# WAA recordings are tracked in git (research data).
+# External backup to ~/oa/recordings/ protects against git stash -u.
+
+# Generated artifacts from generate_demo_review.py (regenerable)
+docs/artifacts/full/
