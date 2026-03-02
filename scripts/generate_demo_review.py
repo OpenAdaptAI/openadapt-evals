@@ -4,7 +4,8 @@
 Reads a WAA recording (meta.json + screenshots), creates thumbnail images,
 and produces a markdown file showing the pipeline output for each step.
 The markdown is suitable for embedding in docs or PR descriptions and
-renders on GitHub with relative image paths.
+renders on GitHub with relative image paths. Thumbnails link to full-resolution
+originals when available.
 
 Usage:
     python scripts/generate_demo_review.py \
@@ -17,13 +18,14 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import sys
 from pathlib import Path
 
 from PIL import Image
 
 
-THUMBNAIL_WIDTH = 400
+THUMBNAIL_WIDTH = 600
 
 
 def _parse_demo_steps(demo_text: str) -> dict[int, str]:
@@ -54,6 +56,9 @@ def _parse_demo_steps(demo_text: str) -> dict[int, str]:
 def _create_thumbnail(src: Path, dst: Path, width: int = THUMBNAIL_WIDTH) -> None:
     """Resize an image to the given width, preserving aspect ratio."""
     with Image.open(src) as img:
+        if img.width <= width:
+            shutil.copy2(src, dst)
+            return
         ratio = width / img.width
         new_height = int(img.height * ratio)
         resized = img.resize((width, new_height), Image.LANCZOS)
@@ -65,7 +70,6 @@ def _relpath(target: Path, start: Path) -> str:
     try:
         return str(target.resolve().relative_to(start.resolve()))
     except ValueError:
-        # target is not under start; compute relative via os
         import os
         return os.path.relpath(target.resolve(), start.resolve())
 
@@ -134,11 +138,15 @@ def main(
         else:
             print(f"Warning: VLM demo not found at {vlm_demo_path}")
 
-    # --- Create thumbnails ---
+    # --- Create thumbnails and copy full-res originals ---
     thumb_dir = output_path.parent / "artifacts" / "thumbnails"
     thumb_dir.mkdir(parents=True, exist_ok=True)
 
-    thumbnail_map: dict[str, Path] = {}  # e.g. "step_00_before" -> path
+    full_dir = output_path.parent / "artifacts" / "full"
+    full_dir.mkdir(parents=True, exist_ok=True)
+
+    thumbnail_map: dict[str, Path] = {}
+    full_map: dict[str, Path] = {}
     for i in range(num_steps):
         for suffix in ("before", "after"):
             name = f"step_{i:02d}_{suffix}"
@@ -147,8 +155,14 @@ def main(
                 dst = thumb_dir / f"{name}.png"
                 _create_thumbnail(src, dst, width=thumbnail_width)
                 thumbnail_map[name] = dst
+                # Copy full-resolution original
+                full_dst = full_dir / f"{name}.png"
+                shutil.copy2(src, full_dst)
+                full_map[name] = full_dst
 
     print(f"Created {len(thumbnail_map)} thumbnails in {thumb_dir}")
+    if full_map:
+        print(f"Copied {len(full_map)} full-resolution images to {full_dir}")
 
     # --- Build markdown ---
     md_dir = output_path.parent
@@ -189,83 +203,81 @@ def main(
 
         lines.append("")
 
-    # --- Per-step details ---
-    lines.append("## Step-by-Step Detail")
-    lines.append("")
-
+    # --- Per-step details (expanded, not collapsed) ---
     for i in range(num_steps):
         step_num = i + 1
         gt = steps[i].get("suggested_step", f"(step {step_num})") if i < len(steps) else f"(step {step_num})"
 
-        lines.append(f"<details>")
-        lines.append(f"<summary><strong>Step {step_num}:</strong> {gt}</summary>")
+        lines.append(f"### Step {step_num}: {gt}")
         lines.append("")
 
-        # Screenshots
+        # Screenshots — thumbnails that link to full-resolution when available
         before_key = f"step_{i:02d}_before"
         after_key = f"step_{i:02d}_after"
         has_before = before_key in thumbnail_map
         has_after = after_key in thumbnail_map
 
         if has_before or has_after:
-            lines.append("#### Screenshots")
-            lines.append("")
-
             if has_before and has_after:
-                before_rel = _relpath(thumbnail_map[before_key], md_dir)
-                after_rel = _relpath(thumbnail_map[after_key], md_dir)
-                lines.append("| Before | After |")
-                lines.append("|--------|-------|")
-                lines.append(
-                    f"| ![before]({before_rel}) | ![after]({after_rel}) |"
-                )
+                before_thumb = _relpath(thumbnail_map[before_key], md_dir)
+                after_thumb = _relpath(thumbnail_map[after_key], md_dir)
+                if before_key in full_map:
+                    before_full = _relpath(full_map[before_key], md_dir)
+                    after_full = _relpath(full_map[after_key], md_dir)
+                    lines.append(
+                        f"[![before]({before_thumb})]({before_full}) "
+                        f"[![after]({after_thumb})]({after_full})"
+                    )
+                else:
+                    lines.append(
+                        f"![before]({before_thumb}) "
+                        f"![after]({after_thumb})"
+                    )
             elif has_before:
-                before_rel = _relpath(thumbnail_map[before_key], md_dir)
-                lines.append(f"**Before:**")
-                lines.append("")
-                lines.append(f"![before]({before_rel})")
+                before_thumb = _relpath(thumbnail_map[before_key], md_dir)
+                if before_key in full_map:
+                    before_full = _relpath(full_map[before_key], md_dir)
+                    lines.append(f"[![before]({before_thumb})]({before_full})")
+                else:
+                    lines.append(f"![before]({before_thumb})")
             elif has_after:
-                after_rel = _relpath(thumbnail_map[after_key], md_dir)
-                lines.append(f"**After:**")
-                lines.append("")
-                lines.append(f"![after]({after_rel})")
+                after_thumb = _relpath(thumbnail_map[after_key], md_dir)
+                if after_key in full_map:
+                    after_full = _relpath(full_map[after_key], md_dir)
+                    lines.append(f"[![after]({after_thumb})]({after_full})")
+                else:
+                    lines.append(f"![after]({after_thumb})")
 
             lines.append("")
 
         # Ground truth
-        lines.append("#### Ground Truth (meta.json)")
-        lines.append("")
-        lines.append(f"> {gt}")
+        lines.append(f"**Ground truth:** {gt}")
         lines.append("")
 
         # Text-only demo output
         if text_steps:
             text_content = text_steps.get(step_num)
-            lines.append("#### Text-Only Demo Output")
-            lines.append("")
             if text_content:
-                lines.append(_indent_block(text_content))
+                lines.append(f"**Text demo:** {text_content}")
             else:
-                lines.append("> *(not available)*")
+                lines.append("**Text demo:** *(not available)*")
             lines.append("")
 
         # VLM-enriched demo output
         if vlm_steps:
             vlm_content = vlm_steps.get(step_num)
-            lines.append("#### VLM-Enriched Demo Output")
-            lines.append("")
             if vlm_content:
+                lines.append("**VLM demo:**")
+                lines.append("")
                 lines.append(_indent_block(vlm_content))
             else:
-                lines.append("> *(not available)*")
+                lines.append("**VLM demo:** *(not available)*")
             lines.append("")
 
-        lines.append("</details>")
+        lines.append("---")
         lines.append("")
 
     # --- Footer ---
-    lines.append("---")
-    lines.append("")
     lines.append(
         f"*Generated by `scripts/generate_demo_review.py` from recording "
         f"`{recording_dir.name}`*"
