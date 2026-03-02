@@ -1,6 +1,25 @@
 # CHANGELOG
 
 
+## v0.19.1 (2026-03-02)
+
+### Bug Fixes
+
+- Rename consilium dependency to openadapt-consilium and revert Python 3.11 requirement
+  ([#69](https://github.com/OpenAdaptAI/openadapt-evals/pull/69),
+  [`6dc97e6`](https://github.com/OpenAdaptAI/openadapt-evals/commit/6dc97e60d0f45f7853802315c3e339e3970110f3))
+
+The `consilium` name on PyPI belongs to another project. `openadapt-consilium` v0.3.2 is now
+  published with requires-python >=3.10, so we can revert our temporary Python 3.11 bump and use the
+  correct package name.
+
+Changes: - Rename `consilium>=0.1.0` to `openadapt-consilium>=0.3.2` in dependencies - Update
+  `[tool.uv.sources]` key from `consilium` to `openadapt-consilium` - Revert `requires-python` from
+  `>=3.11` back to `>=3.10` - Re-add `Programming Language :: Python :: 3.10` classifier
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.19.0 (2026-03-02)
 
 ### Features
