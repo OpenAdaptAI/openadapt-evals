@@ -22,8 +22,12 @@ Example:
 
     # Restart Windows inside QEMU
     from openadapt_evals.infrastructure import QEMUResetManager
-    mgr = QEMUResetManager(vm_ip="172.173.66.131")
+    mgr = QEMUResetManager(vm_ip="10.0.0.1")
     success, msg = mgr.restart_windows()
+
+    # Auto-detect VM IP
+    from openadapt_evals.infrastructure import resolve_vm_ip
+    ip = resolve_vm_ip()  # pool registry → Azure CLI
     ```
 """
 
@@ -31,7 +35,12 @@ from openadapt_evals.infrastructure.azure_ops_tracker import AzureOpsTracker
 from openadapt_evals.infrastructure.azure_vm import AzureVMManager
 from openadapt_evals.infrastructure.pool import PoolManager, PoolRunResult
 from openadapt_evals.infrastructure.qemu_reset import QEMUResetManager
+from openadapt_evals.infrastructure.screen_stability import (
+    compare_screenshots,
+    wait_for_stable_screen,
+)
 from openadapt_evals.infrastructure.ssh_tunnel import SSHTunnelManager, get_tunnel_manager
+from openadapt_evals.infrastructure.vm_ip import resolve_vm_ip
 from openadapt_evals.infrastructure.vm_monitor import VMMonitor, VMConfig
 
 __all__ = [
@@ -43,5 +52,8 @@ __all__ = [
     "VMMonitor",
     "VMConfig",
     "SSHTunnelManager",
+    "compare_screenshots",
     "get_tunnel_manager",
+    "resolve_vm_ip",
+    "wait_for_stable_screen",
 ]

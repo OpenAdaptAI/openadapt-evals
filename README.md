@@ -220,7 +220,7 @@ The Dockerfile also pre-downloads LibreOffice at build time with dynamic version
 
 When a task config includes `related_apps`, the live adapter automatically prepends a `verify_apps` step before the task's setup config. The `--verify` flag on `record_waa_demos.py` provides a pre-flight check across all tasks before starting a recording session.
 
-![LibreOffice Calc installed on Windows 11 VM](https://github.com/OpenAdaptAI/openadapt-evals/releases/download/untagged-42f27f1e47214aae8358/waa_libreoffice.png)
+![LibreOffice Calc running inside Windows 11 QEMU VM via noVNC in Chrome](screenshots/waa_libreoffice_desktop.png)
 
 ## CLI Reference
 
