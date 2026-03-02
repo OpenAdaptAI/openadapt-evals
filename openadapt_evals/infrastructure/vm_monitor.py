@@ -83,6 +83,7 @@ class VMStatus:
     vnc_reachable: bool = False
     waa_ready: bool = False
     waa_probe_response: str | None = None
+    waa_detailed_probe: dict | None = None
     container_running: bool = False
     container_logs: str | None = None
     disk_usage_gb: float | None = None
@@ -97,6 +98,7 @@ class VMStatus:
             "vnc_reachable": self.vnc_reachable,
             "waa_ready": self.waa_ready,
             "waa_probe_response": self.waa_probe_response,
+            "waa_detailed_probe": self.waa_detailed_probe,
             "container_running": self.container_running,
             "container_logs": self.container_logs,
             "disk_usage_gb": self.disk_usage_gb,
@@ -181,6 +183,37 @@ class VMMonitor:
             return False, response or None
         except (subprocess.TimeoutExpired, Exception) as e:
             return False, str(e)
+
+    def check_waa_detailed(
+        self,
+        evaluate_url: str | None = None,
+        layers: list[str] | None = None,
+    ) -> dict | None:
+        """Run a multi-layer probe against the WAA server via SSH tunnel.
+
+        Requires the SSH tunnel to be active (WAA on localhost:{waa_port}).
+
+        Args:
+            evaluate_url: Separate URL for the score layer.
+            layers: Subset of layers to probe.
+
+        Returns:
+            Probe result dict, or None on error.
+        """
+        try:
+            from openadapt_evals.infrastructure.probe import multi_layer_probe
+
+            server_url = f"http://localhost:{self.config.waa_port}"
+            result = multi_layer_probe(
+                server_url,
+                timeout=self.timeout,
+                layers=layers,
+                evaluate_url=evaluate_url,
+            )
+            return result.to_dict()
+        except Exception as e:
+            logger.debug(f"Detailed probe failed: {e}")
+            return None
 
     def get_container_status(self) -> tuple[bool, str | None]:
         """Check container status and get recent logs.
