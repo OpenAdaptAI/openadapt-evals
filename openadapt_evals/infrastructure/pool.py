@@ -151,7 +151,7 @@ sudo usermod -aG docker $USER
 # and gets wiped on VM deallocate, breaking pool-resume)
 sudo systemctl stop docker
 sudo mkdir -p {home_dir}/docker
-sudo bash -c 'echo "{{{{\\\"data-root\\\": \\\"{home_dir}/docker\\\"}}}}" > /etc/docker/daemon.json'
+sudo bash -c 'echo "{{\\"data-root\\": \\"{home_dir}/docker\\"}}" > /etc/docker/daemon.json'
 sudo systemctl start docker
 
 # Pull pre-built image from ACR (faster than building)
@@ -598,7 +598,7 @@ class PoolManager:
             for name in workers_pending:
                 self._log(
                     "POOL-WAIT",
-                    f"  {name}: not ready (check with: ssh azureuser@{workers_pending[name].ip})",
+                    f"  {name}: not ready (check with: ssh {self._ssh_username}@{workers_pending[name].ip})",
                 )
 
         self._log("POOL-WAIT", "=" * 60)
@@ -1095,8 +1095,13 @@ class PoolManager:
 
         success = self.vm_manager.cleanup_pool_resources(prefix, resources)
 
-        # Delete registry
-        self.registry.delete_pool()
-
-        self._log("POOL-CLEANUP", "Cleanup complete.")
+        # Only delete registry if cloud resources were successfully cleaned up
+        if success:
+            self.registry.delete_pool()
+            self._log("POOL-CLEANUP", "Cleanup complete.")
+        else:
+            self._log(
+                "POOL-CLEANUP",
+                "Some resources failed to delete. Registry preserved for retry.",
+            )
         return success
