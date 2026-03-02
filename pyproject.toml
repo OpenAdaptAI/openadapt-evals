@@ -41,6 +41,7 @@ dependencies = [
     "openai>=1.0.0",
     "anthropic>=0.76.0",
     "consilium>=0.1.0",
+    "openadapt-ml>=0.11.0",  # TODO: migrate annotation code into this repo
 ]
 
 [project.optional-dependencies]
