@@ -471,16 +471,6 @@ def _take_screenshot(server: str) -> bytes:
     return resp.content
 
 
-def _compare_screenshots(png_a: bytes, png_b: bytes) -> float:
-    """Compare two PNG screenshots and return pixel similarity (0.0-1.0).
-
-    Delegates to :func:`openadapt_evals.infrastructure.screen_stability.compare_screenshots`.
-    """
-    from openadapt_evals.infrastructure.screen_stability import compare_screenshots
-
-    return compare_screenshots(png_a, png_b)
-
-
 def _wait_for_stable_screen(
     server: str,
     poll_interval: float = 2.0,
@@ -511,7 +501,7 @@ def _build_setup_desc(task_config: dict) -> str:
         p = entry.get("parameters", {})
         if t == "download":
             for f in p.get("files", []):
-                parts.append(f"  - File downloaded: {f['path']}")
+                parts.append(f"  - File downloaded: {f.get('path', '?')}")
         elif t == "open":
             parts.append(f"  - File opened: {p.get('path', '?')}")
         elif t == "launch":

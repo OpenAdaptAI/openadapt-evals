@@ -51,7 +51,7 @@ def convert_text(meta: dict) -> str:
         lines.append("")
 
     lines.append("---")
-    return "\n".join(lines)
+    return "\n".join(lines) + "\n"
 
 
 def convert_vlm(
@@ -122,7 +122,7 @@ def convert_vlm(
             lines.append("")
 
     lines.append("---")
-    return "\n".join(lines)
+    return "\n".join(lines) + "\n"
 
 
 def _encode_image(path: Path) -> str:
