@@ -1,6 +1,43 @@
 # CHANGELOG
 
 
+## v0.17.0 (2026-03-02)
+
+### Features
+
+- Add demo review artifact generator ([#60](https://github.com/OpenAdaptAI/openadapt-evals/pull/60),
+  [`caf0311`](https://github.com/OpenAdaptAI/openadapt-evals/commit/caf031153c083a3e86ac88c806d41efebb3782a7))
+
+* feat: add demo review artifact generator
+
+Adds scripts/generate_demo_review.py that generates markdown with thumbnail screenshots, comparison
+  tables, and collapsible step details for reviewing the demo pipeline output.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* fix: use systemd-first pattern for socat proxy in auto-infrastructure
+
+Match run_dc_eval.py's _setup_eval_proxy pattern: try systemctl restart socat-waa-evaluate.service
+  first (auto-restarts on failure), fall back to legacy nohup for older VMs. Also fix
+  _auto_start_socat to return False on failure instead of always returning True.
+
+* fix: expand steps, add full-res links, increase thumbnail width
+
+- Remove collapsed <details> sections — all steps visible by default - Add full-resolution image
+  copies when originals are available - Thumbnails link to full-res versions (clickable) - Increase
+  default thumbnail width from 400 to 600px - Skip resize if source is already smaller than target
+  width
+
+* fix: add full-resolution images and regenerate demo review
+
+Restore full-res 1280x720 originals to docs/artifacts/full/ and regenerate docs/demo_review.md with
+  expanded layout (no collapsed sections), 600px thumbnails linking to full-res versions.
+
+---------
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.16.0 (2026-03-02)
 
 ### Features
