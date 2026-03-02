@@ -2214,18 +2214,16 @@ def cmd_annotate_waa(
         model: Model override (default: provider's default).
         api_key: API key override.
     """
-    from PIL import Image
-
-    from openadapt_ml.experiments.demo_prompt.annotate import (
+    from openadapt_evals.annotation import (
         ANNOTATION_STEP_PROMPT,
         ANNOTATION_SYSTEM_PROMPT,
         AnnotatedDemo,
         AnnotatedStep,
-        _parse_annotation_response,
+        parse_annotation_response,
         format_annotated_demo,
         validate_annotations,
     )
-    from openadapt_ml.models.providers import get_provider
+    from openadapt_evals.vlm import vlm_call, image_bytes_from_path
 
     recordings_dir = Path(recordings)
     output_dir = Path(output)
@@ -2244,11 +2242,9 @@ def cmd_annotate_waa(
     print(f"Found {len(task_dirs)} recording(s) to annotate")
     print(f"Provider: {provider}, Model: {model or 'default'}\n")
 
-    prov = get_provider(provider)
-    if api_key is None:
-        api_key = prov.get_api_key()
-    client = prov.create_client(api_key)
-    resolved_model = model or prov.default_model
+    resolved_model = model or (
+        "gpt-4.1-mini" if provider == "openai" else "claude-sonnet-4-20250514"
+    )
 
     for task_dir in task_dirs:
         meta = json.loads((task_dir / "meta.json").read_text(encoding="utf-8"))
@@ -2271,9 +2267,6 @@ def cmd_annotate_waa(
                 print(f"  Step {i}: missing before screenshot, skipping")
                 continue
 
-            img_before = Image.open(before_path)
-            img_after = Image.open(after_path) if after_path.exists() else None
-
             # Build action_raw from hints if available
             step_meta = meta.get("steps", [{}])
             action_hint = ""
@@ -2290,7 +2283,7 @@ def cmd_annotate_waa(
                 )
 
             no_after_note = ""
-            if img_after is None:
+            if not after_path.exists():
                 no_after_note = (
                     " (No AFTER image available — describe expected result only.)"
                 )
@@ -2304,28 +2297,24 @@ def cmd_annotate_waa(
                 no_after_note=no_after_note,
             )
 
-            # Build content blocks with images
-            content = [
-                {"type": "text", "text": prompt_text},
-                {"type": "text", "text": "BEFORE image:"},
-                prov.encode_image(img_before),
-            ]
-            if img_after is not None:
-                content.append({"type": "text", "text": "AFTER image:"})
-                content.append(prov.encode_image(img_after))
+            # Build image list
+            images = [image_bytes_from_path(before_path)]
+            if after_path.exists():
+                images.append(image_bytes_from_path(after_path))
 
             print(f"  Step {i + 1}/{num_steps}...", end=" ", flush=True)
 
             try:
-                response = prov.send_message(
-                    client,
-                    model=resolved_model,
+                response = vlm_call(
+                    prompt_text,
+                    images=images,
                     system=ANNOTATION_SYSTEM_PROMPT,
-                    content=content,
+                    model=resolved_model,
                     max_tokens=512,
                     temperature=0.1,
+                    provider=provider,
                 )
-                parsed = _parse_annotation_response(response)
+                parsed = parse_annotation_response(response)
             except Exception as e:
                 print(f"error: {e}")
                 parsed = {
