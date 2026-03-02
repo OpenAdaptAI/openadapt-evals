@@ -29,3 +29,7 @@ benchmark_live.json
 
 # Cost reports (generated during evaluation runs)
 cost_report.json
+
+# WAA recordings (PNGs + meta.json from record-waa sessions)
+# Gitignored to protect from `git stash -u` and `git clean -f`
+waa_recordings/
