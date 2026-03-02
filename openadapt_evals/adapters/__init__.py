@@ -34,6 +34,11 @@ from openadapt_evals.adapters.base import (
     StaticDatasetAdapter,
     UIElement,
 )
+from openadapt_evals.adapters.rl_env import (
+    ResetConfig,
+    RLEnvironment,
+    RolloutStep,
+)
 from openadapt_evals.adapters.waa import (
     WAAAdapter,
     WAAConfig,
@@ -54,6 +59,10 @@ __all__ = [
     "BenchmarkResult",
     "StaticDatasetAdapter",
     "UIElement",
+    # RL environment
+    "RLEnvironment",
+    "ResetConfig",
+    "RolloutStep",
     # WAA adapters
     "WAAAdapter",
     "WAAConfig",
