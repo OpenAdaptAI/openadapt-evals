@@ -88,7 +88,7 @@ def _setup_eval_proxy(vm_user: str, vm_ip: str) -> bool:
         "  || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq socat; "
         "  nohup socat TCP-LISTEN:5051,fork,reuseaddr "
         "  'EXEC:docker exec -i winarena socat - TCP\\:127.0.0.1\\:5050' "
-        "  </dev/null >/dev/null 2>&1 &; "
+        "  </dev/null >/dev/null 2>&1 & "
         "fi"
     )
     result = subprocess.run(
