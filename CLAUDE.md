@@ -156,6 +156,7 @@ oa-vm pool-cleanup -y
 | `delete`         | Delete VM and all resources            |
 | `status`         | Show VM status and IP                  |
 | `deallocate`     | Stop VM (preserves disk, stops billing)|
+| `smoke-test-aws` | Smoke-test AWS backend (credentials, AMI, VPC, lifecycle) |
 
 Run `oa-vm --help` for the full list of 50+ commands.
 
