@@ -1,6 +1,22 @@
 # CHANGELOG
 
 
+## v0.17.1 (2026-03-02)
+
+### Bug Fixes
+
+- Remove bash syntax error in socat nohup fallback
+  ([#63](https://github.com/OpenAdaptAI/openadapt-evals/pull/63),
+  [`1ae7540`](https://github.com/OpenAdaptAI/openadapt-evals/commit/1ae7540a6f18b5b3874aae38e6f443579845f1c0))
+
+`&;` is a syntax error in bash — `&` already acts as a command terminator, so the trailing `;`
+  causes a parse error. This broke the socat nohup fallback on VMs without the systemd service.
+
+Affects both run_dc_eval.py and record_waa_demos.py.
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.17.0 (2026-03-02)
 
 ### Features
