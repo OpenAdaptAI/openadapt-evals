@@ -412,7 +412,10 @@ class AWSVMManager:
             raise RuntimeError(f"EC2 instance creation failed: {e}") from e
 
     def delete_vm(self, name: str) -> bool:
-        """Terminate EC2 instance and release associated Elastic IP."""
+        """Terminate EC2 instance and release associated Elastic IP.
+
+        Waits for the instance to reach 'terminated' state before returning.
+        """
         try:
             instance = self._find_instance_by_name(name)
             if not instance:
@@ -435,7 +438,11 @@ class AWSVMManager:
 
             # Terminate instance
             ec2.terminate_instances(InstanceIds=[instance_id])
-            logger.info(f"Terminated instance {name} ({instance_id})")
+            logger.info(f"Terminating instance {name} ({instance_id}), waiting...")
+
+            waiter = ec2.get_waiter("instance_terminated")
+            waiter.wait(InstanceIds=[instance_id])
+            logger.info(f"Instance {name} terminated")
             return True
 
         except Exception as e:
@@ -443,15 +450,24 @@ class AWSVMManager:
             return False
 
     def deallocate_vm(self, name: str) -> bool:
-        """Stop an EC2 instance (equivalent to Azure deallocate)."""
+        """Stop an EC2 instance (equivalent to Azure deallocate).
+
+        Waits for the instance to reach 'stopped' state before returning,
+        so that a subsequent start_vm() call won't hit IncorrectInstanceState.
+        """
         try:
             instance = self._find_instance_by_name(name)
             if not instance:
                 return False
 
             ec2 = self._get_ec2_client()
-            ec2.stop_instances(InstanceIds=[instance["InstanceId"]])
-            logger.info(f"Stopping instance {name}")
+            instance_id = instance["InstanceId"]
+            ec2.stop_instances(InstanceIds=[instance_id])
+            logger.info(f"Stopping instance {name}, waiting for stopped state...")
+
+            waiter = ec2.get_waiter("instance_stopped")
+            waiter.wait(InstanceIds=[instance_id])
+            logger.info(f"Instance {name} is now stopped")
             return True
 
         except Exception as e:
