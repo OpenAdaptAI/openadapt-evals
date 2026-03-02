@@ -31,6 +31,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import socket
 import subprocess
 import sys
 import time
@@ -1120,6 +1121,344 @@ def _record_single_task(
     return task_id
 
 
+# ---------------------------------------------------------------------------
+# Auto-infrastructure helpers
+# ---------------------------------------------------------------------------
+
+_AUTO_VM_NAME = "waa-pool-00"
+_AUTO_RESOURCE_GROUP = "openadapt-agents"
+_AUTO_SSH_USER = "azureuser"
+
+# Track whether this script started the VM (so we can offer to deallocate on exit)
+_vm_started_by_script = False
+_cleanup_registered = False
+_cleanup_done = False
+
+# Port mappings: local_port -> remote_port (on VM host)
+_TUNNEL_PORTS = {
+    5001: 5000,   # WAA server
+    5050: 5051,   # evaluate server (via socat)
+    8006: 8006,   # VNC (noVNC)
+}
+
+
+def _is_local_port_open(port: int) -> bool:
+    """Check whether a local TCP port is accepting connections."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(2)
+        return sock.connect_ex(("localhost", port)) == 0
+
+
+def _get_vm_power_state() -> str | None:
+    """Return the Azure VM power state, e.g. 'running', 'deallocated', or None on error."""
+    try:
+        result = subprocess.run(
+            [
+                "az", "vm", "get-instance-view",
+                "-g", _AUTO_RESOURCE_GROUP,
+                "-n", _AUTO_VM_NAME,
+                "--query", "instanceView.statuses[?starts_with(code,'PowerState/')].displayStatus | [0]",
+                "-o", "tsv",
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip().replace("VM ", "").lower()
+    except Exception:
+        pass
+    return None
+
+
+def _get_vm_public_ip() -> str | None:
+    """Get the public IP of the VM."""
+    try:
+        result = subprocess.run(
+            [
+                "az", "vm", "show",
+                "-g", _AUTO_RESOURCE_GROUP,
+                "-n", _AUTO_VM_NAME,
+                "--show-details",
+                "--query", "publicIps",
+                "-o", "tsv",
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+
+def _auto_start_vm() -> bool:
+    """Start the Azure VM. Returns True on success."""
+    global _vm_started_by_script
+    print(f"  Starting VM '{_AUTO_VM_NAME}'...")
+    result = subprocess.run(
+        ["az", "vm", "start", "-g", _AUTO_RESOURCE_GROUP, "-n", _AUTO_VM_NAME],
+        capture_output=True, text=True, timeout=300,
+    )
+    if result.returncode != 0:
+        print(f"  ERROR: az vm start failed: {result.stderr.strip()}")
+        return False
+    print(f"  VM '{_AUTO_VM_NAME}' started.")
+    _vm_started_by_script = True
+    _register_vm_cleanup()
+    return True
+
+
+def _auto_establish_tunnels(vm_ip: str) -> bool:
+    """Establish SSH tunnels to the VM. Prefers autossh if available."""
+    import shutil
+
+    use_autossh = shutil.which("autossh") is not None
+    tool = "autossh" if use_autossh else "ssh"
+    print(f"  Establishing SSH tunnels to {vm_ip} (using {tool})...")
+
+    tunnel_args = []
+    for local_port, remote_port in _TUNNEL_PORTS.items():
+        tunnel_args.extend(["-L", f"{local_port}:localhost:{remote_port}"])
+
+    ssh_opts = [
+        "-o", "ConnectTimeout=10",
+        "-o", "ServerAliveInterval=30",
+        "-o", "ServerAliveCountMax=3",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "ExitOnForwardFailure=yes",
+        "-N",
+    ]
+
+    if use_autossh:
+        cmd = ["autossh", "-M", "0", "-f"] + ssh_opts + tunnel_args + [
+            f"{_AUTO_SSH_USER}@{vm_ip}"
+        ]
+    else:
+        cmd = ["ssh", "-f"] + ssh_opts + tunnel_args + [
+            f"{_AUTO_SSH_USER}@{vm_ip}"
+        ]
+        print("  (install autossh for automatic tunnel reconnection)")
+
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    if result.returncode != 0:
+        print(f"  ERROR: {tool} tunnel failed: {result.stderr.strip()}")
+        return False
+
+    time.sleep(2)
+    for local_port in _TUNNEL_PORTS:
+        status = "OK" if _is_local_port_open(local_port) else "NOT YET"
+        print(f"    Tunnel localhost:{local_port} -> VM:{_TUNNEL_PORTS[local_port]}: {status}")
+
+    return True
+
+
+def _auto_start_container(vm_ip: str) -> bool:
+    """Start the winarena Docker container on the VM."""
+    print(f"  Starting Docker container 'winarena' on {vm_ip}...")
+    result = subprocess.run(
+        ["ssh",
+         "-o", "ConnectTimeout=10",
+         "-o", "StrictHostKeyChecking=no",
+         "-o", "UserKnownHostsFile=/dev/null",
+         f"{_AUTO_SSH_USER}@{vm_ip}",
+         "docker start winarena"],
+        capture_output=True, text=True, timeout=60,
+    )
+    if result.returncode != 0:
+        print(f"  ERROR: docker start failed: {result.stderr.strip()}")
+        return False
+    print("  Container started.")
+    return True
+
+
+def _auto_start_socat(vm_ip: str) -> bool:
+    """Start socat proxy on the VM for port 5050 forwarding."""
+    print(f"  Starting socat proxy on {vm_ip} (VM:5051 -> container:5050)...")
+    socat_cmd = (
+        'nohup socat TCP-LISTEN:5051,fork,reuseaddr '
+        'EXEC:"docker exec -i winarena socat - TCP\\:localhost\\:5050" '
+        '&>/dev/null &'
+    )
+    result = subprocess.run(
+        ["ssh",
+         "-o", "ConnectTimeout=10",
+         "-o", "StrictHostKeyChecking=no",
+         "-o", "UserKnownHostsFile=/dev/null",
+         f"{_AUTO_SSH_USER}@{vm_ip}",
+         socat_cmd],
+        capture_output=True, text=True, timeout=30,
+    )
+    if result.returncode != 0:
+        print(f"  WARNING: socat setup returned non-zero: {result.stderr.strip()}")
+    else:
+        print("  Socat proxy started.")
+    return True
+
+
+def _wait_for_waa_ready(server: str, timeout: int = 600, interval: int = 5) -> bool:
+    """Poll WAA /probe endpoint until it returns HTTP 200."""
+    import requests
+
+    print(f"  Waiting for WAA to become ready at {server}/probe (timeout {timeout}s)...")
+    start = time.monotonic()
+    attempts = 0
+    while time.monotonic() - start < timeout:
+        attempts += 1
+        elapsed = int(time.monotonic() - start)
+        try:
+            resp = requests.get(f"{server}/probe", timeout=5)
+            if resp.status_code == 200:
+                print(f"  WAA is ready (after {elapsed}s, {attempts} attempts).")
+                return True
+            print(f"    [{elapsed}s] probe returned {resp.status_code}, retrying...")
+        except requests.ConnectionError:
+            print(f"    [{elapsed}s] connection refused, retrying...")
+        except Exception as e:
+            print(f"    [{elapsed}s] {e}, retrying...")
+        time.sleep(interval)
+
+    print(f"  TIMEOUT: WAA did not become ready within {timeout}s.")
+    return False
+
+
+def _attempt_auto_recovery(
+    server: str,
+    auto_vm: bool,
+    auto_tunnel: bool,
+    auto_container: bool,
+    wait_ready: bool,
+) -> bool:
+    """Attempt to automatically bring up WAA infrastructure.
+
+    Returns True if WAA is reachable after recovery.
+    """
+    print()
+    print("  Auto-recovery: diagnosing infrastructure state...")
+
+    # Step 1: Check/start VM
+    vm_ip = _get_vm_public_ip()
+    power_state = _get_vm_power_state()
+    print(f"  VM power state: {power_state or 'unknown'}")
+
+    if power_state != "running":
+        if auto_vm:
+            if not _auto_start_vm():
+                return False
+            time.sleep(5)
+            vm_ip = _get_vm_public_ip()
+            if not vm_ip:
+                print("  FAILED: VM started but could not get public IP.")
+                return False
+            print(f"  VM IP: {vm_ip}")
+        else:
+            print("  VM is not running. Use --auto-vm to start it automatically.")
+            return False
+    else:
+        if not vm_ip:
+            vm_ip = _get_vm_public_ip()
+        print(f"  VM IP: {vm_ip}")
+
+    if not vm_ip:
+        print("  FAILED: Could not determine VM IP.")
+        return False
+
+    # Step 2: Check/start Docker container
+    if auto_container:
+        _auto_start_container(vm_ip)
+        _auto_start_socat(vm_ip)
+
+    # Step 3: Check/establish SSH tunnels
+    if auto_tunnel and not _is_local_port_open(5001):
+        if not _auto_establish_tunnels(vm_ip):
+            print("  FAILED: Could not establish SSH tunnels.")
+            return False
+
+    # Step 4: Wait for WAA to boot
+    if wait_ready:
+        return _wait_for_waa_ready(server)
+
+    return _is_local_port_open(5001)
+
+
+def _deallocate_vm() -> bool:
+    """Deallocate the Azure VM (async). Returns True on success."""
+    print(f"\n  Deallocating VM '{_AUTO_VM_NAME}'...")
+    try:
+        result = subprocess.run(
+            [
+                "az", "vm", "deallocate",
+                "-g", _AUTO_RESOURCE_GROUP,
+                "-n", _AUTO_VM_NAME,
+                "--no-wait",
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0:
+            print(f"  VM '{_AUTO_VM_NAME}' deallocate initiated (billing will stop shortly).")
+            return True
+        else:
+            print(f"  WARNING: deallocate failed: {result.stderr.strip()}")
+            return False
+    except Exception as e:
+        print(f"  WARNING: deallocate failed: {e}")
+        return False
+
+
+def _cleanup_on_exit(signal_received: bool = False) -> None:
+    """Offer to deallocate the VM if this script started it."""
+    global _cleanup_done
+    if _cleanup_done or not _vm_started_by_script:
+        return
+    _cleanup_done = True
+
+    if signal_received:
+        print("\n\n  Script interrupted. Deallocating VM to stop billing...")
+        _deallocate_vm()
+    else:
+        try:
+            answer = input(
+                f"\n  This script started VM '{_AUTO_VM_NAME}'. "
+                "Deallocate to stop billing? [Y/n] "
+            ).strip().lower()
+            if answer in ("", "y", "yes"):
+                _deallocate_vm()
+            else:
+                print(f"  VM '{_AUTO_VM_NAME}' left running. "
+                      f"Deallocate manually: az vm deallocate -g {_AUTO_RESOURCE_GROUP} "
+                      f"-n {_AUTO_VM_NAME} --no-wait")
+        except (EOFError, KeyboardInterrupt):
+            print()
+            _deallocate_vm()
+
+
+def _register_vm_cleanup() -> None:
+    """Register atexit and signal handlers for VM cleanup. Idempotent."""
+    global _cleanup_registered
+    if _cleanup_registered:
+        return
+    _cleanup_registered = True
+
+    import atexit
+    import signal
+
+    atexit.register(_cleanup_on_exit, signal_received=False)
+
+    _original_sigint = signal.getsignal(signal.SIGINT)
+    _original_sigterm = signal.getsignal(signal.SIGTERM)
+
+    def _signal_handler(signum, frame):
+        _cleanup_on_exit(signal_received=True)
+        if signum == signal.SIGINT and callable(_original_sigint):
+            _original_sigint(signum, frame)
+        elif signum == signal.SIGTERM and callable(_original_sigterm):
+            _original_sigterm(signum, frame)
+        else:
+            sys.exit(1)
+
+    signal.signal(signal.SIGINT, _signal_handler)
+    signal.signal(signal.SIGTERM, _signal_handler)
+
+
 def cmd_record_waa(
     tasks: str = ",".join(HARDER_TASK_IDS),
     server: str = "http://localhost:5001",
@@ -1128,6 +1467,11 @@ def cmd_record_waa(
     vnc_url: str = "http://localhost:8006",
     vm_ip: str | None = None,
     verify: bool = True,
+    auto: bool = False,
+    auto_vm: bool = False,
+    auto_tunnel: bool = False,
+    auto_container: bool = False,
+    wait_ready: bool = True,
 ) -> None:
     """Record demos interactively via WAA API while user performs actions on VNC.
 
@@ -1140,6 +1484,11 @@ def cmd_record_waa(
         vm_ip: Azure VM IP for QEMU reset on task restart.
             Auto-detected from pool registry or Azure if omitted.
         verify: Pre-flight check that all required apps are installed (default True).
+        auto: Automatically start all infrastructure (VM, tunnels, container).
+        auto_vm: Start Azure VM if it is deallocated (incurs charges).
+        auto_tunnel: Establish SSH tunnels if not connected.
+        auto_container: Start Docker container and socat proxy if not running.
+        wait_ready: Wait for WAA server to boot after recovery (default True).
     """
     # Guard: Fire may pass True if --tasks is used without a value
     if not isinstance(tasks, str):
@@ -1148,9 +1497,25 @@ def cmd_record_waa(
         print(f"  Hint: use --tasks=\"id1,id2,...\" (with = and no space)")
         return
 
+    # --auto is a convenience flag that enables all sub-flags
+    if auto:
+        auto_vm = True
+        auto_tunnel = True
+        auto_container = True
+
+    any_auto = auto_vm or auto_tunnel or auto_container
+
     from openadapt_evals.infrastructure.vm_ip import resolve_vm_ip
 
-    vm_ip = resolve_vm_ip(vm_ip)
+    # VM IP resolution may fail if VM is deallocated — that's OK if we have
+    # auto-recovery flags, since we'll start the VM first.
+    try:
+        vm_ip = resolve_vm_ip(vm_ip)
+    except RuntimeError:
+        if any_auto:
+            vm_ip = None  # Will be resolved after VM start
+        else:
+            raise
 
     import requests
 
@@ -1178,13 +1543,63 @@ def cmd_record_waa(
 
     # Verify connection
     print(f"Connecting to WAA server at {server}...")
+    connected = False
     try:
         resp = requests.get(f"{server}/probe", timeout=5)
         resp.raise_for_status()
         print(f"  Connected ({resp.status_code})")
+        connected = True
     except Exception as e:
         print(f"  Failed to connect: {e}")
-        print("  Make sure the WAA server is running and SSH tunnels are up.")
+
+        if any_auto:
+            # Confirm with user if VM start is involved (cost warning)
+            if auto_vm:
+                power_state = _get_vm_power_state()
+                if power_state != "running":
+                    print()
+                    print(
+                        "  WARNING: --auto will start Azure VM resources "
+                        "which incur charges."
+                    )
+                    answer = input("  Continue? [y/N] ").strip().lower()
+                    if answer not in ("y", "yes"):
+                        print("  Aborted.")
+                        return
+
+            recovered = _attempt_auto_recovery(
+                server=server,
+                auto_vm=auto_vm,
+                auto_tunnel=auto_tunnel,
+                auto_container=auto_container,
+                wait_ready=wait_ready,
+            )
+            if recovered:
+                print()
+                print("  Auto-recovery succeeded. WAA is ready.")
+                connected = True
+                # Re-resolve VM IP now that infrastructure is up
+                if vm_ip is None:
+                    try:
+                        vm_ip = resolve_vm_ip(vm_ip)
+                    except RuntimeError:
+                        vm_ip = _get_vm_public_ip()
+            else:
+                print()
+                print("  Auto-recovery FAILED. Cannot proceed.")
+                return
+        else:
+            print()
+            print("  The WAA server is not reachable. To auto-deploy all infrastructure, re-run with --auto:")
+            print(f"    python {__file__} record-waa --auto --tasks={tasks}")
+            print()
+            print("  Or use granular flags:")
+            print("    --auto-vm        Start Azure VM if deallocated (incurs charges)")
+            print("    --auto-tunnel    Establish SSH tunnels")
+            print("    --auto-container Start Docker container + socat proxy")
+            return
+
+    if not connected:
         return
 
     # Pre-flight: verify all required apps are installed
