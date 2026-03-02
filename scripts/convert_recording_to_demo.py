@@ -173,6 +173,10 @@ def convert_vlm(
     steps = meta.get("steps", [])
     num_steps = meta.get("num_steps", len(steps))
 
+    resolved_model = model or (
+        "gpt-4.1" if provider == "openai" else "claude-sonnet-4-20250514"
+    )
+
     lines = [
         "DEMONSTRATION:",
         f"Task: {instruction}",
@@ -221,9 +225,6 @@ def convert_vlm(
         )
 
         try:
-            resolved_model = model or (
-                "gpt-4.1" if provider == "openai" else "claude-sonnet-4-20250514"
-            )
             annotation = vlm_call(
                 prompt,
                 images=images,
