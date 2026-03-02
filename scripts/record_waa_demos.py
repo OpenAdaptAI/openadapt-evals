@@ -31,6 +31,8 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -1471,6 +1473,64 @@ def _attempt_auto_recovery(
         return False
 
 
+# Default external backup root (outside the git repo)
+_BACKUP_ROOT = Path.home() / "oa" / "recordings"
+
+
+def _backup_file(src: Path, task_id: str) -> None:
+    """Hardlink *src* to the external backup directory.
+
+    Creates ``~/oa/recordings/{task_id}/{src.name}``.  Uses a hardlink (zero
+    extra disk space) and falls back to ``shutil.copy2`` for cross-device
+    scenarios.  Failures are silently ignored — recording must never be
+    interrupted by a backup error.
+    """
+    try:
+        backup_dir = _BACKUP_ROOT / task_id
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        dest = backup_dir / src.name
+        if dest.exists():
+            dest.unlink()
+        try:
+            os.link(src, dest)
+        except OSError:
+            shutil.copy2(src, dest)
+    except Exception:
+        pass  # Silent — never interrupt recording
+
+
+def _save_incremental_meta(
+    task_dir: Path,
+    task_id: str,
+    instruction: str,
+    steps_meta: list[dict],
+    step_plans: list[dict],
+    server: str,
+    is_final: bool = False,
+) -> None:
+    """Write ``meta.json`` atomically after each step.
+
+    Writes to a ``.tmp`` file first and renames, preventing corrupt partial
+    writes on crash.  Includes a ``recording_complete`` boolean so downstream
+    scripts can detect partial recordings.
+    """
+    meta = {
+        "task_id": task_id,
+        "instruction": instruction,
+        "num_steps": len(steps_meta),
+        "steps": steps_meta,
+        "step_plans": step_plans,
+        "server_url": server,
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "recording_complete": is_final,
+    }
+    tmp = task_dir / "meta.json.tmp"
+    final = task_dir / "meta.json"
+    tmp.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    tmp.replace(final)
+    _backup_file(final, task_id)
+
+
 def cmd_record_waa(
     tasks: str = ",".join(HARDER_TASK_IDS),
     server: str = "http://localhost:5001",
@@ -1871,9 +1931,9 @@ def cmd_record_waa(
 
         while remaining_steps:
             # Save before screenshot
-            (task_dir / f"step_{step_idx:02d}_before.png").write_bytes(
-                before_png
-            )
+            before_path = task_dir / f"step_{step_idx:02d}_before.png"
+            before_path.write_bytes(before_png)
+            _backup_file(before_path, task_id)
 
             # Display current step
             total = len(completed_steps) + len(remaining_steps)
@@ -1891,17 +1951,17 @@ def cmd_record_waa(
                 # RETRY: discard this attempt, take fresh before screenshot
                 print("  Retrying step (taking fresh screenshot)...")
                 before_png = _take_screenshot(server)
-                (task_dir / f"step_{step_idx:02d}_before.png").write_bytes(
-                    before_png
-                )
+                retry_path = task_dir / f"step_{step_idx:02d}_before.png"
+                retry_path.write_bytes(before_png)
+                _backup_file(retry_path, task_id)
                 continue
 
             elif user_input == "":
                 # ADVANCE: action done, move to next step
                 after_png = _take_screenshot(server)
-                (task_dir / f"step_{step_idx:02d}_after.png").write_bytes(
-                    after_png
-                )
+                after_path = task_dir / f"step_{step_idx:02d}_after.png"
+                after_path.write_bytes(after_png)
+                _backup_file(after_path, task_id)
                 done_step = remaining_steps.pop(0)
                 completed_steps.append(done_step)
                 steps_meta.append({
@@ -1909,6 +1969,10 @@ def cmd_record_waa(
                     "suggested_step": done_step,
                     "step_was_refined": step_idx in refined_indices,
                 })
+                _save_incremental_meta(
+                    task_dir, task_id, instruction, steps_meta,
+                    step_plans, server,
+                )
                 before_png = after_png
                 step_idx += 1
                 print(f"  Step {step_num} recorded.")
@@ -1927,14 +1991,18 @@ def cmd_record_waa(
             elif user_input.lower() == "d":
                 # DONE: task finished (possibly before all steps)
                 after_png = _take_screenshot(server)
-                (task_dir / f"step_{step_idx:02d}_after.png").write_bytes(
-                    after_png
-                )
+                after_path = task_dir / f"step_{step_idx:02d}_after.png"
+                after_path.write_bytes(after_png)
+                _backup_file(after_path, task_id)
                 steps_meta.append({
                     "action_hint": "d",
                     "suggested_step": remaining_steps[0],
                     "step_was_refined": step_idx in refined_indices,
                 })
+                _save_incremental_meta(
+                    task_dir, task_id, instruction, steps_meta,
+                    step_plans, server,
+                )
                 step_idx += 1
                 total = len(completed_steps) + len(remaining_steps)
                 print(f"\n  Task marked done at step {step_num} of {total}. Finishing recording.")
@@ -1972,6 +2040,10 @@ def cmd_record_waa(
                 print("  Restarting task (soft reset — closing apps, re-running setup)...")
                 for f in task_dir.glob("step_*.png"):
                     f.unlink()
+                # Clean external backup for this task too
+                backup_dir = _BACKUP_ROOT / task_id
+                if backup_dir.exists():
+                    shutil.rmtree(backup_dir, ignore_errors=True)
                 before_png = _soft_reset_task_env()
                 print(f"\n  VNC: {vnc_url}")
                 print(f"  Task: {instruction}\n")
@@ -2008,6 +2080,10 @@ def cmd_record_waa(
                 print("  Restarting task (hard reset — QEMU reboot)...")
                 for f in task_dir.glob("step_*.png"):
                     f.unlink()
+                # Clean external backup for this task too
+                backup_dir = _BACKUP_ROOT / task_id
+                if backup_dir.exists():
+                    shutil.rmtree(backup_dir, ignore_errors=True)
                 before_png = _hard_reset_task_env()
                 print(f"\n  VNC: {vnc_url}")
                 print(f"  Task: {instruction}\n")
@@ -2093,18 +2169,10 @@ def cmd_record_waa(
                 )
                 # No action taken — loop re-displays the (possibly new) current step
 
-        # Save metadata
-        meta = {
-            "task_id": task_id,
-            "instruction": instruction,
-            "num_steps": len(steps_meta),
-            "steps": steps_meta,
-            "step_plans": step_plans,
-            "server_url": server,
-            "recorded_at": datetime.now(timezone.utc).isoformat(),
-        }
-        (task_dir / "meta.json").write_text(
-            json.dumps(meta, indent=2), encoding="utf-8"
+        # Save final metadata (marks recording as complete)
+        _save_incremental_meta(
+            task_dir, task_id, instruction, steps_meta,
+            step_plans, server, is_final=True,
         )
 
         # Task completed successfully — remove checkpoint
