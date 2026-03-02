@@ -1,0 +1,143 @@
+{
+  "task_id": "04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS",
+  "instruction": "In a new sheet with 4 headers \"Year\", \"CA changes\", \"FA changes\", and \"OA changes\", calculate the annual changes for the Current Assets, Fixed Assets, and Other Assets columns. Set the results as percentage type.",
+  "num_steps": 21,
+  "steps": [
+    {
+      "action_hint": null,
+      "suggested_step": "Right-click on the \"Sheet1\" tab at the bottom and select \"Insert Sheet\" or \"New Sheet\"",
+      "step_was_refined": false
+    },
+    {
+      "action_hint": null,
+      "suggested_step": "Click cell A1 and type \"Year\"",
+      "step_was_refined": false
+    },
+    {
+      "action_hint": null,
+      "suggested_step": "Press Tab and type \"CA changes\"",
+      "step_was_refined": false
+    },
+    {
+      "action_hint": null,
+      "suggested_step": "Press Tab and type \"FA changes\"",
+      "step_was_refined": false
+    },
+    {
+      "action_hint": null,
+      "suggested_step": "Press Tab and type \"OA changes\"",
+      "step_was_refined": false
+    },
+    {
+      "action_hint": null,
+      "suggested_step": "Click cell A2 and type \"2015\"",
+      "step_was_refined": false
+    },
+    {
+      "action_hint": null,
+      "suggested_step": "Press Enter and type \"2016\"",
+      "step_was_refined": false
+    },
+    {
+      "action_hint": null,
+      "suggested_step": "Press Enter and type \"2017\"",
+      "step_was_refined": false
+    },
+    {
+      "action_hint": null,
+      "suggested_step": "Press Enter and type \"2018\"",
+      "step_was_refined": false
+    },
+    {
+      "action_hint": null,
+      "suggested_step": "Press Enter and type \"2019\"",
+      "step_was_refined": false
+    },
+    {
+      "action_hint": null,
+      "suggested_step": "Click cell B2 and type \"=(Sheet1.B3-Sheet1.B2)/Sheet1.B2\"",
+      "step_was_refined": false
+    },
+    {
+      "action_hint": null,
+      "suggested_step": "Press Enter",
+      "step_was_refined": false
+    },
+    {
+      "action_hint": null,
+      "suggested_step": "Click cell B2, then drag the fill handle down to B6",
+      "step_was_refined": false
+    },
+    {
+      "action_hint": null,
+      "suggested_step": "Click cell C2 and type \"=(Sheet1.C3-Sheet1.C2)/Sheet1.C2\"",
+      "step_was_refined": false
+    },
+    {
+      "action_hint": null,
+      "suggested_step": "Press Enter",
+      "step_was_refined": false
+    },
+    {
+      "action_hint": null,
+      "suggested_step": "Click cell C2, then drag the fill handle down to C6",
+      "step_was_refined": false
+    },
+    {
+      "action_hint": null,
+      "suggested_step": "Click cell D2 and type \"=(Sheet1.D3-Sheet1.D2)/Sheet1.D2\"",
+      "step_was_refined": false
+    },
+    {
+      "action_hint": null,
+      "suggested_step": "Press Enter",
+      "step_was_refined": false
+    },
+    {
+      "action_hint": null,
+      "suggested_step": "Click cell D2, then drag the fill handle down to D6",
+      "step_was_refined": false
+    },
+    {
+      "action_hint": null,
+      "suggested_step": "Click and drag to select cells B2:D6",
+      "step_was_refined": false
+    },
+    {
+      "action_hint": null,
+      "suggested_step": "Click the % button in the toolbar (or press Ctrl+Shift+5)",
+      "step_was_refined": false
+    }
+  ],
+  "step_plans": [
+    {
+      "at_step_idx": 0,
+      "trigger": "initial",
+      "steps": [
+        "Right-click on the \"Sheet1\" tab at the bottom and select \"Insert Sheet\" or \"New Sheet\"",
+        "Click cell A1 and type \"Year\"",
+        "Press Tab and type \"CA changes\"",
+        "Press Tab and type \"FA changes\"",
+        "Press Tab and type \"OA changes\"",
+        "Click cell A2 and type \"2015\"",
+        "Press Enter and type \"2016\"",
+        "Press Enter and type \"2017\"",
+        "Press Enter and type \"2018\"",
+        "Press Enter and type \"2019\"",
+        "Click cell B2 and type \"=(Sheet1.B3-Sheet1.B2)/Sheet1.B2\"",
+        "Press Enter",
+        "Click cell B2, then drag the fill handle down to B6",
+        "Click cell C2 and type \"=(Sheet1.C3-Sheet1.C2)/Sheet1.C2\"",
+        "Press Enter",
+        "Click cell C2, then drag the fill handle down to C6",
+        "Click cell D2 and type \"=(Sheet1.D3-Sheet1.D2)/Sheet1.D2\"",
+        "Press Enter",
+        "Click cell D2, then drag the fill handle down to D6",
+        "Click and drag to select cells B2:D6",
+        "Click the % button in the toolbar (or press Ctrl+Shift+5)"
+      ]
+    }
+  ],
+  "server_url": "http://localhost:5001",
+  "recorded_at": "2026-03-01T23:31:25.670893+00:00"
+}

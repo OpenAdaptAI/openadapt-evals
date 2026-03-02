@@ -16,553 +16,360 @@
 | 2 | Click cell A1 and type "Year" | Action: Click cell A1 and type "Year" | Observation: The new sheet is blank, with cell A1 selected and ready for input.<br>  Intent: To create a header row for organizing annual asset changes.<br>  Action: Click cell A1 and type "Year"<br>  Result: The text "Year" now appears in cell A1. |
 | 3 | Press Tab and type "CA changes" | Action: Press Tab and type "CA changes" | Observation: The new sheet contains only the header "Year" in cell A1, with the cursor positioned in cell B1.<br>  Intent: To add the next header, "CA changes," as part of setting up the required columns for annual asset changes.<br>  Action: Press Tab and type "CA changes"<br>  Result: The header "CA changes" is entered in cell B1, and the sheet now displays two headers: "Year" and "CA changes." |
 
-## Step-by-Step Detail
+### Step 1: Right-click on the "Sheet1" tab at the bottom and select "Insert Sheet" or "New Sheet"
 
-<details>
-<summary><strong>Step 1:</strong> Right-click on the "Sheet1" tab at the bottom and select "Insert Sheet" or "New Sheet"</summary>
+[![before](artifacts/thumbnails/step_00_before.png)](artifacts/full/step_00_before.png) [![after](artifacts/thumbnails/step_00_after.png)](artifacts/full/step_00_after.png)
 
-#### Screenshots
+**Ground truth:** Right-click on the "Sheet1" tab at the bottom and select "Insert Sheet" or "New Sheet"
 
-| Before | After |
-|--------|-------|
-| ![before](artifacts/thumbnails/step_00_before.png) | ![after](artifacts/thumbnails/step_00_after.png) |
+**Text demo:** Action: Right-click on the "Sheet1" tab at the bottom and select "Insert Sheet" or "New Sheet"
 
-#### Ground Truth (meta.json)
-
-> Right-click on the "Sheet1" tab at the bottom and select "Insert Sheet" or "New Sheet"
-
-#### Text-Only Demo Output
-
-> Action: Right-click on the "Sheet1" tab at the bottom and select "Insert Sheet" or "New Sheet"
-
-#### VLM-Enriched Demo Output
+**VLM demo:**
 
 > Observation: The spreadsheet is open to "Sheet1," which contains financial data with columns for years, assets, and liabilities.
 >   Intent: To create a new sheet for calculating and displaying annual changes in asset categories.
 >   Action: Right-click on the "Sheet1" tab at the bottom and select "Insert Sheet" or "New Sheet".
 >   Result: A new, blank sheet named "Sheet2" is added to the workbook and displayed.
 
-</details>
+---
 
-<details>
-<summary><strong>Step 2:</strong> Click cell A1 and type "Year"</summary>
+### Step 2: Click cell A1 and type "Year"
 
-#### Screenshots
+[![before](artifacts/thumbnails/step_01_before.png)](artifacts/full/step_01_before.png) [![after](artifacts/thumbnails/step_01_after.png)](artifacts/full/step_01_after.png)
 
-| Before | After |
-|--------|-------|
-| ![before](artifacts/thumbnails/step_01_before.png) | ![after](artifacts/thumbnails/step_01_after.png) |
+**Ground truth:** Click cell A1 and type "Year"
 
-#### Ground Truth (meta.json)
+**Text demo:** Action: Click cell A1 and type "Year"
 
-> Click cell A1 and type "Year"
-
-#### Text-Only Demo Output
-
-> Action: Click cell A1 and type "Year"
-
-#### VLM-Enriched Demo Output
+**VLM demo:**
 
 > Observation: The new sheet is blank, with cell A1 selected and ready for input.
 >   Intent: To create a header row for organizing annual asset changes.
 >   Action: Click cell A1 and type "Year"
 >   Result: The text "Year" now appears in cell A1.
 
-</details>
+---
 
-<details>
-<summary><strong>Step 3:</strong> Press Tab and type "CA changes"</summary>
+### Step 3: Press Tab and type "CA changes"
 
-#### Screenshots
+[![before](artifacts/thumbnails/step_02_before.png)](artifacts/full/step_02_before.png) [![after](artifacts/thumbnails/step_02_after.png)](artifacts/full/step_02_after.png)
 
-| Before | After |
-|--------|-------|
-| ![before](artifacts/thumbnails/step_02_before.png) | ![after](artifacts/thumbnails/step_02_after.png) |
+**Ground truth:** Press Tab and type "CA changes"
 
-#### Ground Truth (meta.json)
+**Text demo:** Action: Press Tab and type "CA changes"
 
-> Press Tab and type "CA changes"
-
-#### Text-Only Demo Output
-
-> Action: Press Tab and type "CA changes"
-
-#### VLM-Enriched Demo Output
+**VLM demo:**
 
 > Observation: The new sheet contains only the header "Year" in cell A1, with the cursor positioned in cell B1.
 >   Intent: To add the next header, "CA changes," as part of setting up the required columns for annual asset changes.
 >   Action: Press Tab and type "CA changes"
 >   Result: The header "CA changes" is entered in cell B1, and the sheet now displays two headers: "Year" and "CA changes."
 
-</details>
+---
 
-<details>
-<summary><strong>Step 4:</strong> Press Tab and type "FA changes"</summary>
+### Step 4: Press Tab and type "FA changes"
 
-#### Screenshots
+[![before](artifacts/thumbnails/step_03_before.png)](artifacts/full/step_03_before.png) [![after](artifacts/thumbnails/step_03_after.png)](artifacts/full/step_03_after.png)
 
-| Before | After |
-|--------|-------|
-| ![before](artifacts/thumbnails/step_03_before.png) | ![after](artifacts/thumbnails/step_03_after.png) |
+**Ground truth:** Press Tab and type "FA changes"
 
-#### Ground Truth (meta.json)
+**Text demo:** Action: Press Tab and type "FA changes"
 
-> Press Tab and type "FA changes"
-
-#### Text-Only Demo Output
-
-> Action: Press Tab and type "FA changes"
-
-#### VLM-Enriched Demo Output
+**VLM demo:**
 
 > Observation: The new sheet contains two headers, "Year" in cell A1 and "CA changes" in cell B1, with the cursor positioned in cell C1.
 >   Intent: To continue setting up the required headers for calculating annual changes in asset categories.
 >   Action: Press Tab and type "FA changes".
 >   Result: The header "FA changes" is added to cell C1.
 
-</details>
+---
 
-<details>
-<summary><strong>Step 5:</strong> Press Tab and type "OA changes"</summary>
+### Step 5: Press Tab and type "OA changes"
 
-#### Screenshots
+[![before](artifacts/thumbnails/step_04_before.png)](artifacts/full/step_04_before.png) [![after](artifacts/thumbnails/step_04_after.png)](artifacts/full/step_04_after.png)
 
-| Before | After |
-|--------|-------|
-| ![before](artifacts/thumbnails/step_04_before.png) | ![after](artifacts/thumbnails/step_04_after.png) |
+**Ground truth:** Press Tab and type "OA changes"
 
-#### Ground Truth (meta.json)
+**Text demo:** Action: Press Tab and type "OA changes"
 
-> Press Tab and type "OA changes"
-
-#### Text-Only Demo Output
-
-> Action: Press Tab and type "OA changes"
-
-#### VLM-Enriched Demo Output
+**VLM demo:**
 
 > Observation: The new sheet contains three headers: "Year", "CA changes", and "FA changes" in the first row.
 >   Intent: To complete the set of required headers by adding "OA changes" as the fourth column.
 >   Action: Press Tab and type "OA changes".
 >   Result: The "OA changes" header is added in cell D1, completing the four required headers in the first row.
 
-</details>
+---
 
-<details>
-<summary><strong>Step 6:</strong> Click cell A2 and type "2015"</summary>
+### Step 6: Click cell A2 and type "2015"
 
-#### Screenshots
+[![before](artifacts/thumbnails/step_05_before.png)](artifacts/full/step_05_before.png) [![after](artifacts/thumbnails/step_05_after.png)](artifacts/full/step_05_after.png)
 
-| Before | After |
-|--------|-------|
-| ![before](artifacts/thumbnails/step_05_before.png) | ![after](artifacts/thumbnails/step_05_after.png) |
+**Ground truth:** Click cell A2 and type "2015"
 
-#### Ground Truth (meta.json)
+**Text demo:** Action: Click cell A2 and type "2015"
 
-> Click cell A2 and type "2015"
-
-#### Text-Only Demo Output
-
-> Action: Click cell A2 and type "2015"
-
-#### VLM-Enriched Demo Output
+**VLM demo:**
 
 > Observation: The new sheet contains four headers: "Year", "CA changes", "FA changes", and "OA changes", with all cells below the headers empty.
 >   Intent: To begin entering annual data by specifying the first year in the "Year" column.
 >   Action: Click cell A2 and type "2015".
 >   Result: The value "2015" appears in cell A2 under the "Year" header.
 
-</details>
+---
 
-<details>
-<summary><strong>Step 7:</strong> Press Enter and type "2016"</summary>
+### Step 7: Press Enter and type "2016"
 
-#### Screenshots
+[![before](artifacts/thumbnails/step_06_before.png)](artifacts/full/step_06_before.png) [![after](artifacts/thumbnails/step_06_after.png)](artifacts/full/step_06_after.png)
 
-| Before | After |
-|--------|-------|
-| ![before](artifacts/thumbnails/step_06_before.png) | ![after](artifacts/thumbnails/step_06_after.png) |
+**Ground truth:** Press Enter and type "2016"
 
-#### Ground Truth (meta.json)
+**Text demo:** Action: Press Enter and type "2016"
 
-> Press Enter and type "2016"
-
-#### Text-Only Demo Output
-
-> Action: Press Enter and type "2016"
-
-#### VLM-Enriched Demo Output
+**VLM demo:**
 
 > Observation: The new sheet contains headers "Year", "CA changes", "FA changes", and "OA changes" in row 1, with cell A2 currently empty.
 >   Intent: To begin entering the years for which asset changes will be calculated.
 >   Action: Press Enter and type "2016" in cell A2.
 >   Result: The value "2016" appears in cell A2, starting the list of years under the "Year" header.
 
-</details>
+---
 
-<details>
-<summary><strong>Step 8:</strong> Press Enter and type "2017"</summary>
+### Step 8: Press Enter and type "2017"
 
-#### Screenshots
+[![before](artifacts/thumbnails/step_07_before.png)](artifacts/full/step_07_before.png) [![after](artifacts/thumbnails/step_07_after.png)](artifacts/full/step_07_after.png)
 
-| Before | After |
-|--------|-------|
-| ![before](artifacts/thumbnails/step_07_before.png) | ![after](artifacts/thumbnails/step_07_after.png) |
+**Ground truth:** Press Enter and type "2017"
 
-#### Ground Truth (meta.json)
+**Text demo:** Action: Press Enter and type "2017"
 
-> Press Enter and type "2017"
-
-#### Text-Only Demo Output
-
-> Action: Press Enter and type "2017"
-
-#### VLM-Enriched Demo Output
+**VLM demo:**
 
 > Observation: The new sheet contains the headers "Year", "CA changes", "FA changes", and "OA changes" in row 1, and "2016" is entered in cell A2.
 >   Intent: To begin listing the years for which annual changes will be calculated.
 >   Action: Press Enter and type "2017".
 >   Result: "2017" is entered into cell A3, directly below "2016" in the "Year" column.
 
-</details>
+---
 
-<details>
-<summary><strong>Step 9:</strong> Press Enter and type "2018"</summary>
+### Step 9: Press Enter and type "2018"
 
-#### Screenshots
+[![before](artifacts/thumbnails/step_08_before.png)](artifacts/full/step_08_before.png) [![after](artifacts/thumbnails/step_08_after.png)](artifacts/full/step_08_after.png)
 
-| Before | After |
-|--------|-------|
-| ![before](artifacts/thumbnails/step_08_before.png) | ![after](artifacts/thumbnails/step_08_after.png) |
+**Ground truth:** Press Enter and type "2018"
 
-#### Ground Truth (meta.json)
+**Text demo:** Action: Press Enter and type "2018"
 
-> Press Enter and type "2018"
-
-#### Text-Only Demo Output
-
-> Action: Press Enter and type "2018"
-
-#### VLM-Enriched Demo Output
+**VLM demo:**
 
 > Observation: The new sheet contains the headers "Year", "CA changes", "FA changes", and "OA changes", with the years 2016 and 2017 already listed in the "Year" column.
 >   Intent: To continue populating the "Year" column with the next chronological year for annual change calculations.
 >   Action: Press Enter and type "2018".
 >   Result: The value "2018" appears in the next row of the "Year" column.
 
-</details>
+---
 
-<details>
-<summary><strong>Step 10:</strong> Press Enter and type "2019"</summary>
+### Step 10: Press Enter and type "2019"
 
-#### Screenshots
+[![before](artifacts/thumbnails/step_09_before.png)](artifacts/full/step_09_before.png) [![after](artifacts/thumbnails/step_09_after.png)](artifacts/full/step_09_after.png)
 
-| Before | After |
-|--------|-------|
-| ![before](artifacts/thumbnails/step_09_before.png) | ![after](artifacts/thumbnails/step_09_after.png) |
+**Ground truth:** Press Enter and type "2019"
 
-#### Ground Truth (meta.json)
+**Text demo:** Action: Press Enter and type "2019"
 
-> Press Enter and type "2019"
-
-#### Text-Only Demo Output
-
-> Action: Press Enter and type "2019"
-
-#### VLM-Enriched Demo Output
+**VLM demo:**
 
 > Observation: The new sheet contains four headers ("Year", "CA changes", "FA changes", "OA changes") and a column of years from 2015 to 2018 under "Year".
 >   Intent: To add the next year in the sequence to the "Year" column in preparation for calculating annual changes.
 >   Action: Press Enter and type "2019".
 >   Result: The value "2019" appears in the next row under the "Year" column.
 
-</details>
+---
 
-<details>
-<summary><strong>Step 11:</strong> Click cell B2 and type "=(Sheet1.B3-Sheet1.B2)/Sheet1.B2"</summary>
+### Step 11: Click cell B2 and type "=(Sheet1.B3-Sheet1.B2)/Sheet1.B2"
 
-#### Screenshots
+[![before](artifacts/thumbnails/step_10_before.png)](artifacts/full/step_10_before.png) [![after](artifacts/thumbnails/step_10_after.png)](artifacts/full/step_10_after.png)
 
-| Before | After |
-|--------|-------|
-| ![before](artifacts/thumbnails/step_10_before.png) | ![after](artifacts/thumbnails/step_10_after.png) |
+**Ground truth:** Click cell B2 and type "=(Sheet1.B3-Sheet1.B2)/Sheet1.B2"
 
-#### Ground Truth (meta.json)
+**Text demo:** Action: Click cell B2 and type "=(Sheet1.B3-Sheet1.B2)/Sheet1.B2"
 
-> Click cell B2 and type "=(Sheet1.B3-Sheet1.B2)/Sheet1.B2"
-
-#### Text-Only Demo Output
-
-> Action: Click cell B2 and type "=(Sheet1.B3-Sheet1.B2)/Sheet1.B2"
-
-#### VLM-Enriched Demo Output
+**VLM demo:**
 
 > Observation: The new sheet contains headers "Year", "CA changes", "FA changes", and "OA changes", with years listed in column A, but no formulas or data in the other columns.
 >   Intent: To calculate the annual percentage change for Current Assets using data from Sheet1.
 >   Action: Click cell B2 and type "=(Sheet1.B3-Sheet1.B2)/Sheet1.B2".
 >   Result: Cell B2 now contains a formula to compute the percentage change in Current Assets between two years from Sheet1.
 
-</details>
+---
 
-<details>
-<summary><strong>Step 12:</strong> Press Enter</summary>
+### Step 12: Press Enter
 
-#### Screenshots
+[![before](artifacts/thumbnails/step_11_before.png)](artifacts/full/step_11_before.png) [![after](artifacts/thumbnails/step_11_after.png)](artifacts/full/step_11_after.png)
 
-| Before | After |
-|--------|-------|
-| ![before](artifacts/thumbnails/step_11_before.png) | ![after](artifacts/thumbnails/step_11_after.png) |
+**Ground truth:** Press Enter
 
-#### Ground Truth (meta.json)
+**Text demo:** Action: Press Enter
 
-> Press Enter
-
-#### Text-Only Demo Output
-
-> Action: Press Enter
-
-#### VLM-Enriched Demo Output
+**VLM demo:**
 
 > Observation: The new sheet contains headers "Year", "CA changes", "FA changes", and "OA changes", and the first row under "Year" is filled with "2016", while the "CA changes" cell (B2) contains a formula referencing another sheet.
 >   Intent: To confirm and apply the formula entered in cell B2 for calculating annual changes in Current Assets.
 >   Action: Press Enter
 >   Result: The formula in cell B2 is executed, displaying the calculated percentage change for "CA changes" in 2016.
 
-</details>
+---
 
-<details>
-<summary><strong>Step 13:</strong> Click cell B2, then drag the fill handle down to B6</summary>
+### Step 13: Click cell B2, then drag the fill handle down to B6
 
-#### Screenshots
+[![before](artifacts/thumbnails/step_12_before.png)](artifacts/full/step_12_before.png) [![after](artifacts/thumbnails/step_12_after.png)](artifacts/full/step_12_after.png)
 
-| Before | After |
-|--------|-------|
-| ![before](artifacts/thumbnails/step_12_before.png) | ![after](artifacts/thumbnails/step_12_after.png) |
+**Ground truth:** Click cell B2, then drag the fill handle down to B6
 
-#### Ground Truth (meta.json)
+**Text demo:** Action: Click cell B2, then drag the fill handle down to B6
 
-> Click cell B2, then drag the fill handle down to B6
-
-#### Text-Only Demo Output
-
-> Action: Click cell B2, then drag the fill handle down to B6
-
-#### VLM-Enriched Demo Output
+**VLM demo:**
 
 > Observation: The sheet displays headers "Year", "CA changes", "FA changes", and "OA changes", with cell B2 containing a formula and the rest of column B empty.
 >   Intent: To copy the formula in B2 down the column so that annual changes for "CA changes" are calculated for each year.
 >   Action: Click cell B2, then drag the fill handle down to B6.
 >   Result: The formula from B2 is filled down to B6, calculating "CA changes" for all listed years.
 
-</details>
+---
 
-<details>
-<summary><strong>Step 14:</strong> Click cell C2 and type "=(Sheet1.C3-Sheet1.C2)/Sheet1.C2"</summary>
+### Step 14: Click cell C2 and type "=(Sheet1.C3-Sheet1.C2)/Sheet1.C2"
 
-#### Screenshots
+[![before](artifacts/thumbnails/step_13_before.png)](artifacts/full/step_13_before.png) [![after](artifacts/thumbnails/step_13_after.png)](artifacts/full/step_13_after.png)
 
-| Before | After |
-|--------|-------|
-| ![before](artifacts/thumbnails/step_13_before.png) | ![after](artifacts/thumbnails/step_13_after.png) |
+**Ground truth:** Click cell C2 and type "=(Sheet1.C3-Sheet1.C2)/Sheet1.C2"
 
-#### Ground Truth (meta.json)
+**Text demo:** Action: Click cell C2 and type "=(Sheet1.C3-Sheet1.C2)/Sheet1.C2"
 
-> Click cell C2 and type "=(Sheet1.C3-Sheet1.C2)/Sheet1.C2"
-
-#### Text-Only Demo Output
-
-> Action: Click cell C2 and type "=(Sheet1.C3-Sheet1.C2)/Sheet1.C2"
-
-#### VLM-Enriched Demo Output
+**VLM demo:**
 
 > Observation: The new sheet contains headers "Year", "CA changes", "FA changes", and "OA changes", and cell C2 is empty.
 >   Intent: To calculate the annual change for Fixed Assets as a percentage using data from Sheet1.
 >   Action: Click cell C2 and type "=(Sheet1.C3-Sheet1.C2)/Sheet1.C2"
 >   Result: Cell C2 now contains the formula to compute the percentage change in Fixed Assets between two years from Sheet1.
 
-</details>
+---
 
-<details>
-<summary><strong>Step 15:</strong> Press Enter</summary>
+### Step 15: Press Enter
 
-#### Screenshots
+[![before](artifacts/thumbnails/step_14_before.png)](artifacts/full/step_14_before.png) [![after](artifacts/thumbnails/step_14_after.png)](artifacts/full/step_14_after.png)
 
-| Before | After |
-|--------|-------|
-| ![before](artifacts/thumbnails/step_14_before.png) | ![after](artifacts/thumbnails/step_14_after.png) |
+**Ground truth:** Press Enter
 
-#### Ground Truth (meta.json)
+**Text demo:** Action: Press Enter
 
-> Press Enter
-
-#### Text-Only Demo Output
-
-> Action: Press Enter
-
-#### VLM-Enriched Demo Output
+**VLM demo:**
 
 > Observation: The new sheet contains headers "Year", "CA changes", "FA changes", and "OA changes" in row 1, and the first row of data is being entered in row 2.
 >   Intent: To confirm or complete the entry of a formula or value in the spreadsheet.
 >   Action: Press Enter.
 >   Result: The cell selection moves from the current cell (D2) to the next cell below (D3), confirming the entry in D2.
 
-</details>
+---
 
-<details>
-<summary><strong>Step 16:</strong> Click cell C2, then drag the fill handle down to C6</summary>
+### Step 16: Click cell C2, then drag the fill handle down to C6
 
-#### Screenshots
+[![before](artifacts/thumbnails/step_15_before.png)](artifacts/full/step_15_before.png) [![after](artifacts/thumbnails/step_15_after.png)](artifacts/full/step_15_after.png)
 
-| Before | After |
-|--------|-------|
-| ![before](artifacts/thumbnails/step_15_before.png) | ![after](artifacts/thumbnails/step_15_after.png) |
+**Ground truth:** Click cell C2, then drag the fill handle down to C6
 
-#### Ground Truth (meta.json)
+**Text demo:** Action: Click cell C2, then drag the fill handle down to C6
 
-> Click cell C2, then drag the fill handle down to C6
-
-#### Text-Only Demo Output
-
-> Action: Click cell C2, then drag the fill handle down to C6
-
-#### VLM-Enriched Demo Output
+**VLM demo:**
 
 > Observation: The sheet displays headers "Year", "CA changes", "FA changes", and "OA changes" with a formula present in cell C2, but the rest of column C is empty.
 >   Intent: To apply the formula in C2 to the rest of the rows in the "CA changes" column for consistent annual change calculations.
 >   Action: Click cell C2, then drag the fill handle down to C6.
 >   Result: The formula from C2 is copied down to C6, populating the "CA changes" column with calculated values for each year.
 
-</details>
+---
 
-<details>
-<summary><strong>Step 17:</strong> Click cell D2 and type "=(Sheet1.D3-Sheet1.D2)/Sheet1.D2"</summary>
+### Step 17: Click cell D2 and type "=(Sheet1.D3-Sheet1.D2)/Sheet1.D2"
 
-#### Screenshots
+[![before](artifacts/thumbnails/step_16_before.png)](artifacts/full/step_16_before.png) [![after](artifacts/thumbnails/step_16_after.png)](artifacts/full/step_16_after.png)
 
-| Before | After |
-|--------|-------|
-| ![before](artifacts/thumbnails/step_16_before.png) | ![after](artifacts/thumbnails/step_16_after.png) |
+**Ground truth:** Click cell D2 and type "=(Sheet1.D3-Sheet1.D2)/Sheet1.D2"
 
-#### Ground Truth (meta.json)
+**Text demo:** Action: Click cell D2 and type "=(Sheet1.D3-Sheet1.D2)/Sheet1.D2"
 
-> Click cell D2 and type "=(Sheet1.D3-Sheet1.D2)/Sheet1.D2"
-
-#### Text-Only Demo Output
-
-> Action: Click cell D2 and type "=(Sheet1.D3-Sheet1.D2)/Sheet1.D2"
-
-#### VLM-Enriched Demo Output
+**VLM demo:**
 
 > Observation: The new sheet contains headers "Year", "CA changes", "FA changes", and "OA changes" in row 1, with all other cells empty.
 >   Intent: To calculate the annual percentage change for the "OA changes" column using data from Sheet1.
 >   Action: Click cell D2 and type "=(Sheet1.D3-Sheet1.D2)/Sheet1.D2"
 >   Result: Cell D2 is populated with the formula to compute the percentage change for "OA changes" between two years.
 
-</details>
+---
 
-<details>
-<summary><strong>Step 18:</strong> Press Enter</summary>
+### Step 18: Press Enter
 
-#### Screenshots
+[![before](artifacts/thumbnails/step_17_before.png)](artifacts/full/step_17_before.png) [![after](artifacts/thumbnails/step_17_after.png)](artifacts/full/step_17_after.png)
 
-| Before | After |
-|--------|-------|
-| ![before](artifacts/thumbnails/step_17_before.png) | ![after](artifacts/thumbnails/step_17_after.png) |
+**Ground truth:** Press Enter
 
-#### Ground Truth (meta.json)
+**Text demo:** Action: Press Enter
 
-> Press Enter
-
-#### Text-Only Demo Output
-
-> Action: Press Enter
-
-#### VLM-Enriched Demo Output
+**VLM demo:**
 
 > Observation: The formula `=(C3-C2)/C2` is being entered in cell D3 to calculate the percentage change for "OA changes".
 >   Intent: To compute the annual percentage change for Other Assets in the new sheet.
 >   Action: Press Enter
 >   Result: The formula is executed in cell D3, displaying the calculated percentage change for Other Assets.
 
-</details>
+---
 
-<details>
-<summary><strong>Step 19:</strong> Click cell D2, then drag the fill handle down to D6</summary>
+### Step 19: Click cell D2, then drag the fill handle down to D6
 
-#### Screenshots
+[![before](artifacts/thumbnails/step_18_before.png)](artifacts/full/step_18_before.png) [![after](artifacts/thumbnails/step_18_after.png)](artifacts/full/step_18_after.png)
 
-| Before | After |
-|--------|-------|
-| ![before](artifacts/thumbnails/step_18_before.png) | ![after](artifacts/thumbnails/step_18_after.png) |
+**Ground truth:** Click cell D2, then drag the fill handle down to D6
 
-#### Ground Truth (meta.json)
+**Text demo:** Action: Click cell D2, then drag the fill handle down to D6
 
-> Click cell D2, then drag the fill handle down to D6
-
-#### Text-Only Demo Output
-
-> Action: Click cell D2, then drag the fill handle down to D6
-
-#### VLM-Enriched Demo Output
+**VLM demo:**
 
 > Observation: The sheet displays headers "Year", "CA changes", "FA changes", and "OA changes" with a formula present only in cell D2.
 >   Intent: To copy the formula in D2 down the "OA changes" column for all relevant rows.
 >   Action: Click cell D2, then drag the fill handle down to D6.
 >   Result: The formula from D2 is filled down through D6, calculating values for each row in the "OA changes" column.
 
-</details>
+---
 
-<details>
-<summary><strong>Step 20:</strong> Click and drag to select cells B2:D6</summary>
+### Step 20: Click and drag to select cells B2:D6
 
-#### Screenshots
+[![before](artifacts/thumbnails/step_19_before.png)](artifacts/full/step_19_before.png) [![after](artifacts/thumbnails/step_19_after.png)](artifacts/full/step_19_after.png)
 
-| Before | After |
-|--------|-------|
-| ![before](artifacts/thumbnails/step_19_before.png) | ![after](artifacts/thumbnails/step_19_after.png) |
+**Ground truth:** Click and drag to select cells B2:D6
 
-#### Ground Truth (meta.json)
+**Text demo:** Action: Click and drag to select cells B2:D6
 
-> Click and drag to select cells B2:D6
-
-#### Text-Only Demo Output
-
-> Action: Click and drag to select cells B2:D6
-
-#### VLM-Enriched Demo Output
+**VLM demo:**
 
 > Observation: The new sheet contains four headers ("Year", "CA changes", "FA changes", "OA changes") and calculated annual changes for each asset type in columns B, C, and D.
 >   Intent: To select the range of calculated annual changes and their corresponding years for further formatting or analysis.
 >   Action: Click and drag to select cells B2:D6.
 >   Result: Cells B2:D6 are highlighted, indicating they are selected for the next operation.
 
-</details>
+---
 
-<details>
-<summary><strong>Step 21:</strong> Click the % button in the toolbar (or press Ctrl+Shift+5)</summary>
+### Step 21: Click the % button in the toolbar (or press Ctrl+Shift+5)
 
-#### Screenshots
+[![before](artifacts/thumbnails/step_20_before.png)](artifacts/full/step_20_before.png) [![after](artifacts/thumbnails/step_20_after.png)](artifacts/full/step_20_after.png)
 
-| Before | After |
-|--------|-------|
-| ![before](artifacts/thumbnails/step_20_before.png) | ![after](artifacts/thumbnails/step_20_after.png) |
+**Ground truth:** Click the % button in the toolbar (or press Ctrl+Shift+5)
 
-#### Ground Truth (meta.json)
+**Text demo:** Action: Click the % button in the toolbar (or press Ctrl+Shift+5)
 
-> Click the % button in the toolbar (or press Ctrl+Shift+5)
-
-#### Text-Only Demo Output
-
-> Action: Click the % button in the toolbar (or press Ctrl+Shift+5)
-
-#### VLM-Enriched Demo Output
+**VLM demo:**
 
 > Observation: The annual changes for "CA changes", "FA changes", and "OA changes" are displayed as decimal values in columns B, C, and D.
 >   Intent: To format the annual change values as percentages for better readability.
 >   Action: Click the % button in the toolbar (or press Ctrl+Shift+5).
 >   Result: The values in columns B, C, and D are now displayed as percentages.
-
-</details>
 
 ---
 
