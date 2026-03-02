@@ -1,6 +1,24 @@
 # CHANGELOG
 
 
+## v0.16.0 (2026-03-02)
+
+### Features
+
+- Auto-persist WAA recordings to prevent data loss
+  ([#62](https://github.com/OpenAdaptAI/openadapt-evals/pull/62),
+  [`e64368e`](https://github.com/OpenAdaptAI/openadapt-evals/commit/e64368e8ff6fa602efa3d58165a55383f064fa90))
+
+- Add waa_recordings/ to .gitignore (immune to git stash -u, git clean -f) - Add _backup_file()
+  helper: hardlinks PNGs + meta.json to ~/oa/recordings/ (zero extra disk, falls back to copy on
+  cross-device, silent on failure) - Add _save_incremental_meta(): writes meta.json atomically after
+  each step via .tmp rename, with recording_complete field for partial detection - Wire helpers into
+  recording loop (before/after screenshots, step advances, done, restart cleanup) - Use
+  systemd-first pattern for socat proxy in auto-infrastructure
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.15.1 (2026-03-02)
 
 ### Bug Fixes
