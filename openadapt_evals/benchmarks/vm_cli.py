@@ -2245,6 +2245,190 @@ def cmd_test_all(args):
         return 1
 
 
+def cmd_smoke_test_aws(args):
+    """Smoke-test the AWS VM backend with incremental stages.
+
+    Stages 1-5 are read-only (credentials, SSH key, AMI, instance type, VPC).
+    Stages 6-9 require --full and create/stop/start/delete a real EC2 instance.
+    """
+    init_logging()
+
+    region = getattr(args, "region", None)
+    instance_type = getattr(args, "instance_type", "m5a.xlarge")
+    full = getattr(args, "full", False)
+    vm_name = "waa-smoke-test"
+    prefix = "SMOKE-AWS"
+    passed = 0
+    failed = 0
+    total_read_only = 5
+    total_full = 9
+
+    def stage_pass(n, desc):
+        nonlocal passed
+        passed += 1
+        log(prefix, f"Stage {n}: {desc} ... PASS")
+
+    def stage_fail(n, desc, err):
+        nonlocal failed
+        failed += 1
+        log(prefix, f"Stage {n}: {desc} ... FAIL")
+        log(prefix, f"  Error: {err}")
+
+    log(prefix, "=" * 60)
+    log(prefix, f"AWS Smoke Test ({'full lifecycle' if full else 'read-only'})")
+    log(prefix, "=" * 60)
+
+    # --- Stage 1: Credentials ---
+    try:
+        import boto3
+
+        sts = boto3.client("sts")
+        identity = sts.get_caller_identity()
+        log(prefix, f"  Account: {identity['Account']}, ARN: {identity['Arn']}")
+        stage_pass(1, "AWS credentials")
+    except Exception as e:
+        stage_fail(1, "AWS credentials", e)
+        log(prefix, "Cannot continue without valid AWS credentials.")
+        return 1
+
+    # --- Stage 2: SSH key ---
+    ssh_pub = Path.home() / ".ssh" / "id_rsa.pub"
+    if ssh_pub.exists():
+        key_size = ssh_pub.stat().st_size
+        log(prefix, f"  Key: {ssh_pub} ({key_size} bytes)")
+        stage_pass(2, "SSH public key")
+    else:
+        stage_fail(2, "SSH public key", f"{ssh_pub} not found")
+        log(prefix, "Cannot continue without SSH key (needed for VPC infra).")
+        return 1
+
+    # --- Stage 3: AMI lookup ---
+    from openadapt_evals.infrastructure.aws_vm import AWSVMManager
+
+    mgr = AWSVMManager()
+    if region:
+        mgr.region = region
+
+    try:
+        ami = mgr._find_latest_ubuntu_ami(region=mgr.region)
+        log(prefix, f"  AMI: {ami} (region: {mgr.region})")
+        stage_pass(3, "AMI lookup")
+    except Exception as e:
+        stage_fail(3, "AMI lookup", e)
+        log(prefix, "Cannot continue without a valid AMI.")
+        return 1
+
+    # --- Stage 4: Instance type availability ---
+    try:
+        found_type, found_region, cost = mgr.find_available_size_and_region()
+        log(prefix, f"  Type: {found_type}, Region: {found_region}, Cost: ${cost:.3f}/hr")
+        stage_pass(4, "Instance type availability")
+    except Exception as e:
+        stage_fail(4, "Instance type availability", e)
+        log(prefix, "No available instance type/region found (non-fatal for read-only).")
+        # Non-fatal: we can still test VPC infra in the current region
+
+    # --- Stage 5: VPC infrastructure ---
+    try:
+        infra = mgr._ensure_vpc_infrastructure(region=mgr.region)
+        log(prefix, f"  Subnet: {infra['subnet_id']}")
+        log(prefix, f"  Security group: {infra['security_group_id']}")
+        log(prefix, f"  Key pair: {infra['key_name']}")
+        stage_pass(5, "VPC infrastructure")
+    except Exception as e:
+        stage_fail(5, "VPC infrastructure", e)
+        if full:
+            log(prefix, "Cannot continue to lifecycle stages without VPC.")
+            return 1
+
+    # --- Summary for read-only stages ---
+    if not full:
+        log(prefix, "")
+        log(prefix, "-" * 60)
+        log(prefix, f"Read-only stages: {passed} passed, {failed} failed (of {total_read_only})")
+        log(prefix, "Run with --full to test VM lifecycle (stages 6-9).")
+        return 1 if failed > 0 else 0
+
+    # === Full lifecycle stages (6-9) ===
+    log(prefix, "")
+    log(prefix, "--- Full lifecycle (creates real EC2 resources) ---")
+
+    ip = None
+    try:
+        # --- Stage 6: Create VM ---
+        try:
+            log(prefix, f"  Creating {vm_name} ({instance_type} in {mgr.region})...")
+            result = mgr.create_vm(
+                name=vm_name,
+                region=mgr.region,
+                size=instance_type,
+                image_id=ami,
+            )
+            ip = result.get("publicIpAddress")
+            log(prefix, f"  IP: {ip}")
+            stage_pass(6, "Create VM")
+        except Exception as e:
+            stage_fail(6, "Create VM", e)
+            log(prefix, "Cannot continue without a running VM.")
+            return 1
+
+        # --- Stage 7: SSH connectivity ---
+        try:
+            from openadapt_evals.infrastructure.azure_vm import ssh_run, wait_for_ssh
+
+            log(prefix, f"  Waiting for SSH on {ip}...")
+            ssh_ok = wait_for_ssh(ip, timeout=180, username=mgr.ssh_username)
+            if not ssh_ok:
+                raise RuntimeError("SSH did not become reachable within 180s")
+
+            result = ssh_run(ip, "hostname", username=mgr.ssh_username)
+            hostname = result.stdout.strip()
+            log(prefix, f"  Hostname: {hostname}")
+            stage_pass(7, "SSH connectivity")
+        except Exception as e:
+            stage_fail(7, "SSH connectivity", e)
+
+        # --- Stage 8: Stop / Start ---
+        try:
+            log(prefix, "  Stopping VM...")
+            ok = mgr.deallocate_vm(vm_name)
+            if not ok:
+                raise RuntimeError("deallocate_vm returned False")
+            log(prefix, "  VM stopped. Starting VM...")
+
+            ok = mgr.start_vm(vm_name)
+            if not ok:
+                raise RuntimeError("start_vm returned False")
+
+            new_ip = mgr.get_vm_ip(vm_name)
+            log(prefix, f"  New IP after restart: {new_ip}")
+            ip = new_ip  # update for cleanup
+            stage_pass(8, "Stop/Start cycle")
+        except Exception as e:
+            stage_fail(8, "Stop/Start cycle", e)
+
+    finally:
+        # --- Stage 9: Cleanup ---
+        try:
+            log(prefix, f"  Deleting {vm_name}...")
+            ok = mgr.delete_vm(vm_name)
+            if not ok:
+                raise RuntimeError("delete_vm returned False")
+            log(prefix, "  VM terminated and cleaned up.")
+            stage_pass(9, "Cleanup")
+        except Exception as e:
+            stage_fail(9, "Cleanup", e)
+            log(prefix, f"  WARNING: {vm_name} may still exist — check AWS console!")
+
+    # --- Final summary ---
+    total = total_full
+    log(prefix, "")
+    log(prefix, "=" * 60)
+    log(prefix, f"RESULT: {passed}/{total} stages passed, {failed} failed")
+    log(prefix, "=" * 60)
+    return 1 if failed > 0 else 0
+
+
 def cmd_probe(args):
     """Check if WAA server is ready."""
     ip = get_vm_ip()
@@ -7957,6 +8141,28 @@ Examples:
     )
     p_test_all.add_argument("--api-key", help="OpenAI API key (or set OPENAI_API_KEY in .env)")
     p_test_all.set_defaults(func=cmd_test_all)
+
+    # smoke-test-aws
+    p_smoke_aws = subparsers.add_parser(
+        "smoke-test-aws",
+        help="Smoke-test AWS VM backend (credentials, AMI, VPC, lifecycle)",
+    )
+    p_smoke_aws.add_argument(
+        "--full",
+        action="store_true",
+        help="Run full lifecycle (create/stop/start/delete a real EC2 instance)",
+    )
+    p_smoke_aws.add_argument(
+        "--region",
+        default=None,
+        help="AWS region override (default: from config or us-east-1)",
+    )
+    p_smoke_aws.add_argument(
+        "--instance-type",
+        default="m5a.xlarge",
+        help="EC2 instance type for lifecycle test (default: m5a.xlarge, $0.17/hr)",
+    )
+    p_smoke_aws.set_defaults(func=cmd_smoke_test_aws)
 
     # run
     p_run = subparsers.add_parser("run", help="Run benchmark tasks (uses vanilla WAA navi agent)")
