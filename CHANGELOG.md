@@ -1,6 +1,56 @@
 # CHANGELOG
 
 
+## v0.20.0 (2026-03-02)
+
+### Features
+
+- Add smoke-test-aws CLI command with full lifecycle test
+  ([#72](https://github.com/OpenAdaptAI/openadapt-evals/pull/72),
+  [`47a8168`](https://github.com/OpenAdaptAI/openadapt-evals/commit/47a8168b7801080352fa17ba11566dee48c78539))
+
+* feat: add `smoke-test-aws` CLI command with full lifecycle test
+
+Add `oa-vm smoke-test-aws` command that runs incremental verification stages against real AWS
+  infrastructure:
+
+Read-only stages (default): 1. AWS credentials (STS get_caller_identity) 2. SSH public key
+  (~/.ssh/id_rsa.pub) 3. AMI lookup (latest Ubuntu 22.04 LTS) 4. Instance type availability
+  (find_available_size_and_region) 5. VPC infrastructure (ensure_vpc_infrastructure)
+
+Full lifecycle stages (--full): 6. Create VM (m5a.xlarge, $0.17/hr) 7. SSH connectivity
+  (wait_for_ssh + hostname) 8. Stop/Start cycle (deallocate -> start -> verify IP refresh) 9.
+  Cleanup (delete -> verify terminated)
+
+Also fixes two bugs in AWSVMManager discovered during testing: - deallocate_vm: now waits for
+  'stopped' state before returning (previously returned immediately, causing start_vm to fail with
+  IncorrectInstanceState) - delete_vm: now waits for 'terminated' state before returning (previously
+  returned immediately, so callers couldn't verify termination)
+
+Tested: 9/9 stages passed on real AWS (us-east-1, ~1m42s total).
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* docs: add screenshots of Windows 11 running on AWS EC2
+
+Screenshots captured from m5.metal instance in us-east-1: - aws-waa-installing.png: Windows 11
+  installer at 42% on EC2 - aws-waa-windows-desktop.png: Full Windows 11 desktop with Start menu
+
+Proves the full WAA stack works on AWS: EC2 m5.metal → Docker → QEMU/KVM → Windows 11 with all
+  benchmark apps (Notepad, Calculator, Settings, Edge, etc.)
+
+* chore: sync beads state
+
+* docs: add AWS support section with cost analysis to CLAUDE.md
+
+Documents AWS workflow (smoke-test-aws, pool commands with --cloud aws), m5.metal cost breakdown per
+  phase, and references the Windows 11 screenshot.
+
+---------
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.19.2 (2026-03-02)
 
 ### Bug Fixes
