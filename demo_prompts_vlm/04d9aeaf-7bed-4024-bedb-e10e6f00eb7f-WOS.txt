@@ -86,10 +86,10 @@ Step 14:
   Result: Cell C2 now displays the calculated percentage change for Fixed Assets between 2015 and 2016 as a decimal value.
 
 Step 15:
-  Observation: The spreadsheet shows columns "Year", "CA changes", "FA changes", and "OA changes" with numeric values entered in rows 2 and 3 for "CA changes" and "FA changes", and the cell C3 is active with a formula being entered.
-  Intent: To calculate the annual percentage change for Fixed Assets for the year 2016 in cell C3.
-  Action: Press Enter key to confirm the formula input in cell C3.
-  Result: The formula in cell C3 is accepted, and the cell remains selected with the calculated value displayed as a decimal number.
+  Observation: The spreadsheet shows CA changes filled in column B (B2:B6), and the formula for FA changes has just been typed in cell C2 with the formula bar showing "=(Sheet1.C3-Sheet1.C2)/Sheet1.C2".
+  Intent: To confirm the FA changes formula in cell C2 and move to the next cell.
+  Action: Press Enter key to confirm the formula in cell C2.
+  Result: The formula is evaluated and the calculated percentage change for Fixed Assets appears in cell C2.
 
 Step 16:
   Observation: Cell C2 contains a calculated value for FA changes, and cells C3 to C6 are empty.
@@ -98,13 +98,13 @@ Step 16:
   Result: The FA changes formula was filled down from C2 to C6, populating cells C3 to C6 with calculated values.
 
 Step 17:
-  Observation: The sheet shows columns "Year", "CA changes", and "FA changes" filled with percentage values, while the "OA changes" column is empty and cell D2 is selected.
-  Intent: To calculate the annual percentage change for Other Assets in cell D3 using data from Sheet1.
-  Action: CLICK cell D3 and TYPE the formula "=(Sheet1.D3-Sheet1.D2)/Sheet1.D2".
-  Result: Cell D3 now displays the calculated percentage change for Other Assets between 2015 and 2016.
+  Observation: The sheet shows columns "Year", "CA changes", and "FA changes" filled with calculated values, while the "OA changes" column is empty and cell D2 is selected.
+  Intent: To calculate the annual percentage change for Other Assets by entering a formula in cell D2 referencing values from Sheet1.
+  Action: CLICK cell D2 and TYPE the formula "=(Sheet1.D3-Sheet1.D2)/Sheet1.D2".
+  Result: Cell D2 now contains the formula for calculating the percentage change in Other Assets between 2014 and 2015.
 
 Step 18:
-  Observation: The spreadsheet shows columns "Year", "CA changes", "FA changes", and "OA changes" with numerical values entered, and cell D3 is active with a negative decimal value displayed in the formula bar.
+  Observation: The spreadsheet shows columns "Year", "CA changes", "FA changes", and "OA changes" with the formula just entered in cell D2, which is active with the formula visible in the formula bar.
   Intent: To confirm the entry of the annual change value for "OA changes" in 2016 and proceed to the next step.
   Action: Press Enter key while cell D3 is active.
   Result: The active cell remains D3, and the entered value is confirmed without visible change in the spreadsheet content or formatting.
