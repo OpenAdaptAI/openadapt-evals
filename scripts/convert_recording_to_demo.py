@@ -31,7 +31,6 @@ Usage:
 """
 from __future__ import annotations
 
-import base64
 import json
 import re
 import sys
@@ -40,6 +39,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
+
+from openadapt_evals.vlm import vlm_call, image_bytes_from_path
 
 # Regex patterns for extracting key references from step descriptions
 _CELL_REF_RE = re.compile(r'\b([A-Z]+\d+)\b')
@@ -193,10 +194,10 @@ def convert_vlm(
         print(f"  Step {i + 1}/{num_steps}...", end=" ", flush=True)
 
         # Build VLM prompt with strong ground-truth constraint
-        images = [_encode_image(before_path)]
+        images = [image_bytes_from_path(before_path)]
         has_after = after_path.exists()
         if has_after:
-            images.append(_encode_image(after_path))
+            images.append(image_bytes_from_path(after_path))
 
         prompt = (
             f"You are annotating step {i + 1} of {num_steps} in a desktop task demonstration.\n"
@@ -220,7 +221,17 @@ def convert_vlm(
         )
 
         try:
-            annotation = _vlm_call(prompt, images, provider, model)
+            resolved_model = model or (
+                "gpt-4.1" if provider == "openai" else "claude-sonnet-4-20250514"
+            )
+            annotation = vlm_call(
+                prompt,
+                images=images,
+                provider=provider,
+                model=resolved_model,
+                max_tokens=400,
+                temperature=0.0,
+            )
 
             # Post-hoc validation: check VLM Action against ground truth
             vlm_action = _extract_annotation_field(annotation, "Action")
@@ -251,66 +262,6 @@ def convert_vlm(
 
     lines.append("---")
     return "\n".join(lines) + "\n"
-
-
-def _encode_image(path: Path) -> str:
-    """Read an image file and return base64-encoded string."""
-    return base64.b64encode(path.read_bytes()).decode("utf-8")
-
-
-def _vlm_call(
-    prompt: str,
-    images_b64: list[str],
-    provider: str = "openai",
-    model: str | None = None,
-) -> str:
-    """Send a prompt with images to a VLM and return the response text."""
-    if provider == "openai":
-        return _vlm_call_openai(prompt, images_b64, model or "gpt-4.1")
-    elif provider in ("anthropic", "claude"):
-        return _vlm_call_anthropic(prompt, images_b64, model or "claude-sonnet-4-20250514")
-    else:
-        raise ValueError(f"Unsupported provider: {provider}")
-
-
-def _vlm_call_openai(prompt: str, images_b64: list[str], model: str) -> str:
-    import openai
-
-    content: list[dict] = [{"type": "text", "text": prompt}]
-    for img in images_b64:
-        content.append({
-            "type": "image_url",
-            "image_url": {"url": f"data:image/png;base64,{img}", "detail": "low"},
-        })
-
-    client = openai.OpenAI()
-    resp = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": content}],
-        max_tokens=400,
-        temperature=0.0,
-    )
-    return resp.choices[0].message.content
-
-
-def _vlm_call_anthropic(prompt: str, images_b64: list[str], model: str) -> str:
-    import anthropic
-
-    content: list[dict] = [{"type": "text", "text": prompt}]
-    for img in images_b64:
-        content.append({
-            "type": "image",
-            "source": {"type": "base64", "media_type": "image/png", "data": img},
-        })
-
-    client = anthropic.Anthropic()
-    resp = client.messages.create(
-        model=model,
-        messages=[{"role": "user", "content": content}],
-        max_tokens=400,
-        temperature=0.0,
-    )
-    return resp.content[0].text
 
 
 def main(
