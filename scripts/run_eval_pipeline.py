@@ -282,6 +282,32 @@ def _ensure_container_running(vm_user: str, vm_ip: str) -> bool:
     return False
 
 
+def _deallocate_vm(vm_name: str, resource_group: str) -> bool:
+    """Deallocate VM to stop billing.
+
+    Uses raw ``az vm deallocate`` because the built-in ``oa-vm deallocate``
+    hardcodes ``VM_NAME = "waa-eval-vm"`` and doesn't accept a ``--name``
+    parameter, so it won't work for pool-style VMs like ``waa-pool-00``.
+    """
+    print(f"\n[vm] Deallocating {vm_name} (stops billing)...")
+    result = subprocess.run(
+        [
+            "az", "vm", "deallocate",
+            "--name", vm_name,
+            "--resource-group", resource_group,
+            "--no-wait",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        print(f"[vm] Deallocate failed: {result.stderr.strip()}")
+        return False
+    print(f"[vm] Deallocate initiated (async). Billing will stop shortly.")
+    return True
+
+
 # ── Phase 2: Connectivity ─────────────────────────────────────────────────
 
 
@@ -623,6 +649,10 @@ def main() -> int:
         "--no-vnc", dest="vnc", action="store_false",
         help="Do not open VNC viewer",
     )
+    parser.add_argument(
+        "--deallocate-after", action="store_true",
+        help="Deallocate VM after eval completes (stops billing)",
+    )
     args = parser.parse_args()
 
     recordings_dir = Path(args.recordings)
@@ -813,6 +843,11 @@ def main() -> int:
     # ── Phase 4: Summary ──────────────────────────────────────────────
 
     _print_summary(results, args.agent)
+
+    # ── Optional: Deallocate VM ───────────────────────────────────────
+
+    if args.deallocate_after and not args.skip_vm:
+        _deallocate_vm(args.vm_name, args.resource_group)
 
     ok = sum(1 for r in results.values() if r["returncode"] == 0)
     return 0 if ok == len(results) else 1
