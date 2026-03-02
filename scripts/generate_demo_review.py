@@ -17,8 +17,8 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 import re
-import shutil
 import sys
 from pathlib import Path
 
@@ -54,15 +54,21 @@ def _parse_demo_steps(demo_text: str) -> dict[int, str]:
 
 
 def _create_thumbnail(src: Path, dst: Path, width: int = THUMBNAIL_WIDTH) -> None:
-    """Resize an image to the given width, preserving aspect ratio."""
+    """Resize an image to the given width, preserving aspect ratio.
+
+    Saves as JPEG for smaller file sizes (thumbnails are for preview only).
+    """
     with Image.open(src) as img:
         if img.width <= width:
-            shutil.copy2(src, dst)
+            out = img.convert("RGB") if img.mode in ("RGBA", "P") else img
+            out.save(dst, format="JPEG", quality=80, optimize=True)
             return
         ratio = width / img.width
         new_height = int(img.height * ratio)
         resized = img.resize((width, new_height), Image.LANCZOS)
-        resized.save(dst, optimize=True)
+        if resized.mode in ("RGBA", "P"):
+            resized = resized.convert("RGB")
+        resized.save(dst, format="JPEG", quality=80, optimize=True)
 
 
 def _relpath(target: Path, start: Path) -> str:
@@ -70,7 +76,6 @@ def _relpath(target: Path, start: Path) -> str:
     try:
         return str(target.resolve().relative_to(start.resolve()))
     except ValueError:
-        import os
         return os.path.relpath(target.resolve(), start.resolve())
 
 
@@ -138,12 +143,9 @@ def main(
         else:
             print(f"Warning: VLM demo not found at {vlm_demo_path}")
 
-    # --- Create thumbnails and copy full-res originals ---
+    # --- Create JPEG thumbnails and reference originals for full-res ---
     thumb_dir = output_path.parent / "artifacts" / "thumbnails"
     thumb_dir.mkdir(parents=True, exist_ok=True)
-
-    full_dir = output_path.parent / "artifacts" / "full"
-    full_dir.mkdir(parents=True, exist_ok=True)
 
     thumbnail_map: dict[str, Path] = {}
     full_map: dict[str, Path] = {}
@@ -152,17 +154,13 @@ def main(
             name = f"step_{i:02d}_{suffix}"
             src = recording_dir / f"{name}.png"
             if src.exists():
-                dst = thumb_dir / f"{name}.png"
+                dst = thumb_dir / f"{name}.jpg"
                 _create_thumbnail(src, dst, width=thumbnail_width)
                 thumbnail_map[name] = dst
-                # Copy full-resolution original
-                full_dst = full_dir / f"{name}.png"
-                shutil.copy2(src, full_dst)
-                full_map[name] = full_dst
+                # Link to the original in waa_recordings/ (no copy needed)
+                full_map[name] = src
 
     print(f"Created {len(thumbnail_map)} thumbnails in {thumb_dir}")
-    if full_map:
-        print(f"Copied {len(full_map)} full-resolution images to {full_dir}")
 
     # --- Build markdown ---
     md_dir = output_path.parent
