@@ -1324,13 +1324,25 @@ def _auto_start_container(vm_ip: str) -> bool:
 
 
 def _auto_start_socat(vm_ip: str) -> bool:
-    """Start socat proxy on the VM for port 5050 forwarding. Returns True on success."""
+    """Start socat proxy on the VM for port 5050 forwarding.
+
+    Tries the socat-waa-evaluate systemd service first (preferred: auto-restarts
+    on failure).  Falls back to the legacy nohup approach for older VMs that
+    don't have the service installed.
+    """
     print(f"  Starting socat proxy on {vm_ip} (VM:5051 -> container:5050)...")
-    # The socat command runs in the background on the VM
-    socat_cmd = (
-        'nohup socat TCP-LISTEN:5051,fork,reuseaddr '
-        'EXEC:"docker exec -i winarena socat - TCP\\:localhost\\:5050" '
-        '&>/dev/null &'
+    script = (
+        "if systemctl list-unit-files socat-waa-evaluate.service "
+        "| grep -q socat-waa-evaluate; then "
+        "  sudo systemctl restart socat-waa-evaluate.service; "
+        "else "
+        "  killall socat 2>/dev/null || true; sleep 1; "
+        "  which socat >/dev/null 2>&1 "
+        "  || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq socat; "
+        "  nohup socat TCP-LISTEN:5051,fork,reuseaddr "
+        "  'EXEC:docker exec -i winarena socat - TCP\\:127.0.0.1\\:5050' "
+        "  </dev/null >/dev/null 2>&1 &; "
+        "fi"
     )
     result = subprocess.run(
         ["ssh",
@@ -1338,14 +1350,13 @@ def _auto_start_socat(vm_ip: str) -> bool:
          "-o", "StrictHostKeyChecking=no",
          "-o", "UserKnownHostsFile=/dev/null",
          f"{_AUTO_SSH_USER}@{vm_ip}",
-         socat_cmd],
+         script],
         capture_output=True, text=True, timeout=30,
     )
     if result.returncode != 0:
-        print(f"  WARNING: socat setup returned non-zero: {result.stderr.strip()}")
-        # Not fatal — socat may already be running
-    else:
-        print("  Socat proxy started.")
+        print(f"  ERROR: socat proxy setup failed: {result.stderr.strip()}")
+        return False
+    print("  Socat proxy established (VM:5051 -> container:5050).")
     return True
 
 
