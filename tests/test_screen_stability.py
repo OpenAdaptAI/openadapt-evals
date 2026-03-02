@@ -1,22 +1,14 @@
-"""Tests for screen stability detection (_wait_for_stable_screen, _compare_screenshots)."""
+"""Tests for screen stability detection (compare_screenshots, wait_for_stable_screen)."""
 
 import io
-import importlib.util
-import sys
-from pathlib import Path
 from unittest.mock import patch
 
 from PIL import Image
 
-# Load record_waa_demos as a module (it's a script, not a package)
-_script_path = Path(__file__).parent.parent / "scripts" / "record_waa_demos.py"
-_spec = importlib.util.spec_from_file_location("record_waa_demos", _script_path)
-_mod = importlib.util.module_from_spec(_spec)
-sys.modules["record_waa_demos"] = _mod
-_spec.loader.exec_module(_mod)
-
-_compare_screenshots = _mod._compare_screenshots
-_wait_for_stable_screen = _mod._wait_for_stable_screen
+from openadapt_evals.infrastructure.screen_stability import (
+    compare_screenshots as _compare_screenshots,
+    wait_for_stable_screen as _wait_for_stable_screen,
+)
 
 
 def _make_png(width: int = 100, height: int = 100, color: tuple = (0, 0, 0)) -> bytes:
@@ -112,7 +104,7 @@ class TestWaitForStableScreen:
         stable_png = _make_png(color=(100, 100, 100))
 
         with patch(
-            "record_waa_demos._take_screenshot",
+            "openadapt_evals.infrastructure.screen_stability._take_screenshot",
             return_value=stable_png,
         ), patch("time.sleep"):
             result = _wait_for_stable_screen(
@@ -139,7 +131,7 @@ class TestWaitForStableScreen:
             return screenshots[idx]
 
         with patch(
-            "record_waa_demos._take_screenshot",
+            "openadapt_evals.infrastructure.screen_stability._take_screenshot",
             side_effect=mock_screenshot,
         ), patch("time.sleep"):
             result = _wait_for_stable_screen(
@@ -161,7 +153,7 @@ class TestWaitForStableScreen:
             return _make_png(color=(call_count[0] % 256, 0, 0))
 
         with patch(
-            "record_waa_demos._take_screenshot",
+            "openadapt_evals.infrastructure.screen_stability._take_screenshot",
             side_effect=mock_screenshot,
         ), patch("time.sleep"), patch("time.time") as mock_time:
             # Simulate timeout: first call returns 0, subsequent calls exceed deadline
@@ -198,7 +190,7 @@ class TestWaitForStableScreen:
             return screenshots[idx]
 
         with patch(
-            "record_waa_demos._take_screenshot",
+            "openadapt_evals.infrastructure.screen_stability._take_screenshot",
             side_effect=mock_screenshot,
         ), patch("time.sleep"):
             result = _wait_for_stable_screen(
