@@ -337,7 +337,6 @@ class PoolManager:
                     image_id=image_id,
                 )
                 ip = vm_info.get("publicIpAddress", "")
-                self.vm_manager.set_auto_shutdown(name, auto_shutdown_hours)
                 return (name, ip, None)
             except RuntimeError as e:
                 return (name, None, str(e))
@@ -365,6 +364,9 @@ class PoolManager:
             if wait_for_ssh(ip, timeout=120, username=username):
                 self._log("POOL", f"  {name}: SSH ready")
                 workers_ready.append((name, ip))
+                # Set auto-shutdown now that SSH is available
+                if auto_shutdown_hours > 0:
+                    self.vm_manager.set_auto_shutdown(name, auto_shutdown_hours)
             else:
                 self._log("POOL", f"  {name}: SSH timeout")
 
@@ -448,6 +450,8 @@ class PoolManager:
             location=region,
             vm_size=vm_size,
         )
+        pool.ssh_username = self._ssh_username
+        self.registry.save()
 
         # Set auto-pause timer
         if auto_shutdown_hours > 0:

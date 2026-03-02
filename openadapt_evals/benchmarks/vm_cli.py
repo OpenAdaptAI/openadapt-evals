@@ -88,6 +88,11 @@ def _get_default_cloud() -> str:
         return "azure"
 
 
+def _get_pool_ssh_username(pool: dict) -> str:
+    """Get SSH username from pool registry, defaulting to azureuser for backward compat."""
+    return pool.get("ssh_username", "azureuser")
+
+
 def _create_vm_manager(cloud: str | None = None, resource_group: str | None = None):
     """Factory to create the appropriate VM manager based on cloud provider.
 
@@ -908,6 +913,8 @@ def cmd_pool_vnc(args):
     worker_name = getattr(args, "worker", None)
     all_workers = getattr(args, "all", False)
 
+    ssh_user = _get_pool_ssh_username(pool)
+
     if all_workers:
         # Set up tunnels for all workers
         log("POOL-VNC", f"Setting up VNC tunnels for {len(workers)} workers...")
@@ -936,7 +943,7 @@ def cmd_pool_vnc(args):
                     "-N",
                     "-L",
                     f"{local_port}:localhost:8006",
-                    f"azureuser@{ip}",
+                    f"{ssh_user}@{ip}",
                 ],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -1013,7 +1020,7 @@ def cmd_pool_vnc(args):
                 "-N",
                 "-L",
                 f"{local_port}:localhost:8006",
-                f"azureuser@{ip}",
+                f"{ssh_user}@{ip}",
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -1066,6 +1073,7 @@ def cmd_pool_logs(args):
         print("ERROR: Pool has no workers.")
         return 1
 
+    ssh_user = _get_pool_ssh_username(pool)
     pool_id = pool.get("pool_id", "unknown")
     print(f"[pool-logs] Streaming logs from {len(workers)} workers (pool: {pool_id})")
     print("[pool-logs] Press Ctrl+C to stop\n", flush=True)
@@ -1084,7 +1092,7 @@ def cmd_pool_logs(args):
             "UserKnownHostsFile=/dev/null",
             "-o",
             "LogLevel=ERROR",
-            f"azureuser@{ip}",
+            f"{ssh_user}@{ip}",
             "docker logs -f winarena",
         ]
         try:
@@ -1156,6 +1164,7 @@ def cmd_pool_exec(args):
         log("POOL-EXEC", "ERROR: Pool has no workers.")
         return 1
 
+    ssh_user = _get_pool_ssh_username(pool)
     cmd = getattr(args, "cmd", None)
     docker = getattr(args, "docker", False)
     worker_filter = getattr(args, "worker", None)
@@ -1188,7 +1197,7 @@ def cmd_pool_exec(args):
 
         try:
             result = subprocess.run(
-                ["ssh", *SSH_OPTS, f"azureuser@{ip}", full_cmd],
+                ["ssh", *SSH_OPTS, f"{ssh_user}@{ip}", full_cmd],
                 capture_output=True,
                 text=True,
                 timeout=60,
