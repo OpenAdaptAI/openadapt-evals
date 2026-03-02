@@ -54,7 +54,7 @@ from openadapt_evals.infrastructure.vm_provider import VMProvider
 try:
     from openadapt_evals.infrastructure.aws_vm import AWSVMManager
 except ImportError:
-    pass  # boto3 not installed; use `pip install openadapt-evals[aws]`
+    AWSVMManager = None  # boto3 not installed; use `pip install openadapt-evals[aws]`
 
 __all__ = [
     "AWSVMManager",

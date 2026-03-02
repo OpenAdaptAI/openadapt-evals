@@ -23,21 +23,21 @@ Example:
 from __future__ import annotations
 
 import logging
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-# Instance types with nested virtualization (Intel VT-x / KVM) support.
-# m5.2xlarge: 8 vCPU, 32GB — comparable to Azure D8ds_v5.
-INSTANCE_TYPE = "m5.2xlarge"
+# Instance types with nested virtualization (KVM) support.
+# WAA requires QEMU/KVM, which only bare-metal instances expose on AWS.
+# m5.metal: 96 vCPU, 384GB — supports /dev/kvm for nested virtualization.
+INSTANCE_TYPE = "m5.metal"
 INSTANCE_TYPE_FALLBACKS = [
-    ("m5.2xlarge", 0.384),
-    ("m5a.2xlarge", 0.344),
-    ("m5n.2xlarge", 0.476),
-    ("c5.2xlarge", 0.340),
+    ("m5.metal", 4.608),
+    ("m5n.metal", 5.712),
+    ("c5.metal", 4.080),
+    ("m5a.xlarge", 0.172),  # Non-KVM fallback (won't run QEMU, for testing only)
 ]
 # Regions to try in order of preference
 AWS_REGIONS = ["us-east-1", "us-west-2", "us-east-2", "eu-west-1"]
@@ -327,8 +327,15 @@ class AWSVMManager:
         """
         import boto3
 
-        ec2_client = boto3.client("ec2", region_name=region)
-        ec2_resource = boto3.resource("ec2", region_name=region)
+        # Update manager's region so subsequent operations find this instance
+        if region != self.region:
+            logger.info(f"Switching region from {self.region} to {region}")
+            self.region = region
+            self._ec2_client = None
+            self._ec2_resource = None
+
+        ec2_client = self._get_ec2_client()
+        ec2_resource = self._get_ec2_resource()
 
         try:
             infra = self._ensure_vpc_infrastructure(region)
