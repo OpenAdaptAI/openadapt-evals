@@ -239,6 +239,8 @@ class AWSVMManager:
                 Description="WAA pool security group",
                 VpcId=vpc_id,
             )
+            # TODO: restrict to user's IP (e.g., via https://checkip.amazonaws.com)
+            # Open to 0.0.0.0/0 for now; key-based auth mitigates brute-force risk.
             sg.authorize_ingress(
                 IpPermissions=[
                     {
@@ -255,7 +257,9 @@ class AWSVMManager:
         key_name = "waa-pool-key"
         try:
             ec2.describe_key_pairs(KeyNames=[key_name])
-        except Exception:
+        except Exception as e:
+            if "InvalidKeyPair.NotFound" not in str(e):
+                raise
             ssh_pub_key_path = Path.home() / ".ssh" / "id_rsa.pub"
             if not ssh_pub_key_path.exists():
                 raise RuntimeError(
@@ -604,10 +608,17 @@ class AWSVMManager:
         # Terminate instances
         for name in resources.get("instances", []):
             try:
-                instance = self._find_instance_by_name(name)
-                if instance:
-                    ec2.terminate_instances(InstanceIds=[instance["InstanceId"]])
+                if name.startswith("i-"):
+                    # Raw instance ID (no Name tag) — terminate directly
+                    ec2.terminate_instances(InstanceIds=[name])
                     logger.info(f"Terminated {name}")
+                else:
+                    instance = self._find_instance_by_name(name)
+                    if instance:
+                        ec2.terminate_instances(InstanceIds=[instance["InstanceId"]])
+                        logger.info(f"Terminated {name}")
+                    else:
+                        logger.warning(f"Instance {name} not found, skipping")
             except Exception as e:
                 logger.error(f"Failed to terminate {name}: {e}")
                 all_ok = False
@@ -615,16 +626,23 @@ class AWSVMManager:
         # Release Elastic IPs
         for eip_name in resources.get("eips", []):
             try:
-                # Find the EIP by name tag
-                resp = ec2.describe_addresses(
-                    Filters=[{"Name": "tag:Name", "Values": [eip_name]}]
-                )
-                for addr in resp.get("Addresses", []):
-                    if addr.get("AssociationId"):
-                        ec2.disassociate_address(
-                            AssociationId=addr["AssociationId"]
-                        )
-                    ec2.release_address(AllocationId=addr["AllocationId"])
+                if eip_name.startswith("eipalloc-"):
+                    # Raw allocation ID (no Name tag) — release directly
+                    try:
+                        ec2.disassociate_address(AllocationId=eip_name)
+                    except Exception:
+                        pass  # May not be associated
+                    ec2.release_address(AllocationId=eip_name)
+                else:
+                    resp = ec2.describe_addresses(
+                        Filters=[{"Name": "tag:Name", "Values": [eip_name]}]
+                    )
+                    for addr in resp.get("Addresses", []):
+                        if addr.get("AssociationId"):
+                            ec2.disassociate_address(
+                                AssociationId=addr["AssociationId"]
+                            )
+                        ec2.release_address(AllocationId=addr["AllocationId"])
             except Exception as e:
                 logger.error(f"Failed to release EIP {eip_name}: {e}")
                 all_ok = False

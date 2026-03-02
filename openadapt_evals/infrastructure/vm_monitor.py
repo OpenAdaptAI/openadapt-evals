@@ -375,6 +375,7 @@ class VMPool:
     paused_since: str | None = None  # ISO timestamp when pool was paused
     auto_pause_at: str | None = None  # ISO timestamp when pool will auto-pause
     auto_pause_hours: int = 2  # Hours until auto-pause (0 = disabled)
+    ssh_username: str = "azureuser"  # SSH username for pool worker connections
 
 
 class VMPoolRegistry:
