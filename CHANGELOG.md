@@ -1,6 +1,68 @@
 # CHANGELOG
 
 
+## v0.18.0 (2026-03-02)
+
+### Features
+
+- Migrate annotation pipeline from openadapt-ml to openadapt-evals
+  ([#64](https://github.com/OpenAdaptAI/openadapt-evals/pull/64),
+  [`7896051`](https://github.com/OpenAdaptAI/openadapt-evals/commit/7896051e514aedd647faeba0383e4acba9bea5ab))
+
+* feat: migrate annotation pipeline from openadapt-ml to openadapt-evals
+
+Move annotation data classes, prompts, and utilities into openadapt_evals.annotation and consolidate
+  three separate VLM call implementations into a shared openadapt_evals.vlm module.
+
+- New openadapt_evals/vlm.py: unified vlm_call() supporting consilium council, OpenAI, and
+  Anthropic; extract_json() for LLM output parsing; image_bytes_from_path() helper - New
+  openadapt_evals/annotation.py: AnnotatedStep/AnnotatedDemo data classes,
+  ANNOTATION_SYSTEM_PROMPT/ANNOTATION_STEP_PROMPT constants, parse_annotation_response(),
+  validate_annotations(), format_annotated_demo() - Updated scripts/record_waa_demos.py
+  cmd_annotate_waa() to import from openadapt_evals instead of openadapt_ml - Updated
+  scripts/refine_demo.py to use shared vlm_call/extract_json, refactored message builders to
+  prompt+images interface - Updated scripts/convert_recording_to_demo.py to use shared vlm_call - 16
+  new tests in tests/test_annotation.py, all existing tests pass
+
+Closes #59
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* fix: remove unused import and hoist model resolution in convert_recording_to_demo
+
+- Remove unused `import os` from openadapt_evals/vlm.py - Move `resolved_model` computation before
+  the for-loop in convert_vlm() so it's computed once instead of redundantly inside each step's try
+  block
+
+* fix: add timeouts, fix temperature regression, remove dead api_key param
+
+- vlm.py: add timeout=120s to OpenAI/Anthropic SDK clients to prevent indefinite hangs (old code had
+  explicit timeouts via requests) - vlm.py: pass system prompt separately to consilium
+  council_query() instead of concatenating into user prompt - refine_demo.py: explicitly pass
+  temperature=1.0 to vlm_call() in holistic and per-step review to match old behavior (vlm_call
+  defaults to 0.1 which would be an unintended behavioral change) - refine_demo.py: remove dead
+  api_key parameter from run_holistic_review, run_per_step_review, refine_recording, and main() —
+  vlm_call() reads API keys from environment via the SDK
+
+---------
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+### Refactoring
+
+- Deduplicate recording artifacts and use JPEG thumbnails
+  ([#65](https://github.com/OpenAdaptAI/openadapt-evals/pull/65),
+  [`f60df10`](https://github.com/OpenAdaptAI/openadapt-evals/commit/f60df10a56cea3031e254a4f573a8487dc73b5e3))
+
+- Remove docs/artifacts/full/ (was a copy of waa_recordings/ PNGs) - Thumbnails now link to
+  originals in waa_recordings/ for full-res - Switch thumbnails from PNG to JPEG (1.5 MB vs 3.0 MB
+  for same images) - Un-gitignore waa_recordings/ (research data, should be tracked) - Gitignore
+  docs/artifacts/full/ instead (regenerable) - Untrack benchmark_results/ (mock test output, already
+  gitignored) - Move os import to module level in generate_demo_review.py
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.17.1 (2026-03-02)
 
 ### Bug Fixes
