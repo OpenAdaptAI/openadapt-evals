@@ -375,6 +375,7 @@ class VMPool:
     paused_since: str | None = None  # ISO timestamp when pool was paused
     auto_pause_at: str | None = None  # ISO timestamp when pool will auto-pause
     auto_pause_hours: int = 2  # Hours until auto-pause (0 = disabled)
+    ssh_username: str = "azureuser"  # SSH username for pool worker connections
 
 
 class VMPoolRegistry:
@@ -413,6 +414,7 @@ class VMPoolRegistry:
                         paused_since=data.get("paused_since"),
                         auto_pause_at=data.get("auto_pause_at"),
                         auto_pause_hours=data.get("auto_pause_hours", 2),
+                        ssh_username=data.get("ssh_username", "azureuser"),
                     )
             except (json.JSONDecodeError, KeyError) as e:
                 print(f"Warning: Could not load pool registry: {e}")

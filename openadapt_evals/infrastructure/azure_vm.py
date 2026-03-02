@@ -167,6 +167,16 @@ class AzureVMManager:
         self._network_client = None
         self._use_sdk = _sdk_available() and self.subscription_id is not None
 
+    @property
+    def resource_scope(self) -> str:
+        """Cloud-agnostic resource scope (Azure resource group)."""
+        return self.resource_group
+
+    @property
+    def ssh_username(self) -> str:
+        """Default SSH username for Azure VMs."""
+        return "azureuser"
+
     def _get_compute_client(self):
         """Lazy-load Azure ComputeManagementClient."""
         if self._compute_client is None:
@@ -551,6 +561,84 @@ class AzureVMManager:
             "No available VM size/region found. "
             "Check quota: uv run python -m openadapt_evals.benchmarks.vm_cli azure-ml-quota"
         )
+
+    def list_pool_resources(self, prefix: str = "waa-pool") -> dict[str, list[str]]:
+        """List Azure resources matching a pool prefix.
+
+        Args:
+            prefix: Resource name prefix to match.
+
+        Returns:
+            Dict with keys "vms", "nics", "ips", "disks" mapping to
+            lists of matching resource names.
+        """
+        result: dict[str, list[str]] = {}
+        queries = [
+            ("vms", ["vm", "list"]),
+            ("nics", ["network", "nic", "list"]),
+            ("ips", ["network", "public-ip", "list"]),
+            ("disks", ["disk", "list"]),
+        ]
+        for key, cmd_parts in queries:
+            proc = self._az_run(
+                [
+                    *cmd_parts,
+                    "-g",
+                    self.resource_group,
+                    "--query",
+                    f"[?contains(name, '{prefix}')].name",
+                    "-o",
+                    "tsv",
+                ]
+            )
+            if proc.returncode == 0 and proc.stdout.strip():
+                result[key] = [
+                    r.strip() for r in proc.stdout.strip().split("\n") if r.strip()
+                ]
+            else:
+                result[key] = []
+        return result
+
+    def cleanup_pool_resources(
+        self, prefix: str, resources: dict[str, list[str]]
+    ) -> bool:
+        """Delete Azure pool resources.
+
+        Deletes in order: VMs first (releases NICs), then NICs, IPs, disks.
+
+        Args:
+            prefix: Pool name prefix (unused, resources already resolved).
+            resources: Dict from list_pool_resources().
+
+        Returns:
+            True if all deletions succeeded.
+        """
+        all_ok = True
+        rg = self.resource_group
+
+        for vm in resources.get("vms", []):
+            proc = self._az_run(
+                ["vm", "delete", "-g", rg, "-n", vm, "--yes", "--force-deletion", "true"]
+            )
+            if proc.returncode != 0:
+                all_ok = False
+
+        for nic in resources.get("nics", []):
+            proc = self._az_run(["network", "nic", "delete", "-g", rg, "-n", nic])
+            if proc.returncode != 0:
+                all_ok = False
+
+        for ip in resources.get("ips", []):
+            proc = self._az_run(["network", "public-ip", "delete", "-g", rg, "-n", ip])
+            if proc.returncode != 0:
+                all_ok = False
+
+        for disk in resources.get("disks", []):
+            proc = self._az_run(["disk", "delete", "-g", rg, "-n", disk, "--yes"])
+            if proc.returncode != 0:
+                all_ok = False
+
+        return all_ok
 
     # =========================================================================
     # Azure SDK implementations
@@ -942,6 +1030,7 @@ def ssh_run(
     stream: bool = False,
     step: str = "SSH",
     log_fn: Any = None,
+    username: str = "azureuser",
 ) -> subprocess.CompletedProcess:
     """Run command on VM via SSH.
 
@@ -955,6 +1044,7 @@ def ssh_run(
         step: Log prefix for output lines.
         log_fn: Optional logging function (signature: log_fn(step, message)).
             If None, uses print.
+        username: SSH username (default: "azureuser").
 
     Returns:
         CompletedProcess with return code and output.
@@ -967,12 +1057,12 @@ def ssh_run(
             print(f"[{step}] {message}", end=end, flush=True)
 
     if stream:
-        remote_log_dir = "/home/azureuser/cli_logs"
+        remote_log_dir = f"/home/{username}/cli_logs"
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         remote_log = f"{remote_log_dir}/{step.lower()}_{timestamp}.log"
 
         subprocess.run(
-            ["ssh", *SSH_OPTS, f"azureuser@{ip}", f"mkdir -p {remote_log_dir}"],
+            ["ssh", *SSH_OPTS, f"{username}@{ip}", f"mkdir -p {remote_log_dir}"],
             capture_output=True,
         )
 
@@ -985,7 +1075,7 @@ set -o pipefail
   echo $? > {remote_log}.exit
 }} 2>&1 | tee {remote_log}
 """
-        full_cmd = ["ssh", *SSH_OPTS, f"azureuser@{ip}", wrapped_cmd]
+        full_cmd = ["ssh", *SSH_OPTS, f"{username}@{ip}", wrapped_cmd]
 
         process = subprocess.Popen(
             full_cmd,
@@ -1007,7 +1097,7 @@ set -o pipefail
             process.wait()
         except KeyboardInterrupt:
             _log(step, "Interrupted - command continues on VM")
-            _log(step, f"View full log: ssh azureuser@{ip} 'cat {remote_log}'")
+            _log(step, f"View full log: ssh {username}@{ip} 'cat {remote_log}'")
             process.terminate()
             return subprocess.CompletedProcess(cmd, 130, "", "")
 
@@ -1015,7 +1105,7 @@ set -o pipefail
             [
                 "ssh",
                 *SSH_OPTS,
-                f"azureuser@{ip}",
+                f"{username}@{ip}",
                 f"cat {remote_log}.exit 2>/dev/null || echo 1",
             ],
             capture_output=True,
@@ -1025,20 +1115,21 @@ set -o pipefail
 
         if exit_code != 0:
             _log(step, f"Command failed (exit {exit_code})")
-            _log(step, f"Full log: ssh azureuser@{ip} 'cat {remote_log}'")
+            _log(step, f"Full log: ssh {username}@{ip} 'cat {remote_log}'")
 
         return subprocess.CompletedProcess(cmd, exit_code, "", "")
     else:
-        full_cmd = ["ssh", *SSH_OPTS, f"azureuser@{ip}", cmd]
+        full_cmd = ["ssh", *SSH_OPTS, f"{username}@{ip}", cmd]
         return subprocess.run(full_cmd, capture_output=True, text=True)
 
 
-def wait_for_ssh(ip: str, timeout: int = 120) -> bool:
+def wait_for_ssh(ip: str, timeout: int = 120, username: str = "azureuser") -> bool:
     """Wait for SSH to become available on a VM.
 
     Args:
         ip: VM public IP address.
         timeout: Maximum seconds to wait.
+        username: SSH username (default: "azureuser").
 
     Returns:
         True if SSH is reachable within timeout.
@@ -1047,7 +1138,7 @@ def wait_for_ssh(ip: str, timeout: int = 120) -> bool:
     while time.time() - start < timeout:
         try:
             result = subprocess.run(
-                ["ssh", *SSH_OPTS, f"azureuser@{ip}", "echo ok"],
+                ["ssh", *SSH_OPTS, f"{username}@{ip}", "echo ok"],
                 capture_output=True,
                 text=True,
                 timeout=15,
