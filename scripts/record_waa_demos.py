@@ -1075,6 +1075,97 @@ _AUTO_VM_NAME = "waa-pool-00"
 _AUTO_RESOURCE_GROUP = "openadapt-agents"
 _AUTO_SSH_USER = "azureuser"
 
+# Track whether this script started the VM (so we can offer to deallocate on exit)
+_vm_started_by_script = False
+_cleanup_registered = False
+_cleanup_done = False
+
+
+def _deallocate_vm() -> bool:
+    """Deallocate the Azure VM (async, returns immediately). Returns True on success."""
+    print(f"\n  Deallocating VM '{_AUTO_VM_NAME}'...")
+    try:
+        result = subprocess.run(
+            [
+                "az", "vm", "deallocate",
+                "-g", _AUTO_RESOURCE_GROUP,
+                "-n", _AUTO_VM_NAME,
+                "--no-wait",
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0:
+            print(f"  VM '{_AUTO_VM_NAME}' deallocate initiated (billing will stop shortly).")
+            return True
+        else:
+            print(f"  WARNING: deallocate failed: {result.stderr.strip()}")
+            return False
+    except Exception as e:
+        print(f"  WARNING: deallocate failed: {e}")
+        return False
+
+
+def _cleanup_on_exit(signal_received: bool = False) -> None:
+    """Offer to deallocate the VM if this script started it.
+
+    Called from atexit (interactive prompt) or signal handler (auto-deallocate).
+    """
+    global _cleanup_done
+    if _cleanup_done or not _vm_started_by_script:
+        return
+    _cleanup_done = True
+
+    if signal_received:
+        # Non-interactive (signal handler) — deallocate automatically
+        print("\n\n  Script interrupted. Deallocating VM to stop billing...")
+        _deallocate_vm()
+    else:
+        # Interactive (atexit / normal exit) — ask user
+        try:
+            answer = input(
+                f"\n  This script started VM '{_AUTO_VM_NAME}'. "
+                "Deallocate to stop billing? [Y/n] "
+            ).strip().lower()
+            if answer in ("", "y", "yes"):
+                _deallocate_vm()
+            else:
+                print(f"  VM '{_AUTO_VM_NAME}' left running. "
+                      f"Deallocate manually: az vm deallocate -g {_AUTO_RESOURCE_GROUP} "
+                      f"-n {_AUTO_VM_NAME} --no-wait")
+        except (EOFError, KeyboardInterrupt):
+            # stdin closed or user hit ctrl+c during prompt — deallocate
+            print()
+            _deallocate_vm()
+
+
+def _register_vm_cleanup() -> None:
+    """Register atexit and signal handlers for VM cleanup. Idempotent."""
+    global _cleanup_registered
+    if _cleanup_registered:
+        return
+    _cleanup_registered = True
+
+    import atexit
+    import signal
+
+    atexit.register(_cleanup_on_exit, signal_received=False)
+
+    _original_sigint = signal.getsignal(signal.SIGINT)
+    _original_sigterm = signal.getsignal(signal.SIGTERM)
+
+    def _signal_handler(signum, frame):
+        _cleanup_on_exit(signal_received=True)
+        # Re-raise with original handler
+        if signum == signal.SIGINT and callable(_original_sigint):
+            _original_sigint(signum, frame)
+        elif signum == signal.SIGTERM and callable(_original_sigterm):
+            _original_sigterm(signum, frame)
+        else:
+            sys.exit(1)
+
+    signal.signal(signal.SIGINT, _signal_handler)
+    signal.signal(signal.SIGTERM, _signal_handler)
+
 # Port mappings: local_port -> remote_port (on VM host)
 _TUNNEL_PORTS = {
     5001: 5000,   # WAA server
@@ -1113,6 +1204,7 @@ def _get_vm_power_state() -> str | None:
 
 def _auto_start_vm() -> bool:
     """Start the Azure VM. Returns True on success."""
+    global _vm_started_by_script
     print(f"  Starting VM '{_AUTO_VM_NAME}'...")
     result = subprocess.run(
         ["az", "vm", "start", "-g", _AUTO_RESOURCE_GROUP, "-n", _AUTO_VM_NAME],
@@ -1122,6 +1214,8 @@ def _auto_start_vm() -> bool:
         print(f"  ERROR: az vm start failed: {result.stderr.strip()}")
         return False
     print(f"  VM '{_AUTO_VM_NAME}' started.")
+    _vm_started_by_script = True
+    _register_vm_cleanup()
     return True
 
 
