@@ -122,6 +122,34 @@ oa-vm pool-cleanup -y
 3. Results stored in `benchmark_results/`
 4. Use `oa-vm vm setup-waa` for WAA container deployment on a VM (15-20 min fresh, 2-5 min existing)
 
+### AWS Support
+
+WAA also runs on AWS EC2 using the same pool commands with `--cloud aws`:
+
+```bash
+# Verify AWS setup (read-only, free)
+oa-vm smoke-test-aws
+
+# Full lifecycle test (creates/deletes a real instance, ~$0.01)
+oa-vm smoke-test-aws --full
+
+# Production pool on AWS
+oa-vm pool-create --cloud aws --workers 1
+oa-vm pool-wait --cloud aws --timeout 45
+oa-vm pool-cleanup --cloud aws -y
+```
+
+AWS requires `m5.metal` ($4.61/hr) for KVM/QEMU nested virtualization. First boot takes ~35 min (Windows download + install). Costs per full WAA stack test:
+
+| Phase | Time | Cost |
+|-------|------|------|
+| VM + Docker setup | ~14 min | $1.08 |
+| Docker image build | ~7 min | $0.54 |
+| Windows install + boot | ~20 min | $1.54 |
+| Benchmark runtime | varies | $4.61/hr |
+
+![Windows 11 on AWS EC2](docs/aws-waa-windows-desktop.png)
+
 ---
 
 ## CLI Reference
@@ -156,6 +184,7 @@ oa-vm pool-cleanup -y
 | `delete`         | Delete VM and all resources            |
 | `status`         | Show VM status and IP                  |
 | `deallocate`     | Stop VM (preserves disk, stops billing)|
+| `smoke-test-aws` | Smoke-test AWS backend (credentials, AMI, VPC, lifecycle) |
 
 Run `oa-vm --help` for the full list of 50+ commands.
 
