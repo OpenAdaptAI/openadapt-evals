@@ -13,6 +13,9 @@ import re
 from pathlib import Path
 
 
+_DEFAULT_TIMEOUT = 120  # seconds — prevents indefinite hangs on API calls
+
+
 def vlm_call(
     prompt: str,
     *,
@@ -21,6 +24,7 @@ def vlm_call(
     model: str = "gpt-4.1-mini",
     max_tokens: int = 1024,
     temperature: float = 0.1,
+    timeout: int = _DEFAULT_TIMEOUT,
     use_council: bool = False,
     provider: str = "openai",
 ) -> str:
@@ -38,6 +42,7 @@ def vlm_call(
         model: Model name.
         max_tokens: Maximum response tokens.
         temperature: Sampling temperature.
+        timeout: Request timeout in seconds.
         use_council: Whether to use consilium multi-model council.
         provider: VLM provider for direct calls (``"openai"`` or
             ``"anthropic"``).
@@ -49,10 +54,10 @@ def vlm_call(
         try:
             from consilium import council_query
 
-            council_prompt = "\n\n".join(filter(None, [system, prompt]))
             result = council_query(
-                council_prompt,
+                prompt,
                 images=images,
+                system=system or None,
                 skip_review=True,
                 budget=0.50,
             )
@@ -70,6 +75,7 @@ def vlm_call(
             model=model,
             max_tokens=max_tokens,
             temperature=temperature,
+            timeout=timeout,
         )
     elif provider in ("anthropic", "claude"):
         return _vlm_call_anthropic(
@@ -79,6 +85,7 @@ def vlm_call(
             model=model,
             max_tokens=max_tokens,
             temperature=temperature,
+            timeout=timeout,
         )
     else:
         raise ValueError(f"Unsupported provider: {provider}")
@@ -92,6 +99,7 @@ def _vlm_call_openai(
     model: str = "gpt-4.1-mini",
     max_tokens: int = 1024,
     temperature: float = 0.1,
+    timeout: int = _DEFAULT_TIMEOUT,
 ) -> str:
     """Single-model OpenAI call."""
     import openai
@@ -110,7 +118,7 @@ def _vlm_call_openai(
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": content})
 
-    client = openai.OpenAI()
+    client = openai.OpenAI(timeout=timeout)
     resp = client.chat.completions.create(
         model=model,
         messages=messages,
@@ -128,6 +136,7 @@ def _vlm_call_anthropic(
     model: str = "claude-sonnet-4-20250514",
     max_tokens: int = 1024,
     temperature: float = 0.1,
+    timeout: int = _DEFAULT_TIMEOUT,
 ) -> str:
     """Single-model Anthropic call."""
     import anthropic
@@ -141,7 +150,7 @@ def _vlm_call_anthropic(
                 "source": {"type": "base64", "media_type": "image/png", "data": b64},
             })
 
-    client = anthropic.Anthropic()
+    client = anthropic.Anthropic(timeout=timeout)
     kwargs: dict = {
         "model": model,
         "messages": [{"role": "user", "content": content}],
