@@ -541,57 +541,23 @@ def create_evaluate_blueprint(
     return bp
 
 
-# Standalone metrics implementations for when WAA evaluators are not available
-# These provide basic functionality without requiring WAA
+# Standalone metrics implementations — delegates to shared evaluation.metrics module
 
 
 class StandaloneMetrics:
     """Standalone metric implementations.
 
-    These are fallback implementations that can be used when WAA's
-    evaluators are not available (e.g., for testing or standalone use).
+    Thin wrapper around ``openadapt_evals.evaluation.metrics`` so that
+    existing callers (and tests) that reference ``StandaloneMetrics.method``
+    continue to work.
     """
 
-    @staticmethod
-    def exact_match(result: Any, expected: Any, **options) -> float:
-        """Exact string/value match."""
-        if result == expected:
-            return 1.0
-        # Try string comparison
-        if str(result).strip() == str(expected).strip():
-            return 1.0
-        return 0.0
-
-    @staticmethod
-    def fuzzy_match(result: Any, expected: Any, threshold: float = 0.8, **options) -> float:
-        """Fuzzy string matching."""
-        try:
-            from rapidfuzz import fuzz
-
-            score = fuzz.ratio(str(result), str(expected)) / 100.0
-            return 1.0 if score >= threshold else score
-        except ImportError:
-            # Fallback to simple containment check
-            result_str = str(result).lower()
-            expected_str = str(expected).lower()
-            if expected_str in result_str or result_str in expected_str:
-                return 0.8
-            return 0.0
-
-    @staticmethod
-    def contains(result: Any, expected: Any, **options) -> float:
-        """Check if result contains expected."""
-        result_str = str(result).lower()
-        expected_str = str(expected).lower()
-        return 1.0 if expected_str in result_str else 0.0
-
-    @staticmethod
-    def file_exists(result: Any, expected: Any, **options) -> float:
-        """Check if file exists."""
-        path = result if result else expected
-        if path and Path(path).exists():
-            return 1.0
-        return 0.0
+    from openadapt_evals.evaluation.metrics import (
+        exact_match,
+        fuzzy_match,
+        contains,
+        file_exists,
+    )
 
 
 class StandaloneGetters:
