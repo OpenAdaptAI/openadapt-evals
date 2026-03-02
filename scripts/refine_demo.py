@@ -31,7 +31,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import os
 import platform
@@ -44,6 +43,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
+
+from openadapt_evals.vlm import vlm_call, extract_json
 
 # ---------------------------------------------------------------------------
 # Defaults
@@ -59,158 +60,6 @@ HOLISTIC_MAX_SCREENSHOT_PAIRS = 8
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RECORDINGS_DIR = REPO_ROOT / "waa_recordings"
-
-# ---------------------------------------------------------------------------
-# LLM call (consilium with OpenAI fallback)
-# ---------------------------------------------------------------------------
-
-
-def _vlm_call(
-    messages: list[dict],
-    api_key: str | None = None,
-    model: str = DEFAULT_MODEL,
-    max_tokens: int = 1024,
-    *,
-    use_council: bool = True,
-) -> str:
-    """Send a VLM query, optionally using multi-model consilium council.
-
-    When ``use_council=True`` (default), queries multiple LLMs via consilium
-    in Stage-1-only mode (skip_review) for fast multi-model consensus.
-    Falls back to single-model OpenAI if consilium is unavailable.
-    """
-    # Extract system prompt, all text blocks, and images from messages
-    system_text = ""
-    text_parts: list[str] = []
-    image_bytes_list: list[bytes] | None = None
-    for msg in messages:
-        if msg.get("role") == "system":
-            # System prompt — capture separately
-            content = msg.get("content", "")
-            if isinstance(content, str):
-                system_text = content
-            continue
-        if isinstance(msg.get("content"), list):
-            for block in msg["content"]:
-                if block.get("type") == "text":
-                    text_parts.append(block["text"])
-                elif block.get("type") == "image_url":
-                    url = block["image_url"]["url"]
-                    if url.startswith("data:image/png;base64,"):
-                        raw = base64.b64decode(url.split(",", 1)[1])
-                        if image_bytes_list is None:
-                            image_bytes_list = []
-                        image_bytes_list.append(raw)
-        elif isinstance(msg.get("content"), str):
-            text_parts.append(msg["content"])
-
-    # Combine system prompt + all text blocks into one prompt for consilium
-    prompt_text = "\n\n".join(
-        ([system_text] if system_text else []) + text_parts
-    )
-
-    if use_council:
-        try:
-            from consilium import council_query
-
-            result = council_query(
-                prompt_text,
-                images=image_bytes_list,
-                skip_review=True,
-                budget=0.50,
-            )
-            return result["final_answer"]
-        except ImportError:
-            print("  (consilium not installed -- falling back to single-model)")
-        except Exception as e:
-            print(f"  (consilium failed: {e} -- falling back to single-model)")
-
-    # Fallback: single-model OpenAI call
-    if not api_key:
-        api_key = os.environ.get("OPENAI_API_KEY", "")
-    if not api_key:
-        raise RuntimeError(
-            "No OPENAI_API_KEY set and consilium unavailable. "
-            "Set the OPENAI_API_KEY environment variable or install consilium."
-        )
-
-    import requests as _req
-
-    resp = _req.post(
-        "https://api.openai.com/v1/chat/completions",
-        headers={"Authorization": f"Bearer {api_key}"},
-        json={"model": model, "max_tokens": max_tokens, "messages": messages},
-        timeout=120,
-    )
-    resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"]
-
-
-import re as _re
-
-
-def _extract_json(text: str):
-    """Extract a JSON array or object from LLM output.
-
-    Handles common cases:
-    - Pure JSON
-    - JSON wrapped in ```json ... ``` fences
-    - Preamble text before the JSON / fence
-    - Trailing commentary after the JSON
-    """
-    text = text.strip()
-
-    # Try direct parse first
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-
-    # Try extracting from markdown code fences
-    fence_match = _re.search(r"```(?:json)?\s*\n?([\s\S]*?)```", text)
-    if fence_match:
-        try:
-            return json.loads(fence_match.group(1).strip())
-        except json.JSONDecodeError:
-            pass
-
-    # Try finding the first [ ... ] or { ... } in the text
-    for opener, closer in [("[", "]"), ("{", "}")]:
-        start = text.find(opener)
-        if start == -1:
-            continue
-        # Walk from the end to find the matching closer
-        end = text.rfind(closer)
-        if end > start:
-            try:
-                return json.loads(text[start : end + 1])
-            except json.JSONDecodeError:
-                pass
-
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Screenshot helpers
-# ---------------------------------------------------------------------------
-
-
-def _encode_png_b64(path: Path) -> str | None:
-    """Return a data-URI base64 string for a PNG file, or None if missing."""
-    if not path.exists():
-        return None
-    raw = path.read_bytes()
-    b64 = base64.b64encode(raw).decode("ascii")
-    return f"data:image/png;base64,{b64}"
-
-
-def _image_content_block(data_uri: str) -> dict:
-    """Build an OpenAI-style image_url content block."""
-    return {
-        "type": "image_url",
-        "image_url": {"url": data_uri, "detail": "low"},
-    }
-
 
 # ---------------------------------------------------------------------------
 # Prompt templates
@@ -306,11 +155,11 @@ PER_STEP_SYSTEM_PROMPT = textwrap.dedent("""\
 # ---------------------------------------------------------------------------
 
 
-def _build_holistic_messages(
+def _build_holistic_prompt(
     rec_dir: Path,
     meta: dict,
-) -> list[dict]:
-    """Build the messages array for the holistic review pass."""
+) -> tuple[str, list[bytes] | None]:
+    """Build the prompt text and images for the holistic review pass."""
     steps = meta["steps"]
     num_steps = meta["num_steps"]
     instruction = meta["instruction"]
@@ -323,47 +172,28 @@ def _build_holistic_messages(
     # Sample screenshots evenly across the recording
     sample_indices = _sample_indices(num_steps, HOLISTIC_MAX_SCREENSHOT_PAIRS)
 
-    content_blocks: list[dict] = []
-    content_blocks.append(
-        {
-            "type": "text",
-            "text": (
-                f"TASK INSTRUCTION:\n{instruction}\n\n"
-                f"STEP LIST ({num_steps} steps):\n{step_list}\n\n"
-                f"Below are before/after screenshot pairs for a sample of "
-                f"steps (indices: {sample_indices}). Use these to verify "
-                f"that the step text matches what actually happened on screen."
-            ),
-        }
-    )
-
-    for idx in sample_indices:
-        before_uri = _encode_png_b64(rec_dir / f"step_{idx:02d}_before.png")
-        after_uri = _encode_png_b64(rec_dir / f"step_{idx:02d}_after.png")
-        content_blocks.append(
-            {"type": "text", "text": f"\n--- Step [{idx:02d}] ---"}
-        )
-        content_blocks.append(
-            {
-                "type": "text",
-                "text": f"Text: {steps[idx]['suggested_step']}",
-            }
-        )
-        if before_uri:
-            content_blocks.append(
-                {"type": "text", "text": "Before:"}
-            )
-            content_blocks.append(_image_content_block(before_uri))
-        if after_uri:
-            content_blocks.append(
-                {"type": "text", "text": "After:"}
-            )
-            content_blocks.append(_image_content_block(after_uri))
-
-    return [
-        {"role": "system", "content": HOLISTIC_SYSTEM_PROMPT},
-        {"role": "user", "content": content_blocks},
+    text_parts: list[str] = [
+        f"TASK INSTRUCTION:\n{instruction}\n\n"
+        f"STEP LIST ({num_steps} steps):\n{step_list}\n\n"
+        f"Below are before/after screenshot pairs for a sample of "
+        f"steps (indices: {sample_indices}). Use these to verify "
+        f"that the step text matches what actually happened on screen."
     ]
+
+    images: list[bytes] = []
+    for idx in sample_indices:
+        before_path = rec_dir / f"step_{idx:02d}_before.png"
+        after_path = rec_dir / f"step_{idx:02d}_after.png"
+        text_parts.append(f"\n--- Step [{idx:02d}] ---")
+        text_parts.append(f"Text: {steps[idx]['suggested_step']}")
+        if before_path.exists():
+            text_parts.append("Before:")
+            images.append(before_path.read_bytes())
+        if after_path.exists():
+            text_parts.append("After:")
+            images.append(after_path.read_bytes())
+
+    return "\n".join(text_parts), images or None
 
 
 def _sample_indices(total: int, max_samples: int) -> list[int]:
@@ -383,17 +213,18 @@ def run_holistic_review(
     use_council: bool = True,
 ) -> list[dict]:
     """Pass 1: holistic review. Returns list of flagged steps."""
-    messages = _build_holistic_messages(rec_dir, meta)
+    prompt_text, images = _build_holistic_prompt(rec_dir, meta)
     print("  Sending holistic review to LLM...")
-    raw = _vlm_call(
-        messages,
-        api_key=api_key,
+    raw = vlm_call(
+        prompt_text,
+        images=images,
+        system=HOLISTIC_SYSTEM_PROMPT,
         model=model,
         max_tokens=MAX_TOKENS_HOLISTIC,
         use_council=use_council,
     )
     # Parse JSON from response — handle markdown fences and preamble text
-    flagged = _extract_json(raw)
+    flagged = extract_json(raw)
     if flagged is None:
         print(f"  WARNING: Could not parse holistic review response as JSON.")
         print(f"  Raw response:\n{raw[:500]}")
@@ -418,13 +249,13 @@ def run_holistic_review(
 # ---------------------------------------------------------------------------
 
 
-def _build_per_step_messages(
+def _build_per_step_prompt(
     rec_dir: Path,
     meta: dict,
     step_idx: int,
     holistic_flag: dict,
-) -> list[dict]:
-    """Build messages for per-step verification of a flagged step."""
+) -> tuple[str, list[bytes] | None]:
+    """Build prompt text and images for per-step verification."""
     steps = meta["steps"]
     instruction = meta["instruction"]
     num_steps = meta["num_steps"]
@@ -438,45 +269,33 @@ def _build_per_step_messages(
         )
     context_text = "\n".join(context_lines)
 
-    content_blocks: list[dict] = []
-    content_blocks.append(
-        {
-            "type": "text",
-            "text": (
-                f"TASK INSTRUCTION:\n{instruction}\n\n"
-                f"SURROUNDING STEPS (>>> marks the step under review):\n"
-                f"{context_text}\n\n"
-                f"STEP UNDER REVIEW (index {step_idx}):\n"
-                f"  Text: {steps[step_idx]['suggested_step']}\n\n"
-                f"HOLISTIC REVIEW FLAG:\n"
-                f"  Issue type: {holistic_flag.get('issue_type', 'unknown')}\n"
-                f"  Reason: {holistic_flag.get('reason', 'N/A')}\n\n"
-                f"Below are the before and after screenshots for this step."
-            ),
-        }
-    )
-
-    before_uri = _encode_png_b64(rec_dir / f"step_{step_idx:02d}_before.png")
-    after_uri = _encode_png_b64(rec_dir / f"step_{step_idx:02d}_after.png")
-    if before_uri:
-        content_blocks.append({"type": "text", "text": "BEFORE screenshot:"})
-        content_blocks.append(_image_content_block(before_uri))
-    else:
-        content_blocks.append(
-            {"type": "text", "text": "(Before screenshot not available)"}
-        )
-    if after_uri:
-        content_blocks.append({"type": "text", "text": "AFTER screenshot:"})
-        content_blocks.append(_image_content_block(after_uri))
-    else:
-        content_blocks.append(
-            {"type": "text", "text": "(After screenshot not available)"}
-        )
-
-    return [
-        {"role": "system", "content": PER_STEP_SYSTEM_PROMPT},
-        {"role": "user", "content": content_blocks},
+    text_parts: list[str] = [
+        f"TASK INSTRUCTION:\n{instruction}\n\n"
+        f"SURROUNDING STEPS (>>> marks the step under review):\n"
+        f"{context_text}\n\n"
+        f"STEP UNDER REVIEW (index {step_idx}):\n"
+        f"  Text: {steps[step_idx]['suggested_step']}\n\n"
+        f"HOLISTIC REVIEW FLAG:\n"
+        f"  Issue type: {holistic_flag.get('issue_type', 'unknown')}\n"
+        f"  Reason: {holistic_flag.get('reason', 'N/A')}\n\n"
+        f"Below are the before and after screenshots for this step."
     ]
+
+    images: list[bytes] = []
+    before_path = rec_dir / f"step_{step_idx:02d}_before.png"
+    after_path = rec_dir / f"step_{step_idx:02d}_after.png"
+    if before_path.exists():
+        text_parts.append("BEFORE screenshot:")
+        images.append(before_path.read_bytes())
+    else:
+        text_parts.append("(Before screenshot not available)")
+    if after_path.exists():
+        text_parts.append("AFTER screenshot:")
+        images.append(after_path.read_bytes())
+    else:
+        text_parts.append("(After screenshot not available)")
+
+    return "\n".join(text_parts), images or None
 
 
 def run_per_step_review(
@@ -490,15 +309,16 @@ def run_per_step_review(
     use_council: bool = True,
 ) -> dict | None:
     """Pass 2: per-step verification. Returns correction dict or None."""
-    messages = _build_per_step_messages(rec_dir, meta, step_idx, holistic_flag)
-    raw = _vlm_call(
-        messages,
-        api_key=api_key,
+    prompt_text, images = _build_per_step_prompt(rec_dir, meta, step_idx, holistic_flag)
+    raw = vlm_call(
+        prompt_text,
+        images=images,
+        system=PER_STEP_SYSTEM_PROMPT,
         model=model,
         max_tokens=MAX_TOKENS_PER_STEP,
         use_council=use_council,
     )
-    correction = _extract_json(raw)
+    correction = extract_json(raw)
     if correction is None:
         print(f"    WARNING: Could not parse per-step response as JSON.")
         print(f"    Raw response:\n{raw[:300]}")
