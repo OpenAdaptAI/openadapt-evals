@@ -1,6 +1,22 @@
 # CHANGELOG
 
 
+## v0.19.2 (2026-03-02)
+
+### Bug Fixes
+
+- Unify fuzzy_match metrics into shared evaluation.metrics module
+  ([#71](https://github.com/OpenAdaptAI/openadapt-evals/pull/71),
+  [`2e1c547`](https://github.com/OpenAdaptAI/openadapt-evals/commit/2e1c54736743b066034e9487a79328c07330a28f))
+
+Extract metric functions (exact_match, fuzzy_match, contains, boolean, file_exists) into
+  evaluation/metrics.py as the single source of truth. Both client.py and evaluate_endpoint.py now
+  delegate to this module, eliminating the divergence between word-set overlap and rapidfuzz
+  implementations.
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.19.1 (2026-03-02)
 
 ### Bug Fixes
