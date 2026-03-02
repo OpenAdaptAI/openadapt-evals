@@ -25,16 +25,27 @@ Usage:
         --max-steps 15 \\
         --vm-name waa-pool-00 \\
         --zs-only
+
+    # Use AWS instead of Azure
+    python scripts/run_eval_pipeline.py --cloud aws --vm-name waa-pool-00
 """
 
 from __future__ import annotations
 
 import argparse
+import logging
 import subprocess
 import sys
 import time
+import webbrowser
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+
+from openadapt_evals.benchmarks.vm_cli import _create_vm_manager
+from openadapt_evals.infrastructure.azure_vm import ssh_run, wait_for_ssh
+from openadapt_evals.infrastructure.ssh_tunnel import SSHTunnelManager
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Repo root = parent of scripts/
@@ -45,7 +56,6 @@ DEFAULT_DEMO_DIR = REPO_ROOT / "demo_prompts_vlm"
 DEFAULT_OUTPUT = REPO_ROOT / "benchmark_results"
 DEFAULT_VM_NAME = "waa-pool-00"
 DEFAULT_RESOURCE_GROUP = "openadapt-agents"
-DEFAULT_VM_USER = "azureuser"
 
 
 # ── Phase 1a: Demo generation ─────────────────────────────────────────────
@@ -126,118 +136,46 @@ def _generate_demos(
     return generated
 
 
-# ── Phase 1b: VM lifecycle ─────────────────────────────────────────────────
-
-
-def _vm_state(vm_name: str, resource_group: str) -> str:
-    """Get VM power state via Azure CLI.
-
-    Returns e.g. "VM running", "VM deallocated", or "" on error.
-    """
-    result = subprocess.run(
-        [
-            "az", "vm", "get-instance-view",
-            "--name", vm_name,
-            "--resource-group", resource_group,
-            "--query", "instanceView.statuses[1].displayStatus",
-            "-o", "tsv",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    return result.stdout.strip()
-
-
-def _vm_start(vm_name: str, resource_group: str) -> bool:
-    """Start a deallocated VM. Returns True on success."""
-    print(f"[vm] Starting {vm_name}...")
-    result = subprocess.run(
-        [
-            "az", "vm", "start",
-            "--name", vm_name,
-            "--resource-group", resource_group,
-        ],
-        capture_output=True,
-        text=True,
-        timeout=300,
-    )
-    if result.returncode != 0:
-        print(f"[vm] Start failed: {result.stderr.strip()}")
-        return False
-    print(f"[vm] {vm_name} started")
-    return True
-
-
-def _wait_ssh(vm_ip: str, vm_user: str, timeout: int = 180) -> bool:
-    """Wait until SSH is reachable."""
-    deadline = time.time() + timeout
-    print(f"[vm] Waiting for SSH on {vm_ip}...")
-    while time.time() < deadline:
-        result = subprocess.run(
-            [
-                "ssh",
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "ConnectTimeout=5",
-                "-o", "BatchMode=yes",
-                f"{vm_user}@{vm_ip}",
-                "echo ok",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        if result.returncode == 0:
-            print(f"[vm] SSH ready")
-            return True
-        time.sleep(5)
-    print(f"[vm] SSH timeout after {timeout}s")
-    return False
+# ── Phase 1b: VM lifecycle (uses VMProvider protocol) ─────────────────────
 
 
 def _ensure_vm_running(
     vm_name: str,
-    resource_group: str,
+    cloud: str = "azure",
+    resource_group: str | None = None,
 ) -> str | None:
     """Ensure VM is running. Returns VM IP or None on failure.
 
+    Uses the VMProvider protocol to support both Azure and AWS.
     Starts the VM if deallocated, then resolves its IP.
     """
-    state = _vm_state(vm_name, resource_group)
+    manager = _create_vm_manager(cloud=cloud, resource_group=resource_group)
+    state = manager.get_vm_state(vm_name) or ""
     print(f"[vm] {vm_name}: {state or '(unknown)'}")
 
     if "running" in state.lower():
-        return _resolve_ip(vm_name, resource_group)
+        ip = manager.get_vm_ip(vm_name)
+        if ip:
+            print(f"[vm] IP: {ip}")
+        else:
+            print(f"[vm] Could not resolve IP for {vm_name}")
+        return ip
 
     if "deallocated" in state.lower() or "stopped" in state.lower():
-        if not _vm_start(vm_name, resource_group):
+        print(f"[vm] Starting {vm_name}...")
+        if not manager.start_vm(vm_name):
+            print(f"[vm] Start failed")
             return None
-        return _resolve_ip(vm_name, resource_group)
+        print(f"[vm] {vm_name} started")
+        ip = manager.get_vm_ip(vm_name)
+        if ip:
+            print(f"[vm] IP: {ip}")
+        else:
+            print(f"[vm] Could not resolve IP for {vm_name}")
+        return ip
 
     # Unknown state
     print(f"[vm] Unexpected state: {state}")
-    return None
-
-
-def _resolve_ip(vm_name: str, resource_group: str) -> str | None:
-    """Get public IP for a VM via Azure CLI."""
-    result = subprocess.run(
-        [
-            "az", "vm", "list-ip-addresses",
-            "--name", vm_name,
-            "--resource-group", resource_group,
-            "--query", "[0].virtualMachine.network.publicIpAddresses[0].ipAddress",
-            "-o", "tsv",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    ip = result.stdout.strip()
-    if ip:
-        print(f"[vm] IP: {ip}")
-        return ip
-    print(f"[vm] Could not resolve IP for {vm_name}")
     return None
 
 
@@ -245,14 +183,12 @@ def _ensure_container_running(vm_user: str, vm_ip: str) -> bool:
     """Ensure the WAA Docker container is running on the VM.
 
     After VM deallocate/start, the container may be in 'Exited' state.
+    Uses ssh_run from infrastructure.azure_vm for SSH operations.
     """
-    result = subprocess.run(
-        [
-            "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10",
-            f"{vm_user}@{vm_ip}",
-            "docker inspect -f '{{.State.Running}}' winarena 2>/dev/null || echo missing",
-        ],
-        capture_output=True, text=True, timeout=30,
+    result = ssh_run(
+        vm_ip,
+        "docker inspect -f '{{.State.Running}}' winarena 2>/dev/null || echo missing",
+        username=vm_user,
     )
     state = result.stdout.strip()
 
@@ -266,14 +202,7 @@ def _ensure_container_running(vm_user: str, vm_ip: str) -> bool:
 
     # Container exists but not running — restart it
     print("[vm] WAA container not running, starting...")
-    result = subprocess.run(
-        [
-            "ssh", "-o", "StrictHostKeyChecking=no",
-            f"{vm_user}@{vm_ip}",
-            "docker start winarena",
-        ],
-        capture_output=True, text=True, timeout=60,
-    )
+    result = ssh_run(vm_ip, "docker start winarena", username=vm_user)
     if result.returncode == 0:
         print("[vm] WAA container started")
         return True
@@ -282,63 +211,32 @@ def _ensure_container_running(vm_user: str, vm_ip: str) -> bool:
     return False
 
 
-def _deallocate_vm(vm_name: str, resource_group: str) -> bool:
+def _deallocate_vm(
+    vm_name: str,
+    cloud: str = "azure",
+    resource_group: str | None = None,
+) -> bool:
     """Deallocate VM to stop billing.
 
-    Uses raw ``az vm deallocate`` because the built-in ``oa-vm deallocate``
-    hardcodes ``VM_NAME = "waa-eval-vm"`` and doesn't accept a ``--name``
-    parameter, so it won't work for pool-style VMs like ``waa-pool-00``.
+    Uses the VMProvider protocol to support both Azure and AWS.
     """
     print(f"\n[vm] Deallocating {vm_name} (stops billing)...")
-    result = subprocess.run(
-        [
-            "az", "vm", "deallocate",
-            "--name", vm_name,
-            "--resource-group", resource_group,
-            "--no-wait",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    if result.returncode != 0:
-        print(f"[vm] Deallocate failed: {result.stderr.strip()}")
+    manager = _create_vm_manager(cloud=cloud, resource_group=resource_group)
+    if not manager.deallocate_vm(vm_name):
+        print(f"[vm] Deallocate failed")
         return False
-    print(f"[vm] Deallocate initiated (async). Billing will stop shortly.")
+    print(f"[vm] Deallocate initiated. Billing will stop shortly.")
     return True
 
 
-# ── Phase 2: Connectivity ─────────────────────────────────────────────────
-
-
-def _kill_tunnels() -> None:
-    """Kill all SSH tunnels matching port 5001."""
-    subprocess.run(
-        "ps aux | grep 'ssh.*5001' | grep -v grep | awk '{print $2}' | xargs kill 2>/dev/null",
-        shell=True, capture_output=True,
-    )
-
-
-def _start_tunnel(vm_user: str, vm_ip: str) -> bool:
-    """Establish SSH tunnel for WAA ports (5001, 5050, 8006)."""
-    cmd = [
-        "ssh", "-f", "-N",
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "ServerAliveInterval=15",
-        "-o", "ServerAliveCountMax=3",
-        "-o", "TCPKeepAlive=yes",
-        "-o", "ExitOnForwardFailure=yes",
-        "-L", "5001:localhost:5000",
-        "-L", "5050:localhost:5051",
-        "-L", "8006:localhost:8006",
-        f"{vm_user}@{vm_ip}",
-    ]
-    result = subprocess.run(cmd, capture_output=True)
-    return result.returncode == 0
+# ── Phase 2: Connectivity (uses SSHTunnelManager) ────────────────────────
 
 
 def _setup_eval_proxy(vm_user: str, vm_ip: str) -> bool:
-    """(Re-)establish socat proxy for the evaluate server on the VM."""
+    """(Re-)establish socat proxy for the evaluate server on the VM.
+
+    Uses ssh_run from infrastructure.azure_vm for the SSH command.
+    """
     script = (
         "if systemctl list-unit-files socat-waa-evaluate.service "
         "| grep -q socat-waa-evaluate; then "
@@ -352,12 +250,9 @@ def _setup_eval_proxy(vm_user: str, vm_ip: str) -> bool:
         "  </dev/null >/dev/null 2>&1 & "
         "fi"
     )
-    result = subprocess.run(
-        ["ssh", "-o", "StrictHostKeyChecking=no", f"{vm_user}@{vm_ip}", script],
-        capture_output=True, timeout=30,
-    )
+    result = ssh_run(vm_ip, script, username=vm_user)
     if result.returncode != 0:
-        print(f"  socat proxy setup failed: {result.stderr.decode()}")
+        print(f"  socat proxy setup failed: {result.stderr}")
         return False
     return True
 
@@ -377,6 +272,7 @@ def _ensure_waa_ready(
     server: str,
     vm_user: str,
     vm_ip: str,
+    tunnel_manager: SSHTunnelManager,
     max_wait: int = 420,
     evaluate_url: str | None = None,
 ) -> bool:
@@ -391,10 +287,13 @@ def _ensure_waa_ready(
         return True
 
     print("  WAA unreachable, reconnecting tunnel...")
-    _kill_tunnels()
+    tunnel_manager.stop_all_tunnels()
     time.sleep(1)
     _setup_eval_proxy(vm_user, vm_ip)
-    if _start_tunnel(vm_user, vm_ip):
+    tunnel_manager.reset_reconnect_attempts()
+    statuses = tunnel_manager.start_tunnels_for_vm(vm_ip, ssh_user=vm_user)
+    any_active = any(s.active for s in statuses.values())
+    if any_active:
         time.sleep(3)
         if _probe(server) and (evaluate_url is None or _probe(evaluate_url)):
             print("  Tunnel reconnected, WAA ready!")
@@ -417,18 +316,26 @@ def _ensure_waa_ready(
     return False
 
 
-def _setup_connectivity(vm_ip: str, vm_user: str) -> bool:
+def _setup_connectivity(
+    vm_ip: str,
+    vm_user: str,
+    tunnel_manager: SSHTunnelManager,
+) -> bool:
     """Kill stale tunnels, establish fresh ones, set up socat proxy."""
     print("[conn] Killing stale SSH tunnels...")
-    _kill_tunnels()
+    tunnel_manager.stop_all_tunnels()
     time.sleep(1)
 
     print("[conn] Setting up socat proxy for evaluate server...")
     _setup_eval_proxy(vm_user, vm_ip)
 
     print("[conn] Establishing SSH tunnels (5001, 5050, 8006)...")
-    if not _start_tunnel(vm_user, vm_ip):
-        print("[conn] ERROR: Failed to establish SSH tunnels")
+    tunnel_manager.reset_reconnect_attempts()
+    statuses = tunnel_manager.start_tunnels_for_vm(vm_ip, ssh_user=vm_user)
+
+    failed = [name for name, s in statuses.items() if not s.active]
+    if failed:
+        print(f"[conn] ERROR: Failed to establish SSH tunnels: {', '.join(failed)}")
         return False
 
     time.sleep(2)
@@ -515,6 +422,7 @@ def _run_eval(
     output_dir: Path,
     vm_ip: str,
     vm_user: str,
+    tunnel_manager: SSHTunnelManager,
 ) -> dict[str, dict]:
     """Run all eval conditions sequentially with health checks."""
     results = {}
@@ -530,7 +438,11 @@ def _run_eval(
         print(f"{'=' * 60}")
 
         # Health check before each run
-        if not _ensure_waa_ready(server, vm_user, vm_ip, evaluate_url=evaluate_url):
+        if not _ensure_waa_ready(
+            server, vm_user, vm_ip,
+            tunnel_manager=tunnel_manager,
+            evaluate_url=evaluate_url,
+        ):
             print(f"  Skipping {run_name} — WAA unreachable after recovery")
             results[run_name] = {
                 "status": "SKIP",
@@ -557,8 +469,30 @@ def _run_eval(
         if demo_path:
             cmd.extend(["--demo", str(demo_path.resolve())])
 
-        result = subprocess.run(cmd)
+        result = subprocess.run(cmd, capture_output=True, text=True)
         elapsed = time.time() - task_start
+
+        # Log captured output to a file and print summary
+        log_dir = output_dir / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / f"{run_name}.log"
+        with open(log_path, "w") as f:
+            f.write(f"=== STDOUT ===\n{result.stdout}\n")
+            f.write(f"=== STDERR ===\n{result.stderr}\n")
+        print(f"  Output logged to: {log_path}")
+
+        # Print last few lines of stdout for quick feedback
+        stdout_lines = result.stdout.strip().splitlines()
+        if stdout_lines:
+            tail = stdout_lines[-min(5, len(stdout_lines)):]
+            for line in tail:
+                print(f"  | {line}")
+
+        if result.stderr.strip():
+            stderr_lines = result.stderr.strip().splitlines()
+            tail = stderr_lines[-min(3, len(stderr_lines)):]
+            for line in tail:
+                print(f"  ! {line}")
 
         status = "OK" if result.returncode == 0 else f"FAIL (rc={result.returncode})"
         results[run_name] = {
@@ -567,6 +501,7 @@ def _run_eval(
             "elapsed_s": elapsed,
             "task_id": tid,
             "condition": cond_label,
+            "log_path": str(log_path),
         }
         print(f"\n  -> {status} ({elapsed:.0f}s)")
 
@@ -591,6 +526,13 @@ def _print_summary(results: dict[str, dict], agent: str) -> None:
     for name, r in results.items():
         cond = r.get("condition", "?")
         print(f"  {name:30s}  {cond:2s}  {r['status']:15s}  {r['elapsed_s']:.0f}s")
+
+    # Print log file locations
+    log_paths = [r.get("log_path") for r in results.values() if r.get("log_path")]
+    if log_paths:
+        print(f"\n  Logs:")
+        for p in log_paths:
+            print(f"    {p}")
 
     print()
 
@@ -621,12 +563,16 @@ def main() -> int:
     parser.add_argument("--server", default="http://localhost:5001")
     parser.add_argument("--evaluate-url", default="http://localhost:5050")
     parser.add_argument(
-        "--vm-name", default=DEFAULT_VM_NAME, help="Azure VM name",
+        "--vm-name", default=DEFAULT_VM_NAME, help="VM name",
     )
     parser.add_argument(
         "--resource-group", default=DEFAULT_RESOURCE_GROUP,
+        help="Azure resource group (ignored for AWS)",
     )
-    parser.add_argument("--vm-user", default=DEFAULT_VM_USER)
+    parser.add_argument(
+        "--cloud", default="azure", choices=["azure", "aws"],
+        help="Cloud provider (default: azure)",
+    )
     parser.add_argument("--vm-ip", default=None, help="VM IP (skip auto-detection)")
     parser.add_argument(
         "--vlm-provider", default="openai", help="VLM provider for demo generation",
@@ -659,6 +605,10 @@ def main() -> int:
     demo_dir = Path(args.demo_dir)
     output_dir = Path(args.output)
 
+    # Resolve VM user from provider
+    vm_manager = _create_vm_manager(cloud=args.cloud, resource_group=args.resource_group)
+    vm_user = vm_manager.ssh_username
+
     # Resolve task filter
     task_filter = None
     if args.tasks:
@@ -690,7 +640,9 @@ def main() -> int:
     print(f"  Demo dir:   {demo_dir} ({len(existing_demos)} existing)")
     print(f"  Missing:    {len(missing_demos)} demo(s) to generate")
     print(f"  Agent:      {args.agent}")
-    print(f"  VM:         {args.vm_name} ({args.resource_group})")
+    print(f"  Cloud:      {args.cloud}")
+    print(f"  VM:         {args.vm_name} ({vm_manager.resource_scope})")
+    print(f"  VM user:    {vm_user}")
     print(f"  Conditions: {'ZS only' if args.zs_only else 'DC only' if args.dc_only else 'ZS + DC'}")
     print()
 
@@ -752,6 +704,7 @@ def main() -> int:
             futures["vm"] = pool.submit(
                 _ensure_vm_running,
                 args.vm_name,
+                args.cloud,
                 args.resource_group,
             )
         elif vm_ip:
@@ -783,27 +736,32 @@ def main() -> int:
 
     # ── Phase 2: Connectivity ──────────────────────────────────────────
 
+    # Create tunnel manager for the session
+    tunnel_manager = SSHTunnelManager()
+
     if not args.skip_vm:
         print(f"\n{'─' * 60}")
         print("PHASE 2: Connectivity (SSH tunnels + WAA readiness)")
         print(f"{'─' * 60}\n")
 
-        if not _wait_ssh(vm_ip, args.vm_user):
+        print(f"[vm] Waiting for SSH on {vm_ip}...")
+        if not wait_for_ssh(vm_ip, timeout=180, username=vm_user):
             print("ERROR: SSH not reachable")
             return 1
+        print("[vm] SSH ready")
 
-        if not _ensure_container_running(args.vm_user, vm_ip):
+        if not _ensure_container_running(vm_user, vm_ip):
             print("ERROR: WAA container not running and could not be started")
             return 1
 
-        if not _setup_connectivity(vm_ip, args.vm_user):
+        if not _setup_connectivity(vm_ip, vm_user, tunnel_manager):
             print("ERROR: Failed to set up tunnels")
             return 1
 
         if args.vnc:
-            vnc_url = f"http://localhost:8006"
+            vnc_url = "http://localhost:8006"
             print(f"[vnc] Opening VNC viewer: {vnc_url}")
-            subprocess.Popen(["open", vnc_url])
+            webbrowser.open(vnc_url)
 
         if not _wait_waa_ready(args.server, args.evaluate_url):
             print("ERROR: WAA server not ready")
@@ -837,17 +795,21 @@ def main() -> int:
         max_steps=args.max_steps,
         output_dir=output_dir,
         vm_ip=vm_ip or "",
-        vm_user=args.vm_user,
+        vm_user=vm_user,
+        tunnel_manager=tunnel_manager,
     )
 
     # ── Phase 4: Summary ──────────────────────────────────────────────
 
     _print_summary(results, args.agent)
 
+    # Clean up tunnels
+    tunnel_manager.stop_all_tunnels()
+
     # ── Optional: Deallocate VM ───────────────────────────────────────
 
     if args.deallocate_after and not args.skip_vm:
-        _deallocate_vm(args.vm_name, args.resource_group)
+        _deallocate_vm(args.vm_name, args.cloud, args.resource_group)
 
     ok = sum(1 for r in results.values() if r["returncode"] == 0)
     return 0 if ok == len(results) else 1
