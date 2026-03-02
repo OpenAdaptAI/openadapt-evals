@@ -111,13 +111,13 @@ This failed with "unterminated string literal" (newlines in `pyautogui.write()` 
 
 **Fix**: Added `_clamp_pixel_coords()` method that keeps all coordinates at least 5px from screen edges. Applied to click, drag, and element-based actions.
 
-### 4. "Unterminated String Literal" on Multi-line Type (Known)
+### 4. "Unterminated String Literal" on Multi-line Type (Fixed)
 
 **Bug**: When the agent sends text containing newline characters (`\n`), the `pyautogui.write()` command string becomes a syntax error because the newline breaks the Python string literal.
 
 **Impact**: 2 of 30 DC steps failed with this error, wasting step budget.
 
-**Status**: Not fixed in this PR. Requires escaping newlines in the type text translation or using a different pyautogui method.
+**Fix**: `_build_type_commands()` splits text on newlines and interleaves `pyautogui.write()` with `pyautogui.press('enter')`. Each segment is properly escaped.
 
 ## Key Findings
 
@@ -128,7 +128,9 @@ This failed with "unterminated string literal" (newlines in `pyautogui.write()` 
 
 ### 2. Binary scoring masks meaningful progress
 
-Both conditions scored 0.00, but the DC agent completed ~60% of the task (1 of 3 columns with correct formulas). The WAA evaluator uses binary pass/fail, which cannot capture partial progress. A graded metric (e.g., fraction of correct cell values) would show clear DC advantage.
+Both conditions scored 0.00, but the DC agent completed ~60% of the task (1 of 3 columns with correct formulas). WAA's `compare_table` metric runs **server-side inside the Windows VM** — it compares entire sheets and returns binary 0/1. The scoring infrastructure technically supports float scores (0.0-1.0), but the metric itself doesn't compute partial credit.
+
+Adding partial-credit scoring would require modifying WAA's evaluator logic inside the VM (e.g., cell-level comparison in `compare_table`), not just changes on our adapter side. For now, qualitative analysis of action traces (as in this document) is the most practical way to measure DC vs ZS behavioral differences.
 
 ### 3. Step budget is a binding constraint
 
@@ -146,8 +148,8 @@ Three infrastructure bugs (fail-safe detection, drag defaults, coordinate clampi
 ## Recommendations
 
 1. **Increase default max-steps to 40-50** for harder tasks (21+ step recordings)
-2. **Fix the newline-in-type bug** — escape `\n` in `_translate_action()` or use `pyautogui.typewrite()` with key-by-key entry
-3. **Add partial-credit scoring** — count fraction of correct cell values to capture meaningful DC vs ZS differences
+2. ~~**Fix the newline-in-type bug**~~ — Fixed: `_build_type_commands()` splits on newlines, interleaves `write()` with `press('enter')`
+3. **Investigate partial-credit scoring** — would require modifying WAA's server-side `compare_table` metric to do cell-level comparison; qualitative action-trace analysis is the near-term alternative
 4. **Record more harder tasks** — this single task shows promising DC signal but N=1 is not statistically meaningful
 5. **Consider running 3-5 trials per condition** — agent behavior is stochastic (different click targets, formula entry strategies)
 

@@ -215,6 +215,44 @@ def _is_failsafe_error(text: str) -> bool:
     return "failsafeexception" in lower
 
 
+def _escape_for_pyautogui(text: str) -> str:
+    """Escape text for embedding in a single-quoted Python string literal."""
+    return (
+        text
+        .replace("\\", "\\\\")
+        .replace("'", "\\'")
+        .replace("\r", "")
+    )
+
+
+def _build_type_commands(text: str) -> str:
+    """Build pyautogui commands to type text, handling embedded newlines.
+
+    ``pyautogui.write()`` cannot handle literal newline characters — the
+    generated Python command string becomes an unterminated string literal
+    when executed via ``exec()``.  This function splits the text on newlines
+    and interleaves ``pyautogui.write()`` with ``pyautogui.press('enter')``.
+
+    Returns:
+        A Python command string (without a leading ``import pyautogui;``).
+    """
+    segments = text.split("\n")
+    if len(segments) == 1:
+        escaped = _escape_for_pyautogui(text)
+        return f"pyautogui.write('{escaped}', interval=0.02)"
+
+    commands: list[str] = []
+    for i, seg in enumerate(segments):
+        # Skip empty trailing segment from a trailing newline
+        if seg or i < len(segments) - 1:
+            escaped = _escape_for_pyautogui(seg)
+            if escaped:
+                commands.append(f"pyautogui.write('{escaped}', interval=0.02)")
+            if i < len(segments) - 1:
+                commands.append("pyautogui.press('enter')")
+    return "; ".join(commands) if commands else "pass"
+
+
 @dataclass
 class WAALiveConfig:
     """Configuration for WAALiveAdapter.
@@ -1098,8 +1136,7 @@ class WAALiveAdapter(BenchmarkAdapter):
 
         if action.type == "type":
             text = action.text or ""
-            # Escape special characters
-            text = text.replace("\\", "\\\\").replace("'", "\\'")
+            type_cmds = _build_type_commands(text)
             # If target_node_id is set (from type_element), click element first to focus it
             if action.target_node_id is not None:
                 elem_id = str(action.target_node_id)
@@ -1111,11 +1148,11 @@ class WAALiveAdapter(BenchmarkAdapter):
                         f"import pyautogui; "
                         f"pyautogui.click({cx}, {cy}); "
                         f"import time; time.sleep(0.2); "
-                        f"pyautogui.write('{text}', interval=0.02)"
+                        + type_cmds
                     )
                 else:
                     logger.warning(f"Element ID '{elem_id}' not found for type_element, typing without focus")
-            return f"import pyautogui; pyautogui.write('{text}', interval=0.02)"
+            return f"import pyautogui; {type_cmds}"
 
         if action.type == "key":
             return self._translate_key_action(action)
