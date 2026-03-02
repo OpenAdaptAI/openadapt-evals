@@ -211,7 +211,7 @@ def main() -> int:
     parser.add_argument("--output", default="benchmark_results")
     parser.add_argument("--tasks", help="Comma-separated task IDs or prefixes (default: all 12)")
     parser.add_argument("--start-from", type=int, default=0, help="Task index to start from")
-    parser.add_argument("--vm-ip", default="172.173.66.131", help="VM IP")
+    parser.add_argument("--vm-ip", default=None, help="VM IP (auto-detected if omitted)")
     parser.add_argument("--vm-user", default="azureuser", help="VM SSH user")
     parser.add_argument("--zs-only", action="store_true", help="Run zero-shot only (no demo)")
     parser.add_argument("--dc-only", action="store_true", help="Run demo-conditioned only")
@@ -251,12 +251,16 @@ def main() -> int:
                 continue
             conditions.append((tid, f"val_dc_{sid}", demo_path))
 
+    from openadapt_evals.infrastructure.vm_ip import resolve_vm_ip
+
+    vm_ip = resolve_vm_ip(args.vm_ip)
+
     print(f"Eval: {len(conditions)} runs ({len(task_ids)} tasks) with {args.agent}")
-    print(f"VM: {args.vm_ip}")
+    print(f"VM: {vm_ip}")
     print()
 
     # Verify initial WAA health
-    if not ensure_waa_ready(args.server, args.vm_user, args.vm_ip, evaluate_url=args.evaluate_url):
+    if not ensure_waa_ready(args.server, args.vm_user, vm_ip, evaluate_url=args.evaluate_url):
         print("ERROR: Cannot reach WAA server or evaluate server")
         return 1
 
@@ -269,7 +273,7 @@ def main() -> int:
             continue
 
         # Health check before each run
-        if not ensure_waa_ready(args.server, args.vm_user, args.vm_ip, evaluate_url=args.evaluate_url):
+        if not ensure_waa_ready(args.server, args.vm_user, vm_ip, evaluate_url=args.evaluate_url):
             print(f"  Skipping {run_name} - WAA unreachable after recovery")
             results[run_name] = {"status": "SKIP", "returncode": -1, "elapsed_s": 0}
             continue

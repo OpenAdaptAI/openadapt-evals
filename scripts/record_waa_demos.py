@@ -31,6 +31,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import socket
 import subprocess
 import sys
 import time
@@ -470,6 +471,63 @@ def _take_screenshot(server: str) -> bytes:
     return resp.content
 
 
+def _wait_for_stable_screen(
+    server: str,
+    poll_interval: float = 2.0,
+    stability_timeout: float = 30.0,
+    similarity_threshold: float = 0.995,
+    required_stable_checks: int = 3,
+) -> bytes:
+    """Wait for the VM screen to stabilize, then return the screenshot.
+
+    Delegates to :func:`openadapt_evals.infrastructure.screen_stability.wait_for_stable_screen`.
+    """
+    from openadapt_evals.infrastructure.screen_stability import wait_for_stable_screen
+
+    return wait_for_stable_screen(
+        server,
+        poll_interval=poll_interval,
+        stability_timeout=stability_timeout,
+        similarity_threshold=similarity_threshold,
+        required_stable_checks=required_stable_checks,
+    )
+
+
+def _build_setup_desc(task_config: dict) -> str:
+    """Build a human-readable description of the task setup actions."""
+    parts = []
+    for entry in task_config.get("config", []):
+        t = entry.get("type", "")
+        p = entry.get("parameters", {})
+        if t == "download":
+            for f in p.get("files", []):
+                parts.append(f"  - File downloaded: {f.get('path', '?')}")
+        elif t == "open":
+            parts.append(f"  - File opened: {p.get('path', '?')}")
+        elif t == "launch":
+            parts.append(f"  - App launched: {p.get('command', '?')}")
+    return "\n".join(parts) if parts else "  (none)"
+
+
+def _vlm_call(
+    messages: list[dict],
+    api_key: str,
+    model: str = "gpt-4o",
+    max_tokens: int = 800,
+) -> str:
+    """Send a chat completion request to OpenAI. Returns the text response."""
+    import requests as _req
+
+    resp = _req.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}"},
+        json={"model": model, "max_tokens": max_tokens, "messages": messages},
+        timeout=60,
+    )
+    resp.raise_for_status()
+    return resp.json()["choices"][0]["message"]["content"]
+
+
 def _generate_steps(
     screenshot_png: bytes,
     instruction: str,
@@ -486,28 +544,15 @@ def _generate_steps(
     if not api_key:
         return "(No OPENAI_API_KEY set — skipping AI step generation)"
 
-    import requests as _req
-
     b64 = base64.b64encode(screenshot_png).decode()
-
-    setup_desc = ""
-    for entry in task_config.get("config", []):
-        t = entry.get("type", "")
-        p = entry.get("parameters", {})
-        if t == "download":
-            for f in p.get("files", []):
-                setup_desc += f"  - File downloaded: {f['path']}\n"
-        elif t == "open":
-            setup_desc += f"  - File opened: {p.get('path', '?')}\n"
-        elif t == "launch":
-            setup_desc += f"  - App launched: {p.get('command', '?')}\n"
+    setup_desc = _build_setup_desc(task_config)
 
     prompt = f"""You are helping a human perform a task on a Windows desktop via VNC.
 
 TASK: {instruction}
 
 ENVIRONMENT SETUP (already done automatically):
-{setup_desc if setup_desc else "  (none)"}
+{setup_desc}
 
 Look at the screenshot and give step-by-step instructions to complete the task.
 Be specific about what to click, what to type, and what menus to use.
@@ -515,35 +560,893 @@ If a file should already be open but isn't visible, say how to open it.
 Keep each step to one action. Use plain text, numbered list.
 Be concise — the user will read this on a phone screen."""
 
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{b64}",
+                        "detail": "high",
+                    },
+                },
+            ],
+        }
+    ]
+
     try:
-        resp = _req.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}"},
-            json={
-                "model": "gpt-4o",
-                "max_tokens": 800,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/png;base64,{b64}",
-                                    "detail": "high",
-                                },
-                            },
-                        ],
-                    }
-                ],
-            },
-            timeout=30,
-        )
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
+        return _vlm_call(messages, api_key)
     except Exception as e:
         return f"(AI step generation failed: {e})"
+
+
+def _refine_steps(
+    screenshot_png: bytes,
+    instruction: str,
+    task_config: dict,
+    current_steps: str,
+    feedback: str,
+) -> str:
+    """Refine suggested steps based on user feedback.
+
+    Sends the original screenshot, instruction, current steps, and the
+    user's correction back to the VLM for a revised set of steps.
+    """
+    import base64
+    import os
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return current_steps
+
+    b64 = base64.b64encode(screenshot_png).decode()
+    setup_desc = _build_setup_desc(task_config)
+
+    prompt = f"""You are helping a human perform a task on a Windows desktop via VNC.
+
+TASK: {instruction}
+
+ENVIRONMENT SETUP (already done automatically):
+{setup_desc}
+
+You previously suggested these steps:
+
+{current_steps}
+
+The user says this is wrong and provides this feedback:
+
+"{feedback}"
+
+Look at the screenshot again and produce CORRECTED step-by-step instructions
+that address the user's feedback. Keep the same format: plain text, numbered list,
+one action per step, concise."""
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{b64}",
+                        "detail": "high",
+                    },
+                },
+            ],
+        }
+    ]
+
+    try:
+        return _vlm_call(messages, api_key)
+    except Exception as e:
+        print(f"  (Refinement failed: {e})")
+        return current_steps
+
+
+def _parse_step_list(steps_text: str) -> list[str]:
+    """Parse numbered VLM output into a list of step strings.
+
+    Handles formats like "1. Do X", "1) Do X", "1: Do X".
+    Falls back to non-empty lines if no numbered items are found.
+    """
+    import re
+
+    lines = steps_text.strip().splitlines()
+    steps: list[str] = []
+    current_step: list[str] = []
+
+    for line in lines:
+        # Check if this line starts a new numbered step
+        m = re.match(r"^\s*\d+[\.\)\:]\s+(.*)", line)
+        if m:
+            if current_step:
+                steps.append(" ".join(current_step))
+            current_step = [m.group(1).strip()]
+        elif current_step:
+            # Continuation line for the current step
+            stripped = line.strip()
+            if stripped:
+                current_step.append(stripped)
+
+    if current_step:
+        steps.append(" ".join(current_step))
+
+    # Fallback: if no numbered items found, split on non-empty lines
+    if not steps:
+        steps = [line.strip() for line in lines if line.strip()]
+
+    return steps
+
+
+def _format_step_list(steps: list[str], start_num: int = 1) -> str:
+    """Format a list of step strings back into numbered text."""
+    return "\n".join(
+        f"{i}. {step}" for i, step in enumerate(steps, start=start_num)
+    )
+
+
+def _display_steps(steps_text: str) -> None:
+    """Pretty-print suggested steps in a box."""
+    print()
+    print("  ┌─ SUGGESTED STEPS ──────────────────────────────")
+    for line in steps_text.splitlines():
+        print(f"  │ {line}")
+    print("  └────────────────────────────────────────────────")
+    print()
+
+
+def _display_current_step(step_num: int, total: int, step_text: str) -> None:
+    """Display the current step in a box before the action prompt."""
+    header = f" Step {step_num} of {total} "
+    width = max(len(header) + 4, len(step_text) + 6, 50)
+    bar = "─" * (width - len(header) - 2)
+    print(f"\n  ──{header}{bar}")
+    print(f"  │ {step_text}")
+    print(f"  └{'─' * (width)}")
+
+
+def _interactive_step_review(
+    screenshot_png: bytes,
+    instruction: str,
+    task_config: dict,
+    initial_steps: str,
+) -> str:
+    """Let the user review and iteratively correct the suggested steps.
+
+    The user can press Enter to accept, or type feedback to refine.
+    Returns the final accepted steps text.
+    """
+    current = initial_steps
+    while True:
+        correction = input(
+            "  Press Enter to accept steps, or type correction: "
+        ).strip()
+        if not correction:
+            return current
+        print("  Refining steps...")
+        current = _refine_steps(
+            screenshot_png, instruction, task_config, current, correction,
+        )
+        _display_steps(current)
+
+
+def _refine_remaining_steps(
+    screenshot_png: bytes,
+    instruction: str,
+    task_config: dict,
+    completed_steps: list[str],
+    remaining_steps: list[str],
+    feedback: str,
+) -> str:
+    """Refine remaining steps based on user feedback mid-recording.
+
+    Takes a FRESH screenshot (current screen state after completed steps)
+    and sends it along with the context of what's been done and what remains.
+    Returns the raw VLM text for remaining steps.
+    """
+    import base64
+    import os
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return _format_step_list(remaining_steps)
+
+    b64 = base64.b64encode(screenshot_png).decode()
+    setup_desc = _build_setup_desc(task_config)
+
+    completed_text = (
+        _format_step_list(completed_steps)
+        if completed_steps
+        else "(none)"
+    )
+    remaining_text = _format_step_list(remaining_steps)
+    current_step_num = len(completed_steps) + 1
+
+    prompt = f"""You are helping a human perform a task on a Windows desktop via VNC.
+
+TASK: {instruction}
+
+ENVIRONMENT SETUP (already done automatically):
+{setup_desc}
+
+The user has already completed these steps:
+{completed_text}
+
+You previously suggested these REMAINING steps (not yet performed):
+{remaining_text}
+
+The user is currently on step {current_step_num} and says:
+"{feedback}"
+
+Look at the CURRENT screenshot (taken just now, after the completed steps)
+and produce CORRECTED remaining steps that address the user's feedback.
+Only output the remaining steps (do not repeat completed steps).
+Keep the same format: plain text, numbered list starting from 1,
+one action per step, concise."""
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{b64}",
+                        "detail": "high",
+                    },
+                },
+            ],
+        }
+    ]
+
+    try:
+        return _vlm_call(messages, api_key)
+    except Exception as e:
+        print(f"  (Refinement failed: {e})")
+        return _format_step_list(remaining_steps)
+
+
+def _interactive_remaining_review(
+    server: str,
+    instruction: str,
+    task_config: dict,
+    completed_steps: list[str],
+    remaining_steps: list[str],
+    initial_feedback: str,
+) -> list[str]:
+    """Mini review loop for mid-recording step refinement.
+
+    Takes a fresh screenshot for each refinement round.
+    Returns the accepted list of remaining steps.
+    """
+    # First refinement using the initial feedback
+    fresh_png = _take_screenshot(server)
+    refined_text = _refine_remaining_steps(
+        fresh_png, instruction, task_config,
+        completed_steps, remaining_steps, initial_feedback,
+    )
+    new_steps = _parse_step_list(refined_text)
+
+    if not new_steps:
+        print("  WARNING: VLM returned no steps. Keeping previous plan.")
+        return remaining_steps
+
+    while True:
+        # Display corrected remaining steps
+        print()
+        print("  ┌─ CORRECTED REMAINING STEPS ─────────────────────")
+        for line in _format_step_list(new_steps).splitlines():
+            print(f"  │ {line}")
+        print("  └─────────────────────────────────────────────────")
+        print()
+
+        correction = input(
+            "  Press Enter to accept, or type another correction: "
+        ).strip()
+        if not correction:
+            return new_steps
+
+        print("  Taking fresh screenshot and refining...")
+        fresh_png = _take_screenshot(server)
+        refined_text = _refine_remaining_steps(
+            fresh_png, instruction, task_config,
+            completed_steps, new_steps, correction,
+        )
+        parsed = _parse_step_list(refined_text)
+        if parsed:
+            new_steps = parsed
+        else:
+            print("  WARNING: VLM returned no steps. Keeping previous plan.")
+
+
+def _record_single_task(
+    task_id: str,
+    task_num: int,
+    total_tasks: int,
+    output_dir: Path,
+    server: str,
+    evaluate_url: str,
+    vnc_url: str,
+    vm_ip: str | None,
+) -> str | None:
+    """Record a single task interactively via WAA API.
+
+    Returns the task_id on success, or None on failure.
+    """
+    import requests
+
+    from openadapt_evals.infrastructure.qemu_reset import QEMUResetManager
+
+    print_header(f"Task {task_num}/{total_tasks}: {task_id[:12]}...")
+
+    task_dir = output_dir / task_id
+    task_dir.mkdir(parents=True, exist_ok=True)
+
+    # Load task config from evaluate server
+    instruction = task_id  # fallback
+    task_config: dict = {}
+    try:
+        task_resp = requests.get(
+            f"{evaluate_url}/task/{task_id}", timeout=10
+        )
+        if task_resp.ok:
+            task_config = task_resp.json()
+            instruction = task_config.get(
+                "instruction", task_config.get("task", task_id)
+            )
+    except Exception as e:
+        print(f"  Warning: could not load task config: {e}")
+
+    def _setup_task_env() -> None:
+        """Run task setup config (download files, open apps, etc.)."""
+        setup_config = task_config.get("config", [])
+        related_apps = task_config.get("related_apps", [])
+        if related_apps:
+            setup_config = [
+                {"type": "verify_apps", "parameters": {"apps": related_apps}}
+            ] + setup_config
+        if setup_config:
+            resp = requests.post(
+                f"{evaluate_url}/setup",
+                json={"config": setup_config},
+                timeout=120,
+            )
+            resp.raise_for_status()
+            results = resp.json().get("results", [])
+            for r in results:
+                status = r.get("status", "?")
+                stype = r.get("type", "?")
+                print(f"    setup {stype}: {status}")
+
+    def _soft_reset_task_env() -> bytes:
+        """Soft reset: close_all + re-run setup + wait for stable screen."""
+        print("  Resetting environment (soft)...")
+        try:
+            resp = requests.post(f"{server}/setup/close_all", timeout=30)
+            print(f"    close_all: {resp.status_code}")
+            time.sleep(2)
+            _setup_task_env()
+        except Exception as e:
+            print(f"  WARNING: environment setup failed: {e}")
+            print(f"  The task app may not be open. Check VNC.")
+        print("  Waiting for screen to stabilize...")
+        return _wait_for_stable_screen(server)
+
+    def _hard_reset_task_env() -> bytes:
+        """Hard reset: QEMU system_reset + wait for boot + clear recovery + setup."""
+        print("  Restarting Windows (QEMU hard reset)...")
+        mgr = QEMUResetManager(vm_ip=vm_ip, timeout_seconds=300)
+        success, msg = mgr.restart_windows(server_url=server)
+        if not success:
+            print(f"  WARNING: QEMU reset failed: {msg}")
+            print("  Falling back to soft reset...")
+            return _soft_reset_task_env()
+        print(f"    {msg}")
+        _clear_recovery_data(server)
+        print("  Running task setup...")
+        try:
+            _setup_task_env()
+        except Exception as e:
+            print(f"  WARNING: environment setup failed: {e}")
+            print(f"  The task app may not be open. Check VNC.")
+        print("  Waiting for screen to stabilize...")
+        return _wait_for_stable_screen(server)
+
+    before_png = _soft_reset_task_env()
+
+    print(f"\n  VNC: {vnc_url}")
+    print(f"  Task: {instruction}\n")
+
+    # Generate AI step-by-step guidance from screenshot
+    print("  Generating suggested steps...")
+    suggested = _generate_steps(before_png, instruction, task_config)
+    _display_steps(suggested)
+    suggested = _interactive_step_review(
+        before_png, instruction, task_config, suggested,
+    )
+
+    # Parse accepted steps into a structured list
+    completed_steps: list[str] = []
+    remaining_steps = _parse_step_list(suggested)
+    step_plans = [{
+        "at_step_idx": 0,
+        "trigger": "initial",
+        "steps": list(remaining_steps),
+    }]
+    refined_indices: set[int] = set()
+    steps_meta: list[dict] = []
+    step_idx = 0
+
+    print()
+    print("  Perform each action in VNC. You can provide feedback")
+    print("  at any point to correct the remaining steps.\n")
+
+    while remaining_steps:
+        # Save before screenshot
+        (task_dir / f"step_{step_idx:02d}_before.png").write_bytes(
+            before_png
+        )
+
+        # Display current step
+        total = len(completed_steps) + len(remaining_steps)
+        step_num = len(completed_steps) + 1
+        _display_current_step(step_num, total, remaining_steps[0])
+
+        user_input = input(
+            "  [Enter]=done  [d]=task done  [r]=redo  [R]=restart\n"
+            "  Or type feedback to correct remaining steps: "
+        ).strip()
+
+        if user_input == "":
+            # ADVANCE: action done, move to next step
+            after_png = _take_screenshot(server)
+            (task_dir / f"step_{step_idx:02d}_after.png").write_bytes(
+                after_png
+            )
+            done_step = remaining_steps.pop(0)
+            completed_steps.append(done_step)
+            steps_meta.append({
+                "action_hint": None,
+                "suggested_step": done_step,
+                "step_was_refined": step_idx in refined_indices,
+            })
+            before_png = after_png
+            step_idx += 1
+            print(f"  Step {step_num} recorded.")
+
+            if not remaining_steps:
+                print(f"\n  All {total} steps completed. Finishing recording.")
+
+        elif user_input.lower() == "d":
+            # DONE: task finished (possibly before all steps)
+            after_png = _take_screenshot(server)
+            (task_dir / f"step_{step_idx:02d}_after.png").write_bytes(
+                after_png
+            )
+            steps_meta.append({
+                "action_hint": "d",
+                "suggested_step": remaining_steps[0],
+                "step_was_refined": step_idx in refined_indices,
+            })
+            step_idx += 1
+            total = len(completed_steps) + len(remaining_steps)
+            print(f"\n  Task marked done at step {step_num} of {total}. Finishing recording.")
+            break
+
+        elif user_input.lower() == "r":
+            # REDO: go back one step
+            if not completed_steps:
+                print("  Nothing to redo (already at step 1).")
+                continue
+            step_idx -= 1
+            remaining_steps.insert(0, completed_steps.pop())
+            steps_meta.pop()
+            before_png = _take_screenshot(server)
+            print(f"  Redoing step {len(completed_steps) + 1}...")
+
+        elif user_input == "R":
+            # RESTART: QEMU hard reset + re-generate everything
+            print("  Restarting task from scratch (QEMU hard reset)...")
+            for f in task_dir.glob("step_*.png"):
+                f.unlink()
+            before_png = _hard_reset_task_env()
+            print(f"\n  VNC: {vnc_url}")
+            print(f"  Task: {instruction}\n")
+
+            print("  Generating suggested steps...")
+            new_suggested = _generate_steps(before_png, instruction, task_config)
+            _display_steps(new_suggested)
+            new_suggested = _interactive_step_review(
+                before_png, instruction, task_config, new_suggested,
+            )
+
+            completed_steps = []
+            remaining_steps = _parse_step_list(new_suggested)
+            step_plans.append({
+                "at_step_idx": 0,
+                "trigger": "restart",
+                "steps": list(remaining_steps),
+            })
+            refined_indices = set()
+            steps_meta = []
+            step_idx = 0
+            print()
+            print("  Task restarted. Continue recording.\n")
+
+        else:
+            # FEEDBACK: mid-recording step correction
+            print("  Taking fresh screenshot and refining remaining steps...")
+            remaining_steps = _interactive_remaining_review(
+                server, instruction, task_config,
+                completed_steps, remaining_steps, user_input,
+            )
+            step_plans.append({
+                "at_step_idx": step_idx,
+                "trigger": f"feedback: {user_input}",
+                "steps": list(remaining_steps),
+            })
+            for i in range(step_idx, step_idx + len(remaining_steps)):
+                refined_indices.add(i)
+            # No action taken — loop re-displays the (possibly new) current step
+
+    # Save metadata
+    meta = {
+        "task_id": task_id,
+        "instruction": instruction,
+        "num_steps": len(steps_meta),
+        "steps": steps_meta,
+        "step_plans": step_plans,
+        "server_url": server,
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+    }
+    (task_dir / "meta.json").write_text(
+        json.dumps(meta, indent=2), encoding="utf-8"
+    )
+
+    print(f"\n  Saved {len(steps_meta)} step(s) to {task_dir}")
+    return task_id
+
+
+# ---------------------------------------------------------------------------
+# Auto-infrastructure helpers
+# ---------------------------------------------------------------------------
+
+_AUTO_VM_NAME = "waa-pool-00"
+_AUTO_RESOURCE_GROUP = "openadapt-agents"
+_AUTO_SSH_USER = "azureuser"
+
+# Track whether this script started the VM (so we can offer to deallocate on exit)
+_vm_started_by_script = False
+_cleanup_registered = False
+_cleanup_done = False
+
+# Port mappings: local_port -> remote_port (on VM host)
+_TUNNEL_PORTS = {
+    5001: 5000,   # WAA server
+    5050: 5051,   # evaluate server (via socat)
+    8006: 8006,   # VNC (noVNC)
+}
+
+
+def _is_local_port_open(port: int) -> bool:
+    """Check whether a local TCP port is accepting connections."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(2)
+        return sock.connect_ex(("localhost", port)) == 0
+
+
+def _get_vm_power_state() -> str | None:
+    """Return the Azure VM power state, e.g. 'running', 'deallocated', or None on error."""
+    try:
+        result = subprocess.run(
+            [
+                "az", "vm", "get-instance-view",
+                "-g", _AUTO_RESOURCE_GROUP,
+                "-n", _AUTO_VM_NAME,
+                "--query", "instanceView.statuses[?starts_with(code,'PowerState/')].displayStatus | [0]",
+                "-o", "tsv",
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip().replace("VM ", "").lower()
+    except Exception:
+        pass
+    return None
+
+
+def _get_vm_public_ip() -> str | None:
+    """Get the public IP of the VM."""
+    try:
+        result = subprocess.run(
+            [
+                "az", "vm", "show",
+                "-g", _AUTO_RESOURCE_GROUP,
+                "-n", _AUTO_VM_NAME,
+                "--show-details",
+                "--query", "publicIps",
+                "-o", "tsv",
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+
+def _auto_start_vm() -> bool:
+    """Start the Azure VM. Returns True on success."""
+    global _vm_started_by_script
+    print(f"  Starting VM '{_AUTO_VM_NAME}'...")
+    result = subprocess.run(
+        ["az", "vm", "start", "-g", _AUTO_RESOURCE_GROUP, "-n", _AUTO_VM_NAME],
+        capture_output=True, text=True, timeout=300,
+    )
+    if result.returncode != 0:
+        print(f"  ERROR: az vm start failed: {result.stderr.strip()}")
+        return False
+    print(f"  VM '{_AUTO_VM_NAME}' started.")
+    _vm_started_by_script = True
+    _register_vm_cleanup()
+    return True
+
+
+def _auto_establish_tunnels(vm_ip: str) -> bool:
+    """Establish SSH tunnels to the VM. Prefers autossh if available."""
+    import shutil
+
+    use_autossh = shutil.which("autossh") is not None
+    tool = "autossh" if use_autossh else "ssh"
+    print(f"  Establishing SSH tunnels to {vm_ip} (using {tool})...")
+
+    tunnel_args = []
+    for local_port, remote_port in _TUNNEL_PORTS.items():
+        tunnel_args.extend(["-L", f"{local_port}:localhost:{remote_port}"])
+
+    ssh_opts = [
+        "-o", "ConnectTimeout=10",
+        "-o", "ServerAliveInterval=30",
+        "-o", "ServerAliveCountMax=3",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "ExitOnForwardFailure=yes",
+        "-N",
+    ]
+
+    if use_autossh:
+        cmd = ["autossh", "-M", "0", "-f"] + ssh_opts + tunnel_args + [
+            f"{_AUTO_SSH_USER}@{vm_ip}"
+        ]
+    else:
+        cmd = ["ssh", "-f"] + ssh_opts + tunnel_args + [
+            f"{_AUTO_SSH_USER}@{vm_ip}"
+        ]
+        print("  (install autossh for automatic tunnel reconnection)")
+
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    if result.returncode != 0:
+        print(f"  ERROR: {tool} tunnel failed: {result.stderr.strip()}")
+        return False
+
+    time.sleep(2)
+    for local_port in _TUNNEL_PORTS:
+        status = "OK" if _is_local_port_open(local_port) else "NOT YET"
+        print(f"    Tunnel localhost:{local_port} -> VM:{_TUNNEL_PORTS[local_port]}: {status}")
+
+    return True
+
+
+def _auto_start_container(vm_ip: str) -> bool:
+    """Start the winarena Docker container on the VM."""
+    print(f"  Starting Docker container 'winarena' on {vm_ip}...")
+    result = subprocess.run(
+        ["ssh",
+         "-o", "ConnectTimeout=10",
+         "-o", "StrictHostKeyChecking=no",
+         "-o", "UserKnownHostsFile=/dev/null",
+         f"{_AUTO_SSH_USER}@{vm_ip}",
+         "docker start winarena"],
+        capture_output=True, text=True, timeout=60,
+    )
+    if result.returncode != 0:
+        print(f"  ERROR: docker start failed: {result.stderr.strip()}")
+        return False
+    print("  Container started.")
+    return True
+
+
+def _auto_start_socat(vm_ip: str) -> bool:
+    """Start socat proxy on the VM for port 5050 forwarding."""
+    print(f"  Starting socat proxy on {vm_ip} (VM:5051 -> container:5050)...")
+    socat_cmd = (
+        'nohup socat TCP-LISTEN:5051,fork,reuseaddr '
+        'EXEC:"docker exec -i winarena socat - TCP\\:localhost\\:5050" '
+        '&>/dev/null &'
+    )
+    result = subprocess.run(
+        ["ssh",
+         "-o", "ConnectTimeout=10",
+         "-o", "StrictHostKeyChecking=no",
+         "-o", "UserKnownHostsFile=/dev/null",
+         f"{_AUTO_SSH_USER}@{vm_ip}",
+         socat_cmd],
+        capture_output=True, text=True, timeout=30,
+    )
+    if result.returncode != 0:
+        print(f"  WARNING: socat setup returned non-zero: {result.stderr.strip()}")
+    else:
+        print("  Socat proxy started.")
+    return True
+
+
+def _wait_for_waa_ready(server: str, timeout: int = 600, interval: int = 5) -> bool:
+    """Poll WAA /probe endpoint until it returns HTTP 200."""
+    import requests
+
+    print(f"  Waiting for WAA to become ready at {server}/probe (timeout {timeout}s)...")
+    start = time.monotonic()
+    attempts = 0
+    while time.monotonic() - start < timeout:
+        attempts += 1
+        elapsed = int(time.monotonic() - start)
+        try:
+            resp = requests.get(f"{server}/probe", timeout=5)
+            if resp.status_code == 200:
+                print(f"  WAA is ready (after {elapsed}s, {attempts} attempts).")
+                return True
+            print(f"    [{elapsed}s] probe returned {resp.status_code}, retrying...")
+        except requests.ConnectionError:
+            print(f"    [{elapsed}s] connection refused, retrying...")
+        except Exception as e:
+            print(f"    [{elapsed}s] {e}, retrying...")
+        time.sleep(interval)
+
+    print(f"  TIMEOUT: WAA did not become ready within {timeout}s.")
+    return False
+
+
+def _attempt_auto_recovery(
+    server: str,
+    auto_vm: bool,
+    auto_tunnel: bool,
+    auto_container: bool,
+    wait_ready: bool,
+) -> bool:
+    """Attempt to automatically bring up WAA infrastructure.
+
+    Returns True if WAA is reachable after recovery.
+    """
+    print()
+    print("  Auto-recovery: diagnosing infrastructure state...")
+
+    # Step 1: Check/start VM
+    vm_ip = _get_vm_public_ip()
+    power_state = _get_vm_power_state()
+    print(f"  VM power state: {power_state or 'unknown'}")
+
+    if power_state != "running":
+        if auto_vm:
+            if not _auto_start_vm():
+                return False
+            time.sleep(5)
+            vm_ip = _get_vm_public_ip()
+            if not vm_ip:
+                print("  FAILED: VM started but could not get public IP.")
+                return False
+            print(f"  VM IP: {vm_ip}")
+        else:
+            print("  VM is not running. Use --auto-vm to start it automatically.")
+            return False
+    else:
+        if not vm_ip:
+            vm_ip = _get_vm_public_ip()
+        print(f"  VM IP: {vm_ip}")
+
+    if not vm_ip:
+        print("  FAILED: Could not determine VM IP.")
+        return False
+
+    # Step 2: Check/start Docker container
+    if auto_container:
+        _auto_start_container(vm_ip)
+        _auto_start_socat(vm_ip)
+
+    # Step 3: Check/establish SSH tunnels
+    if auto_tunnel and not _is_local_port_open(5001):
+        if not _auto_establish_tunnels(vm_ip):
+            print("  FAILED: Could not establish SSH tunnels.")
+            return False
+
+    # Step 4: Wait for WAA to boot
+    if wait_ready:
+        return _wait_for_waa_ready(server)
+
+    return _is_local_port_open(5001)
+
+
+def _deallocate_vm() -> bool:
+    """Deallocate the Azure VM (async). Returns True on success."""
+    print(f"\n  Deallocating VM '{_AUTO_VM_NAME}'...")
+    try:
+        result = subprocess.run(
+            [
+                "az", "vm", "deallocate",
+                "-g", _AUTO_RESOURCE_GROUP,
+                "-n", _AUTO_VM_NAME,
+                "--no-wait",
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0:
+            print(f"  VM '{_AUTO_VM_NAME}' deallocate initiated (billing will stop shortly).")
+            return True
+        else:
+            print(f"  WARNING: deallocate failed: {result.stderr.strip()}")
+            return False
+    except Exception as e:
+        print(f"  WARNING: deallocate failed: {e}")
+        return False
+
+
+def _cleanup_on_exit(signal_received: bool = False) -> None:
+    """Offer to deallocate the VM if this script started it."""
+    global _cleanup_done
+    if _cleanup_done or not _vm_started_by_script:
+        return
+    _cleanup_done = True
+
+    if signal_received:
+        print("\n\n  Script interrupted. Deallocating VM to stop billing...")
+        _deallocate_vm()
+    else:
+        try:
+            answer = input(
+                f"\n  This script started VM '{_AUTO_VM_NAME}'. "
+                "Deallocate to stop billing? [Y/n] "
+            ).strip().lower()
+            if answer in ("", "y", "yes"):
+                _deallocate_vm()
+            else:
+                print(f"  VM '{_AUTO_VM_NAME}' left running. "
+                      f"Deallocate manually: az vm deallocate -g {_AUTO_RESOURCE_GROUP} "
+                      f"-n {_AUTO_VM_NAME} --no-wait")
+        except (EOFError, KeyboardInterrupt):
+            print()
+            _deallocate_vm()
+
+
+def _register_vm_cleanup() -> None:
+    """Register atexit and signal handlers for VM cleanup. Idempotent."""
+    global _cleanup_registered
+    if _cleanup_registered:
+        return
+    _cleanup_registered = True
+
+    import atexit
+    import signal
+
+    atexit.register(_cleanup_on_exit, signal_received=False)
+
+    _original_sigint = signal.getsignal(signal.SIGINT)
+    _original_sigterm = signal.getsignal(signal.SIGTERM)
+
+    def _signal_handler(signum, frame):
+        _cleanup_on_exit(signal_received=True)
+        if signum == signal.SIGINT and callable(_original_sigint):
+            _original_sigint(signum, frame)
+        elif signum == signal.SIGTERM and callable(_original_sigterm):
+            _original_sigterm(signum, frame)
+        else:
+            sys.exit(1)
+
+    signal.signal(signal.SIGINT, _signal_handler)
+    signal.signal(signal.SIGTERM, _signal_handler)
 
 
 def cmd_record_waa(
@@ -552,8 +1455,13 @@ def cmd_record_waa(
     evaluate_url: str = "http://localhost:5050",
     output: str = "waa_recordings",
     vnc_url: str = "http://localhost:8006",
-    vm_ip: str = "172.173.66.131",
+    vm_ip: str | None = None,
     verify: bool = True,
+    auto: bool = False,
+    auto_vm: bool = False,
+    auto_tunnel: bool = False,
+    auto_container: bool = False,
+    wait_ready: bool = True,
 ) -> None:
     """Record demos interactively via WAA API while user performs actions on VNC.
 
@@ -564,16 +1472,42 @@ def cmd_record_waa(
         output: Output directory for recordings.
         vnc_url: VNC URL for the user to open in a browser.
         vm_ip: Azure VM IP for QEMU reset on task restart.
+            Auto-detected from pool registry or Azure if omitted.
         verify: Pre-flight check that all required apps are installed (default True).
+        auto: Automatically start all infrastructure (VM, tunnels, container).
+        auto_vm: Start Azure VM if it is deallocated (incurs charges).
+        auto_tunnel: Establish SSH tunnels if not connected.
+        auto_container: Start Docker container and socat proxy if not running.
+        wait_ready: Wait for WAA server to boot after recovery (default True).
     """
-    import requests
-
     # Guard: Fire may pass True if --tasks is used without a value
     if not isinstance(tasks, str):
         print(f"ERROR: --tasks must be a string of comma-separated task IDs.")
         print(f"  Got: {tasks!r} (type {type(tasks).__name__})")
         print(f"  Hint: use --tasks=\"id1,id2,...\" (with = and no space)")
         return
+
+    # --auto is a convenience flag that enables all sub-flags
+    if auto:
+        auto_vm = True
+        auto_tunnel = True
+        auto_container = True
+
+    any_auto = auto_vm or auto_tunnel or auto_container
+
+    from openadapt_evals.infrastructure.vm_ip import resolve_vm_ip
+
+    # VM IP resolution may fail if VM is deallocated — that's OK if we have
+    # auto-recovery flags, since we'll start the VM first.
+    try:
+        vm_ip = resolve_vm_ip(vm_ip)
+    except RuntimeError:
+        if any_auto:
+            vm_ip = None  # Will be resolved after VM start
+        else:
+            raise
+
+    import requests
 
     output_dir = Path(output)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -599,13 +1533,63 @@ def cmd_record_waa(
 
     # Verify connection
     print(f"Connecting to WAA server at {server}...")
+    connected = False
     try:
         resp = requests.get(f"{server}/probe", timeout=5)
         resp.raise_for_status()
         print(f"  Connected ({resp.status_code})")
+        connected = True
     except Exception as e:
         print(f"  Failed to connect: {e}")
-        print("  Make sure the WAA server is running and SSH tunnels are up.")
+
+        if any_auto:
+            # Confirm with user if VM start is involved (cost warning)
+            if auto_vm:
+                power_state = _get_vm_power_state()
+                if power_state != "running":
+                    print()
+                    print(
+                        "  WARNING: --auto will start Azure VM resources "
+                        "which incur charges."
+                    )
+                    answer = input("  Continue? [y/N] ").strip().lower()
+                    if answer not in ("y", "yes"):
+                        print("  Aborted.")
+                        return
+
+            recovered = _attempt_auto_recovery(
+                server=server,
+                auto_vm=auto_vm,
+                auto_tunnel=auto_tunnel,
+                auto_container=auto_container,
+                wait_ready=wait_ready,
+            )
+            if recovered:
+                print()
+                print("  Auto-recovery succeeded. WAA is ready.")
+                connected = True
+                # Re-resolve VM IP now that infrastructure is up
+                if vm_ip is None:
+                    try:
+                        vm_ip = resolve_vm_ip(vm_ip)
+                    except RuntimeError:
+                        vm_ip = _get_vm_public_ip()
+            else:
+                print()
+                print("  Auto-recovery FAILED. Cannot proceed.")
+                return
+        else:
+            print()
+            print("  The WAA server is not reachable. To auto-deploy all infrastructure, re-run with --auto:")
+            print(f"    python {__file__} record-waa --auto --tasks={tasks}")
+            print()
+            print("  Or use granular flags:")
+            print("    --auto-vm        Start Azure VM if deallocated (incurs charges)")
+            print("    --auto-tunnel    Establish SSH tunnels")
+            print("    --auto-container Start Docker container + socat proxy")
+            return
+
+    if not connected:
         return
 
     # Pre-flight: verify all required apps are installed
@@ -669,171 +1653,18 @@ def cmd_record_waa(
 
     recorded = []
     for task_num, task_id in enumerate(task_ids, 1):
-        print_header(f"Task {task_num}/{len(task_ids)}: {task_id[:12]}...")
-
-        task_dir = output_dir / task_id
-        task_dir.mkdir(parents=True, exist_ok=True)
-
-        # Load task config from evaluate server
-        instruction = task_id  # fallback
-        task_config = {}
-        try:
-            task_resp = requests.get(
-                f"{evaluate_url}/task/{task_id}", timeout=10
-            )
-            if task_resp.ok:
-                task_config = task_resp.json()
-                instruction = task_config.get(
-                    "instruction", task_config.get("task", task_id)
-                )
-        except Exception as e:
-            print(f"  Warning: could not load task config: {e}")
-
-        def _setup_task_env() -> None:
-            """Run task setup config (download files, open apps, etc.)."""
-            setup_config = task_config.get("config", [])
-            related_apps = task_config.get("related_apps", [])
-            if related_apps:
-                setup_config = [
-                    {"type": "verify_apps", "parameters": {"apps": related_apps}}
-                ] + setup_config
-            if setup_config:
-                resp = requests.post(
-                    f"{evaluate_url}/setup",
-                    json={"config": setup_config},
-                    timeout=120,
-                )
-                resp.raise_for_status()
-                results = resp.json().get("results", [])
-                for r in results:
-                    status = r.get("status", "?")
-                    stype = r.get("type", "?")
-                    print(f"    setup {stype}: {status}")
-            time.sleep(3)
-
-        def _soft_reset_task_env() -> bytes:
-            """Soft reset: close_all + re-run setup + screenshot."""
-            print("  Resetting environment (soft)...")
-            try:
-                resp = requests.post(f"{server}/setup/close_all", timeout=30)
-                print(f"    close_all: {resp.status_code}")
-                time.sleep(2)
-                _setup_task_env()
-            except Exception as e:
-                print(f"  WARNING: environment setup failed: {e}")
-                print(f"  The task app may not be open. Check VNC.")
-            print("  Taking initial screenshot...")
-            return _take_screenshot(server)
-
-        def _hard_reset_task_env() -> bytes:
-            """Hard reset: QEMU system_reset + wait for boot + clear recovery + setup + screenshot."""
-            print("  Restarting Windows (QEMU hard reset)...")
-            mgr = QEMUResetManager(vm_ip=vm_ip, timeout_seconds=300)
-            success, msg = mgr.restart_windows(server_url=server)
-            if not success:
-                print(f"  WARNING: QEMU reset failed: {msg}")
-                print("  Falling back to soft reset...")
-                return _soft_reset_task_env()
-            print(f"    {msg}")
-            _clear_recovery_data(server)
-            print("  Running task setup...")
-            try:
-                _setup_task_env()
-            except Exception as e:
-                print(f"  WARNING: environment setup failed: {e}")
-                print(f"  The task app may not be open. Check VNC.")
-            print("  Taking initial screenshot...")
-            return _take_screenshot(server)
-
-        before_png = _soft_reset_task_env()
-
-        print(f"\n  VNC: {vnc_url}")
-        print(f"  Task: {instruction}\n")
-
-        # Generate AI step-by-step guidance from screenshot
-        print("  Generating suggested steps...")
-        suggested = _generate_steps(before_png, instruction, task_config)
-        print()
-        print("  ┌─ SUGGESTED STEPS ──────────────────────────────")
-        for line in suggested.splitlines():
-            print(f"  │ {line}")
-        print("  └────────────────────────────────────────────────")
-        print()
-        print("  Perform each action in VNC, then press Enter here.")
-        print("  Press 'd' when done, 'r' to redo last step,")
-        print("  'R' to restart task from scratch.\n")
-
-        steps = []
-        step_idx = 0
-        while True:
-            # Save before screenshot
-            (task_dir / f"step_{step_idx:02d}_before.png").write_bytes(
-                before_png
-            )
-
-            action_desc = input(
-                f"  Step {step_idx + 1}: Press Enter after action "
-                "(or 'd'=done, 'r'=redo last, 'R'=restart task): "
-            ).strip()
-
-            if action_desc == "R":
-                # Restart: QEMU hard reset + re-run setup, clear all steps
-                print("  Restarting task from scratch (QEMU hard reset)...")
-                # Clean recorded step files
-                for f in task_dir.glob("step_*.png"):
-                    f.unlink()
-                before_png = _hard_reset_task_env()
-                steps = []
-                step_idx = 0
-                print(f"\n  VNC: {vnc_url}")
-                print(f"  Task: {instruction}\n")
-                print("  Task restarted. Continue recording.\n")
-                continue
-
-            if action_desc.lower() == "d":
-                # Save final screenshot as the last after
-                after_png = _take_screenshot(server)
-                (task_dir / f"step_{step_idx:02d}_after.png").write_bytes(
-                    after_png
-                )
-                steps.append({"action_hint": action_desc or None})
-                step_idx += 1
-                break
-
-            if action_desc.lower() == "r" and step_idx > 0:
-                # Redo: go back one step
-                step_idx -= 1
-                steps.pop()
-                # Re-take the before screenshot from current state
-                before_png = _take_screenshot(server)
-                print(f"  Redoing step {step_idx + 1}...")
-                continue
-
-            # Take after screenshot
-            after_png = _take_screenshot(server)
-            (task_dir / f"step_{step_idx:02d}_after.png").write_bytes(
-                after_png
-            )
-
-            steps.append({"action_hint": action_desc or None})
-            before_png = after_png  # next step's before = this step's after
-            step_idx += 1
-
-        # Save metadata
-        meta = {
-            "task_id": task_id,
-            "instruction": instruction,
-            "num_steps": len(steps),
-            "steps": steps,
-            "server_url": server,
-            "recorded_at": datetime.now(timezone.utc).isoformat(),
-        }
-        (task_dir / "meta.json").write_text(
-            json.dumps(meta, indent=2), encoding="utf-8"
+        result = _record_single_task(
+            task_id=task_id,
+            task_num=task_num,
+            total_tasks=len(task_ids),
+            output_dir=output_dir,
+            server=server,
+            evaluate_url=evaluate_url,
+            vnc_url=vnc_url,
+            vm_ip=vm_ip,
         )
-
-        recorded.append(task_id)
-        print(f"\n  Saved {len(steps)} step(s) to {task_dir}")
+        if result is not None:
+            recorded.append(result)
 
     # Summary
     print_header("Recording Summary")

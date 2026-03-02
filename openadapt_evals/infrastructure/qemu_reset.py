@@ -24,7 +24,7 @@ Usage::
 
     from openadapt_evals.infrastructure.qemu_reset import QEMUResetManager
 
-    mgr = QEMUResetManager(vm_ip="172.173.66.131")
+    mgr = QEMUResetManager(vm_ip="10.0.0.1")
 
     # Full restart: send reset + wait for WAA server
     success, message = mgr.restart_windows()
