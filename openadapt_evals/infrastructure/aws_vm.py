@@ -627,9 +627,14 @@ class AWSVMManager:
         for eip_name in resources.get("eips", []):
             try:
                 if eip_name.startswith("eipalloc-"):
-                    # Raw allocation ID (no Name tag) — release directly
+                    # Raw allocation ID (no Name tag) — look up and release
                     try:
-                        ec2.disassociate_address(AllocationId=eip_name)
+                        addrs = ec2.describe_addresses(AllocationIds=[eip_name])
+                        for addr in addrs.get("Addresses", []):
+                            if addr.get("AssociationId"):
+                                ec2.disassociate_address(
+                                    AssociationId=addr["AssociationId"]
+                                )
                     except Exception:
                         pass  # May not be associated
                     ec2.release_address(AllocationId=eip_name)
