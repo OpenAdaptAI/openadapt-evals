@@ -414,6 +414,7 @@ class VMPoolRegistry:
                         paused_since=data.get("paused_since"),
                         auto_pause_at=data.get("auto_pause_at"),
                         auto_pause_hours=data.get("auto_pause_hours", 2),
+                        ssh_username=data.get("ssh_username", "azureuser"),
                     )
             except (json.JSONDecodeError, KeyError) as e:
                 print(f"Warning: Could not load pool registry: {e}")
