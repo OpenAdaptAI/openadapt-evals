@@ -30,7 +30,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import subprocess
 import sys
 import time
@@ -102,28 +101,27 @@ def _generate_demos(
     demo_dir.mkdir(parents=True, exist_ok=True)
     print(f"[demos] Generating VLM demos for {len(missing)} recording(s)...")
 
-    # Import here to avoid loading VLM deps when not needed
-    sys.path.insert(0, str(REPO_ROOT / "scripts"))
-    from convert_recording_to_demo import convert_vlm
-
     generated = []
     for task_dir, task_id in missing:
-        meta_path = task_dir / "meta_refined.json"
-        if not meta_path.exists():
-            meta_path = task_dir / "meta.json"
+        print(f"[demos] {task_id[:12]}...")
 
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        num_steps = meta.get("num_steps", len(meta.get("steps", [])))
-        print(f"[demos] {task_id[:12]}... ({num_steps} steps)")
+        cmd = [
+            sys.executable, str(REPO_ROOT / "scripts" / "convert_recording_to_demo.py"),
+            "--recordings", str(recordings_dir),
+            "--output", str(demo_dir),
+            "--mode", "vlm",
+            "--provider", provider,
+            "--task", task_id[:8],
+        ]
+        if model:
+            cmd.extend(["--model", model])
 
-        try:
-            demo_text = convert_vlm(meta, task_dir, provider=provider, model=model)
-            out_path = demo_dir / f"{task_id}.txt"
-            out_path.write_text(demo_text, encoding="utf-8")
-            print(f"[demos]   -> {out_path.name} ({len(demo_text)} bytes)")
+        result = subprocess.run(cmd, timeout=600)
+        if result.returncode == 0:
+            print(f"[demos]   -> done")
             generated.append(task_id)
-        except Exception as e:
-            print(f"[demos]   ERROR: {e}")
+        else:
+            print(f"[demos]   ERROR: exit code {result.returncode}")
 
     return generated
 
@@ -246,12 +244,114 @@ def _resolve_ip(vm_name: str, resource_group: str) -> str | None:
 # ── Phase 2: Connectivity ─────────────────────────────────────────────────
 
 
+def _kill_tunnels() -> None:
+    """Kill all SSH tunnels matching port 5001."""
+    subprocess.run(
+        "ps aux | grep 'ssh.*5001' | grep -v grep | awk '{print $2}' | xargs kill 2>/dev/null",
+        shell=True, capture_output=True,
+    )
+
+
+def _start_tunnel(vm_user: str, vm_ip: str) -> bool:
+    """Establish SSH tunnel for WAA ports (5001, 5050, 8006)."""
+    cmd = [
+        "ssh", "-f", "-N",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "ServerAliveInterval=15",
+        "-o", "ServerAliveCountMax=3",
+        "-o", "TCPKeepAlive=yes",
+        "-o", "ExitOnForwardFailure=yes",
+        "-L", "5001:localhost:5000",
+        "-L", "5050:localhost:5051",
+        "-L", "8006:localhost:8006",
+        f"{vm_user}@{vm_ip}",
+    ]
+    result = subprocess.run(cmd, capture_output=True)
+    return result.returncode == 0
+
+
+def _setup_eval_proxy(vm_user: str, vm_ip: str) -> bool:
+    """(Re-)establish socat proxy for the evaluate server on the VM."""
+    script = (
+        "if systemctl list-unit-files socat-waa-evaluate.service "
+        "| grep -q socat-waa-evaluate; then "
+        "  sudo systemctl restart socat-waa-evaluate.service; "
+        "else "
+        "  killall socat 2>/dev/null || true; sleep 1; "
+        "  which socat >/dev/null 2>&1 "
+        "  || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq socat; "
+        "  nohup socat TCP-LISTEN:5051,fork,reuseaddr "
+        "  'EXEC:docker exec -i winarena socat - TCP\\:127.0.0.1\\:5050' "
+        "  </dev/null >/dev/null 2>&1 & "
+        "fi"
+    )
+    result = subprocess.run(
+        ["ssh", "-o", "StrictHostKeyChecking=no", f"{vm_user}@{vm_ip}", script],
+        capture_output=True, timeout=30,
+    )
+    if result.returncode != 0:
+        print(f"  socat proxy setup failed: {result.stderr.decode()}")
+        return False
+    return True
+
+
+def _probe(server: str, timeout: int = 10) -> bool:
+    """HTTP probe to check if a server is alive."""
+    import requests
+
+    try:
+        resp = requests.get(f"{server}/probe", timeout=timeout)
+        return resp.ok
+    except Exception:
+        return False
+
+
+def _ensure_waa_ready(
+    server: str,
+    vm_user: str,
+    vm_ip: str,
+    max_wait: int = 420,
+    evaluate_url: str | None = None,
+) -> bool:
+    """Ensure WAA is reachable, recovering via tunnel reconnect if needed.
+
+    Recovery sequence:
+    1. Probe -> OK: return True
+    2. Reconnect tunnel -> Probe -> OK: return True
+    3. Wait for probe with timeout
+    """
+    if _probe(server) and (evaluate_url is None or _probe(evaluate_url)):
+        return True
+
+    print("  WAA unreachable, reconnecting tunnel...")
+    _kill_tunnels()
+    time.sleep(1)
+    _setup_eval_proxy(vm_user, vm_ip)
+    if _start_tunnel(vm_user, vm_ip):
+        time.sleep(3)
+        if _probe(server) and (evaluate_url is None or _probe(evaluate_url)):
+            print("  Tunnel reconnected, WAA ready!")
+            return True
+
+    # Wait for WAA to come back
+    deadline = time.time() + max_wait
+    last_print = 0
+    while time.time() < deadline:
+        elapsed = int(time.time() - (deadline - max_wait))
+        if elapsed - last_print >= 15:
+            print(f"  [{elapsed}s] Waiting for WAA server...")
+            last_print = elapsed
+        if _probe(server, timeout=10) and (evaluate_url is None or _probe(evaluate_url, timeout=10)):
+            print(f"  WAA ready after {elapsed}s!")
+            return True
+        time.sleep(10)
+
+    print(f"  TIMEOUT: WAA not ready after {max_wait}s")
+    return False
+
+
 def _setup_connectivity(vm_ip: str, vm_user: str) -> bool:
     """Kill stale tunnels, establish fresh ones, set up socat proxy."""
-    # Import from run_dc_eval (same directory)
-    sys.path.insert(0, str(REPO_ROOT / "scripts"))
-    from run_dc_eval import _kill_tunnels, _setup_eval_proxy, _start_tunnel
-
     print("[conn] Killing stale SSH tunnels...")
     _kill_tunnels()
     time.sleep(1)
@@ -350,9 +450,6 @@ def _run_eval(
     vm_user: str,
 ) -> dict[str, dict]:
     """Run all eval conditions sequentially with health checks."""
-    sys.path.insert(0, str(REPO_ROOT / "scripts"))
-    from run_dc_eval import ensure_waa_ready
-
     results = {}
     start_time = time.time()
 
@@ -366,7 +463,7 @@ def _run_eval(
         print(f"{'=' * 60}")
 
         # Health check before each run
-        if not ensure_waa_ready(server, vm_user, vm_ip, evaluate_url=evaluate_url):
+        if not _ensure_waa_ready(server, vm_user, vm_ip, evaluate_url=evaluate_url):
             print(f"  Skipping {run_name} — WAA unreachable after recovery")
             results[run_name] = {
                 "status": "SKIP",
