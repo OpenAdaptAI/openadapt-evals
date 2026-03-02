@@ -18,7 +18,7 @@
 
 ### Step 1: Right-click on the "Sheet1" tab at the bottom and select "Insert Sheet" or "New Sheet"
 
-[![before](artifacts/thumbnails/step_00_before.png)](artifacts/full/step_00_before.png) [![after](artifacts/thumbnails/step_00_after.png)](artifacts/full/step_00_after.png)
+[![before](artifacts/thumbnails/step_00_before.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_00_before.png) [![after](artifacts/thumbnails/step_00_after.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_00_after.png)
 
 **Ground truth:** Right-click on the "Sheet1" tab at the bottom and select "Insert Sheet" or "New Sheet"
 
@@ -35,7 +35,7 @@
 
 ### Step 2: Click cell A1 and type "Year"
 
-[![before](artifacts/thumbnails/step_01_before.png)](artifacts/full/step_01_before.png) [![after](artifacts/thumbnails/step_01_after.png)](artifacts/full/step_01_after.png)
+[![before](artifacts/thumbnails/step_01_before.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_01_before.png) [![after](artifacts/thumbnails/step_01_after.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_01_after.png)
 
 **Ground truth:** Click cell A1 and type "Year"
 
@@ -52,7 +52,7 @@
 
 ### Step 3: Press Tab and type "CA changes"
 
-[![before](artifacts/thumbnails/step_02_before.png)](artifacts/full/step_02_before.png) [![after](artifacts/thumbnails/step_02_after.png)](artifacts/full/step_02_after.png)
+[![before](artifacts/thumbnails/step_02_before.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_02_before.png) [![after](artifacts/thumbnails/step_02_after.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_02_after.png)
 
 **Ground truth:** Press Tab and type "CA changes"
 
@@ -69,7 +69,7 @@
 
 ### Step 4: Press Tab and type "FA changes"
 
-[![before](artifacts/thumbnails/step_03_before.png)](artifacts/full/step_03_before.png) [![after](artifacts/thumbnails/step_03_after.png)](artifacts/full/step_03_after.png)
+[![before](artifacts/thumbnails/step_03_before.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_03_before.png) [![after](artifacts/thumbnails/step_03_after.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_03_after.png)
 
 **Ground truth:** Press Tab and type "FA changes"
 
@@ -86,7 +86,7 @@
 
 ### Step 5: Press Tab and type "OA changes"
 
-[![before](artifacts/thumbnails/step_04_before.png)](artifacts/full/step_04_before.png) [![after](artifacts/thumbnails/step_04_after.png)](artifacts/full/step_04_after.png)
+[![before](artifacts/thumbnails/step_04_before.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_04_before.png) [![after](artifacts/thumbnails/step_04_after.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_04_after.png)
 
 **Ground truth:** Press Tab and type "OA changes"
 
@@ -103,7 +103,7 @@
 
 ### Step 6: Click cell A2 and type "2015"
 
-[![before](artifacts/thumbnails/step_05_before.png)](artifacts/full/step_05_before.png) [![after](artifacts/thumbnails/step_05_after.png)](artifacts/full/step_05_after.png)
+[![before](artifacts/thumbnails/step_05_before.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_05_before.png) [![after](artifacts/thumbnails/step_05_after.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_05_after.png)
 
 **Ground truth:** Click cell A2 and type "2015"
 
@@ -120,7 +120,7 @@
 
 ### Step 7: Press Enter and type "2016"
 
-[![before](artifacts/thumbnails/step_06_before.png)](artifacts/full/step_06_before.png) [![after](artifacts/thumbnails/step_06_after.png)](artifacts/full/step_06_after.png)
+[![before](artifacts/thumbnails/step_06_before.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_06_before.png) [![after](artifacts/thumbnails/step_06_after.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_06_after.png)
 
 **Ground truth:** Press Enter and type "2016"
 
@@ -137,7 +137,7 @@
 
 ### Step 8: Press Enter and type "2017"
 
-[![before](artifacts/thumbnails/step_07_before.png)](artifacts/full/step_07_before.png) [![after](artifacts/thumbnails/step_07_after.png)](artifacts/full/step_07_after.png)
+[![before](artifacts/thumbnails/step_07_before.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_07_before.png) [![after](artifacts/thumbnails/step_07_after.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_07_after.png)
 
 **Ground truth:** Press Enter and type "2017"
 
@@ -154,7 +154,7 @@
 
 ### Step 9: Press Enter and type "2018"
 
-[![before](artifacts/thumbnails/step_08_before.png)](artifacts/full/step_08_before.png) [![after](artifacts/thumbnails/step_08_after.png)](artifacts/full/step_08_after.png)
+[![before](artifacts/thumbnails/step_08_before.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_08_before.png) [![after](artifacts/thumbnails/step_08_after.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_08_after.png)
 
 **Ground truth:** Press Enter and type "2018"
 
@@ -171,7 +171,7 @@
 
 ### Step 10: Press Enter and type "2019"
 
-[![before](artifacts/thumbnails/step_09_before.png)](artifacts/full/step_09_before.png) [![after](artifacts/thumbnails/step_09_after.png)](artifacts/full/step_09_after.png)
+[![before](artifacts/thumbnails/step_09_before.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_09_before.png) [![after](artifacts/thumbnails/step_09_after.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_09_after.png)
 
 **Ground truth:** Press Enter and type "2019"
 
@@ -188,7 +188,7 @@
 
 ### Step 11: Click cell B2 and type "=(Sheet1.B3-Sheet1.B2)/Sheet1.B2"
 
-[![before](artifacts/thumbnails/step_10_before.png)](artifacts/full/step_10_before.png) [![after](artifacts/thumbnails/step_10_after.png)](artifacts/full/step_10_after.png)
+[![before](artifacts/thumbnails/step_10_before.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_10_before.png) [![after](artifacts/thumbnails/step_10_after.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_10_after.png)
 
 **Ground truth:** Click cell B2 and type "=(Sheet1.B3-Sheet1.B2)/Sheet1.B2"
 
@@ -205,7 +205,7 @@
 
 ### Step 12: Press Enter
 
-[![before](artifacts/thumbnails/step_11_before.png)](artifacts/full/step_11_before.png) [![after](artifacts/thumbnails/step_11_after.png)](artifacts/full/step_11_after.png)
+[![before](artifacts/thumbnails/step_11_before.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_11_before.png) [![after](artifacts/thumbnails/step_11_after.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_11_after.png)
 
 **Ground truth:** Press Enter
 
@@ -222,7 +222,7 @@
 
 ### Step 13: Click cell B2, then drag the fill handle down to B6
 
-[![before](artifacts/thumbnails/step_12_before.png)](artifacts/full/step_12_before.png) [![after](artifacts/thumbnails/step_12_after.png)](artifacts/full/step_12_after.png)
+[![before](artifacts/thumbnails/step_12_before.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_12_before.png) [![after](artifacts/thumbnails/step_12_after.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_12_after.png)
 
 **Ground truth:** Click cell B2, then drag the fill handle down to B6
 
@@ -239,7 +239,7 @@
 
 ### Step 14: Click cell C2 and type "=(Sheet1.C3-Sheet1.C2)/Sheet1.C2"
 
-[![before](artifacts/thumbnails/step_13_before.png)](artifacts/full/step_13_before.png) [![after](artifacts/thumbnails/step_13_after.png)](artifacts/full/step_13_after.png)
+[![before](artifacts/thumbnails/step_13_before.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_13_before.png) [![after](artifacts/thumbnails/step_13_after.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_13_after.png)
 
 **Ground truth:** Click cell C2 and type "=(Sheet1.C3-Sheet1.C2)/Sheet1.C2"
 
@@ -256,7 +256,7 @@
 
 ### Step 15: Press Enter
 
-[![before](artifacts/thumbnails/step_14_before.png)](artifacts/full/step_14_before.png) [![after](artifacts/thumbnails/step_14_after.png)](artifacts/full/step_14_after.png)
+[![before](artifacts/thumbnails/step_14_before.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_14_before.png) [![after](artifacts/thumbnails/step_14_after.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_14_after.png)
 
 **Ground truth:** Press Enter
 
@@ -273,7 +273,7 @@
 
 ### Step 16: Click cell C2, then drag the fill handle down to C6
 
-[![before](artifacts/thumbnails/step_15_before.png)](artifacts/full/step_15_before.png) [![after](artifacts/thumbnails/step_15_after.png)](artifacts/full/step_15_after.png)
+[![before](artifacts/thumbnails/step_15_before.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_15_before.png) [![after](artifacts/thumbnails/step_15_after.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_15_after.png)
 
 **Ground truth:** Click cell C2, then drag the fill handle down to C6
 
@@ -290,7 +290,7 @@
 
 ### Step 17: Click cell D2 and type "=(Sheet1.D3-Sheet1.D2)/Sheet1.D2"
 
-[![before](artifacts/thumbnails/step_16_before.png)](artifacts/full/step_16_before.png) [![after](artifacts/thumbnails/step_16_after.png)](artifacts/full/step_16_after.png)
+[![before](artifacts/thumbnails/step_16_before.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_16_before.png) [![after](artifacts/thumbnails/step_16_after.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_16_after.png)
 
 **Ground truth:** Click cell D2 and type "=(Sheet1.D3-Sheet1.D2)/Sheet1.D2"
 
@@ -307,7 +307,7 @@
 
 ### Step 18: Press Enter
 
-[![before](artifacts/thumbnails/step_17_before.png)](artifacts/full/step_17_before.png) [![after](artifacts/thumbnails/step_17_after.png)](artifacts/full/step_17_after.png)
+[![before](artifacts/thumbnails/step_17_before.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_17_before.png) [![after](artifacts/thumbnails/step_17_after.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_17_after.png)
 
 **Ground truth:** Press Enter
 
@@ -324,7 +324,7 @@
 
 ### Step 19: Click cell D2, then drag the fill handle down to D6
 
-[![before](artifacts/thumbnails/step_18_before.png)](artifacts/full/step_18_before.png) [![after](artifacts/thumbnails/step_18_after.png)](artifacts/full/step_18_after.png)
+[![before](artifacts/thumbnails/step_18_before.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_18_before.png) [![after](artifacts/thumbnails/step_18_after.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_18_after.png)
 
 **Ground truth:** Click cell D2, then drag the fill handle down to D6
 
@@ -341,7 +341,7 @@
 
 ### Step 20: Click and drag to select cells B2:D6
 
-[![before](artifacts/thumbnails/step_19_before.png)](artifacts/full/step_19_before.png) [![after](artifacts/thumbnails/step_19_after.png)](artifacts/full/step_19_after.png)
+[![before](artifacts/thumbnails/step_19_before.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_19_before.png) [![after](artifacts/thumbnails/step_19_after.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_19_after.png)
 
 **Ground truth:** Click and drag to select cells B2:D6
 
@@ -358,7 +358,7 @@
 
 ### Step 21: Click the % button in the toolbar (or press Ctrl+Shift+5)
 
-[![before](artifacts/thumbnails/step_20_before.png)](artifacts/full/step_20_before.png) [![after](artifacts/thumbnails/step_20_after.png)](artifacts/full/step_20_after.png)
+[![before](artifacts/thumbnails/step_20_before.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_20_before.png) [![after](artifacts/thumbnails/step_20_after.jpg)](../waa_recordings/04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS/step_20_after.png)
 
 **Ground truth:** Click the % button in the toolbar (or press Ctrl+Shift+5)
 
