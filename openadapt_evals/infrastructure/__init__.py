@@ -1,7 +1,9 @@
 """Infrastructure components for VM management and monitoring.
 
 This module provides:
+- VMProvider: Cloud-agnostic VM provider protocol
 - AzureVMManager: Azure VM lifecycle management (SDK + CLI fallback)
+- AWSVMManager: AWS EC2 lifecycle management (boto3)
 - PoolManager: Multi-VM pool orchestration
 - VMMonitor: Azure VM status monitoring
 - AzureOpsTracker: Azure operation logging
@@ -12,9 +14,14 @@ Example:
     ```python
     from openadapt_evals.infrastructure import AzureVMManager, PoolManager
 
-    # Manage VMs
+    # Manage VMs (Azure)
     vm = AzureVMManager()
     ip = vm.get_vm_ip("waa-eval-vm")
+
+    # Or use AWS
+    from openadapt_evals.infrastructure import AWSVMManager
+    vm = AWSVMManager(region="us-east-1")
+    pool = PoolManager(vm_manager=vm)
 
     # Create and manage pools
     pool = PoolManager()
@@ -42,8 +49,15 @@ from openadapt_evals.infrastructure.screen_stability import (
 from openadapt_evals.infrastructure.ssh_tunnel import SSHTunnelManager, get_tunnel_manager
 from openadapt_evals.infrastructure.vm_ip import resolve_vm_ip
 from openadapt_evals.infrastructure.vm_monitor import VMMonitor, VMConfig
+from openadapt_evals.infrastructure.vm_provider import VMProvider
+
+try:
+    from openadapt_evals.infrastructure.aws_vm import AWSVMManager
+except ImportError:
+    AWSVMManager = None  # boto3 not installed; use `pip install openadapt-evals[aws]`
 
 __all__ = [
+    "AWSVMManager",
     "AzureOpsTracker",
     "AzureVMManager",
     "PoolManager",
@@ -51,6 +65,7 @@ __all__ = [
     "QEMUResetManager",
     "VMMonitor",
     "VMConfig",
+    "VMProvider",
     "SSHTunnelManager",
     "compare_screenshots",
     "get_tunnel_manager",

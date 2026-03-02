@@ -76,6 +76,44 @@ def _get_resource_group() -> str:
 
 
 RESOURCE_GROUP = _get_resource_group()
+
+
+def _get_default_cloud() -> str:
+    """Get default cloud provider from config."""
+    try:
+        from openadapt_evals.config import settings
+
+        return settings.cloud_provider
+    except Exception:
+        return "azure"
+
+
+def _get_pool_ssh_username(pool: dict) -> str:
+    """Get SSH username from pool registry, defaulting to azureuser for backward compat."""
+    return pool.get("ssh_username", "azureuser")
+
+
+def _create_vm_manager(cloud: str | None = None, resource_group: str | None = None):
+    """Factory to create the appropriate VM manager based on cloud provider.
+
+    Args:
+        cloud: Cloud provider ("azure" or "aws"). If None, uses config default.
+        resource_group: Azure resource group (ignored for AWS).
+
+    Returns:
+        VMProvider instance (AzureVMManager or AWSVMManager).
+    """
+    cloud = cloud or _get_default_cloud()
+    if cloud == "aws":
+        from openadapt_evals.infrastructure.aws_vm import AWSVMManager
+
+        return AWSVMManager()
+    else:
+        from openadapt_evals.infrastructure.azure_vm import AzureVMManager
+
+        return AzureVMManager(resource_group=resource_group or RESOURCE_GROUP)
+
+
 # Custom WAA image built from waa_deploy/Dockerfile
 # Uses dockurr/windows:latest as base (with proper ISO download) + WAA components
 DOCKER_IMAGE = "waa-auto:latest"
@@ -518,11 +556,10 @@ def cmd_pool_status(args):
     """Show status of all VMs in the current pool."""
     init_logging()
 
-    from openadapt_evals.infrastructure.azure_vm import AzureVMManager
     from openadapt_evals.infrastructure.pool import PoolManager
     from openadapt_evals.infrastructure.vm_monitor import VMMonitor, VMConfig
 
-    vm_manager = AzureVMManager(resource_group=RESOURCE_GROUP)
+    vm_manager = _create_vm_manager(getattr(args, "cloud", None))
     manager = PoolManager(vm_manager=vm_manager, log_fn=log)
     pool = manager.status()
 
@@ -592,10 +629,9 @@ def cmd_delete_pool(args):
     init_logging()
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    from openadapt_evals.infrastructure.azure_vm import AzureVMManager
     from openadapt_evals.infrastructure.pool import PoolManager
 
-    vm_manager = AzureVMManager(resource_group=RESOURCE_GROUP)
+    vm_manager = _create_vm_manager(getattr(args, "cloud", None))
     manager = PoolManager(vm_manager=vm_manager, log_fn=log)
     pool = manager.status()
 
@@ -642,7 +678,6 @@ def cmd_pool_create(args):
     Uses ThreadPoolExecutor for concurrent VM creation.
     """
     init_logging()
-    from openadapt_evals.infrastructure.azure_vm import AzureVMManager
     from openadapt_evals.infrastructure.pool import PoolManager
 
     num_workers = getattr(args, "workers", 3)
@@ -650,7 +685,7 @@ def cmd_pool_create(args):
     use_acr = getattr(args, "use_acr", False)
     image_id = getattr(args, "image", None)
 
-    vm_manager = AzureVMManager(resource_group=RESOURCE_GROUP)
+    vm_manager = _create_vm_manager(getattr(args, "cloud", None))
     manager = PoolManager(vm_manager=vm_manager, log_fn=log)
 
     try:
@@ -673,13 +708,12 @@ def cmd_pool_wait(args):
     and the WAA server to respond.
     """
     init_logging()
-    from openadapt_evals.infrastructure.azure_vm import AzureVMManager
     from openadapt_evals.infrastructure.pool import PoolManager
 
     timeout_minutes = getattr(args, "timeout", 30)
     no_start = getattr(args, "no_start", False)
 
-    vm_manager = AzureVMManager(resource_group=RESOURCE_GROUP)
+    vm_manager = _create_vm_manager(getattr(args, "cloud", None))
     manager = PoolManager(vm_manager=vm_manager, log_fn=log)
 
     try:
@@ -700,7 +734,6 @@ def cmd_pool_run(args):
     in parallel. Collects results from all workers.
     """
     init_logging()
-    from openadapt_evals.infrastructure.azure_vm import AzureVMManager
     from openadapt_evals.infrastructure.pool import PoolManager
 
     num_tasks = getattr(args, "tasks", 10)
@@ -708,7 +741,7 @@ def cmd_pool_run(args):
     model = getattr(args, "model", "gpt-4o-mini")
     api_key = getattr(args, "api_key", None)
 
-    vm_manager = AzureVMManager(resource_group=RESOURCE_GROUP)
+    vm_manager = _create_vm_manager(getattr(args, "cloud", None))
     manager = PoolManager(vm_manager=vm_manager, log_fn=log)
 
     try:
@@ -731,10 +764,9 @@ def cmd_pool_cleanup(args):
     weren't properly deleted.
     """
     init_logging()
-    from openadapt_evals.infrastructure.azure_vm import AzureVMManager
     from openadapt_evals.infrastructure.pool import PoolManager
 
-    vm_manager = AzureVMManager(resource_group=RESOURCE_GROUP)
+    vm_manager = _create_vm_manager(getattr(args, "cloud", None))
     manager = PoolManager(vm_manager=vm_manager, log_fn=log)
 
     confirm = not getattr(args, "yes", False)
@@ -752,7 +784,6 @@ def cmd_pool_auto(args):
     If a pool already exists, skips creation and resumes from wait → run.
     """
     init_logging()
-    from openadapt_evals.infrastructure.azure_vm import AzureVMManager
     from openadapt_evals.infrastructure.pool import PoolManager
 
     num_workers = getattr(args, "workers", 1)
@@ -763,7 +794,7 @@ def cmd_pool_auto(args):
     model = getattr(args, "model", "gpt-4o-mini")
     api_key = getattr(args, "api_key", None)
 
-    vm_manager = AzureVMManager(resource_group=RESOURCE_GROUP)
+    vm_manager = _create_vm_manager(getattr(args, "cloud", None))
     manager = PoolManager(vm_manager=vm_manager, log_fn=log)
 
     try:
@@ -820,10 +851,9 @@ def cmd_pool_pause(args):
     instead of recreating from scratch (~42 min). Idle cost ~$0.25/day.
     """
     init_logging()
-    from openadapt_evals.infrastructure.azure_vm import AzureVMManager
     from openadapt_evals.infrastructure.pool import PoolManager
 
-    vm_manager = AzureVMManager(resource_group=RESOURCE_GROUP)
+    vm_manager = _create_vm_manager(getattr(args, "cloud", None))
     manager = PoolManager(vm_manager=vm_manager, log_fn=log)
 
     try:
@@ -842,12 +872,11 @@ def cmd_pool_resume(args):
     (~5 min vs ~42 min).
     """
     init_logging()
-    from openadapt_evals.infrastructure.azure_vm import AzureVMManager
     from openadapt_evals.infrastructure.pool import PoolManager
 
     timeout_minutes = getattr(args, "timeout", 10)
 
-    vm_manager = AzureVMManager(resource_group=RESOURCE_GROUP)
+    vm_manager = _create_vm_manager(getattr(args, "cloud", None))
     manager = PoolManager(vm_manager=vm_manager, log_fn=log)
 
     try:
@@ -884,6 +913,8 @@ def cmd_pool_vnc(args):
     worker_name = getattr(args, "worker", None)
     all_workers = getattr(args, "all", False)
 
+    ssh_user = _get_pool_ssh_username(pool)
+
     if all_workers:
         # Set up tunnels for all workers
         log("POOL-VNC", f"Setting up VNC tunnels for {len(workers)} workers...")
@@ -912,7 +943,7 @@ def cmd_pool_vnc(args):
                     "-N",
                     "-L",
                     f"{local_port}:localhost:8006",
-                    f"azureuser@{ip}",
+                    f"{ssh_user}@{ip}",
                 ],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -989,7 +1020,7 @@ def cmd_pool_vnc(args):
                 "-N",
                 "-L",
                 f"{local_port}:localhost:8006",
-                f"azureuser@{ip}",
+                f"{ssh_user}@{ip}",
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -1042,6 +1073,7 @@ def cmd_pool_logs(args):
         print("ERROR: Pool has no workers.")
         return 1
 
+    ssh_user = _get_pool_ssh_username(pool)
     pool_id = pool.get("pool_id", "unknown")
     print(f"[pool-logs] Streaming logs from {len(workers)} workers (pool: {pool_id})")
     print("[pool-logs] Press Ctrl+C to stop\n", flush=True)
@@ -1060,7 +1092,7 @@ def cmd_pool_logs(args):
             "UserKnownHostsFile=/dev/null",
             "-o",
             "LogLevel=ERROR",
-            f"azureuser@{ip}",
+            f"{ssh_user}@{ip}",
             "docker logs -f winarena",
         ]
         try:
@@ -1132,6 +1164,7 @@ def cmd_pool_exec(args):
         log("POOL-EXEC", "ERROR: Pool has no workers.")
         return 1
 
+    ssh_user = _get_pool_ssh_username(pool)
     cmd = getattr(args, "cmd", None)
     docker = getattr(args, "docker", False)
     worker_filter = getattr(args, "worker", None)
@@ -1164,7 +1197,7 @@ def cmd_pool_exec(args):
 
         try:
             result = subprocess.run(
-                ["ssh", *SSH_OPTS, f"azureuser@{ip}", full_cmd],
+                ["ssh", *SSH_OPTS, f"{ssh_user}@{ip}", full_cmd],
                 capture_output=True,
                 text=True,
                 timeout=60,
@@ -7623,10 +7656,18 @@ Examples:
     p_delete = subparsers.add_parser("delete", help="Delete VM and all resources")
     p_delete.set_defaults(func=cmd_delete)
 
+    # Shared --cloud argument for pool commands
+    _cloud_kwargs = {
+        "choices": ["azure", "aws"],
+        "default": None,
+        "help": "Cloud provider (default: from config, usually azure)",
+    }
+
     # pool-status
     p_pool_status = subparsers.add_parser(
         "pool-status", help="Show status of all VMs in the current pool"
     )
+    p_pool_status.add_argument("--cloud", **_cloud_kwargs)
     p_pool_status.add_argument(
         "--probe",
         action="store_true",
@@ -7636,6 +7677,7 @@ Examples:
 
     # delete-pool
     p_delete_pool = subparsers.add_parser("delete-pool", help="Delete all VMs in the current pool")
+    p_delete_pool.add_argument("--cloud", **_cloud_kwargs)
     p_delete_pool.add_argument("-y", "--yes", action="store_true", help="Skip confirmation")
     p_delete_pool.set_defaults(func=cmd_delete_pool)
 
@@ -7643,6 +7685,7 @@ Examples:
     p_pool_create = subparsers.add_parser(
         "pool-create", help="Create a pool of VMs for parallel WAA evaluation"
     )
+    p_pool_create.add_argument("--cloud", **_cloud_kwargs)
     p_pool_create.add_argument(
         "--workers",
         "-n",
@@ -7671,6 +7714,7 @@ Examples:
     p_pool_wait = subparsers.add_parser(
         "pool-wait", help="Wait for all pool workers to have WAA ready"
     )
+    p_pool_wait.add_argument("--cloud", **_cloud_kwargs)
     p_pool_wait.add_argument(
         "--timeout", "-t", type=int, default=30, help="Timeout in minutes (default: 30)"
     )
@@ -7685,6 +7729,7 @@ Examples:
     p_pool_run = subparsers.add_parser(
         "pool-run", help="Run WAA benchmark tasks distributed across pool workers"
     )
+    p_pool_run.add_argument("--cloud", **_cloud_kwargs)
     p_pool_run.add_argument(
         "--tasks",
         "-n",
@@ -7703,6 +7748,7 @@ Examples:
     p_pool_cleanup = subparsers.add_parser(
         "pool-cleanup", help="Clean up orphaned pool resources (VMs, NICs, IPs, disks)"
     )
+    p_pool_cleanup.add_argument("--cloud", **_cloud_kwargs)
     p_pool_cleanup.add_argument("-y", "--yes", action="store_true", help="Skip confirmation")
     p_pool_cleanup.set_defaults(func=cmd_pool_cleanup)
 
@@ -7711,6 +7757,7 @@ Examples:
         "pool-auto",
         help="Fully automated: create VMs → wait for WAA → run benchmark",
     )
+    p_pool_auto.add_argument("--cloud", **_cloud_kwargs)
     p_pool_auto.add_argument(
         "--workers", "-w", type=int, default=1, help="Number of worker VMs (default: 1)"
     )
@@ -7738,6 +7785,7 @@ Examples:
         "pool-pause",
         help="Deallocate pool VMs (stops compute billing, keeps disks ~$0.25/day)",
     )
+    p_pool_pause.add_argument("--cloud", **_cloud_kwargs)
     p_pool_pause.set_defaults(func=cmd_pool_pause)
 
     # pool-resume
@@ -7745,6 +7793,7 @@ Examples:
         "pool-resume",
         help="Resume a paused pool (start VMs, wait for WAA ~5 min)",
     )
+    p_pool_resume.add_argument("--cloud", **_cloud_kwargs)
     p_pool_resume.add_argument(
         "--timeout",
         "-t",

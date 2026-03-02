@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     azure_checkpoints_container: str = "checkpoints"
     azure_comparisons_container: str = "comparisons"
 
+    # Multi-cloud settings
+    cloud_provider: str = "azure"  # "azure" or "aws"
+    aws_region: str = "us-east-1"
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",
