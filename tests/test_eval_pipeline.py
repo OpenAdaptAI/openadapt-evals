@@ -671,7 +671,9 @@ class TestArgumentParsing:
         parser.add_argument("--evaluate-url", default="http://localhost:5050")
         parser.add_argument("--vm-name", default=pipeline.DEFAULT_VM_NAME)
         parser.add_argument("--resource-group", default=pipeline.DEFAULT_RESOURCE_GROUP)
-        parser.add_argument("--vm-user", default=pipeline.DEFAULT_VM_USER)
+        parser.add_argument(
+            "--cloud", default="azure", choices=["azure", "aws"],
+        )
         parser.add_argument("--vm-ip", default=None)
         parser.add_argument("--vlm-provider", default="openai")
         parser.add_argument("--vlm-model", default=None)
@@ -681,6 +683,7 @@ class TestArgumentParsing:
         parser.add_argument("--skip-vm", action="store_true")
         parser.add_argument("--vnc", action="store_true", default=True)
         parser.add_argument("--no-vnc", dest="vnc", action="store_false")
+        parser.add_argument("--deallocate-after", action="store_true")
         return parser
 
 
@@ -844,9 +847,6 @@ class TestModuleConstants:
 
     def test_default_resource_group(self):
         assert pipeline.DEFAULT_RESOURCE_GROUP == "openadapt-agents"
-
-    def test_default_vm_user(self):
-        assert pipeline.DEFAULT_VM_USER == "azureuser"
 
     def test_repo_root_is_parent_of_scripts(self):
         """REPO_ROOT should be the parent of the scripts directory."""
