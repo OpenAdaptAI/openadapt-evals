@@ -241,6 +241,47 @@ def _resolve_ip(vm_name: str, resource_group: str) -> str | None:
     return None
 
 
+def _ensure_container_running(vm_user: str, vm_ip: str) -> bool:
+    """Ensure the WAA Docker container is running on the VM.
+
+    After VM deallocate/start, the container may be in 'Exited' state.
+    """
+    result = subprocess.run(
+        [
+            "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10",
+            f"{vm_user}@{vm_ip}",
+            "docker inspect -f '{{.State.Running}}' winarena 2>/dev/null || echo missing",
+        ],
+        capture_output=True, text=True, timeout=30,
+    )
+    state = result.stdout.strip()
+
+    if state == "true":
+        print("[vm] WAA container already running")
+        return True
+
+    if state == "missing":
+        print("[vm] WARNING: No winarena container found")
+        return False
+
+    # Container exists but not running — restart it
+    print("[vm] WAA container not running, starting...")
+    result = subprocess.run(
+        [
+            "ssh", "-o", "StrictHostKeyChecking=no",
+            f"{vm_user}@{vm_ip}",
+            "docker start winarena",
+        ],
+        capture_output=True, text=True, timeout=60,
+    )
+    if result.returncode == 0:
+        print("[vm] WAA container started")
+        return True
+
+    print(f"[vm] Failed to start container: {result.stderr.strip()}")
+    return False
+
+
 # ── Phase 2: Connectivity ─────────────────────────────────────────────────
 
 
@@ -372,7 +413,7 @@ def _setup_connectivity(vm_ip: str, vm_user: str) -> bool:
 def _wait_waa_ready(
     server: str = "http://localhost:5001",
     evaluate_url: str = "http://localhost:5050",
-    timeout: int = 420,
+    timeout: int = 1200,
 ) -> bool:
     """Wait for WAA server and evaluate server to respond."""
     import requests
@@ -574,6 +615,14 @@ def main() -> int:
         "--skip-vm", action="store_true",
         help="Skip VM start (assume tunnels already up)",
     )
+    parser.add_argument(
+        "--vnc", action="store_true", default=True,
+        help="Open VNC viewer in browser (default: True)",
+    )
+    parser.add_argument(
+        "--no-vnc", dest="vnc", action="store_false",
+        help="Do not open VNC viewer",
+    )
     args = parser.parse_args()
 
     recordings_dir = Path(args.recordings)
@@ -713,9 +762,18 @@ def main() -> int:
             print("ERROR: SSH not reachable")
             return 1
 
+        if not _ensure_container_running(args.vm_user, vm_ip):
+            print("ERROR: WAA container not running and could not be started")
+            return 1
+
         if not _setup_connectivity(vm_ip, args.vm_user):
             print("ERROR: Failed to set up tunnels")
             return 1
+
+        if args.vnc:
+            vnc_url = f"http://localhost:8006"
+            print(f"[vnc] Opening VNC viewer: {vnc_url}")
+            subprocess.Popen(["open", vnc_url])
 
         if not _wait_waa_ready(args.server, args.evaluate_url):
             print("ERROR: WAA server not ready")
