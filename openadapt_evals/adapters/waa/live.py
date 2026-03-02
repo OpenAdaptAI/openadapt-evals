@@ -234,12 +234,12 @@ def _build_type_commands(text: str) -> str:
     and interleaves ``pyautogui.write()`` with ``pyautogui.press('enter')``.
 
     Returns:
-        A Python command string (without a leading ``import pyautogui;``).
+        A complete Python command string including ``import pyautogui;``.
     """
     segments = text.split("\n")
     if len(segments) == 1:
         escaped = _escape_for_pyautogui(text)
-        return f"pyautogui.write('{escaped}', interval=0.02)"
+        return f"import pyautogui; pyautogui.write('{escaped}', interval=0.02)"
 
     commands: list[str] = []
     for i, seg in enumerate(segments):
@@ -250,7 +250,8 @@ def _build_type_commands(text: str) -> str:
                 commands.append(f"pyautogui.write('{escaped}', interval=0.02)")
             if i < len(segments) - 1:
                 commands.append("pyautogui.press('enter')")
-    return "; ".join(commands) if commands else "pass"
+    body = "; ".join(commands) if commands else "pass"
+    return f"import pyautogui; {body}"
 
 
 @dataclass
@@ -1145,14 +1146,14 @@ class WAALiveAdapter(BenchmarkAdapter):
                     cx = (rect[0] + rect[2]) // 2
                     cy = (rect[1] + rect[3]) // 2
                     return (
-                        f"import pyautogui; "
+                        f"import pyautogui; import time; "
                         f"pyautogui.click({cx}, {cy}); "
-                        f"import time; time.sleep(0.2); "
-                        + type_cmds
+                        f"time.sleep(0.2); "
+                        + type_cmds.removeprefix("import pyautogui; ")
                     )
                 else:
                     logger.warning(f"Element ID '{elem_id}' not found for type_element, typing without focus")
-            return f"import pyautogui; {type_cmds}"
+            return type_cmds
 
         if action.type == "key":
             return self._translate_key_action(action)

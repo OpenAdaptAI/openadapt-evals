@@ -38,7 +38,7 @@ import subprocess
 import sys
 import time
 import webbrowser
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from openadapt_evals.benchmarks.vm_cli import _create_vm_manager
@@ -540,7 +540,11 @@ def _print_summary(results: dict[str, dict], agent: str) -> None:
 # ── Main ──────────────────────────────────────────────────────────────────
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """Build the argument parser for the eval pipeline.
+
+    Extracted so tests can use the same parser without reconstructing it.
+    """
     parser = argparse.ArgumentParser(
         description="End-to-end eval pipeline: demos + VM + ZS/DC evaluation",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -599,15 +603,23 @@ def main() -> int:
         "--deallocate-after", action="store_true",
         help="Deallocate VM after eval completes (stops billing)",
     )
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
     args = parser.parse_args()
 
     recordings_dir = Path(args.recordings)
     demo_dir = Path(args.demo_dir)
     output_dir = Path(args.output)
 
-    # Resolve VM user from provider
-    vm_manager = _create_vm_manager(cloud=args.cloud, resource_group=args.resource_group)
-    vm_user = vm_manager.ssh_username
+    # Resolve VM manager and user lazily — skip if --dry-run or --skip-vm
+    vm_manager = None
+    vm_user = None
+    if not args.dry_run:
+        vm_manager = _create_vm_manager(cloud=args.cloud, resource_group=args.resource_group)
+        vm_user = vm_manager.ssh_username
 
     # Resolve task filter
     task_filter = None
@@ -618,7 +630,7 @@ def main() -> int:
 
     # Find all recorded task IDs
     recorded_tasks = []
-    for d in sorted(recordings_dir.iterdir()) if recordings_dir.exists() else []:
+    for d in (sorted(recordings_dir.iterdir()) if recordings_dir.exists() else []):
         if d.is_dir() and ((d / "meta.json").exists() or (d / "meta_refined.json").exists()):
             if task_filter is None or any(d.name.startswith(f) for f in task_filter):
                 recorded_tasks.append(d.name)
@@ -641,8 +653,9 @@ def main() -> int:
     print(f"  Missing:    {len(missing_demos)} demo(s) to generate")
     print(f"  Agent:      {args.agent}")
     print(f"  Cloud:      {args.cloud}")
-    print(f"  VM:         {args.vm_name} ({vm_manager.resource_scope})")
-    print(f"  VM user:    {vm_user}")
+    resource_scope = vm_manager.resource_scope if vm_manager else args.resource_group
+    print(f"  VM:         {args.vm_name} ({resource_scope})")
+    print(f"  VM user:    {vm_user or '(resolved at runtime)'}")
     print(f"  Conditions: {'ZS only' if args.zs_only else 'DC only' if args.dc_only else 'ZS + DC'}")
     print()
 

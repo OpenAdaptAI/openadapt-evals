@@ -647,44 +647,11 @@ class TestArgumentParsing:
 
     @staticmethod
     def _build_parser():
-        """Reconstruct the argparse parser from main() for testing.
+        """Use the shared parser from the pipeline module.
 
-        We rebuild it here rather than importing main() to avoid side effects.
-        This mirrors the parser defined in run_eval_pipeline.main().
+        This ensures tests always match the real CLI arguments.
         """
-        import argparse
-
-        parser = argparse.ArgumentParser()
-        parser.add_argument("--tasks")
-        parser.add_argument(
-            "--recordings",
-            default=str(pipeline.DEFAULT_RECORDINGS),
-        )
-        parser.add_argument(
-            "--demo-dir",
-            default=str(pipeline.DEFAULT_DEMO_DIR),
-        )
-        parser.add_argument("--agent", default="api-claude-cu")
-        parser.add_argument("--max-steps", type=int, default=15)
-        parser.add_argument("--output", default=str(pipeline.DEFAULT_OUTPUT))
-        parser.add_argument("--server", default="http://localhost:5001")
-        parser.add_argument("--evaluate-url", default="http://localhost:5050")
-        parser.add_argument("--vm-name", default=pipeline.DEFAULT_VM_NAME)
-        parser.add_argument("--resource-group", default=pipeline.DEFAULT_RESOURCE_GROUP)
-        parser.add_argument(
-            "--cloud", default="azure", choices=["azure", "aws"],
-        )
-        parser.add_argument("--vm-ip", default=None)
-        parser.add_argument("--vlm-provider", default="openai")
-        parser.add_argument("--vlm-model", default=None)
-        parser.add_argument("--zs-only", action="store_true")
-        parser.add_argument("--dc-only", action="store_true")
-        parser.add_argument("--dry-run", action="store_true")
-        parser.add_argument("--skip-vm", action="store_true")
-        parser.add_argument("--vnc", action="store_true", default=True)
-        parser.add_argument("--no-vnc", dest="vnc", action="store_false")
-        parser.add_argument("--deallocate-after", action="store_true")
-        return parser
+        return pipeline.build_parser()
 
 
 # ---------------------------------------------------------------------------
