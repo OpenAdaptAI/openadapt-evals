@@ -1,6 +1,35 @@
 # CHANGELOG
 
 
+## v0.15.1 (2026-03-02)
+
+### Bug Fixes
+
+- Add build-time and runtime validation for evaluate_server.py deployment
+  ([#56](https://github.com/OpenAdaptAI/openadapt-evals/pull/56),
+  [`b040805`](https://github.com/OpenAdaptAI/openadapt-evals/commit/b0408053ec6b137a154f66b4b12f421522d56c00))
+
+The evaluate_server.py inside the Docker container was found to be a symlink to /proc/self/fd/0
+  (stdin) instead of the actual file, causing the evaluate server to start with 0 routes.
+
+Root causes addressed: - WAA_START_SCRIPT overrode --entrypoint to /bin/bash, bypassing
+  start_with_evaluate.sh and its validation entirely - SCP failures during Docker build context
+  upload were silently ignored - No validation existed at build time or runtime to catch corrupt
+  files
+
+Changes: - Dockerfile: add RUN verification after COPY that fails the build if evaluate_server.py is
+  a symlink, empty, or missing expected routes - start_with_evaluate.sh: add startup validation
+  checking for symlinks, missing files, empty files, and missing Flask routes before starting -
+  pool.py: remove --entrypoint /bin/bash override so the container uses the Dockerfile ENTRYPOINT
+  (start_with_evaluate.sh) which validates the file and starts the evaluate server properly -
+  pool.py: add error checking for SCP file uploads during Docker build context transfer (missing
+  files and failed transfers now report errors instead of silently continuing) - tests: add 26
+  deployment integrity tests validating source files, Dockerfile configuration, entrypoint
+  validation, and Flask routes
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.15.0 (2026-03-02)
 
 ### Features
