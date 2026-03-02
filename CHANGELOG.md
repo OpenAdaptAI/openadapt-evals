@@ -1,6 +1,57 @@
 # CHANGELOG
 
 
+## v0.19.0 (2026-03-02)
+
+### Features
+
+- Add multi-cloud VM support with AWS backend and VMProvider protocol
+  ([#66](https://github.com/OpenAdaptAI/openadapt-evals/pull/66),
+  [`7a27d60`](https://github.com/OpenAdaptAI/openadapt-evals/commit/7a27d60977f144bcc04aa3646af69bc183cc870b))
+
+* feat: add multi-cloud VM support with AWS backend and VMProvider protocol
+
+- Create VMProvider Protocol (typing.Protocol) for cloud-agnostic VM management - Create
+  AWSVMManager with boto3 for EC2 lifecycle (create, delete, start, stop) - Add
+  resource_scope/ssh_username properties to AzureVMManager - Add
+  list_pool_resources/cleanup_pool_resources to AzureVMManager - Parameterize pool.py SSH calls and
+  scripts with username/home_dir - Add --cloud flag (azure|aws) to all pool CLI commands - Add
+  cloud_provider/aws_region to config.py settings - Add boto3 optional dependency
+  (openadapt-evals[aws]) - Update tests for WAA_START_SCRIPT_TEMPLATE rename
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* fix: address review findings in AWS VM backend
+
+- Fix DOCKER_SETUP_SCRIPT_WITH_ACR daemon.json double-brace corruption that produced invalid JSON
+  ({{"data-root"...}}) breaking Docker start - Use .metal instance types for AWS (KVM/nested virt
+  required for QEMU) - Fix region mismatch: update self.region and invalidate cached clients when
+  create_vm uses a different region than the manager default - Fix hardcoded "azureuser" in
+  pool-wait diagnostic message - Set AWSVMManager = None on ImportError so `import *` doesn't raise
+  - Only delete pool registry on successful cleanup (prevents orphaned cloud resources when deletion
+  fails) - Remove unused `time` import from aws_vm.py
+
+* fix: address second review findings
+
+- Fix pool-vnc/pool-logs/pool-exec hardcoded azureuser: read ssh_username from pool registry with
+  backward-compatible default - Store ssh_username in VMPool dataclass and persist to registry on
+  create - Move set_auto_shutdown after SSH is available (was racing with boot) - Fix
+  cleanup_pool_resources: handle raw instance IDs and allocation IDs for resources without Name tags
+  (prevents orphaned resources) - Narrow key pair exception handling: re-raise unless
+  InvalidKeyPair.NotFound - Add TODO for restricting SSH security group to user's IP
+
+* fix: restore ssh_username on registry load, fix EIP disassociate API
+
+- Add ssh_username to VMPoolRegistry.load() so it persists across process restarts (was silently
+  reverting to "azureuser" default) - Fix disassociate_address for raw allocation IDs: look up
+  AssociationId via describe_addresses first (disassociate_address does not accept AllocationId
+  parameter)
+
+---------
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.18.0 (2026-03-02)
 
 ### Features
