@@ -23,10 +23,10 @@ jobs:
         uses: astral-sh/setup-uv@v4
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync --extra dev --no-sources
 
       - name: Run tests
         run: |
-          uv run pytest tests/ -q \
+          uv run --no-sources pytest tests/ -q \
             --ignore=tests/test_api_agent_ml.py \
             -k "not (test_demo_format_and_persistence or test_synthetic_demos)"
