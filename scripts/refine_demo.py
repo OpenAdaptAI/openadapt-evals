@@ -209,7 +209,6 @@ def run_holistic_review(
     meta: dict,
     *,
     model: str = DEFAULT_MODEL,
-    api_key: str | None = None,
     use_council: bool = True,
 ) -> list[dict]:
     """Pass 1: holistic review. Returns list of flagged steps."""
@@ -221,6 +220,7 @@ def run_holistic_review(
         system=HOLISTIC_SYSTEM_PROMPT,
         model=model,
         max_tokens=MAX_TOKENS_HOLISTIC,
+        temperature=1.0,
         use_council=use_council,
     )
     # Parse JSON from response — handle markdown fences and preamble text
@@ -305,7 +305,6 @@ def run_per_step_review(
     holistic_flag: dict,
     *,
     model: str = DEFAULT_MODEL,
-    api_key: str | None = None,
     use_council: bool = True,
 ) -> dict | None:
     """Pass 2: per-step verification. Returns correction dict or None."""
@@ -316,6 +315,7 @@ def run_per_step_review(
         system=PER_STEP_SYSTEM_PROMPT,
         model=model,
         max_tokens=MAX_TOKENS_PER_STEP,
+        temperature=1.0,
         use_council=use_council,
     )
     correction = extract_json(raw)
@@ -530,7 +530,6 @@ def refine_recording(
     rec_dir: Path,
     *,
     model: str = DEFAULT_MODEL,
-    api_key: str | None = None,
     auto: bool = False,
     dry_run: bool = False,
     use_council: bool = True,
@@ -583,7 +582,6 @@ def refine_recording(
         rec_dir,
         meta,
         model=model,
-        api_key=api_key,
         use_council=use_council,
     )
 
@@ -622,7 +620,6 @@ def refine_recording(
             step_idx,
             flag,
             model=model,
-            api_key=api_key,
             use_council=use_council,
         )
 
@@ -793,7 +790,6 @@ def main() -> int:
         parser.error("Provide a recording directory or use --all.")
 
     use_council = not args.no_council
-    api_key = os.environ.get("OPENAI_API_KEY")
 
     if args.all:
         recordings = find_all_recordings(args.recordings_dir)
@@ -809,7 +805,6 @@ def main() -> int:
             ok = refine_recording(
                 rec_dir,
                 model=args.model,
-                api_key=api_key,
                 auto=args.auto,
                 dry_run=args.dry_run,
                 use_council=use_council,
@@ -828,7 +823,6 @@ def main() -> int:
         ok = refine_recording(
             rec_dir,
             model=args.model,
-            api_key=api_key,
             auto=args.auto,
             dry_run=args.dry_run,
             use_council=use_council,
