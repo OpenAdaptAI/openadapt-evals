@@ -1,9 +1,9 @@
 """Pool management for parallel WAA benchmark evaluation.
 
-Provides a clean Python API for creating and managing pools of Azure VMs,
+Provides a clean Python API for creating and managing pools of VMs,
 distributing benchmark tasks across workers, and collecting results.
 
-Extracted from cli.py for reuse as a library.
+Supports multiple cloud providers via the VMProvider protocol.
 
 Example:
     from openadapt_evals.infrastructure.pool import PoolManager
@@ -14,9 +14,14 @@ Example:
     result = manager.run(tasks=10)
     manager.cleanup(confirm=False)
 
-    # With custom resource group:
+    # With custom VM manager:
     from openadapt_evals.infrastructure.azure_vm import AzureVMManager
     vm = AzureVMManager(resource_group="my-rg")
+    manager = PoolManager(vm_manager=vm)
+
+    # Or with AWS:
+    from openadapt_evals.infrastructure.aws_vm import AWSVMManager
+    vm = AWSVMManager(region="us-east-1")
     manager = PoolManager(vm_manager=vm)
 """
 
@@ -29,7 +34,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from openadapt_evals.infrastructure.azure_vm import (
     SSH_OPTS,
@@ -37,6 +42,9 @@ from openadapt_evals.infrastructure.azure_vm import (
     ssh_run,
     wait_for_ssh,
 )
+
+if TYPE_CHECKING:
+    from openadapt_evals.infrastructure.vm_provider import VMProvider
 from openadapt_evals.infrastructure.vm_monitor import (
     VMConfig,
     VMMonitor,
@@ -60,7 +68,8 @@ class PoolRunResult:
     """List of (worker_name, completed, failed, error_or_none)."""
 
 
-# Docker setup script for WAA workers
+# Docker setup script template for WAA workers.
+# {home_dir} is formatted at runtime with the provider's ssh_username home path.
 DOCKER_SETUP_SCRIPT = """
 set -e
 export DEBIAN_FRONTEND=noninteractive
@@ -81,8 +90,8 @@ sudo usermod -aG docker $USER
 # Configure Docker to use persistent storage (NOT /mnt which is ephemeral
 # and gets wiped on VM deallocate, breaking pool-resume)
 sudo systemctl stop docker
-sudo mkdir -p /home/azureuser/docker
-sudo bash -c 'echo "{\\"data-root\\": \\"/home/azureuser/docker\\"}" > /etc/docker/daemon.json'
+sudo mkdir -p {home_dir}/docker
+sudo bash -c 'echo "{{\\"data-root\\": \\"{home_dir}/docker\\"}}" > /etc/docker/daemon.json'
 sudo systemctl start docker
 
 # Pull base images (use sudo since usermod hasn't taken effect yet)
@@ -119,7 +128,8 @@ sudo systemctl daemon-reload
 sudo systemctl enable socat-waa-evaluate.service
 """
 
-# Docker setup script that pulls pre-built image from ACR instead of building
+# Docker setup script that pulls pre-built image from ACR instead of building.
+# {home_dir} is formatted at runtime with the provider's ssh_username home path.
 DOCKER_SETUP_SCRIPT_WITH_ACR = """
 set -e
 export DEBIAN_FRONTEND=noninteractive
@@ -140,8 +150,8 @@ sudo usermod -aG docker $USER
 # Configure Docker to use persistent storage (NOT /mnt which is ephemeral
 # and gets wiped on VM deallocate, breaking pool-resume)
 sudo systemctl stop docker
-sudo mkdir -p /home/azureuser/docker
-sudo bash -c 'echo "{{\\"data-root\\": \\"/home/azureuser/docker\\"}}" > /etc/docker/daemon.json'
+sudo mkdir -p {home_dir}/docker
+sudo bash -c 'echo "{{{{\\\"data-root\\\": \\\"{home_dir}/docker\\\"}}}}" > /etc/docker/daemon.json'
 sudo systemctl start docker
 
 # Pull pre-built image from ACR (faster than building)
@@ -178,10 +188,11 @@ sudo systemctl daemon-reload
 sudo systemctl enable socat-waa-evaluate.service
 """
 
-# WAA container start script
-WAA_START_SCRIPT = """
+# WAA container start script template.
+# {home_dir} and {ssh_username} are formatted at runtime.
+WAA_START_SCRIPT_TEMPLATE = """
 # Check if container already running
-if docker ps --format '{{.Names}}' | grep -q '^winarena$'; then
+if docker ps --format '{{{{.Names}}}}' | grep -q '^winarena$'; then
     # Container is up — ensure the socat proxy systemd service is running.
     # The service auto-restarts on failure, but we explicitly restart it here
     # in case the container was restarted externally.
@@ -192,8 +203,8 @@ fi
 
 # Container not running, start it
 docker rm -f winarena 2>/dev/null || true
-sudo mkdir -p /home/azureuser/waa-storage
-sudo chown azureuser:azureuser /home/azureuser/waa-storage
+sudo mkdir -p {home_dir}/waa-storage
+sudo chown {ssh_username}:{ssh_username} {home_dir}/waa-storage
 docker run -d --name winarena \\
   --device=/dev/kvm \\
   --cap-add NET_ADMIN \\
@@ -202,7 +213,7 @@ docker run -d --name winarena \\
   -p 5050:5050 \\
   -p 8006:8006 \\
   -p 7200:7200 \\
-  -v /home/azureuser/waa-storage:/storage \\
+  -v {home_dir}/waa-storage:/storage \\
   -e VERSION=11e \\
   -e RAM_SIZE=8G \\
   -e CPU_CORES=4 \\
@@ -222,17 +233,18 @@ echo "STARTED"
 
 @dataclass
 class PoolManager:
-    """Manages a pool of Azure VMs for parallel WAA benchmark evaluation.
+    """Manages a pool of VMs for parallel WAA benchmark evaluation.
 
     Provides the full pool lifecycle: create, wait, run, cleanup.
+    Works with any VMProvider (Azure, AWS, etc.).
 
     Args:
-        vm_manager: AzureVMManager instance (controls resource group, auth).
+        vm_manager: VMProvider instance (AzureVMManager or AWSVMManager).
         registry: VMPoolRegistry for persisting pool state.
         log_fn: Optional logging function with signature log_fn(step, message).
     """
 
-    vm_manager: AzureVMManager = field(default_factory=AzureVMManager)
+    vm_manager: VMProvider = field(default_factory=AzureVMManager)
     registry: VMPoolRegistry = field(default_factory=VMPoolRegistry)
     log_fn: Any = None
 
@@ -243,6 +255,16 @@ class PoolManager:
         else:
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             print(f"[{timestamp}] [{step}] {message}", end=end, flush=True)
+
+    @property
+    def _ssh_username(self) -> str:
+        """SSH username from the VM provider."""
+        return self.vm_manager.ssh_username
+
+    @property
+    def _home_dir(self) -> str:
+        """Home directory path for the VM provider's SSH user."""
+        return f"/home/{self._ssh_username}"
 
     def _get_acr_password(self, acr_name: str) -> str | None:
         """Get ACR admin password via az CLI."""
@@ -336,10 +358,11 @@ class PoolManager:
         self._log("POOL", f"\nCreated {len(workers_created)}/{workers} VMs")
 
         # Wait for SSH
+        username = self._ssh_username
         self._log("POOL", "Waiting for SSH access...")
         workers_ready: list[tuple[str, str]] = []
         for name, ip in workers_created:
-            if wait_for_ssh(ip, timeout=120):
+            if wait_for_ssh(ip, timeout=120, username=username):
                 self._log("POOL", f"  {name}: SSH ready")
                 workers_ready.append((name, ip))
             else:
@@ -354,14 +377,16 @@ class PoolManager:
             workers_docker_ok = workers_ready
         else:
             self._log("POOL", "Installing Docker on all VMs...")
+            home_dir = self._home_dir
 
             # Determine which setup script to use
-            docker_script = DOCKER_SETUP_SCRIPT
+            docker_script = DOCKER_SETUP_SCRIPT.format(home_dir=home_dir)
             if use_acr:
                 from openadapt_evals.config import settings
                 acr_password = self._get_acr_password(settings.acr_name)
                 if acr_password:
                     docker_script = DOCKER_SETUP_SCRIPT_WITH_ACR.format(
+                        home_dir=home_dir,
                         acr_login_server=settings.acr_login_server,
                         acr_username=settings.acr_name,
                         acr_password=acr_password,
@@ -378,7 +403,7 @@ class PoolManager:
                     # Upload Docker build context (Dockerfile + supporting files)
                     waa_deploy_dir = Path(__file__).parent.parent / "waa_deploy"
                     subprocess.run(
-                        ["ssh", *SSH_OPTS, f"azureuser@{ip}", "mkdir -p /tmp/waa-build"],
+                        ["ssh", *SSH_OPTS, f"{username}@{ip}", "mkdir -p /tmp/waa-build"],
                         capture_output=True,
                     )
                     required_files = [
@@ -393,13 +418,13 @@ class PoolManager:
                         if not src.exists():
                             return (name, False, f"Missing build file: {fname}")
                         scp_result = subprocess.run(
-                            ["scp", *SSH_OPTS, str(src), f"azureuser@{ip}:/tmp/waa-build/"],
+                            ["scp", *SSH_OPTS, str(src), f"{username}@{ip}:/tmp/waa-build/"],
                             capture_output=True,
                             text=True,
                         )
                         if scp_result.returncode != 0:
                             return (name, False, f"SCP failed for {fname}: {scp_result.stderr[:100]}")
-                result = ssh_run(ip, docker_script, stream=False, step="DOCKER")
+                result = ssh_run(ip, docker_script, stream=False, step="DOCKER", username=username)
                 error = result.stderr[:200] if result.stderr else ""
                 return (name, result.returncode == 0, error)
 
@@ -419,7 +444,7 @@ class PoolManager:
         # Register pool
         pool = self.registry.create_pool(
             workers=workers_docker_ok,
-            resource_group=self.vm_manager.resource_group,
+            resource_group=self.vm_manager.resource_scope,
             location=region,
             vm_size=vm_size,
         )
@@ -480,11 +505,19 @@ class PoolManager:
         # Start WAA containers
         if start_containers:
             self._log("POOL-WAIT", "Checking WAA containers on all workers...")
+            username = self._ssh_username
+            waa_start_script = WAA_START_SCRIPT_TEMPLATE.format(
+                home_dir=self._home_dir,
+                ssh_username=username,
+            )
 
             def start_container(
                 worker: PoolWorker,
             ) -> tuple[str, bool, str]:
-                result = ssh_run(worker.ip, WAA_START_SCRIPT, stream=False, step="START")
+                result = ssh_run(
+                    worker.ip, waa_start_script, stream=False, step="START",
+                    username=username,
+                )
                 output = result.stdout.strip() if result.stdout else ""
                 return (worker.name, result.returncode == 0, output)
 
@@ -532,6 +565,7 @@ class PoolManager:
                                 "curl -sf http://localhost:5051/probe",
                                 stream=False,
                                 step="EVAL",
+                                username=self._ssh_username,
                             )
                             eval_ok = eval_result.returncode == 0
                         except Exception:
@@ -659,6 +693,7 @@ class PoolManager:
         # Uses docker exec -d (detached) + tail -f for streaming.
         # Process survives SSH drops; tail -f reconnects automatically.
         stale_timeout = 15 * 60  # Kill if no log activity for 15 minutes
+        _username = self._ssh_username
 
         def run_on_worker(
             worker: PoolWorker,
@@ -685,6 +720,7 @@ class PoolManager:
                 ssh_run(
                     worker.ip,
                     f'docker exec winarena python -c "{py_cmd}"',
+                    username=_username,
                 )
                 self._log("RUN", f"  {worker.name}: limited to {tasks} tasks")
                 test_meta_arg = f"--test_all_meta_path {subset_json} "
@@ -702,6 +738,7 @@ class PoolManager:
                 worker.ip,
                 f"docker exec -d -e OPENAI_API_KEY='{api_key}' winarena "
                 f"bash -c '{run_cmd}'",
+                username=_username,
             )
             self._log("RUN", f"  {worker.name}: started (detached), log: {log_file}")
 
@@ -710,6 +747,7 @@ class PoolManager:
             pid_result = ssh_run(
                 worker.ip,
                 "docker exec winarena pgrep -f 'python.*run.py' || echo ''",
+                username=_username,
             )
             pid = pid_result.stdout.strip().splitlines()[0] if pid_result.stdout.strip() else ""
             if pid:
@@ -730,6 +768,7 @@ class PoolManager:
                         stream=True,
                         step="RUN",
                         log_fn=self.log_fn,
+                        username=_username,
                     )
                     # tail -f exited — process likely done
                     break
@@ -745,6 +784,7 @@ class PoolManager:
                             worker.ip,
                             "docker exec winarena pgrep -f run.py > /dev/null "
                             "&& echo RUNNING || echo DONE",
+                            username=_username,
                         )
                         if "DONE" in check.stdout:
                             break
@@ -752,8 +792,9 @@ class PoolManager:
                         mtime_result = ssh_run(
                             worker.ip,
                             f"docker exec winarena stat -c %Y {log_file} 2>/dev/null || echo 0",
+                            username=_username,
                         )
-                        now_result = ssh_run(worker.ip, "date +%s")
+                        now_result = ssh_run(worker.ip, "date +%s", username=_username)
                         mtime = int(mtime_result.stdout.strip()) if mtime_result.stdout.strip().isdigit() else 0
                         now = int(now_result.stdout.strip()) if now_result.stdout.strip().isdigit() else 0
                         if mtime > 0 and now - mtime > stale_timeout:
@@ -766,6 +807,7 @@ class PoolManager:
                                 worker.ip,
                                 "docker exec winarena bash -c "
                                 "'kill -9 $(pgrep -f run.py) 2>/dev/null' || true",
+                                username=_username,
                             )
                             return (
                                 worker.name, 0, 1,
@@ -781,6 +823,7 @@ class PoolManager:
                 exit_result = ssh_run(
                     worker.ip,
                     f"docker exec winarena cat {exit_file} 2>/dev/null || echo 1",
+                    username=_username,
                 )
                 exit_code = int(exit_result.stdout.strip()) if exit_result.stdout.strip().isdigit() else 1
             except Exception:
@@ -979,7 +1022,7 @@ class PoolManager:
                 self._log("POOL-RESUME", f"  {worker.name}: no IP address, skipping")
                 continue
 
-            if wait_for_ssh(worker.ip, timeout=120):
+            if wait_for_ssh(worker.ip, timeout=120, username=self._ssh_username):
                 self._log("POOL-RESUME", f"  {worker.name}: SSH ready")
                 workers_ssh_ok.append(worker)
             else:
@@ -1013,7 +1056,10 @@ class PoolManager:
         self,
         confirm: bool = True,
     ) -> bool:
-        """Clean up orphaned pool resources (VMs, NICs, IPs, disks).
+        """Clean up orphaned pool resources.
+
+        Delegates resource discovery and deletion to the VM provider,
+        making this method cloud-agnostic.
 
         Args:
             confirm: If True, prompt for confirmation before deleting.
@@ -1021,31 +1067,20 @@ class PoolManager:
         Returns:
             True if cleanup succeeded.
         """
-        rg = self.vm_manager.resource_group
-
+        prefix = "waa-pool"
         self._log("POOL-CLEANUP", "Searching for orphaned pool resources...")
 
-        # Find pool resources
-        vms = self._list_pool_resources("vm", "list", rg)
-        nics = self._list_pool_resources("network nic", "list", rg)
-        ips = self._list_pool_resources("network public-ip", "list", rg)
-        disks = self._list_pool_resources("disk", "list", rg)
-
-        total = len(vms) + len(nics) + len(ips) + len(disks)
+        resources = self.vm_manager.list_pool_resources(prefix)
+        total = sum(len(v) for v in resources.values())
 
         if total == 0:
             self._log("POOL-CLEANUP", "No orphaned resources found.")
             return True
 
         self._log("POOL-CLEANUP", f"Found {total} orphaned resources:")
-        if vms:
-            self._log("POOL-CLEANUP", f"  VMs: {len(vms)}")
-        if nics:
-            self._log("POOL-CLEANUP", f"  NICs: {len(nics)}")
-        if ips:
-            self._log("POOL-CLEANUP", f"  Public IPs: {len(ips)}")
-        if disks:
-            self._log("POOL-CLEANUP", f"  Disks: {len(disks)}")
+        for rtype, names in resources.items():
+            if names:
+                self._log("POOL-CLEANUP", f"  {rtype}: {len(names)}")
 
         if confirm:
             user_input = input("\nDelete these resources? [y/N]: ")
@@ -1053,92 +1088,15 @@ class PoolManager:
                 self._log("POOL-CLEANUP", "Aborted.")
                 return False
 
-        # Delete VMs first (releases NICs)
-        for vm in vms:
-            self._log("POOL-CLEANUP", f"  Deleting VM: {vm}")
-            self.vm_manager._az_run(
-                [
-                    "vm",
-                    "delete",
-                    "-g",
-                    rg,
-                    "-n",
-                    vm,
-                    "--yes",
-                    "--force-deletion",
-                    "true",
-                ]
-            )
+        self._log("POOL-CLEANUP", "Deleting resources...")
+        for rtype, names in resources.items():
+            for name in names:
+                self._log("POOL-CLEANUP", f"  Deleting {rtype}: {name}")
 
-        for nic in nics:
-            self._log("POOL-CLEANUP", f"  Deleting NIC: {nic}")
-            self.vm_manager._az_run(
-                [
-                    "network",
-                    "nic",
-                    "delete",
-                    "-g",
-                    rg,
-                    "-n",
-                    nic,
-                ]
-            )
-
-        for ip in ips:
-            self._log("POOL-CLEANUP", f"  Deleting IP: {ip}")
-            self.vm_manager._az_run(
-                [
-                    "network",
-                    "public-ip",
-                    "delete",
-                    "-g",
-                    rg,
-                    "-n",
-                    ip,
-                ]
-            )
-
-        for disk in disks:
-            self._log("POOL-CLEANUP", f"  Deleting disk: {disk}")
-            self.vm_manager._az_run(
-                [
-                    "disk",
-                    "delete",
-                    "-g",
-                    rg,
-                    "-n",
-                    disk,
-                    "--yes",
-                ]
-            )
+        success = self.vm_manager.cleanup_pool_resources(prefix, resources)
 
         # Delete registry
         self.registry.delete_pool()
 
         self._log("POOL-CLEANUP", "Cleanup complete.")
-        return True
-
-    def _list_pool_resources(
-        self,
-        resource_type: str,
-        action: str,
-        resource_group: str,
-    ) -> list[str]:
-        """List Azure resources matching 'waa-pool' in the resource group."""
-        # Split resource type for compound types like "network nic"
-        type_parts = resource_type.split()
-        result = self.vm_manager._az_run(
-            [
-                *type_parts,
-                action,
-                "-g",
-                resource_group,
-                "--query",
-                "[?contains(name, 'waa-pool')].name",
-                "-o",
-                "tsv",
-            ]
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return [r.strip() for r in result.stdout.strip().split("\n") if r.strip()]
-        return []
+        return success

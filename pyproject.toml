@@ -64,6 +64,10 @@ azure = [
     "azure-mgmt-network>=27.0.0",
     "azure-mgmt-resource>=23.2.0",
 ]
+aws = [
+    # AWS EC2 management for VM pool operations
+    "boto3>=1.34.0",
+]
 retrieval = [
     # For RetrievalAugmentedAgent with automatic demo selection
     "openadapt-retrieval>=0.1.0",
@@ -78,7 +82,7 @@ wandb = [
     "wandb>=0.16.0",
 ]
 all = [
-    "openadapt-evals[dev,waa,azure,retrieval,viewer,wandb]",
+    "openadapt-evals[dev,waa,azure,aws,retrieval,viewer,wandb]",
 ]
 test = [
     "anthropic>=0.76.0",

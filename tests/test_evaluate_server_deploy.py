@@ -189,24 +189,24 @@ class TestEntrypointScript:
 
 
 class TestPoolManagerEntrypoint:
-    """Validate pool.py WAA_START_SCRIPT uses the Dockerfile entrypoint."""
+    """Validate pool.py WAA_START_SCRIPT_TEMPLATE uses the Dockerfile entrypoint."""
 
     def test_waa_start_script_no_entrypoint_override(self):
-        """WAA_START_SCRIPT must not override --entrypoint to /bin/bash."""
-        from openadapt_evals.infrastructure.pool import WAA_START_SCRIPT
+        """WAA_START_SCRIPT_TEMPLATE must not override --entrypoint to /bin/bash."""
+        from openadapt_evals.infrastructure.pool import WAA_START_SCRIPT_TEMPLATE
 
-        assert "--entrypoint /bin/bash" not in WAA_START_SCRIPT, (
-            "WAA_START_SCRIPT overrides --entrypoint to /bin/bash, bypassing "
+        assert "--entrypoint /bin/bash" not in WAA_START_SCRIPT_TEMPLATE, (
+            "WAA_START_SCRIPT_TEMPLATE overrides --entrypoint to /bin/bash, bypassing "
             "start_with_evaluate.sh and its validation. Remove --entrypoint to "
             "use the Dockerfile's ENTRYPOINT which includes startup checks."
         )
 
     def test_waa_start_script_uses_entry_sh(self):
-        """WAA_START_SCRIPT must pass /entry.sh as command (not inline python)."""
-        from openadapt_evals.infrastructure.pool import WAA_START_SCRIPT
+        """WAA_START_SCRIPT_TEMPLATE must pass /entry.sh as command (not inline python)."""
+        from openadapt_evals.infrastructure.pool import WAA_START_SCRIPT_TEMPLATE
 
-        assert "/entry.sh" in WAA_START_SCRIPT, (
-            "WAA_START_SCRIPT does not reference /entry.sh. "
+        assert "/entry.sh" in WAA_START_SCRIPT_TEMPLATE, (
+            "WAA_START_SCRIPT_TEMPLATE does not reference /entry.sh. "
             "The container should run /entry.sh via the Dockerfile entrypoint."
         )
 
