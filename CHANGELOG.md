@@ -1,6 +1,186 @@
 # CHANGELOG
 
 
+## v0.15.0 (2026-03-02)
+
+### Features
+
+- Add consilium integration, autossh, checkpoint/resume, and auto-recovery
+  ([#58](https://github.com/OpenAdaptAI/openadapt-evals/pull/58),
+  [`26da34c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/26da34cfe78d56187980f3bae7999fe6bce45402))
+
+* fix: replace LibreOffice screenshot with full desktop view
+
+The previous screenshot showed only the Calc window. The new one shows the full context: macOS
+  Chrome browser with noVNC tab, Windows 11 desktop inside QEMU, LibreOffice Calc welcome dialog,
+  and Windows taskbar. This better demonstrates the VM evaluation infrastructure.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* feat: add VM IP auto-detection and screen stability detection
+
+- Add resolve_vm_ip() with layered resolution: explicit arg → pool registry (fast, local) → Azure
+  CLI query (always accurate, ~3s) - Remove hardcoded 172.173.66.131 defaults from
+  record_waa_demos.py and run_dc_eval.py; --vm-ip is now auto-detected if omitted - Add
+  _wait_for_stable_screen() that polls QEMU framebuffer (free) until 3 consecutive screenshots match
+  (99.5% similarity threshold), replacing the fixed time.sleep(3) that caused stale screenshots -
+  Add _compare_screenshots() with numpy-vectorized pixel comparison - 24 new tests (14 for VM IP, 10
+  for screen stability)
+
+* fix: regenerate suggested steps after task restart
+
+When the user presses 'R' to restart a task, the QEMU hard reset produces a new stable screenshot,
+  but the suggested steps were not regenerated. The stale steps from the previous screenshot were
+  displayed. Now _generate_steps() is called again with the fresh screenshot after every restart.
+
+* feat: add interactive step correction during recording
+
+After generating suggested steps from the screenshot, the user can now type corrections (e.g., "step
+  9 formula should reference Sheet1.B2") and the VLM will regenerate with the feedback. Loop
+  continues until the user presses Enter to accept.
+
+Also refactors _generate_steps into smaller functions: - _build_setup_desc(): extracts setup
+  description from task config - _vlm_call(): shared OpenAI API call helper - _refine_steps(): sends
+  feedback + screenshot for revised steps - _display_steps(): pretty-prints step box -
+  _interactive_step_review(): correction loop
+
+* fix: validate task args before VM IP resolution
+
+Move the tasks-type guard above resolve_vm_ip() call so that input validation happens before any
+  real work. Fixes CI failure where resolve_vm_ip raises RuntimeError in environments without Azure
+  access.
+
+* feat: add consilium integration, autossh, checkpoint/resume, and auto-recovery
+
+- Integrate consilium multi-model council for step generation (_vlm_call) with graceful fallback to
+  single-model (gpt-4.1-mini) on failure - Add efficiency-focused step generation with human/agent
+  target modes - Fix prompt framing in _refine_steps (remove sycophantic "user says wrong") - Add
+  grounded reasoning (describe screenshot before listing steps) - Add checkpoint/resume: save
+  recording state after every step to survive tunnel drops or crashes, with interactive resume on
+  reconnection - Add --auto/--auto-vm/--auto-tunnel/--auto-container flags for automatic
+  infrastructure recovery (VM start, SSH tunnels, Docker container, socat) - Prefer autossh over
+  plain ssh for tunnel auto-reconnection - Add bcdedit recoveryenabled=No to Dockerfile
+  FirstLogonCommands to prevent Windows Automatic Repair loops after dirty shutdown - Add retry (3x)
+  for task config fetch to handle transient connection aborts - Add resilience-options.md
+  documenting infrastructure recovery strategies - Add test_vlm_call.py with 10 tests covering image
+  passing, checkpoint roundtrip, prompt construction, and fallback model validation
+
+* fix: pre-fetch task configs before QEMU reset to avoid stale socat
+
+The evaluate server (localhost:5050) goes through a socat bridge that can become stale after
+  container/VM restarts. Pre-fetching all task configs before the QEMU reset ensures human-readable
+  instructions are cached in memory even if the bridge dies later. Falls back to live fetch with
+  retry on cache miss.
+
+* fix: update lock file for consilium google-genai migration
+
+Picks up consilium e3619ad which migrates from deprecated google-generativeai to google-genai SDK,
+  eliminating the FutureWarning about the deprecated package.
+
+* fix: remove unused import os in _refine_steps
+
+* feat: add [s] screenshot refresh to regenerate steps mid-recording
+
+When the model's planned steps diverge from the actual UI (e.g. a menu doesn't have the expected
+  option), the user can press 's' to take a fresh screenshot and regenerate all remaining steps from
+  the current screen state — no need to describe what's wrong.
+
+* fix: improve checkpoint resume UX with VM state guidance
+
+Show the next step and prompt user to verify VNC matches expected state before resuming. Default
+  changed to No since fresh start is the safe choice — resume is only valid after tunnel drops, not
+  VM reboots.
+
+* feat: reorganize recording keys — add soft restart, rename redo to undo
+
+New key mapping: Enter = step done d = task done early u = undo last step (was 'r', renamed for
+  clarity) r = restart task (soft — close apps, re-setup, regenerate steps) R = restart task (hard —
+  QEMU reboot) s = refresh remaining steps from current screenshot text = feedback to correct
+  remaining steps
+
+* fix: check for checkpoint before hard reset, not after
+
+The hard reset at startup was destroying the VM state that checkpoints depend on. Now the script
+  checks for checkpoints BEFORE the reset. If the user wants to resume, the reset is skipped
+  entirely. If not, stale checkpoints are cleaned up automatically.
+
+* fix: number corrected steps from where recording left off
+
+Corrected remaining steps now show as "Step 4 of 10", "Step 5 of 10" etc. instead of restarting from
+  1. Uses the existing start_num parameter of _format_step_list.
+
+* feat: add retry step [x], clarify recording controls
+
+New prompt layout with clearer descriptions: [Enter] next step [x] retry step [u] undo prev step [d]
+  task complete [s] refresh steps from screenshot [r] restart task [R] restart task (reboot VM) Or
+  type correction:
+
+[x] retry step: discards the current attempt, takes a fresh before screenshot, and re-displays the
+  same step. Useful when you messed up the action and want to try again.
+
+* fix: tighten step generation prompt and add soft restart delay
+
+- Remove "draft then review" instructions that caused models to output both draft and final step
+  lists. Now requests only the final numbered steps with no commentary. - Add 5s delay after
+  _setup_task_env() in soft restart so the task app has time to open before screen stability check
+  begins. - Increase close_all delay from 2s to 3s for reliability.
+
+* feat: add demo refinement script for post-recording error correction
+
+Two-pass LLM analysis pipeline: - Pass 1 (holistic): sends full task context + sampled screenshots
+  to identify problematic steps - Pass 2 (per-step): deep-dives each flagged step with before/after
+  screenshots + surrounding context
+
+Interactive review with accept/reject/edit per correction. Saves meta_refined.json +
+  refinement_log.json alongside original meta.json.
+
+Supports --auto (non-interactive), --dry-run, --all, --model, and --no-council flags.
+
+* fix: include system prompt and all text blocks in refine_demo VLM calls
+
+The _vlm_call() was only passing the last text block to consilium, losing the system prompt (with
+  JSON constraint) and all step text. Now concatenates system prompt + all text blocks into a single
+  prompt.
+
+This fixes the holistic review returning prose instead of JSON.
+
+* fix: robust JSON extraction in refine_demo, add openadapt-ml source
+
+- Replace naive fence-stripping with _extract_json() that handles: preamble text before JSON,
+  ```json fences, trailing commentary, and bare JSON arrays/objects embedded in prose. - Add
+  openadapt-ml as uv source (path = "../openadapt-ml") so `uv sync` can resolve it for the
+  annotation command.
+
+* feat: add openadapt-ml dependency for annotation pipeline
+
+The annotate command imports prompt templates, data classes, and VLM provider wrappers from
+  openadapt-ml. Added as dependency with local path source in [tool.uv.sources].
+
+TODO: migrate annotation code into openadapt-evals to eliminate
+
+this cross-repo dependency.
+
+* feat: auto-deallocate VM on script exit when started with --auto-vm
+
+When the recording script starts a VM via --auto-vm, it now registers atexit and signal handlers to
+  clean up on exit: - Normal exit: prompts user to deallocate (default Y) - SIGINT/SIGTERM:
+  auto-deallocates to prevent billing from orphaned VMs - Only triggers if the script itself started
+  the VM (not pre-running)
+
+* chore: sync beads state
+
+* fix(ci): use --no-sources and bump Python to >=3.11 for CI compatibility
+
+CI was failing because uv.sources references local paths (../openadapt-ml) that don't exist in CI.
+  Use --no-sources flag to fall back to PyPI versions. Also bump requires-python to >=3.11 since
+  consilium 0.3.0 on PyPI requires it, and fix consilium git URL to the renamed
+  OpenAdaptAI/openadapt-consilium repo.
+
+---------
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.14.0 (2026-03-02)
 
 ### Features
