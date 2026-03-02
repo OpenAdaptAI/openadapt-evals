@@ -1,6 +1,123 @@
 # CHANGELOG
 
 
+## v0.14.0 (2026-03-02)
+
+### Features
+
+- Add VM IP auto-detection and screen stability detection
+  ([#57](https://github.com/OpenAdaptAI/openadapt-evals/pull/57),
+  [`3463f9d`](https://github.com/OpenAdaptAI/openadapt-evals/commit/3463f9d9daac783e12dad787a8c41f7045d8c53d))
+
+* fix: replace LibreOffice screenshot with full desktop view
+
+The previous screenshot showed only the Calc window. The new one shows the full context: macOS
+  Chrome browser with noVNC tab, Windows 11 desktop inside QEMU, LibreOffice Calc welcome dialog,
+  and Windows taskbar. This better demonstrates the VM evaluation infrastructure.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* feat: add VM IP auto-detection and screen stability detection
+
+- Add resolve_vm_ip() with layered resolution: explicit arg → pool registry (fast, local) → Azure
+  CLI query (always accurate, ~3s) - Remove hardcoded 172.173.66.131 defaults from
+  record_waa_demos.py and run_dc_eval.py; --vm-ip is now auto-detected if omitted - Add
+  _wait_for_stable_screen() that polls QEMU framebuffer (free) until 3 consecutive screenshots match
+  (99.5% similarity threshold), replacing the fixed time.sleep(3) that caused stale screenshots -
+  Add _compare_screenshots() with numpy-vectorized pixel comparison - 24 new tests (14 for VM IP, 10
+  for screen stability)
+
+* fix: regenerate suggested steps after task restart
+
+When the user presses 'R' to restart a task, the QEMU hard reset produces a new stable screenshot,
+  but the suggested steps were not regenerated. The stale steps from the previous screenshot were
+  displayed. Now _generate_steps() is called again with the fresh screenshot after every restart.
+
+* feat: add interactive step correction during recording
+
+After generating suggested steps from the screenshot, the user can now type corrections (e.g., "step
+  9 formula should reference Sheet1.B2") and the VLM will regenerate with the feedback. Loop
+  continues until the user presses Enter to accept.
+
+Also refactors _generate_steps into smaller functions: - _build_setup_desc(): extracts setup
+  description from task config - _vlm_call(): shared OpenAI API call helper - _refine_steps(): sends
+  feedback + screenshot for revised steps - _display_steps(): pretty-prints step box -
+  _interactive_step_review(): correction loop
+
+* fix: validate task args before VM IP resolution
+
+Move the tasks-type guard above resolve_vm_ip() call so that input validation happens before any
+  real work. Fixes CI failure where resolve_vm_ip raises RuntimeError in environments without Azure
+  access.
+
+* refactor: extract screen stability into module and recording loop into function
+
+- Move _compare_screenshots and _wait_for_stable_screen from scripts/record_waa_demos.py into
+  openadapt_evals/infrastructure/screen_stability.py as public functions (compare_screenshots,
+  wait_for_stable_screen) - Script wrappers delegate to the new module, preserving all call sites -
+  Update tests/test_screen_stability.py to import from the module directly, removing the fragile
+  importlib.util.spec_from_file_location hack - Extract per-task recording loop from
+  cmd_record_waa() into _record_single_task() for readability and testability - Fix pre-existing
+  bug: len(steps) -> len(steps_meta) in completion message
+
+* feat: add --auto flag to record-waa for automatic infrastructure deployment
+
+When the WAA server is not reachable, the script now: - With --auto: starts VM, establishes SSH
+  tunnels, starts Docker container and socat proxy, then waits for WAA to boot. Confirms with user
+  before starting VM (cost warning). Auto-deallocates VM on exit/signal. - Without --auto: prints
+  actionable help message showing --auto and granular flags (--auto-vm, --auto-tunnel,
+  --auto-container).
+
+* feat: add recording-to-demo converter and first real demo for 04d9aeaf
+
+New script converts WAA recordings (meta.json + screenshots) to demo text files for eval-suite, with
+  two modes: - text: instant, free, uses step descriptions from meta.json - vlm: richer, sends
+  screenshots to VLM for Observation/Intent/Result
+
+Generated both text-only and VLM-enriched demos for task 04d9aeaf (LibreOffice Calc annual changes).
+  No VM or openadapt-ml needed.
+
+* fix: correct VLM annotation errors in 04d9aeaf demo (steps 15, 17-18)
+
+Step 15: VLM described after-state instead of before-state, and referenced C3 instead of C2. Step
+  17: VLM hallucinated "CLICK cell D3" — should be D2 (first data row for OA changes formula). Step
+  18: Cascading fix from step 17.
+
+* Revert "fix: correct VLM annotation errors in 04d9aeaf demo (steps 15, 17-18)"
+
+This reverts commit 27b14bb72a5d76629a6bff24fbc7e88da967ed5b.
+
+* fix: remove dead code, fix KeyError risk, add trailing newlines
+
+- Remove unused _compare_screenshots wrapper in record_waa_demos.py - Use f.get('path', '?') instead
+  of f['path'] in _build_setup_desc - Ensure demo .txt files end with trailing newline
+
+* fix: constrain VLM annotations to ground-truth step descriptions
+
+The VLM (gpt-4.1-mini) was hallucinating cell references and other details that contradicted the
+  recorded actions from meta.json (e.g., "D3" instead of "D2"). Three improvements to the converter
+  pipeline:
+
+1. Strengthen the VLM prompt to label the recorded action as "GROUND-TRUTH" and explicitly instruct
+  the model not to substitute different cell refs, values, or formulas based on visual
+  interpretation.
+
+2. Add post-hoc validation that extracts cell references, formulas, and quoted text from both the
+  ground-truth step and the VLM's Action field. On mismatch, the Action field is replaced with the
+  ground-truth description while preserving the VLM's Observation/Intent/Result.
+
+3. Upgrade default model from gpt-4.1-mini to gpt-4.1 and lower temperature from 0.1 to 0.0 for more
+  deterministic output. The --model flag allows overriding back to gpt-4.1-mini if cost is a
+  concern.
+
+Regenerated demo for 04d9aeaf with the fixed pipeline — previously hallucinated cell references
+  (steps 15, 17, 18) are now correct.
+
+---------
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.13.0 (2026-03-01)
 
 ### Features
