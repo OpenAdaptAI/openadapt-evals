@@ -471,36 +471,13 @@ def _take_screenshot(server: str) -> bytes:
 
 
 def _compare_screenshots(png_a: bytes, png_b: bytes) -> float:
-    """Compare two PNG screenshots and return pixel similarity (0.0–1.0).
+    """Compare two PNG screenshots and return pixel similarity (0.0-1.0).
 
-    Uses raw RGB pixel comparison.  Returns 1.0 for identical images.
-    The 99.5% threshold used by ``_wait_for_stable_screen`` tolerates
-    minor differences like the taskbar clock updating (~0.14% of pixels)
-    or cursor blink.
+    Delegates to :func:`openadapt_evals.infrastructure.screen_stability.compare_screenshots`.
     """
-    import io
+    from openadapt_evals.infrastructure.screen_stability import compare_screenshots
 
-    from PIL import Image
-
-    img_a = Image.open(io.BytesIO(png_a)).convert("RGB")
-    img_b = Image.open(io.BytesIO(png_b)).convert("RGB")
-
-    if img_a.size != img_b.size:
-        return 0.0
-
-    bytes_a = img_a.tobytes()
-    bytes_b = img_b.tobytes()
-
-    if bytes_a == bytes_b:
-        return 1.0  # fast path: identical raw bytes
-
-    # Vectorized comparison via numpy (already a transitive dep via open-clip-torch)
-    import numpy as np
-
-    arr_a = np.frombuffer(bytes_a, dtype=np.uint8).reshape(-1, 3)
-    arr_b = np.frombuffer(bytes_b, dtype=np.uint8).reshape(-1, 3)
-    matching = int(np.all(arr_a == arr_b, axis=1).sum())
-    return matching / arr_a.shape[0]
+    return compare_screenshots(png_a, png_b)
 
 
 def _wait_for_stable_screen(
@@ -512,53 +489,17 @@ def _wait_for_stable_screen(
 ) -> bytes:
     """Wait for the VM screen to stabilize, then return the screenshot.
 
-    Polls the QEMU framebuffer (free — local HTTP call) until
-    ``required_stable_checks`` consecutive screenshot pairs exceed
-    ``similarity_threshold``.  With the defaults (3 checks at 2s
-    intervals), the screen must be stable for 6 seconds before
-    proceeding.
-
-    Args:
-        server: WAA server URL (``/screenshot`` endpoint).
-        poll_interval: Seconds between screenshots.
-        stability_timeout: Maximum seconds to wait.  If exceeded, the
-            last screenshot is returned with a warning.
-        similarity_threshold: Pixel-match fraction (0.0–1.0).  0.995
-            tolerates taskbar clock and cursor blink.
-        required_stable_checks: Consecutive stable pairs required.
-            With poll_interval=2 and required_stable_checks=3, the
-            screen must be unchanged for 6 seconds.
-
-    Returns:
-        PNG screenshot bytes of the stable screen.
+    Delegates to :func:`openadapt_evals.infrastructure.screen_stability.wait_for_stable_screen`.
     """
-    prev_png = _take_screenshot(server)
-    stable_count = 0
-    deadline = time.time() + stability_timeout
+    from openadapt_evals.infrastructure.screen_stability import wait_for_stable_screen
 
-    while time.time() < deadline:
-        time.sleep(poll_interval)
-        curr_png = _take_screenshot(server)
-
-        similarity = _compare_screenshots(prev_png, curr_png)
-
-        if similarity >= similarity_threshold:
-            stable_count += 1
-            if stable_count >= required_stable_checks:
-                elapsed = stability_timeout - (deadline - time.time())
-                print(f"    Screen stable after {elapsed:.0f}s "
-                      f"({stable_count} checks, {similarity:.4f} similarity)")
-                return curr_png
-        else:
-            if stable_count > 0:
-                print(f"    Screen changed ({similarity:.3f}), resetting stability count")
-            stable_count = 0
-
-        prev_png = curr_png
-
-    print(f"    WARNING: Screen did not stabilize within {stability_timeout:.0f}s. "
-          "Using last screenshot.")
-    return prev_png
+    return wait_for_stable_screen(
+        server,
+        poll_interval=poll_interval,
+        stability_timeout=stability_timeout,
+        similarity_threshold=similarity_threshold,
+        required_stable_checks=required_stable_checks,
+    )
 
 
 def _build_setup_desc(task_config: dict) -> str:
@@ -931,6 +872,254 @@ def _interactive_remaining_review(
             print("  WARNING: VLM returned no steps. Keeping previous plan.")
 
 
+def _record_single_task(
+    task_id: str,
+    task_num: int,
+    total_tasks: int,
+    output_dir: Path,
+    server: str,
+    evaluate_url: str,
+    vnc_url: str,
+    vm_ip: str | None,
+) -> str | None:
+    """Record a single task interactively via WAA API.
+
+    Returns the task_id on success, or None on failure.
+    """
+    import requests
+
+    from openadapt_evals.infrastructure.qemu_reset import QEMUResetManager
+
+    print_header(f"Task {task_num}/{total_tasks}: {task_id[:12]}...")
+
+    task_dir = output_dir / task_id
+    task_dir.mkdir(parents=True, exist_ok=True)
+
+    # Load task config from evaluate server
+    instruction = task_id  # fallback
+    task_config: dict = {}
+    try:
+        task_resp = requests.get(
+            f"{evaluate_url}/task/{task_id}", timeout=10
+        )
+        if task_resp.ok:
+            task_config = task_resp.json()
+            instruction = task_config.get(
+                "instruction", task_config.get("task", task_id)
+            )
+    except Exception as e:
+        print(f"  Warning: could not load task config: {e}")
+
+    def _setup_task_env() -> None:
+        """Run task setup config (download files, open apps, etc.)."""
+        setup_config = task_config.get("config", [])
+        related_apps = task_config.get("related_apps", [])
+        if related_apps:
+            setup_config = [
+                {"type": "verify_apps", "parameters": {"apps": related_apps}}
+            ] + setup_config
+        if setup_config:
+            resp = requests.post(
+                f"{evaluate_url}/setup",
+                json={"config": setup_config},
+                timeout=120,
+            )
+            resp.raise_for_status()
+            results = resp.json().get("results", [])
+            for r in results:
+                status = r.get("status", "?")
+                stype = r.get("type", "?")
+                print(f"    setup {stype}: {status}")
+
+    def _soft_reset_task_env() -> bytes:
+        """Soft reset: close_all + re-run setup + wait for stable screen."""
+        print("  Resetting environment (soft)...")
+        try:
+            resp = requests.post(f"{server}/setup/close_all", timeout=30)
+            print(f"    close_all: {resp.status_code}")
+            time.sleep(2)
+            _setup_task_env()
+        except Exception as e:
+            print(f"  WARNING: environment setup failed: {e}")
+            print(f"  The task app may not be open. Check VNC.")
+        print("  Waiting for screen to stabilize...")
+        return _wait_for_stable_screen(server)
+
+    def _hard_reset_task_env() -> bytes:
+        """Hard reset: QEMU system_reset + wait for boot + clear recovery + setup."""
+        print("  Restarting Windows (QEMU hard reset)...")
+        mgr = QEMUResetManager(vm_ip=vm_ip, timeout_seconds=300)
+        success, msg = mgr.restart_windows(server_url=server)
+        if not success:
+            print(f"  WARNING: QEMU reset failed: {msg}")
+            print("  Falling back to soft reset...")
+            return _soft_reset_task_env()
+        print(f"    {msg}")
+        _clear_recovery_data(server)
+        print("  Running task setup...")
+        try:
+            _setup_task_env()
+        except Exception as e:
+            print(f"  WARNING: environment setup failed: {e}")
+            print(f"  The task app may not be open. Check VNC.")
+        print("  Waiting for screen to stabilize...")
+        return _wait_for_stable_screen(server)
+
+    before_png = _soft_reset_task_env()
+
+    print(f"\n  VNC: {vnc_url}")
+    print(f"  Task: {instruction}\n")
+
+    # Generate AI step-by-step guidance from screenshot
+    print("  Generating suggested steps...")
+    suggested = _generate_steps(before_png, instruction, task_config)
+    _display_steps(suggested)
+    suggested = _interactive_step_review(
+        before_png, instruction, task_config, suggested,
+    )
+
+    # Parse accepted steps into a structured list
+    completed_steps: list[str] = []
+    remaining_steps = _parse_step_list(suggested)
+    step_plans = [{
+        "at_step_idx": 0,
+        "trigger": "initial",
+        "steps": list(remaining_steps),
+    }]
+    refined_indices: set[int] = set()
+    steps_meta: list[dict] = []
+    step_idx = 0
+
+    print()
+    print("  Perform each action in VNC. You can provide feedback")
+    print("  at any point to correct the remaining steps.\n")
+
+    while remaining_steps:
+        # Save before screenshot
+        (task_dir / f"step_{step_idx:02d}_before.png").write_bytes(
+            before_png
+        )
+
+        # Display current step
+        total = len(completed_steps) + len(remaining_steps)
+        step_num = len(completed_steps) + 1
+        _display_current_step(step_num, total, remaining_steps[0])
+
+        user_input = input(
+            "  [Enter]=done  [d]=task done  [r]=redo  [R]=restart\n"
+            "  Or type feedback to correct remaining steps: "
+        ).strip()
+
+        if user_input == "":
+            # ADVANCE: action done, move to next step
+            after_png = _take_screenshot(server)
+            (task_dir / f"step_{step_idx:02d}_after.png").write_bytes(
+                after_png
+            )
+            done_step = remaining_steps.pop(0)
+            completed_steps.append(done_step)
+            steps_meta.append({
+                "action_hint": None,
+                "suggested_step": done_step,
+                "step_was_refined": step_idx in refined_indices,
+            })
+            before_png = after_png
+            step_idx += 1
+            print(f"  Step {step_num} recorded.")
+
+            if not remaining_steps:
+                print(f"\n  All {total} steps completed. Finishing recording.")
+
+        elif user_input.lower() == "d":
+            # DONE: task finished (possibly before all steps)
+            after_png = _take_screenshot(server)
+            (task_dir / f"step_{step_idx:02d}_after.png").write_bytes(
+                after_png
+            )
+            steps_meta.append({
+                "action_hint": "d",
+                "suggested_step": remaining_steps[0],
+                "step_was_refined": step_idx in refined_indices,
+            })
+            step_idx += 1
+            total = len(completed_steps) + len(remaining_steps)
+            print(f"\n  Task marked done at step {step_num} of {total}. Finishing recording.")
+            break
+
+        elif user_input.lower() == "r":
+            # REDO: go back one step
+            if not completed_steps:
+                print("  Nothing to redo (already at step 1).")
+                continue
+            step_idx -= 1
+            remaining_steps.insert(0, completed_steps.pop())
+            steps_meta.pop()
+            before_png = _take_screenshot(server)
+            print(f"  Redoing step {len(completed_steps) + 1}...")
+
+        elif user_input == "R":
+            # RESTART: QEMU hard reset + re-generate everything
+            print("  Restarting task from scratch (QEMU hard reset)...")
+            for f in task_dir.glob("step_*.png"):
+                f.unlink()
+            before_png = _hard_reset_task_env()
+            print(f"\n  VNC: {vnc_url}")
+            print(f"  Task: {instruction}\n")
+
+            print("  Generating suggested steps...")
+            new_suggested = _generate_steps(before_png, instruction, task_config)
+            _display_steps(new_suggested)
+            new_suggested = _interactive_step_review(
+                before_png, instruction, task_config, new_suggested,
+            )
+
+            completed_steps = []
+            remaining_steps = _parse_step_list(new_suggested)
+            step_plans.append({
+                "at_step_idx": 0,
+                "trigger": "restart",
+                "steps": list(remaining_steps),
+            })
+            refined_indices = set()
+            steps_meta = []
+            step_idx = 0
+            print()
+            print("  Task restarted. Continue recording.\n")
+
+        else:
+            # FEEDBACK: mid-recording step correction
+            print("  Taking fresh screenshot and refining remaining steps...")
+            remaining_steps = _interactive_remaining_review(
+                server, instruction, task_config,
+                completed_steps, remaining_steps, user_input,
+            )
+            step_plans.append({
+                "at_step_idx": step_idx,
+                "trigger": f"feedback: {user_input}",
+                "steps": list(remaining_steps),
+            })
+            for i in range(step_idx, step_idx + len(remaining_steps)):
+                refined_indices.add(i)
+            # No action taken — loop re-displays the (possibly new) current step
+
+    # Save metadata
+    meta = {
+        "task_id": task_id,
+        "instruction": instruction,
+        "num_steps": len(steps_meta),
+        "steps": steps_meta,
+        "step_plans": step_plans,
+        "server_url": server,
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+    }
+    (task_dir / "meta.json").write_text(
+        json.dumps(meta, indent=2), encoding="utf-8"
+    )
+
+    print(f"\n  Saved {len(steps_meta)} step(s) to {task_dir}")
+    return task_id
+
+
 def cmd_record_waa(
     tasks: str = ",".join(HARDER_TASK_IDS),
     server: str = "http://localhost:5001",
@@ -1059,234 +1248,18 @@ def cmd_record_waa(
 
     recorded = []
     for task_num, task_id in enumerate(task_ids, 1):
-        print_header(f"Task {task_num}/{len(task_ids)}: {task_id[:12]}...")
-
-        task_dir = output_dir / task_id
-        task_dir.mkdir(parents=True, exist_ok=True)
-
-        # Load task config from evaluate server
-        instruction = task_id  # fallback
-        task_config = {}
-        try:
-            task_resp = requests.get(
-                f"{evaluate_url}/task/{task_id}", timeout=10
-            )
-            if task_resp.ok:
-                task_config = task_resp.json()
-                instruction = task_config.get(
-                    "instruction", task_config.get("task", task_id)
-                )
-        except Exception as e:
-            print(f"  Warning: could not load task config: {e}")
-
-        def _setup_task_env() -> None:
-            """Run task setup config (download files, open apps, etc.)."""
-            setup_config = task_config.get("config", [])
-            related_apps = task_config.get("related_apps", [])
-            if related_apps:
-                setup_config = [
-                    {"type": "verify_apps", "parameters": {"apps": related_apps}}
-                ] + setup_config
-            if setup_config:
-                resp = requests.post(
-                    f"{evaluate_url}/setup",
-                    json={"config": setup_config},
-                    timeout=120,
-                )
-                resp.raise_for_status()
-                results = resp.json().get("results", [])
-                for r in results:
-                    status = r.get("status", "?")
-                    stype = r.get("type", "?")
-                    print(f"    setup {stype}: {status}")
-
-        def _soft_reset_task_env() -> bytes:
-            """Soft reset: close_all + re-run setup + wait for stable screen."""
-            print("  Resetting environment (soft)...")
-            try:
-                resp = requests.post(f"{server}/setup/close_all", timeout=30)
-                print(f"    close_all: {resp.status_code}")
-                time.sleep(2)
-                _setup_task_env()
-            except Exception as e:
-                print(f"  WARNING: environment setup failed: {e}")
-                print(f"  The task app may not be open. Check VNC.")
-            print("  Waiting for screen to stabilize...")
-            return _wait_for_stable_screen(server)
-
-        def _hard_reset_task_env() -> bytes:
-            """Hard reset: QEMU system_reset + wait for boot + clear recovery + setup + stable screen."""
-            print("  Restarting Windows (QEMU hard reset)...")
-            mgr = QEMUResetManager(vm_ip=vm_ip, timeout_seconds=300)
-            success, msg = mgr.restart_windows(server_url=server)
-            if not success:
-                print(f"  WARNING: QEMU reset failed: {msg}")
-                print("  Falling back to soft reset...")
-                return _soft_reset_task_env()
-            print(f"    {msg}")
-            _clear_recovery_data(server)
-            print("  Running task setup...")
-            try:
-                _setup_task_env()
-            except Exception as e:
-                print(f"  WARNING: environment setup failed: {e}")
-                print(f"  The task app may not be open. Check VNC.")
-            print("  Waiting for screen to stabilize...")
-            return _wait_for_stable_screen(server)
-
-        before_png = _soft_reset_task_env()
-
-        print(f"\n  VNC: {vnc_url}")
-        print(f"  Task: {instruction}\n")
-
-        # Generate AI step-by-step guidance from screenshot
-        print("  Generating suggested steps...")
-        suggested = _generate_steps(before_png, instruction, task_config)
-        _display_steps(suggested)
-        suggested = _interactive_step_review(
-            before_png, instruction, task_config, suggested,
+        result = _record_single_task(
+            task_id=task_id,
+            task_num=task_num,
+            total_tasks=len(task_ids),
+            output_dir=output_dir,
+            server=server,
+            evaluate_url=evaluate_url,
+            vnc_url=vnc_url,
+            vm_ip=vm_ip,
         )
-
-        # Parse accepted steps into a structured list
-        completed_steps: list[str] = []
-        remaining_steps = _parse_step_list(suggested)
-        step_plans = [{
-            "at_step_idx": 0,
-            "trigger": "initial",
-            "steps": list(remaining_steps),
-        }]
-        refined_indices: set[int] = set()
-        steps_meta: list[dict] = []
-        step_idx = 0
-
-        print()
-        print("  Perform each action in VNC. You can provide feedback")
-        print("  at any point to correct the remaining steps.\n")
-
-        while remaining_steps:
-            # Save before screenshot
-            (task_dir / f"step_{step_idx:02d}_before.png").write_bytes(
-                before_png
-            )
-
-            # Display current step
-            total = len(completed_steps) + len(remaining_steps)
-            step_num = len(completed_steps) + 1
-            _display_current_step(step_num, total, remaining_steps[0])
-
-            user_input = input(
-                "  [Enter]=done  [d]=task done  [r]=redo  [R]=restart\n"
-                "  Or type feedback to correct remaining steps: "
-            ).strip()
-
-            if user_input == "":
-                # ADVANCE: action done, move to next step
-                after_png = _take_screenshot(server)
-                (task_dir / f"step_{step_idx:02d}_after.png").write_bytes(
-                    after_png
-                )
-                done_step = remaining_steps.pop(0)
-                completed_steps.append(done_step)
-                steps_meta.append({
-                    "action_hint": None,
-                    "suggested_step": done_step,
-                    "step_was_refined": step_idx in refined_indices,
-                })
-                before_png = after_png
-                step_idx += 1
-                print(f"  Step {step_num} recorded.")
-
-                if not remaining_steps:
-                    print(f"\n  All {total} steps completed. Finishing recording.")
-
-            elif user_input.lower() == "d":
-                # DONE: task finished (possibly before all steps)
-                after_png = _take_screenshot(server)
-                (task_dir / f"step_{step_idx:02d}_after.png").write_bytes(
-                    after_png
-                )
-                steps_meta.append({
-                    "action_hint": "d",
-                    "suggested_step": remaining_steps[0],
-                    "step_was_refined": step_idx in refined_indices,
-                })
-                step_idx += 1
-                total = len(completed_steps) + len(remaining_steps)
-                print(f"\n  Task marked done at step {step_num} of {total}. Finishing recording.")
-                break
-
-            elif user_input.lower() == "r":
-                # REDO: go back one step
-                if not completed_steps:
-                    print("  Nothing to redo (already at step 1).")
-                    continue
-                step_idx -= 1
-                remaining_steps.insert(0, completed_steps.pop())
-                steps_meta.pop()
-                before_png = _take_screenshot(server)
-                print(f"  Redoing step {len(completed_steps) + 1}...")
-
-            elif user_input == "R":
-                # RESTART: QEMU hard reset + re-generate everything
-                print("  Restarting task from scratch (QEMU hard reset)...")
-                for f in task_dir.glob("step_*.png"):
-                    f.unlink()
-                before_png = _hard_reset_task_env()
-                print(f"\n  VNC: {vnc_url}")
-                print(f"  Task: {instruction}\n")
-
-                print("  Generating suggested steps...")
-                new_suggested = _generate_steps(before_png, instruction, task_config)
-                _display_steps(new_suggested)
-                new_suggested = _interactive_step_review(
-                    before_png, instruction, task_config, new_suggested,
-                )
-
-                completed_steps = []
-                remaining_steps = _parse_step_list(new_suggested)
-                step_plans.append({
-                    "at_step_idx": 0,
-                    "trigger": "restart",
-                    "steps": list(remaining_steps),
-                })
-                refined_indices = set()
-                steps_meta = []
-                step_idx = 0
-                print()
-                print("  Task restarted. Continue recording.\n")
-
-            else:
-                # FEEDBACK: mid-recording step correction
-                print("  Taking fresh screenshot and refining remaining steps...")
-                remaining_steps = _interactive_remaining_review(
-                    server, instruction, task_config,
-                    completed_steps, remaining_steps, user_input,
-                )
-                step_plans.append({
-                    "at_step_idx": step_idx,
-                    "trigger": f"feedback: {user_input}",
-                    "steps": list(remaining_steps),
-                })
-                for i in range(step_idx, step_idx + len(remaining_steps)):
-                    refined_indices.add(i)
-                # No action taken — loop re-displays the (possibly new) current step
-
-        # Save metadata
-        meta = {
-            "task_id": task_id,
-            "instruction": instruction,
-            "num_steps": len(steps_meta),
-            "steps": steps_meta,
-            "step_plans": step_plans,
-            "server_url": server,
-            "recorded_at": datetime.now(timezone.utc).isoformat(),
-        }
-        (task_dir / "meta.json").write_text(
-            json.dumps(meta, indent=2), encoding="utf-8"
-        )
-
-        recorded.append(task_id)
-        print(f"\n  Saved {len(steps)} step(s) to {task_dir}")
+        if result is not None:
+            recorded.append(result)
 
     # Summary
     print_header("Recording Summary")
