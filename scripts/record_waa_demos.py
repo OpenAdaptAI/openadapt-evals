@@ -1356,9 +1356,10 @@ def _auto_start_socat(vm_ip: str) -> bool:
         capture_output=True, text=True, timeout=30,
     )
     if result.returncode != 0:
-        print(f"  ERROR: socat proxy setup failed: {result.stderr.strip()}")
-        return False
-    print("  Socat proxy established (VM:5051 -> container:5050).")
+        print(f"  WARNING: socat setup returned non-zero: {result.stderr.strip()}")
+        # Not fatal — socat may already be running
+    else:
+        print("  Socat proxy established (VM:5051 -> container:5050).")
     return True
 
 
