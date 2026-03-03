@@ -352,8 +352,7 @@ def cmd_create(args):
 
     if not vm_created:
         log("CREATE", "ERROR: Could not create VM in any region with any size")
-        if use_fast:
-            log("CREATE", "Tried sizes: " + ", ".join(s[0] for s in sizes_to_try))
+        log("CREATE", "Tried sizes: " + ", ".join(s[0] for s in sizes_to_try))
         return 1
 
     log(
@@ -594,7 +593,7 @@ def cmd_pool_status(args):
             if remaining_min > 0:
                 print(f"Auto-shutdown: in {remaining_min:.0f} minutes")
             else:
-                print(f"Auto-shutdown: OVERDUE (check VM status)")
+                print("Auto-shutdown: OVERDUE (check VM status)")
         except ValueError:
             pass
     print(f"Tasks: {pool.completed_tasks}/{pool.total_tasks}")
@@ -1577,7 +1576,6 @@ def cmd_image_create(args):
     """
     init_logging()
     from openadapt_evals.infrastructure.azure_vm import AzureVMManager
-    from openadapt_evals.infrastructure.pool import PoolManager
     from openadapt_evals.infrastructure.vm_monitor import VMPoolRegistry
 
     vm_manager = AzureVMManager(resource_group=RESOURCE_GROUP)
@@ -7916,7 +7914,7 @@ def cmd_gpu_train(args):
             )
             result = ssh_run(ip, "bash /tmp/setup_gpu_training.sh", username=username, stream=True)
             if result.returncode != 0:
-                print(f"ERROR: Setup failed")
+                print("ERROR: Setup failed")
                 return 1
 
     # Delegate to the E2E script's launch_training() which handles:

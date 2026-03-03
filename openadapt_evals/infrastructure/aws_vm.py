@@ -347,7 +347,6 @@ class AWSVMManager:
         Raises:
             RuntimeError: If instance creation fails.
         """
-        import boto3
 
         # Update manager's region so subsequent operations find this instance
         if region != self.region:
@@ -519,7 +518,7 @@ class AWSVMManager:
         A more robust approach would use CloudWatch Events + Lambda.
         """
         try:
-            from openadapt_evals.infrastructure.azure_vm import SSH_OPTS, ssh_run
+            from openadapt_evals.infrastructure.azure_vm import ssh_run
 
             ip = self.get_vm_ip(name)
             if not ip:
