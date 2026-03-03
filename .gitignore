@@ -38,3 +38,6 @@ docs/artifacts/full/
 
 # Private/sensitive documents (NEVER commit)
 private/
+
+# Maintenance tool patterns (contains sensitive strings — NEVER commit)
+maintenance/patterns

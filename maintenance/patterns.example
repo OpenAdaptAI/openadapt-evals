@@ -1,0 +1,6 @@
+# Example patterns file — one pattern per line.
+# Lines starting with # are comments.
+# The actual patterns file (maintenance/patterns) is gitignored.
+
+Example Sensitive Company Name
+example-api-key-prefix
