@@ -1,6 +1,117 @@
 # CHANGELOG
 
 
+## v0.21.0 (2026-03-03)
+
+### Features
+
+- Add end-to-end eval pipeline script
+  ([#68](https://github.com/OpenAdaptAI/openadapt-evals/pull/68),
+  [`a6b3852`](https://github.com/OpenAdaptAI/openadapt-evals/commit/a6b3852fe586f643da25ba90f1ed5bf0ce280c06))
+
+* feat: add end-to-end eval pipeline script
+
+Orchestrates the full evaluation flow in a single command: - Phase 1 (parallel): generate VLM demos
+  + start VM if deallocated - Phase 2: establish SSH tunnels, socat proxy, wait for WAA readiness -
+  Phase 3: run ZS and DC evaluations with health checks - Phase 4: print results summary
+
+Composes existing scripts (run_dc_eval, convert_recording_to_demo) without modifying them. Supports
+  --dry-run, --tasks, --zs-only/--dc-only, --skip-vm.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* fix: inline tunnel functions to avoid module-level import failures
+
+The previous approach imported functions from run_dc_eval.py which imports openadapt_evals at module
+  level. This fails when running as a standalone script outside the uv environment. Inlining the
+  small subprocess-based functions avoids the dependency chain.
+
+* fix: add container restart, VNC viewer, and longer WAA timeout
+
+- Check and restart stopped WAA container in Phase 2 (handles VM deallocate/start where container
+  exits) - Increase default WAA readiness timeout from 420s to 1200s (cold boot can take 15-35 min)
+  - Add --vnc/--no-vnc flags to open VNC in browser (default: on)
+
+* fix: failsafe recovery for 500 responses and coordinate clamping
+
+Three fixes for the PyAutoGUI fail-safe issue:
+
+1. Failsafe detection now checks ALL response statuses, not just 200. WAA returns fail-safe errors
+  as HTTP 500 with the exception in the response body — the previous code only checked stderr on 200
+  responses. Also detect "fail-safe triggered" substring (WAA's error format).
+
+2. Coordinate clamping: all pixel coordinates are clamped to a 5px margin from screen edges via
+  _clamp_pixel_coords(), preventing accidental corner touches that trigger the fail-safe.
+
+3. Drag coordinate validation: skip drag actions with missing or all-zero coordinates instead of
+  defaulting to (0,0) which guarantees a fail-safe trigger.
+
+* docs: add experimental analysis for task 04d9aeaf DC eval
+
+Comprehensive analysis of ZS vs DC evaluation on a 21-step LibreOffice Calc task. Key findings: -
+  ZS: stuck after 1 step (wait loop) - DC: 30 steps, wrote 4 correct cross-sheet formulas for 1 of 3
+  columns - Binary scoring (0.00 both) masks significant DC behavioral advantage - Documents 3
+  infrastructure bugs found and fixed during eval
+
+* feat: add --deallocate-after flag to eval pipeline
+
+Adds a --deallocate-after flag that deallocates the VM after eval completes to stop billing. Uses
+  raw az CLI because oa-vm deallocate hardcodes VM_NAME="waa-eval-vm" and doesn't accept --name, so
+  it won't work for pool-style VMs like waa-pool-00.
+
+* refactor: remove live.py changes (moved to fix/harden-failsafe-detection)
+
+* test: add unit tests for eval pipeline functions
+
+- Test _build_conditions with zs-only, dc-only, default, both-flags, multiple tasks, JSON fallback,
+  and warning output - Test _find_recordings_needing_demos with mocked filesystem covering existing
+  demos, missing demos, no recording dir, no meta.json, meta_refined.json, task filters, and sorted
+  output - Test _print_summary for success/failure/empty/skip scenarios - Test CLI argument parsing
+  defaults and flag behavior - Test --dry-run integration (exit codes and output content) - Test
+  module-level constants - All 54 tests run without VM access
+
+* refactor: use VMProvider protocol and deduplicate infra in eval pipeline
+
+- Replace Azure-only az CLI calls with VMProvider interface (supports AWS) - Fix macOS-only VNC
+  opener with cross-platform webbrowser.open() - Replace duplicate SSH/tunnel functions with
+  infrastructure module calls - Capture eval subprocess output for cleaner pipeline logs
+
+* fix: update tests for VMProvider refactor (remove DEFAULT_VM_USER)
+
+- Remove references to removed DEFAULT_VM_USER constant - Replace --vm-user with --cloud in test
+  parser - Add --deallocate-after to test parser - 53/53 tests pass
+
+* fix: handle newlines in type actions to prevent unterminated string errors
+
+When the agent sends text containing newlines, pyautogui.write() was called with a literal newline
+  in the Python string, causing an "unterminated string literal" syntax error on the WAA server.
+
+Adds _build_type_commands() which splits text on newlines and interleaves pyautogui.write() with
+  pyautogui.press('enter'). Also extracts _escape_for_pyautogui() for consistent string escaping.
+
+Updates analysis doc: corrects partial-scoring recommendation to note it requires WAA server-side
+  changes (compare_table metric), not just adapter-side changes.
+
+* fix: address review feedback for eval pipeline
+
+- Guard _create_vm_manager() behind dry-run check so --dry-run works without Azure/AWS SDKs
+  configured - Remove unused as_completed import - Add parentheses to clarify sorted() if/else
+  expression - Make _build_type_commands() self-contained (includes import pyautogui) so
+  concatenation at call sites is no longer fragile - Extract build_parser() from main() so tests use
+  the real parser instead of a manually reconstructed copy
+
+* docs: add AWS as supported cloud backend in README
+
+- Update description, key features, and architecture to mention both Azure and AWS - Add aws extra
+  to installation section - Show --cloud aws examples in Quick Start and Parallel Evaluation - Add
+  aws_vm.py to architecture tree - Add smoke-test-aws to CLI reference table - Add AWS env vars to
+  configuration section - Add Windows 11 on AWS screenshot
+
+---------
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.20.0 (2026-03-02)
 
 ### Features
