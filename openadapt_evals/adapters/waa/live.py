@@ -905,6 +905,27 @@ class WAALiveAdapter(BenchmarkAdapter):
         """
         return self._get_observation()
 
+    def observe_pil(self) -> "PIL.Image.Image":
+        """Get current screenshot as a PIL Image.
+
+        Convenience wrapper around observe() for VLM/RL training pipelines
+        that work with PIL images directly.
+
+        Returns:
+            PIL.Image.Image of the current desktop state.
+
+        Raises:
+            RuntimeError: If no screenshot is available.
+        """
+        import io
+
+        from PIL import Image
+
+        obs = self.observe()
+        if not obs.screenshot:
+            raise RuntimeError("No screenshot available from WAA server")
+        return Image.open(io.BytesIO(obs.screenshot))
+
     def pixel_action(
         self,
         x: int | float | None = None,
