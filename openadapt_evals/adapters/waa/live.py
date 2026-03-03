@@ -536,6 +536,74 @@ class WAALiveAdapter(BenchmarkAdapter):
 
         return self._get_observation()
 
+    def _send_command(self, command: str) -> None:
+        """Send a pyautogui command to WAA via /execute_windows.
+
+        Handles fail-safe detection and recovery. If PyAutoGUI's fail-safe is
+        triggered (mouse at screen corner), recovery is attempted automatically
+        via the /execute endpoint before retrying the command once.
+
+        Args:
+            command: Python command string to execute on the WAA server.
+        """
+        import requests
+
+        logger.info("Sending command to WAA: %r", command)
+        try:
+            resp = requests.post(
+                f"{self.config.server_url}/execute_windows",
+                json={"command": command},
+                timeout=self.config.timeout
+            )
+            # Check ALL responses (200 and non-200) for fail-safe errors.
+            # WAA returns 500 with a JSON "message" field for fail-safe,
+            # and sometimes 200 with stderr containing the exception.
+            response_text = resp.text
+            if resp.status_code == 200:
+                result = resp.json()
+                stderr = result.get("stderr", "")
+                stdout = result.get("stdout", "")
+                response_text = stderr + stdout
+                if stderr:
+                    logger.warning(f"Command stderr: {stderr}")
+            else:
+                logger.error(f"Execute failed ({resp.status_code}): {resp.text}")
+
+            # Detect PyAutoGUI fail-safe and attempt recovery (once per step)
+            if _is_failsafe_error(response_text):
+                logger.warning(
+                    "PyAutoGUI fail-safe detected; attempting recovery..."
+                )
+                if self._recover_failsafe():
+                    logger.info(
+                        "Fail-safe cleared; retrying command: %s", command
+                    )
+                    retry_resp = requests.post(
+                        f"{self.config.server_url}/execute_windows",
+                        json={"command": command},
+                        timeout=self.config.timeout,
+                    )
+                    if retry_resp.status_code == 200:
+                        retry_result = retry_resp.json()
+                        if retry_result.get("stderr"):
+                            logger.warning(
+                                f"Retry stderr: {retry_result['stderr']}"
+                            )
+                    else:
+                        logger.error(
+                            f"Retry failed ({retry_resp.status_code}): "
+                            f"{retry_resp.text}"
+                        )
+                else:
+                    logger.error(
+                        "Fail-safe recovery failed; step will proceed "
+                        "with degraded state"
+                    )
+            elif resp.status_code == 200:
+                logger.debug(f"Executed: {command}")
+        except Exception as e:
+            logger.error(f"Execute request failed: {e}")
+
     def step(
         self, action: BenchmarkAction
     ) -> tuple[BenchmarkObservation, bool, dict[str, Any]]:
@@ -555,8 +623,6 @@ class WAALiveAdapter(BenchmarkAdapter):
         Returns:
             Tuple of (observation, done, info).
         """
-        import requests
-
         self._step_count += 1
         self._actions.append(action)
 
@@ -565,61 +631,7 @@ class WAALiveAdapter(BenchmarkAdapter):
 
         # Execute command via /execute_windows (has access to computer object)
         if command:
-            logger.info("Sending command to WAA: %r", command)
-            try:
-                resp = requests.post(
-                    f"{self.config.server_url}/execute_windows",
-                    json={"command": command},
-                    timeout=self.config.timeout
-                )
-                # Check ALL responses (200 and non-200) for fail-safe errors.
-                # WAA returns 500 with a JSON "message" field for fail-safe,
-                # and sometimes 200 with stderr containing the exception.
-                response_text = resp.text
-                if resp.status_code == 200:
-                    result = resp.json()
-                    stderr = result.get("stderr", "")
-                    stdout = result.get("stdout", "")
-                    response_text = stderr + stdout
-                    if stderr:
-                        logger.warning(f"Command stderr: {stderr}")
-                else:
-                    logger.error(f"Execute failed ({resp.status_code}): {resp.text}")
-
-                # Detect PyAutoGUI fail-safe and attempt recovery (once per step)
-                if _is_failsafe_error(response_text):
-                    logger.warning(
-                        "PyAutoGUI fail-safe detected; attempting recovery..."
-                    )
-                    if self._recover_failsafe():
-                        logger.info(
-                            "Fail-safe cleared; retrying command: %s", command
-                        )
-                        retry_resp = requests.post(
-                            f"{self.config.server_url}/execute_windows",
-                            json={"command": command},
-                            timeout=self.config.timeout,
-                        )
-                        if retry_resp.status_code == 200:
-                            retry_result = retry_resp.json()
-                            if retry_result.get("stderr"):
-                                logger.warning(
-                                    f"Retry stderr: {retry_result['stderr']}"
-                                )
-                        else:
-                            logger.error(
-                                f"Retry failed ({retry_resp.status_code}): "
-                                f"{retry_resp.text}"
-                            )
-                    else:
-                        logger.error(
-                            "Fail-safe recovery failed; step will proceed "
-                            "with degraded state"
-                        )
-                elif resp.status_code == 200:
-                    logger.debug(f"Executed: {command}")
-            except Exception as e:
-                logger.error(f"Execute request failed: {e}")
+            self._send_command(command)
 
         # Wait for UI to settle
         time.sleep(self.config.action_delay)
@@ -861,8 +873,9 @@ class WAALiveAdapter(BenchmarkAdapter):
         """Execute a pixel-coordinate action and return (obs, done, info).
 
         Convenience method for RL agents that output raw pixel coordinates
-        instead of element IDs. Supports both absolute pixels and normalized
-        fractions.
+        instead of element IDs. Builds pyautogui commands directly and sends
+        them to WAA via /execute_windows, bypassing the element-based routing
+        in _translate_action/_translate_click_action entirely.
 
         Coordinates can be specified as:
         - Absolute pixels: pixel_action(x=885, y=22)
@@ -881,15 +894,108 @@ class WAALiveAdapter(BenchmarkAdapter):
             y_frac: Y as fraction of screen height (0.0-1.0). Overrides y.
 
         Returns:
-            Tuple of (observation, done, info) — same as step().
+            Tuple of (observation, done, info) -- same as step().
         """
         if x_frac is not None or y_frac is not None:
             w, h = self.screen_size
             x = int((x_frac or 0.0) * w)
             y = int((y_frac or 0.0) * h)
 
+        # Build the action for bookkeeping (step count, action history)
         action = BenchmarkAction(type=action_type, x=x, y=y, text=text, key=key)
-        return self.step(action)
+        self._step_count += 1
+        self._actions.append(action)
+
+        # Build pyautogui command directly -- no element resolution needed
+        command = self._build_pixel_command(
+            action_type=action_type, x=x, y=y, text=text, key=key,
+        )
+
+        if command:
+            self._send_command(command)
+
+        # Wait for UI to settle
+        time.sleep(self.config.action_delay)
+
+        # Check if done (error actions are also terminal)
+        done = (
+            action_type in ("done", "error")
+            or self._step_count >= self.config.max_steps
+        )
+
+        obs = self._get_observation()
+        info = {
+            "step": self._step_count,
+            "command": command,
+            "pixel_direct": True,
+        }
+
+        return obs, done, info
+
+    def _build_pixel_command(
+        self,
+        action_type: str,
+        x: int | float | None = None,
+        y: int | float | None = None,
+        text: str | None = None,
+        key: str | None = None,
+    ) -> str | None:
+        """Build a pyautogui command string from pixel coordinates.
+
+        This is the direct-pixel path used by pixel_action(). It generates
+        pyautogui commands using absolute pixel coordinates without consulting
+        the accessibility tree or element rects.
+
+        Args:
+            action_type: One of "click", "double_click", "right_click", "type",
+                "key", "scroll", "done", "error", "wait".
+            x: X pixel coordinate (absolute).
+            y: Y pixel coordinate (absolute).
+            text: Text to type (for action_type="type").
+            key: Key name (for action_type="key").
+
+        Returns:
+            Python command string for pyautogui, or None for terminal actions.
+        """
+        if action_type in ("done", "error"):
+            return None
+
+        if action_type == "wait":
+            return "import time; time.sleep(1)"
+
+        # Resolve pixel coordinates and clamp to safe margin
+        px = int(x) if x is not None else 0
+        py = int(y) if y is not None else 0
+        px, py = self._clamp_pixel_coords(px, py)
+
+        if action_type == "click":
+            return f"import pyautogui; pyautogui.click({px}, {py})"
+
+        if action_type == "double_click":
+            return f"import pyautogui; pyautogui.doubleClick({px}, {py})"
+
+        if action_type == "right_click":
+            return f"import pyautogui; pyautogui.rightClick({px}, {py})"
+
+        if action_type == "type":
+            type_body = _build_type_commands(text or "")
+            return (
+                f"import pyautogui; import time; "
+                f"pyautogui.click({px}, {py}); "
+                f"time.sleep(0.2); "
+                f"{type_body}"
+            )
+
+        if action_type == "key":
+            # Reuse the key translation logic
+            temp_action = BenchmarkAction(type="key", key=key)
+            return self._translate_key_action(temp_action)
+
+        if action_type == "scroll":
+            return f"import pyautogui; pyautogui.scroll(-3, x={px}, y={py})"
+
+        logger.warning(f"Unknown pixel action type: {action_type}")
+        return None
 
     def _get_observation(self) -> BenchmarkObservation:
         """Fetch current observation from WAA server.
