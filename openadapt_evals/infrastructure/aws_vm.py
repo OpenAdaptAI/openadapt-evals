@@ -45,6 +45,18 @@ INSTANCE_TYPE_FALLBACKS = [
     ("c5.metal", 4.080),
     ("m5a.xlarge", 0.172),  # Non-KVM fallback (won't run QEMU, for testing only)
 ]
+
+# GPU instance types for verl-agent RL training.
+# verl-agent requires 2+ GPUs for distributed VLM training.
+# p3.8xlarge: 4x V100 16GB NVLink — recommended for Qwen2.5-VL-3B training.
+# g5.12xlarge: 4x A10G 24GB — budget option (no NVLink).
+# p3.2xlarge: 1x V100 16GB — single-GPU baseline (tight for 3B).
+GPU_INSTANCE_TYPE_FALLBACKS = [
+    ("p3.8xlarge", 12.24),
+    ("g5.12xlarge", 7.48),
+    ("p3.2xlarge", 3.06),
+]
+
 # Regions to try in order of preference
 AWS_REGIONS = ["us-east-1", "us-west-2", "us-east-2", "eu-west-1"]
 
@@ -526,10 +538,16 @@ class AWSVMManager:
             logger.warning(f"Failed to set auto-shutdown for {name}: {e}")
             return False
 
-    def find_available_size_and_region(self) -> tuple[str, str, float]:
+    def find_available_size_and_region(
+        self, gpu: bool = False,
+    ) -> tuple[str, str, float]:
         """Find a working EC2 instance type and region.
 
         Checks instance type availability in each region.
+
+        Args:
+            gpu: If True, try GPU instances (for verl-agent training).
+                Otherwise try CPU/metal instances (for WAA evaluation).
 
         Returns:
             Tuple of (instance_type, region, cost_per_hour).
@@ -539,7 +557,8 @@ class AWSVMManager:
         """
         import boto3
 
-        for instance_type, cost in INSTANCE_TYPE_FALLBACKS:
+        fallbacks = GPU_INSTANCE_TYPE_FALLBACKS if gpu else INSTANCE_TYPE_FALLBACKS
+        for instance_type, cost in fallbacks:
             for region in AWS_REGIONS:
                 try:
                     ec2 = boto3.client("ec2", region_name=region)

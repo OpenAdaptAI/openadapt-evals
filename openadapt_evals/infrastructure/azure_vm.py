@@ -65,6 +65,18 @@ VM_SIZE_FALLBACKS = [
     ("Standard_D8ds_v4", 0.38),
     ("Standard_D8as_v5", 0.34),
 ]
+
+# GPU VM sizes for verl-agent RL training.
+# verl-agent requires 2+ GPUs for distributed VLM training.
+# NC48ads_A100_v4: 2x A100 80GB — recommended for Qwen2.5-VL-3B/7B.
+# NC24ads_A100_v4: 1x A100 80GB — single-GPU baseline.
+# NC12s_v3: 1x V100 16GB — budget option (tight for 3B).
+GPU_VM_SIZE_FALLBACKS = [
+    ("Standard_NC48ads_A100_v4", 11.04),
+    ("Standard_NC24ads_A100_v4", 5.52),
+    ("Standard_NC12s_v3", 1.50),
+]
+
 VM_REGIONS = ["centralus", "eastus", "westus2", "eastus2"]
 
 # Ubuntu 22.04 LTS image reference for Azure SDK
@@ -522,11 +534,17 @@ class AzureVMManager:
         )
         return result.returncode == 0
 
-    def find_available_size_and_region(self) -> tuple[str, str, float]:
+    def find_available_size_and_region(
+        self, gpu: bool = False,
+    ) -> tuple[str, str, float]:
         """Find a working VM size and region by creating a test VM.
 
         Tries size/region combinations until one succeeds, then cleans up
         the test VM.
+
+        Args:
+            gpu: If True, try GPU sizes (for verl-agent training).
+                Otherwise try CPU sizes (for WAA evaluation).
 
         Returns:
             Tuple of (vm_size, region, cost_per_hour).
@@ -534,7 +552,7 @@ class AzureVMManager:
         Raises:
             RuntimeError: If no available size/region found.
         """
-        sizes_to_try = VM_SIZE_FALLBACKS
+        sizes_to_try = GPU_VM_SIZE_FALLBACKS if gpu else VM_SIZE_FALLBACKS
 
         test_vm_to_cleanup = None
         try:

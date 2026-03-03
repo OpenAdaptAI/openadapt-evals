@@ -74,8 +74,13 @@ class VMProvider(Protocol):
         """Set auto-shutdown policy on a VM."""
         ...
 
-    def find_available_size_and_region(self) -> tuple[str, str, float]:
+    def find_available_size_and_region(
+        self, gpu: bool = False,
+    ) -> tuple[str, str, float]:
         """Find a working VM size and region.
+
+        Args:
+            gpu: If True, try GPU sizes for RL training.
 
         Returns:
             Tuple of (vm_size, region, cost_per_hour).
