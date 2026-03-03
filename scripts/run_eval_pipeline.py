@@ -126,12 +126,15 @@ def _generate_demos(
         if model:
             cmd.extend(["--model", model])
 
-        result = subprocess.run(cmd, timeout=600)
+        result = subprocess.run(cmd, timeout=600, capture_output=True, text=True)
         if result.returncode == 0:
             print(f"[demos]   -> done")
             generated.append(task_id)
         else:
             print(f"[demos]   ERROR: exit code {result.returncode}")
+            if result.stderr:
+                for line in result.stderr.strip().splitlines()[-3:]:
+                    print(f"[demos]   ! {line}")
 
     return generated
 
@@ -280,11 +283,15 @@ def _ensure_waa_ready(
 
     Recovery sequence:
     1. Probe -> OK: return True
-    2. Reconnect tunnel -> Probe -> OK: return True
+    2. Reconnect tunnel -> Probe -> OK: return True (skipped if vm_ip is empty)
     3. Wait for probe with timeout
     """
     if _probe(server) and (evaluate_url is None or _probe(evaluate_url)):
         return True
+
+    if not vm_ip:
+        print("  WAA unreachable and no VM IP available for tunnel reconnect")
+        return False
 
     print("  WAA unreachable, reconnecting tunnel...")
     tunnel_manager.stop_all_tunnels()
@@ -469,7 +476,7 @@ def _run_eval(
         if demo_path:
             cmd.extend(["--demo", str(demo_path.resolve())])
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
         elapsed = time.time() - task_start
 
         # Log captured output to a file and print summary
@@ -645,7 +652,7 @@ def main() -> int:
     missing_demos = [t for t in recorded_tasks if t not in existing_demos]
 
     # Tasks eligible for eval = those with demos (or will have demos after generation)
-    eval_tasks = recorded_tasks  # all recorded tasks (demos will be generated if missing)
+    eval_tasks = list(recorded_tasks)  # copy; demos will be generated for missing ones
 
     print(f"Pipeline Configuration")
     print(f"  Recordings: {recordings_dir} ({len(recorded_tasks)} task(s))")
