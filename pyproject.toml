@@ -82,6 +82,13 @@ wandb = [
     # Weights & Biases for experiment tracking
     "wandb>=0.16.0",
 ]
+verl = [
+    # veRL: Volcano Engine Reinforcement Learning for LLMs
+    # https://github.com/volcengine/verl
+    "verl>=0.3.0",
+    # NOTE: VAGEN (Visual Agent with Environment Grounding) is not published
+    # on PyPI. Install from source: https://github.com/RAGEN-AI/VAGEN
+]
 all = [
     "openadapt-evals[dev,waa,azure,aws,retrieval,viewer,wandb]",
 ]
