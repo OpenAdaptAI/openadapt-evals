@@ -166,110 +166,167 @@ def prepare_training_data(ip: str, group_size: int = 8, username: str = "ubuntu"
         raise RuntimeError("Data preparation failed")
 
 
-def patch_env_manager(ip: str, waa_server: str, task_id: str, max_steps: int = 15, username: str = "ubuntu"):
-    """Patch verl-agent's env_manager.py to support WAADesktopEnv.
+def register_waa_env(ip: str, waa_server: str, task_id: str, max_steps: int = 15, username: str = "ubuntu"):
+    """Register WAADesktopEnv in VAGEN's env registry on the GPU VM.
 
-    verl-agent uses a hardcoded if/elif chain in make_envs() to dispatch
-    environments by name. We add a 'waa' branch that creates our
-    WAADesktopEnv-based environment manager.
+    VAGEN uses a YAML registry (vagen/configs/env_registry.yaml) to dispatch
+    environments by name. We add a 'WAADesktop' entry pointing to our
+    WAADesktopEnv class. This is the VAGEN-native approach — no monkey-patching.
     """
-    logger.info("Patching verl-agent env_manager for WAA support...")
+    logger.info("Registering WAADesktopEnv in VAGEN env registry...")
 
-    # Write the patch script to the remote VM
-    patch_script = f'''
-import os, sys
+    register_script = '''
+import os, sys, yaml
 
-env_manager_path = os.path.expanduser(
-    "~/verl-agent/agent_system/environments/env_manager.py"
-)
+# Find env_registry.yaml in VAGEN installation
+candidates = [
+    os.path.expanduser("~/verl-agent/vagen/configs/env_registry.yaml"),
+    os.path.expanduser("~/VAGEN/vagen/configs/env_registry.yaml"),
+]
 
-with open(env_manager_path, "r") as f:
-    content = f.read()
+registry_path = None
+for c in candidates:
+    if os.path.exists(c):
+        registry_path = c
+        break
 
-# Check if already patched
-if "waa" in content.lower() and "WAADesktopEnv" in content:
-    print("env_manager.py already patched for WAA")
+if registry_path is None:
+    # Try finding it via the vagen package
+    try:
+        import vagen
+        pkg_dir = os.path.dirname(vagen.__file__)
+        registry_path = os.path.join(pkg_dir, "configs", "env_registry.yaml")
+    except ImportError:
+        pass
+
+if registry_path is None or not os.path.exists(registry_path):
+    print("ERROR: Cannot find vagen/configs/env_registry.yaml")
+    print("Searched:", candidates)
+    sys.exit(1)
+
+with open(registry_path, "r") as f:
+    config = yaml.safe_load(f) or {}
+
+registry = config.get("env_registry", {})
+
+if "WAADesktop" in registry:
+    print(f"WAADesktop already registered in {registry_path}")
     sys.exit(0)
 
-# Find the else branch that exits and add our elif before it
-patch = """
-    elif "waa" in config.env.env_name.lower():
-        # WAA Desktop Automation Environment (openadapt-evals)
-        from openadapt_evals.adapters.verl_env import WAADesktopEnv
-        from functools import partial
-        import asyncio
+registry["WAADesktop"] = "openadapt_evals.adapters.verl_env.WAADesktopEnv"
+config["env_registry"] = registry
 
-        server_url = getattr(config.env, "waa", {{}}).get("server_url", "{waa_server}")
-        task_id = getattr(config.env, "waa", {{}}).get("task_id", "{task_id}")
-        max_steps = config.env.max_steps
+with open(registry_path, "w") as f:
+    yaml.dump(config, f, default_flow_style=False)
 
-        env_config = {{
-            "server_url": server_url,
-            "task_id": task_id,
-            "max_steps": max_steps,
-            "evaluate_at_done": True,
-            "action_type": "fractional",
-        }}
-
-        # Build vectorized environments using Ray
-        class WAAEnvWrapper:
-            """Sync wrapper for WAADesktopEnv's async interface."""
-            def __init__(self, config):
-                self.env = WAADesktopEnv(config)
-                self._loop = None
-
-            def _get_loop(self):
-                if self._loop is None or self._loop.is_closed():
-                    self._loop = asyncio.new_event_loop()
-                return self._loop
-
-            def reset(self, seed=0):
-                return self._get_loop().run_until_complete(self.env.reset(seed))
-
-            def step(self, action):
-                return self._get_loop().run_until_complete(self.env.step(action))
-
-            def close(self):
-                if self._loop and not self._loop.is_closed():
-                    self._loop.run_until_complete(self.env.close())
-                    self._loop.close()
-
-        # For now, use a simple non-vectorized approach
-        # Full Ray vectorization can be added once basic training works
-        print(f"WAA environment: server={{server_url}}, task={{task_id}}, max_steps={{max_steps}}")
-        print("NOTE: WAA env integration is experimental. See openadapt-evals docs.")
-
-        # Create minimal env manager compatible with verl-agent's expected interface
-        env_wrapper = WAAEnvWrapper(env_config)
-        # Return a placeholder - the actual integration requires implementing
-        # EnvironmentManagerBase, which we'll do as a next step
-        raise NotImplementedError(
-            "WAA environment manager integration is in progress. "
-            "The env dispatch is patched but EnvironmentManagerBase "
-            "adapter is needed. See openadapt-evals PR #87."
-        )
-"""
-
-# Insert before the else branch
-old = '    else:\\n        print("Environment not supported")'
-if old in content:
-    content = content.replace(old, patch + '    else:\\n        print("Environment not supported")')
-    with open(env_manager_path, "w") as f:
-        f.write(content)
-    print("env_manager.py patched successfully")
-else:
-    # Try alternate pattern matching
-    print("WARNING: Could not find expected else branch in env_manager.py")
-    print("Manual patching may be required")
-    sys.exit(1)
+print(f"Registered WAADesktop in {registry_path}")
+print(f"Registry now contains: {list(registry.keys())}")
 '''
 
-    _ssh_run(
+    result = _ssh_run(
         ip,
-        f"conda run -n verl-agent python3 -c '{patch_script}'",
+        f"conda run -n verl-agent python3 -c '{register_script}'",
         username=username,
         stream=True,
     )
+    if result.returncode != 0:
+        logger.warning("Registry update failed; trying programmatic registration...")
+        # Fallback: use our register_in_vagen() helper
+        fallback_script = '''
+import sys
+sys.path.insert(0, ".")
+from openadapt_evals.adapters.verl_env import register_in_vagen
+if not register_in_vagen():
+    print("WARNING: Could not register WAADesktopEnv. Manual registration required.")
+    print("Add to vagen/configs/env_registry.yaml:")
+    print("  WAADesktop: openadapt_evals.adapters.verl_env.WAADesktopEnv")
+'''
+        _ssh_run(
+            ip,
+            f"conda run -n verl-agent python3 -c '{fallback_script}'",
+            username=username,
+            stream=True,
+        )
+
+
+def _generate_training_config(
+    ip: str,
+    waa_server: str,
+    task_id: str,
+    algorithm: str,
+    model: str,
+    n_gpus: int,
+    max_turns: int,
+    group_size: int,
+    epochs: int,
+    username: str,
+) -> str:
+    """Generate a VAGEN training config YAML on the GPU VM.
+
+    Returns the remote path to the generated config file.
+    """
+    import json
+
+    config = {
+        "model": {
+            "name": model,
+        },
+        "envs": [
+            {
+                "name": "WAADesktop",
+                "n_envs": group_size,
+                "data_source": "waa",
+                "seed": [1, 100, 1],
+                "max_turns": max_turns,
+                "response_length_per_turn": 512,
+                "config": {
+                    "server_url": waa_server,
+                    "task_id": task_id,
+                    "max_steps": max_turns,
+                    "evaluate_at_done": True,
+                    "action_type": "fractional",
+                },
+            }
+        ],
+        "algorithm": {
+            "name": algorithm,
+            "kl_coef": 0.0,
+            "epsilon": 0.2,
+            "gamma": 1.0 if algorithm != "gigpo" else 0.95,
+        },
+        "trainer": {
+            "total_epochs": epochs,
+            "n_gpus_per_node": n_gpus,
+            "micro_batch_size": 4,
+            "gradient_accumulation_steps": 2,
+            "test_freq": 5,
+            "experiment_name": f"{algorithm}_waa_desktop",
+            "project_name": "openadapt-waa-rl",
+            "logger": ["console", "wandb"],
+        },
+        "rollout": {
+            "temperature": 0.7,
+            "top_p": 0.95,
+            "mode": "async",
+        },
+    }
+
+    # Upload config as YAML
+    config_script = f"""
+import yaml, os
+config = {json.dumps(config)}
+path = os.path.expanduser("~/waa_training_config.yaml")
+with open(path, "w") as f:
+    yaml.dump(config, f, default_flow_style=False)
+print(f"Training config written to {{path}}")
+"""
+    _ssh_run(
+        ip,
+        f"conda run -n verl-agent python3 -c '{config_script}'",
+        username=username,
+        stream=True,
+    )
+    return "~/waa_training_config.yaml"
 
 
 def launch_training(
@@ -284,31 +341,47 @@ def launch_training(
     epochs: int = 100,
     username: str = "ubuntu",
 ):
-    """Launch verl-agent training on the GPU VM.
+    """Launch VAGEN training on the GPU VM.
 
-    The training connects to the WAA server via HTTP for environment
-    interaction (reset, step, evaluate).
+    VAGEN uses GymImageEnv environments with a YAML registry. Our
+    WAADesktopEnv is registered as 'WAADesktop' and connects to the
+    WAA server via HTTP for environment interaction.
 
-    NOTE: verl-agent uses a hardcoded env dispatch in make_envs(). This
-    function patches it to support our WAADesktopEnv before launching.
-    The full EnvironmentManagerBase adapter is still TODO — this will
-    raise NotImplementedError on the first training attempt. See the
-    decision doc for the integration roadmap.
+    The training flow:
+    1. Register WAADesktopEnv in VAGEN's env registry
+    2. Prepare training data (parquet files for VAGEN's dataset loader)
+    3. Generate training config YAML
+    4. Launch training via VAGEN's entry point
     """
-    # Step 1: Prepare parquet data files (required by verl-agent)
+    # Step 1: Register WAADesktopEnv in VAGEN's env registry
+    register_waa_env(ip, waa_server, task_id, max_steps=max_turns, username=username)
+
+    # Step 2: Prepare parquet data files (required by VAGEN's AgenticDataset)
     prepare_training_data(ip, group_size=group_size, username=username)
 
-    # Step 2: Patch env_manager to recognize 'waa' env name
-    patch_env_manager(ip, waa_server, task_id, max_steps=max_turns, username=username)
+    # Step 3: Generate training config
+    config_path = _generate_training_config(
+        ip=ip,
+        waa_server=waa_server,
+        task_id=task_id,
+        algorithm=algorithm,
+        model=model,
+        n_gpus=n_gpus,
+        max_turns=max_turns,
+        group_size=group_size,
+        epochs=epochs,
+        username=username,
+    )
 
-    # Step 3: Build the training command with validated Hydra overrides
-    # Config paths validated against verl-agent's ppo_trainer.yaml schema.
-    # See docs/verl_agent_decision.md for the validation report.
+    # Step 4: Launch training
+    # VAGEN uses verl's trainer entry point with additional env/agent config.
+    # The exact command may vary by VAGEN version. The config YAML provides
+    # the env spec; Hydra overrides configure the verl training loop.
     train_cmd = f"""
 cd ~/verl-agent && \\
 conda run -n verl-agent python3 -m verl.trainer.main_ppo \\
     algorithm.adv_estimator={algorithm} \\
-    algorithm.gamma=0.95 \\
+    algorithm.gamma={'0.95' if algorithm == 'gigpo' else '1.0'} \\
     actor_rollout_ref.model.path={model} \\
     actor_rollout_ref.rollout.name=vllm \\
     actor_rollout_ref.rollout.tensor_model_parallel_size={n_gpus} \\
@@ -316,11 +389,6 @@ conda run -n verl-agent python3 -m verl.trainer.main_ppo \\
     actor_rollout_ref.rollout.enable_chunked_prefill=False \\
     actor_rollout_ref.actor.ppo_mini_batch_size=64 \\
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=8 \\
-    env.env_name=waa_desktop \\
-    env.max_steps={max_turns} \\
-    env.rollout.n={group_size} \\
-    env.waa.server_url={waa_server} \\
-    env.waa.task_id={task_id} \\
     data.train_files=$HOME/data/verl-agent/visual/train.parquet \\
     data.val_files=$HOME/data/verl-agent/visual/test.parquet \\
     data.train_batch_size={group_size} \\
@@ -335,7 +403,8 @@ conda run -n verl-agent python3 -m verl.trainer.main_ppo \\
     trainer.test_freq=5 \\
     trainer.experiment_name={algorithm}_waa_desktop \\
     trainer.logger=['console','wandb'] \\
-    trainer.project_name=openadapt-waa-rl
+    trainer.project_name=openadapt-waa-rl \\
+    +env_config={config_path}
 """
     logger.info("Launching training with %s on %d GPU(s)...", algorithm, n_gpus)
     logger.info("Model: %s", model)

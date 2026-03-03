@@ -12,10 +12,14 @@ import pytest
 
 from openadapt_evals.adapters.rl_env import RLEnvironment
 from openadapt_evals.adapters.verl_env import (
+    ENV_CLASS_PATH,
+    ENV_REGISTRY_KEY,
     WAADesktopEnv,
     _ACTION_PATTERN,
     _build_obs_dict,
     _parse_action_str,
+    generate_env_spec,
+    register_in_vagen,
 )
 from openadapt_evals.adapters.waa.mock import WAAMockAdapter
 
@@ -299,3 +303,63 @@ class TestWAADesktopEnv:
         asyncio.run(env.reset(seed=42))
         _, _, _, info = asyncio.run(env.step("random garbage"))
         assert info["is_action_valid"] is False
+
+
+# --- VAGEN registration helpers tests ---
+
+
+class TestGenerateEnvSpec:
+    def test_default_spec(self):
+        spec = generate_env_spec()
+        assert spec["name"] == ENV_REGISTRY_KEY
+        assert spec["n_envs"] == 8
+        assert spec["max_turns"] == 15
+        assert spec["config"]["server_url"] == "http://localhost:5001"
+        assert spec["config"]["action_type"] == "fractional"
+
+    def test_custom_spec(self):
+        spec = generate_env_spec(
+            server_url="http://10.0.0.5:5001",
+            task_id="abc-123",
+            n_envs=4,
+            max_turns=20,
+        )
+        assert spec["config"]["server_url"] == "http://10.0.0.5:5001"
+        assert spec["config"]["task_id"] == "abc-123"
+        assert spec["n_envs"] == 4
+        assert spec["max_turns"] == 20
+        assert spec["config"]["max_steps"] == 20
+
+
+class TestRegisterInVagen:
+    def test_register_creates_yaml_entry(self, tmp_path):
+        """Test that register_in_vagen adds entry to env_registry.yaml."""
+        registry = tmp_path / "env_registry.yaml"
+        registry.write_text("env_registry:\n  Sokoban: vagen.envs.sokoban.Sokoban\n")
+
+        result = register_in_vagen(registry)
+        assert result is True
+
+        content = registry.read_text()
+        assert ENV_REGISTRY_KEY in content
+        assert ENV_CLASS_PATH in content
+        # Existing entries preserved
+        assert "Sokoban" in content
+
+    def test_register_idempotent(self, tmp_path):
+        """Test that registering twice doesn't duplicate the entry."""
+        registry = tmp_path / "env_registry.yaml"
+        registry.write_text(
+            f"env_registry:\n  {ENV_REGISTRY_KEY}: {ENV_CLASS_PATH}\n"
+        )
+
+        result = register_in_vagen(registry)
+        assert result is True
+        # Key should appear exactly once as a YAML key (indented with colon)
+        content = registry.read_text()
+        assert content.count(f"  {ENV_REGISTRY_KEY}:") == 1
+
+    def test_register_no_file_returns_false(self):
+        """Test that missing file returns False."""
+        result = register_in_vagen("/nonexistent/path/env_registry.yaml")
+        assert result is False

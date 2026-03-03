@@ -250,28 +250,46 @@ By delegating to verl-agent, we avoid building and maintaining:
 
 ---
 
-## Integration Gap: verl-agent Environment Protocol
+## Integration: VAGEN Environment Registry
 
 Our `WAADesktopEnv` implements VAGEN's `GymImageEnv` protocol (async
-`reset`/`step`/`close`). However, verl-agent uses a **different, synchronous
-environment protocol** (`EnvironmentManagerBase`) with a **hardcoded dispatch**
-in `agent_system/environments/env_manager.py` — you cannot pass a Python class
-path as `env.env_name`.
+`reset`/`step`/`close`/`system_prompt`), which is the **native environment
+interface** for VAGEN. No additional adapter is needed.
 
-To integrate with verl-agent, we need to:
+**Note**: Earlier analysis referenced an `EnvironmentManagerBase` ABC and a
+`make_envs()` dispatch function. These do not exist in the current VAGEN
+codebase. The actual architecture uses:
 
-1. **Patch `make_envs()`** — add an `elif "waa" in config.env.env_name.lower()`
-   branch (automated by `scripts/train_verl_e2e.py`)
-2. **Implement `EnvironmentManagerBase`** — wraps our async `WAADesktopEnv` in
-   verl-agent's sync vectorized env interface (`reset`, `step`, `build_text_obs`,
-   `success_evaluator`)
-3. **Prepare parquet data** — verl-agent requires `data.train_files` and
-   `data.val_files` even for env-based training
-4. **Use env-specific config** — `env.waa.server_url` instead of `env.env_kwargs`
+- `GymBaseEnv` → `GymImageEnv` — the environment ABC (which we implement)
+- `vagen/envs/registry.py` — YAML-based env registry for dispatch
+- `GymAgentLoop` — training-time rollout orchestrator that instantiates envs
 
-The `GymImageEnv` protocol remains our **portable interface**. The verl-agent
-`EnvironmentManagerBase` adapter is a thin sync wrapper around it. If we switch
-to a different framework, only the wrapper changes.
+Integration steps (automated by `scripts/train_verl_e2e.py`):
+
+1. **Register in VAGEN's env registry** — add `WAADesktop:
+   openadapt_evals.adapters.verl_env.WAADesktopEnv` to
+   `vagen/configs/env_registry.yaml`. This is the only configuration needed.
+2. **Prepare parquet data** — VAGEN's `AgenticDataset` requires train/val
+   parquet files even for env-based training
+3. **Configure training** — provide env spec (server URL, task ID, max turns)
+   via the VAGEN training YAML (see `configs/train_waa_vagen.yaml`)
+
+The `GymImageEnv` protocol is our **portable interface**. If we switch to a
+different framework, only the ~250-line `WAADesktopEnv` adapter changes. The
+environment, evaluation, and infrastructure code remain untouched.
+
+### VAGEN Remote Env Pattern (Optional)
+
+For production deployments where the WAA VM and GPU VM have poor connectivity,
+VAGEN provides a remote env service pattern:
+
+- **Server** (WAA VM): `BaseGymHandler` + `build_gym_service()` → FastAPI
+- **Client** (GPU VM): `GymImageEnvClient` (registered as `RemoteEnv`)
+
+This adds HTTP session management, multipart encoding (JSON + images), and
+automatic retry/failover. Currently unnecessary since `WAADesktopEnv` already
+handles remote connectivity via the WAA Flask API, but documented for future
+scaling to multi-VM env pools.
 
 ---
 

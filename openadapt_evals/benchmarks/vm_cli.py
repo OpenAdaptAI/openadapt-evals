@@ -7919,24 +7919,26 @@ def cmd_gpu_train(args):
                 print(f"ERROR: Setup failed")
                 return 1
 
-    # Launch training via the E2E script (handles data prep, env patching, config)
+    # Launch training via the E2E script (handles data prep, env registration, config)
     # Import here to avoid circular deps
     import sys
     sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts"))
-    from train_verl_e2e import prepare_training_data, patch_env_manager
+    from train_verl_e2e import prepare_training_data, register_waa_env
+
+    print("Registering WAADesktopEnv in VAGEN env registry...")
+    register_waa_env(ip, args.waa_server, args.task_id, username=username)
 
     print("Preparing training data...")
     prepare_training_data(ip, group_size=8, username=username)
 
-    print("Patching verl-agent for WAA environment...")
-    patch_env_manager(ip, args.waa_server, args.task_id, username=username)
-
-    # Validated Hydra config (see docs/verl_agent_decision.md)
+    # Hydra overrides for verl training loop + VAGEN env config.
+    # WAADesktopEnv is registered in VAGEN's env_registry.yaml as 'WAADesktop'.
+    # The env connects to WAA server via HTTP (GymImageEnv protocol).
     train_cmd = (
         f"cd ~/verl-agent && "
         f"conda run -n verl-agent python3 -m verl.trainer.main_ppo "
         f"algorithm.adv_estimator={args.algorithm} "
-        f"algorithm.gamma=0.95 "
+        f"algorithm.gamma={'0.95' if args.algorithm == 'gigpo' else '1.0'} "
         f"actor_rollout_ref.model.path={args.model} "
         f"actor_rollout_ref.rollout.name=vllm "
         f"actor_rollout_ref.rollout.tensor_model_parallel_size={args.n_gpus} "
@@ -7944,11 +7946,6 @@ def cmd_gpu_train(args):
         f"actor_rollout_ref.rollout.enable_chunked_prefill=False "
         f"actor_rollout_ref.actor.ppo_mini_batch_size=64 "
         f"actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=8 "
-        f"env.env_name=waa_desktop "
-        f"env.max_steps=15 "
-        f"env.rollout.n=8 "
-        f"env.waa.server_url={args.waa_server} "
-        f"env.waa.task_id={args.task_id} "
         f"data.train_files=$HOME/data/verl-agent/visual/train.parquet "
         f"data.val_files=$HOME/data/verl-agent/visual/test.parquet "
         f"data.train_batch_size=8 "
