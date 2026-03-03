@@ -1182,6 +1182,24 @@ class WAALiveAdapter(BenchmarkAdapter):
                 pass  # Best-effort; don't fail reset if notification kill fails
         logger.debug("Dismissed system notifications")
 
+    def _clamp_pixel_coords(self, x: int, y: int) -> tuple[int, int]:
+        """Clamp pixel coordinates to a safe margin from screen edges.
+
+        Prevents PyAutoGUI fail-safe by keeping the mouse at least 5px from
+        any screen corner.  If both coordinates are 0, the action would
+        target the top-left corner -- the most common fail-safe trigger.
+
+        Returns:
+            Clamped (x, y) tuple.
+        """
+        screen_w, screen_h = self._actual_screen_size or (
+            self.config.screen_width, self.config.screen_height,
+        )
+        margin = 5
+        x = max(margin, min(x, screen_w - margin))
+        y = max(margin, min(y, screen_h - margin))
+        return x, y
+
     def _translate_action(self, action: BenchmarkAction) -> str | None:
         """Translate BenchmarkAction to element-based command for WAA's Computer.
 
@@ -1242,29 +1260,41 @@ class WAALiveAdapter(BenchmarkAdapter):
             return f"import pyautogui; pyautogui.scroll({clicks})"
 
         if action.type == "drag":
-            # Get start position
-            start_x, start_y = 0, 0
+            # Get start position -- skip drag entirely if no coordinates
+            start_x, start_y = None, None
             if action.target_node_id is not None:
                 elem_id = str(action.target_node_id)
                 if elem_id in self._current_rects:
                     rect = self._current_rects[elem_id]
                     start_x = (rect[0] + rect[2]) // 2
                     start_y = (rect[1] + rect[3]) // 2
-            elif action.x is not None and action.y is not None:
+            if start_x is None and action.x is not None and action.y is not None:
                 screen_w, screen_h = self._actual_screen_size or (self.config.screen_width, self.config.screen_height)
                 start_x = action.x if not isinstance(action.x, float) or action.x > 1 else int(action.x * screen_w)
                 start_y = action.y if not isinstance(action.y, float) or action.y > 1 else int(action.y * screen_h)
 
             # Get end position
             screen_w, screen_h = self._actual_screen_size or (self.config.screen_width, self.config.screen_height)
-            end_x = action.end_x or 0
-            end_y = action.end_y or 0
-            if isinstance(end_x, float) and 0 <= end_x <= 1:
+            end_x = action.end_x
+            end_y = action.end_y
+            if end_x is not None and isinstance(end_x, float) and 0 <= end_x <= 1:
                 end_x = int(end_x * screen_w)
-            if isinstance(end_y, float) and 0 <= end_y <= 1:
+            if end_y is not None and isinstance(end_y, float) and 0 <= end_y <= 1:
                 end_y = int(end_y * screen_h)
 
-            return f"import pyautogui; pyautogui.moveTo({int(start_x)}, {int(start_y)}); pyautogui.drag({int(end_x - start_x)}, {int(end_y - start_y)}, duration=0.5)"
+            # Skip drag if coordinates are missing or both are at origin
+            if start_x is None or end_x is None or end_y is None:
+                logger.warning("Drag action missing coordinates, skipping")
+                return "pass  # drag skipped: missing coordinates"
+            if int(start_x) == 0 and int(start_y) == 0 and int(end_x) == 0 and int(end_y) == 0:
+                logger.warning("Drag action has all-zero coordinates, skipping")
+                return "pass  # drag skipped: all-zero coordinates"
+
+            # Clamp to safe margin
+            start_x, start_y = self._clamp_pixel_coords(int(start_x), int(start_y))
+            end_x, end_y = self._clamp_pixel_coords(int(end_x), int(end_y))
+
+            return f"import pyautogui; pyautogui.moveTo({start_x}, {start_y}); pyautogui.drag({end_x - start_x}, {end_y - start_y}, duration=0.5)"
 
         logger.warning(f"Unknown action type: {action.type}")
         return None
@@ -1294,6 +1324,7 @@ class WAALiveAdapter(BenchmarkAdapter):
                 rect = self._current_rects[elem_id]
                 cx = (rect[0] + rect[2]) // 2
                 cy = (rect[1] + rect[3]) // 2
+                cx, cy = self._clamp_pixel_coords(cx, cy)
                 return f"import pyautogui; pyautogui.{pyautogui_method}({cx}, {cy})"
             else:
                 logger.warning(f"Element ID '{elem_id}' not found in rects, falling back to coordinates")
@@ -1315,7 +1346,8 @@ class WAALiveAdapter(BenchmarkAdapter):
         if isinstance(y, float) and 0 <= y <= 1:
             y = int(y * screen_h)
 
-        return f"import pyautogui; pyautogui.{pyautogui_method}({int(x)}, {int(y)})"
+        x, y = self._clamp_pixel_coords(int(x), int(y))
+        return f"import pyautogui; pyautogui.{pyautogui_method}({x}, {y})"
 
     def _translate_key_action(self, action: BenchmarkAction) -> str:
         """Translate key press action using pyautogui (no grounding needed)."""
