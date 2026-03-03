@@ -78,6 +78,9 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
 
     DEFAULT_MODEL = "claude-sonnet-4-6"
 
+    # Minimum normalized coordinate to avoid PyAutoGUI fail-safe (top-left corner)
+    _COORD_EPS = 0.005  # ~6px at 1280, ~4px at 720
+
     def __init__(
         self,
         api_key: str | None = None,
@@ -122,6 +125,16 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
             logger.info(
                 f"Demo provided ({len(self.demo)} chars) - persists across all steps"
             )
+
+    def _clamp_coord(self, x_norm: float, y_norm: float) -> tuple[float, float]:
+        """Clamp normalized coordinates away from (0,0) to avoid fail-safe."""
+        if x_norm < self._COORD_EPS and y_norm < self._COORD_EPS:
+            logger.warning(
+                f"Clamping near-zero coordinates ({x_norm:.4f}, {y_norm:.4f}) "
+                f"to ({self._COORD_EPS}, {self._COORD_EPS}) to avoid fail-safe"
+            )
+            return (self._COORD_EPS, self._COORD_EPS)
+        return (x_norm, y_norm)
 
     def reset(self) -> None:
         """Reset agent state between episodes."""
@@ -178,7 +191,17 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
                 tool_result = self._build_tool_result(
                     screenshot_b64, self._last_tool_use_id
                 )
-                self._messages.append({"role": "user", "content": [tool_result]})
+                content: list[dict[str, Any]] = [tool_result]
+                # Re-inject demo at every step so it doesn't drift out of context
+                if self.demo:
+                    content.append({
+                        "type": "text",
+                        "text": (
+                            f"DEMONSTRATION (follow this pattern, you are at step "
+                            f"{self._step_count}):\n---\n{self.demo}\n---"
+                        ),
+                    })
+                self._messages.append({"role": "user", "content": content})
 
         # Loop: call API, and if Claude requests a screenshot/wait, send the
         # screenshot back and call again (up to MAX_INTERNAL_RETRIES times)
@@ -374,8 +397,9 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
             "triple_click",
         ):
             coord = tool_input.get("coordinate", [0, 0])
-            x_norm = coord[0] / self.display_width
-            y_norm = coord[1] / self.display_height
+            x_norm, y_norm = self._clamp_coord(
+                coord[0] / self.display_width, coord[1] / self.display_height
+            )
             ba_type = "click"
             raw["click_variant"] = action_type
             return BenchmarkAction(
@@ -414,25 +438,33 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
 
         # Drag action
         if action_type == "left_click_drag":
-            start = tool_input.get("startCoordinate", [0, 0])
-            end = tool_input.get("endCoordinate", [0, 0])
+            # Claude's computer_use API uses snake_case field names:
+            #   start_coordinate: [x, y]  (drag start)
+            #   coordinate: [x, y]        (drag end)
+            start = tool_input.get("start_coordinate", [0, 0])
+            end = tool_input.get("coordinate", [0, 0])
+            sx, sy = self._clamp_coord(
+                start[0] / self.display_width, start[1] / self.display_height
+            )
+            ex, ey = self._clamp_coord(
+                end[0] / self.display_width, end[1] / self.display_height
+            )
             return BenchmarkAction(
                 type="drag",
-                x=start[0] / self.display_width,
-                y=start[1] / self.display_height,
-                end_x=end[0] / self.display_width,
-                end_y=end[1] / self.display_height,
+                x=sx, y=sy, end_x=ex, end_y=ey,
                 raw_action=raw,
             )
 
         # Mouse move — treat as a click with no effect for BenchmarkAction
         if action_type == "mouse_move":
             coord = tool_input.get("coordinate", [0, 0])
+            x_norm, y_norm = self._clamp_coord(
+                coord[0] / self.display_width, coord[1] / self.display_height
+            )
             raw["is_mouse_move"] = True
             return BenchmarkAction(
                 type="click",
-                x=coord[0] / self.display_width,
-                y=coord[1] / self.display_height,
+                x=x_norm, y=y_norm,
                 raw_action=raw,
             )
 

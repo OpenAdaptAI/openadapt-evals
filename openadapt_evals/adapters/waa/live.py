@@ -215,43 +215,33 @@ def _is_failsafe_error(text: str) -> bool:
     return "failsafeexception" in lower or "fail-safe triggered" in lower
 
 
-def _escape_for_pyautogui(text: str) -> str:
-    """Escape text for embedding in a single-quoted Python string literal."""
-    return (
-        text
-        .replace("\\", "\\\\")
-        .replace("'", "\\'")
-        .replace("\t", "\\t")
-        .replace("\r", "")
-    )
-
-
 def _build_type_commands(text: str) -> str:
     """Build pyautogui command body to type text, handling embedded newlines.
 
-    ``pyautogui.write()`` cannot handle literal newline characters — the
-    generated Python command string becomes an unterminated string literal
-    when executed via ``exec()``.  This function splits the text on newlines
-    and interleaves ``pyautogui.write()`` with ``pyautogui.press('enter')``.
+    Uses ``repr()`` for string escaping instead of manual character-by-character
+    replacement.  This eliminates the entire class of escaping bugs (newlines,
+    tabs, quotes, unicode, null bytes, etc.) because ``repr()`` is Python's own
+    mechanism for producing valid string literals from any string content —
+    the same principle as parameterized SQL queries vs string concatenation.
+
+    Newlines are handled semantically: split into separate ``write()`` calls
+    with ``press('enter')`` between them, since the agent intends "press Enter."
 
     Returns:
         A pyautogui command body string (without ``import pyautogui;`` prefix).
         Callers must prepend the import themselves.
     """
+    text = text.replace("\r", "")
     segments = text.split("\n")
     if len(segments) == 1:
-        escaped = _escape_for_pyautogui(text)
-        return f"pyautogui.write('{escaped}', interval=0.02)"
+        return f"pyautogui.write({repr(text)}, interval=0.02)"
 
     commands: list[str] = []
     for i, seg in enumerate(segments):
-        # Skip empty trailing segment from a trailing newline
-        if seg or i < len(segments) - 1:
-            escaped = _escape_for_pyautogui(seg)
-            if escaped:
-                commands.append(f"pyautogui.write('{escaped}', interval=0.02)")
-            if i < len(segments) - 1:
-                commands.append("pyautogui.press('enter')")
+        if seg:
+            commands.append(f"pyautogui.write({repr(seg)}, interval=0.02)")
+        if i < len(segments) - 1:
+            commands.append("pyautogui.press('enter')")
     return "; ".join(commands) if commands else "pass"
 
 
@@ -575,6 +565,7 @@ class WAALiveAdapter(BenchmarkAdapter):
 
         # Execute command via /execute_windows (has access to computer object)
         if command:
+            logger.info("Sending command to WAA: %r", command)
             try:
                 resp = requests.post(
                     f"{self.config.server_url}/execute_windows",
