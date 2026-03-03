@@ -1,6 +1,21 @@
 # CHANGELOG
 
 
+## v0.23.1 (2026-03-03)
+
+### Bug Fixes
+
+- Add coordinate clamping and drag safety to prevent fail-safe triggers
+  ([#74](https://github.com/OpenAdaptAI/openadapt-evals/pull/74),
+  [`92c83d2`](https://github.com/OpenAdaptAI/openadapt-evals/commit/92c83d2f314fceed30a4c4992e7a1561be9688f1))
+
+- Add _clamp_pixel_coords() to keep mouse 5px from screen edges - Apply clamping in
+  _translate_click_action (element and coordinate paths) - Fix drag handler: skip drags with None or
+  all-zero coordinates - Apply clamping to drag start/end coordinates
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.23.0 (2026-03-03)
 
 ### Features
