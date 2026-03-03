@@ -212,7 +212,7 @@ def _is_failsafe_error(text: str) -> bool:
         True if the text indicates a fail-safe trigger, False otherwise.
     """
     lower = text.lower()
-    return "failsafeexception" in lower
+    return "failsafeexception" in lower or "fail-safe triggered" in lower
 
 
 def _escape_for_pyautogui(text: str) -> str:
@@ -581,47 +581,52 @@ class WAALiveAdapter(BenchmarkAdapter):
                     json={"command": command},
                     timeout=self.config.timeout
                 )
-                if resp.status_code != 200:
-                    logger.error(f"Execute failed ({resp.status_code}): {resp.text}")
-                else:
+                # Check ALL responses (200 and non-200) for fail-safe errors.
+                # WAA returns 500 with a JSON "message" field for fail-safe,
+                # and sometimes 200 with stderr containing the exception.
+                response_text = resp.text
+                if resp.status_code == 200:
                     result = resp.json()
                     stderr = result.get("stderr", "")
                     stdout = result.get("stdout", "")
                     response_text = stderr + stdout
                     if stderr:
                         logger.warning(f"Command stderr: {stderr}")
-                    # Detect PyAutoGUI fail-safe and attempt recovery (once per step)
-                    if _is_failsafe_error(response_text):
-                        logger.warning(
-                            "PyAutoGUI fail-safe detected; attempting recovery..."
+                else:
+                    logger.error(f"Execute failed ({resp.status_code}): {resp.text}")
+
+                # Detect PyAutoGUI fail-safe and attempt recovery (once per step)
+                if _is_failsafe_error(response_text):
+                    logger.warning(
+                        "PyAutoGUI fail-safe detected; attempting recovery..."
+                    )
+                    if self._recover_failsafe():
+                        logger.info(
+                            "Fail-safe cleared; retrying command: %s", command
                         )
-                        if self._recover_failsafe():
-                            logger.info(
-                                "Fail-safe cleared; retrying command: %s", command
-                            )
-                            retry_resp = requests.post(
-                                f"{self.config.server_url}/execute_windows",
-                                json={"command": command},
-                                timeout=self.config.timeout,
-                            )
-                            if retry_resp.status_code == 200:
-                                retry_result = retry_resp.json()
-                                if retry_result.get("stderr"):
-                                    logger.warning(
-                                        f"Retry stderr: {retry_result['stderr']}"
-                                    )
-                            else:
-                                logger.error(
-                                    f"Retry failed ({retry_resp.status_code}): "
-                                    f"{retry_resp.text}"
+                        retry_resp = requests.post(
+                            f"{self.config.server_url}/execute_windows",
+                            json={"command": command},
+                            timeout=self.config.timeout,
+                        )
+                        if retry_resp.status_code == 200:
+                            retry_result = retry_resp.json()
+                            if retry_result.get("stderr"):
+                                logger.warning(
+                                    f"Retry stderr: {retry_result['stderr']}"
                                 )
                         else:
                             logger.error(
-                                "Fail-safe recovery failed; step will proceed "
-                                "with degraded state"
+                                f"Retry failed ({retry_resp.status_code}): "
+                                f"{retry_resp.text}"
                             )
                     else:
-                        logger.debug(f"Executed: {command}")
+                        logger.error(
+                            "Fail-safe recovery failed; step will proceed "
+                            "with degraded state"
+                        )
+                elif resp.status_code == 200:
+                    logger.debug(f"Executed: {command}")
             except Exception as e:
                 logger.error(f"Execute request failed: {e}")
 
@@ -823,6 +828,77 @@ class WAALiveAdapter(BenchmarkAdapter):
         self._current_task = None
         self._current_a11y = None
         self._actions = []
+
+    # --- Public convenience methods for RL / pixel-coordinate agents ---
+
+    @property
+    def screen_size(self) -> tuple[int, int]:
+        """Actual screen dimensions (width, height) detected from screenshots.
+
+        Defaults to config values until first screenshot is taken.
+        RL agents should verify this matches their coordinate normalization
+        assumption (e.g., 1920x1080 for models trained on that resolution).
+        """
+        return self._actual_screen_size or (
+            self.config.screen_width,
+            self.config.screen_height,
+        )
+
+    def observe(self) -> BenchmarkObservation:
+        """Get current observation (screenshot + a11y tree) without stepping.
+
+        Returns a BenchmarkObservation containing:
+        - screenshot: raw PNG bytes (decode with PIL.Image.open(BytesIO(obs.screenshot)))
+        - viewport: (width, height) tuple of actual screen dimensions
+        - accessibility_tree: parsed UIA tree dict (or None if unavailable)
+        - window_title: title of the foreground window (or None)
+
+        This does NOT advance the step counter or record an action.
+        """
+        return self._get_observation()
+
+    def pixel_action(
+        self,
+        x: int | float | None = None,
+        y: int | float | None = None,
+        action_type: str = "click",
+        text: str | None = None,
+        key: str | None = None,
+        x_frac: float | None = None,
+        y_frac: float | None = None,
+    ) -> tuple[BenchmarkObservation, bool, dict[str, Any]]:
+        """Execute a pixel-coordinate action and return (obs, done, info).
+
+        Convenience method for RL agents that output raw pixel coordinates
+        instead of element IDs. Supports both absolute pixels and normalized
+        fractions.
+
+        Coordinates can be specified as:
+        - Absolute pixels: pixel_action(x=885, y=22)
+        - Normalized fractions (0.0-1.0): pixel_action(x_frac=0.461, y_frac=0.021)
+        If x_frac/y_frac are provided, they are converted to absolute pixels
+        using screen_size.
+
+        Args:
+            x: X pixel coordinate (absolute).
+            y: Y pixel coordinate (absolute).
+            action_type: One of "click", "double_click", "right_click", "type",
+                "key", "scroll", "drag".
+            text: Text to type (required when action_type="type").
+            key: Key name (for action_type="key", e.g. "enter", "ctrl+a").
+            x_frac: X as fraction of screen width (0.0-1.0). Overrides x.
+            y_frac: Y as fraction of screen height (0.0-1.0). Overrides y.
+
+        Returns:
+            Tuple of (observation, done, info) — same as step().
+        """
+        if x_frac is not None or y_frac is not None:
+            w, h = self.screen_size
+            x = int((x_frac or 0.0) * w)
+            y = int((y_frac or 0.0) * h)
+
+        action = BenchmarkAction(type=action_type, x=x, y=y, text=text, key=key)
+        return self.step(action)
 
     def _get_observation(self) -> BenchmarkObservation:
         """Fetch current observation from WAA server.
