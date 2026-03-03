@@ -1,6 +1,107 @@
 # CHANGELOG
 
 
+## v0.25.0 (2026-03-03)
+
+### Bug Fixes
+
+- **agent**: Replace manual string escaping with repr() and fix CU agent bugs
+  ([#83](https://github.com/OpenAdaptAI/openadapt-evals/pull/83),
+  [`ffcb41d`](https://github.com/OpenAdaptAI/openadapt-evals/commit/ffcb41d9a2dd6cc53eae4bf478d2d3b139d22b84))
+
+* fix(agent): replace manual string escaping with repr() and fix CU agent bugs
+
+Five reliability fixes for eval runs:
+
+1. Replace _escape_for_pyautogui() with repr() in _build_type_commands() - eliminates entire class
+  of string-embedding bugs (newlines, tabs, quotes, unicode) using Python's own escaping mechanism
+
+2. Fix drag coordinate field names: startCoordinate/endCoordinate (camelCase) →
+  start_coordinate/coordinate (snake_case) per Claude computer_use API
+
+3. Add _clamp_coord() to prevent (0,0) coordinates from triggering PyAutoGUI fail-safe, applied to
+  click, drag, and mouse_move actions
+
+4. Re-inject demo text at every step in tool_result messages to prevent context drift in
+  demo-conditioned evaluation
+
+5. Add command logging in WAALiveAdapter.step() for debugging
+
+Also adds docs/eval_analysis_2026_03_02.md documenting ZS vs DC eval results and literature review
+  on demo-conditioning approaches.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* feat: add multi-level demo format transform and fix tests
+
+- Add scripts/transform_demo_format.py: transforms rigid {Observation, Intent, Action, Result} demos
+  into adaptive {Think, Action, Expect} format with PLAN section (Option D from eval analysis) -
+  LLM-assisted mode (default): uses vlm_call() for semantic transform - Rule-based mode (--no-llm):
+  free, no API calls needed - Supports --dry-run for preview
+
+- Fix tests for repr() escaping and coordinate clamping: - Remove TestEscapeForPyautogui (tests
+  deleted function) - Update TestBuildTypeCommands for repr() output format - Add
+  test_all_special_chars_produce_valid_python invariant test - Fix drag test to use snake_case field
+  names - Fix coordinate edge test to expect clamped (0.005, 0.005)
+
+- Regenerate uv.lock for consilium package name resolution
+
+* docs: add DC-multilevel eval results to analysis
+
+DC-multilevel (new {Think, Action, Expect} + PLAN format) showed clear improvement over DC-rigid:
+  agent followed the plan, entered all headers and years, typed correct formula, used drag-fill.
+  Still scored 0.0 due to premature task completion (finished 1/3 columns), but qualitatively the
+  best behavior across all three conditions.
+
+---------
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+### Features
+
+- Add VAGEN/verl-agent environment adapter for VLM RL training
+  ([`0183321`](https://github.com/OpenAdaptAI/openadapt-evals/commit/018332168389b4be74660ecbc754eef5768f6b51))
+
+* feat: add VAGEN/verl-agent environment adapter for VLM RL training
+
+WAADesktopEnv implements the GymImageEnv protocol from VAGEN, enabling desktop GUI automation
+  training with verl-agent's multi-turn VLM RL pipeline (GiGPO, GRPO, PPO).
+
+The adapter translates between openadapt-evals BenchmarkObservation (PNG bytes + a11y tree) and
+  VAGEN's observation format (obs_str + multi_modal_input with PIL images).
+
+- Async interface (reset/step/close/system_prompt) - Action DSL parsing (CLICK, TYPE, KEY, SCROLL,
+  WAIT, DONE) - Fractional coordinate support (0.0-1.0) - Lazy adapter initialization - 21 tests
+  passing with mock adapter - Example VAGEN training config included
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* docs: add comprehensive verl-agent decision document
+
+Records the full reasoning chain for choosing verl-agent/VAGEN: - Framework comparison (TRL,
+  standalone, verl-agent, VAGEN, OpenRLHF, Unsloth) - Key insight: per-step verification via GiGPO
+  for long-horizon GUI tasks - TRL multi-turn VLM blocker (issues #5119, #5120) - "Environment is
+  the moat" strategic framing - Architecture diagram and migration path
+
+* feat: add verl-agent as optional dependency
+
+* feat: vendor GymImageEnv base classes from VAGEN
+
+* docs: fact-check framework review in verl decision doc
+
+Update Sections E (OpenRLHF), F (Unsloth), TRL, and comparison matrix with accurate details from
+  thorough review:
+
+- OpenRLHF: document AgentTrainer multi-turn support and OpenRLHF-M fork - Unsloth: nuanced
+  assessment — single-turn VLM works, multi-turn text via ART works, but multi-turn VLM blocked by
+  rollout_func issue (#3573) - TRL: add note about OpenEnv/rollout_func for text models (VLM
+  blocked) - Comparison matrix: add Unsloth column with footnotes
+
+---------
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.24.0 (2026-03-03)
 
 ### Documentation
