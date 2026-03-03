@@ -458,3 +458,137 @@ class TestFailsafeDetection:
         from openadapt_evals.adapters.waa.live import _is_failsafe_error
 
         assert not _is_failsafe_error("The application has a fail-safe mechanism")
+
+
+# ---------------------------------------------------------------------------
+# _escape_for_pyautogui
+# ---------------------------------------------------------------------------
+
+
+class TestEscapeForPyautogui:
+    """Tests for _escape_for_pyautogui text escaping."""
+
+    def test_plain_text(self):
+        from openadapt_evals.adapters.waa.live import _escape_for_pyautogui
+
+        assert _escape_for_pyautogui("hello world") == "hello world"
+
+    def test_backslash_escaped(self):
+        from openadapt_evals.adapters.waa.live import _escape_for_pyautogui
+
+        assert _escape_for_pyautogui("path\\to\\file") == "path\\\\to\\\\file"
+
+    def test_single_quote_escaped(self):
+        from openadapt_evals.adapters.waa.live import _escape_for_pyautogui
+
+        assert _escape_for_pyautogui("it's") == "it\\'s"
+
+    def test_tab_escaped(self):
+        from openadapt_evals.adapters.waa.live import _escape_for_pyautogui
+
+        assert _escape_for_pyautogui("col1\tcol2") == "col1\\tcol2"
+
+    def test_carriage_return_stripped(self):
+        from openadapt_evals.adapters.waa.live import _escape_for_pyautogui
+
+        assert _escape_for_pyautogui("line\r") == "line"
+
+    def test_empty_string(self):
+        from openadapt_evals.adapters.waa.live import _escape_for_pyautogui
+
+        assert _escape_for_pyautogui("") == ""
+
+    def test_combined_special_chars(self):
+        from openadapt_evals.adapters.waa.live import _escape_for_pyautogui
+
+        # \r is stripped, so "with\rtabs" → "withtabs"
+        result = _escape_for_pyautogui("it's a\\path\twith\rtabs")
+        assert result == "it\\'s a\\\\path\\twithtabs"
+
+
+# ---------------------------------------------------------------------------
+# _build_type_commands
+# ---------------------------------------------------------------------------
+
+
+class TestBuildTypeCommands:
+    """Tests for _build_type_commands which handles newlines in type actions."""
+
+    def test_simple_text(self):
+        from openadapt_evals.adapters.waa.live import _build_type_commands
+
+        result = _build_type_commands("hello")
+        assert result == "pyautogui.write('hello', interval=0.02)"
+
+    def test_text_with_newline(self):
+        from openadapt_evals.adapters.waa.live import _build_type_commands
+
+        result = _build_type_commands("abc\ndef")
+        assert "pyautogui.write('abc', interval=0.02)" in result
+        assert "pyautogui.press('enter')" in result
+        assert "pyautogui.write('def', interval=0.02)" in result
+
+    def test_trailing_newline(self):
+        from openadapt_evals.adapters.waa.live import _build_type_commands
+
+        result = _build_type_commands("abc\n")
+        assert "pyautogui.write('abc', interval=0.02)" in result
+        assert "pyautogui.press('enter')" in result
+        # Should NOT have a write('') after the enter
+        assert result.endswith("pyautogui.press('enter')")
+
+    def test_leading_newline(self):
+        from openadapt_evals.adapters.waa.live import _build_type_commands
+
+        result = _build_type_commands("\nabc")
+        assert result.startswith("pyautogui.press('enter')")
+        assert "pyautogui.write('abc', interval=0.02)" in result
+
+    def test_just_newline(self):
+        from openadapt_evals.adapters.waa.live import _build_type_commands
+
+        result = _build_type_commands("\n")
+        assert result == "pyautogui.press('enter')"
+
+    def test_empty_string(self):
+        from openadapt_evals.adapters.waa.live import _build_type_commands
+
+        result = _build_type_commands("")
+        assert "pyautogui.write('', interval=0.02)" in result
+
+    def test_multiple_newlines(self):
+        from openadapt_evals.adapters.waa.live import _build_type_commands
+
+        result = _build_type_commands("a\nb\nc")
+        parts = result.split("; ")
+        assert parts[0] == "pyautogui.write('a', interval=0.02)"
+        assert parts[1] == "pyautogui.press('enter')"
+        assert parts[2] == "pyautogui.write('b', interval=0.02)"
+        assert parts[3] == "pyautogui.press('enter')"
+        assert parts[4] == "pyautogui.write('c', interval=0.02)"
+
+    def test_special_chars_escaped(self):
+        from openadapt_evals.adapters.waa.live import _build_type_commands
+
+        result = _build_type_commands("it's a\\path")
+        assert "it\\'s a\\\\path" in result
+
+    def test_no_import_prefix(self):
+        """_build_type_commands should return body only, no import statement."""
+        from openadapt_evals.adapters.waa.live import _build_type_commands
+
+        result = _build_type_commands("hello")
+        assert not result.startswith("import ")
+
+    def test_formula_with_newlines(self):
+        """Reproduces the original LibreOffice Calc bug."""
+        from openadapt_evals.adapters.waa.live import _build_type_commands
+
+        text = "=(Sheet1.C4-Sheet1.C3)/Sheet1.C3\n=(Sheet1.C5-Sheet1.C4)/Sheet1.C4"
+        result = _build_type_commands(text)
+        # Should have two write commands separated by enter
+        assert "pyautogui.write('=(Sheet1.C4-Sheet1.C3)/Sheet1.C3', interval=0.02)" in result
+        assert "pyautogui.press('enter')" in result
+        assert "pyautogui.write('=(Sheet1.C5-Sheet1.C4)/Sheet1.C4', interval=0.02)" in result
+        # No literal newlines in the result
+        assert "\n" not in result
