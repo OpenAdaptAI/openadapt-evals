@@ -1,6 +1,40 @@
 # CHANGELOG
 
 
+## v0.23.1 (2026-03-03)
+
+### Bug Fixes
+
+- Add coordinate clamping and drag safety to prevent fail-safe triggers
+  ([#74](https://github.com/OpenAdaptAI/openadapt-evals/pull/74),
+  [`92c83d2`](https://github.com/OpenAdaptAI/openadapt-evals/commit/92c83d2f314fceed30a4c4992e7a1561be9688f1))
+
+- Add _clamp_pixel_coords() to keep mouse 5px from screen edges - Apply clamping in
+  _translate_click_action (element and coordinate paths) - Fix drag handler: skip drags with None or
+  all-zero coordinates - Apply clamping to drag start/end coordinates
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
+## v0.23.0 (2026-03-03)
+
+### Features
+
+- Add 4-layer WAA probe for per-layer diagnostics
+  ([#75](https://github.com/OpenAdaptAI/openadapt-evals/pull/75),
+  [`7a22ec1`](https://github.com/OpenAdaptAI/openadapt-evals/commit/7a22ec1e3f1c069a5dc89159c73da1474325c9d2))
+
+Add multi-layer probe that tests screenshot (PNG capture), accessibility (a11y tree), action
+  (pyautogui pipeline), and score (evaluate endpoint) layers individually using existing WAA
+  endpoints. No server-side changes.
+
+- New probe.py module with ProbeLayerResult/MultiLayerProbeResult dataclasses - CLI: --detailed,
+  --json, --layers, --evaluate-url args on probe command - VMMonitor: check_waa_detailed() method
+  and waa_detailed_probe field - 41 tests covering all layers, orchestrator, and helpers
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.22.0 (2026-03-03)
 
 ### Features
