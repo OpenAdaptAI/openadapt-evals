@@ -47,6 +47,12 @@ from openadapt_evals.infrastructure.screen_stability import (
     wait_for_stable_screen,
 )
 from openadapt_evals.infrastructure.ssh_tunnel import SSHTunnelManager, get_tunnel_manager
+from openadapt_evals.infrastructure.probe import (
+    MultiLayerProbeResult,
+    ProbeLayerResult,
+    multi_layer_probe,
+    print_probe_results,
+)
 from openadapt_evals.infrastructure.vm_ip import resolve_vm_ip
 from openadapt_evals.infrastructure.vm_monitor import VMMonitor, VMConfig
 from openadapt_evals.infrastructure.vm_provider import VMProvider
@@ -60,8 +66,10 @@ __all__ = [
     "AWSVMManager",
     "AzureOpsTracker",
     "AzureVMManager",
+    "MultiLayerProbeResult",
     "PoolManager",
     "PoolRunResult",
+    "ProbeLayerResult",
     "QEMUResetManager",
     "VMMonitor",
     "VMConfig",
@@ -69,6 +77,8 @@ __all__ = [
     "SSHTunnelManager",
     "compare_screenshots",
     "get_tunnel_manager",
+    "multi_layer_probe",
+    "print_probe_results",
     "resolve_vm_ip",
     "wait_for_stable_screen",
 ]
