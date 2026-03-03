@@ -104,6 +104,10 @@ from openadapt_evals.benchmarks import (
     LiveEvaluationTracker,
     save_execution_trace,
 )
+from openadapt_evals.evaluation.verifier_registry import (
+    TaskVerifierRegistry,
+    VerificationResult,
+)
 
 # Lazy imports for optional dependencies
 def __getattr__(name: str):
@@ -140,6 +144,9 @@ __all__ = [
     "evaluate_agent_on_benchmark",
     "compute_metrics",
     "compute_domain_metrics",
+    # Task verification
+    "TaskVerifierRegistry",
+    "VerificationResult",
     # WAA adapters
     "WAAAdapter",
     "WAAConfig",
