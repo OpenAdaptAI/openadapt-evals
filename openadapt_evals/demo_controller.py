@@ -366,10 +366,11 @@ class DemoController:
                 vr = self._verify_step(screenshot_bytes, current.expect)
                 current.verification_result = vr
 
-                if vr.status == "verified":
+                if vr.effectively_verified:
                     logger.info(
-                        "Step %d verified (confidence=%.2f): %s",
+                        "Step %d %s (confidence=%.2f): %s",
                         current.step_num,
+                        vr.status,
                         vr.confidence,
                         vr.explanation[:80],
                     )
@@ -760,7 +761,7 @@ class DemoController:
             model=self.verify_model,
             provider=self.verify_provider,
         )
-        return result.status == "verified"
+        return result.effectively_verified
 
     # ------------------------------------------------------------------
     # Helpers

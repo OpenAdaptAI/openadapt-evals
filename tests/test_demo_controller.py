@@ -897,3 +897,211 @@ class TestGetScreenshotBytes:
         )
         result = DemoController._get_screenshot_bytes(obs)
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Test plan step tracking drift prevention
+# ---------------------------------------------------------------------------
+
+
+class TestPlanStepDriftPrevention:
+    """Tests that the controller never skips steps without VLM verification.
+
+    These tests reproduce the scenario from the Level 3 live eval where
+    the controller's plan step tracking jumped ahead incorrectly:
+    - At step 3, it marked plan steps 2-6 as done
+    - At step 4, it marked plan steps 6-11 as done
+
+    The controller must only advance to the next step when the CURRENT step
+    is verified by VLM, never based on heuristic keyword matching alone.
+    """
+
+    @patch("openadapt_evals.demo_controller.verify_goal_completion")
+    @patch("openadapt_evals.demo_controller.verify_step")
+    def test_only_verified_steps_advance(self, mock_verify_step, mock_verify_goal):
+        """Controller only advances when VLM verifies the current step.
+
+        Unclear verification results cause retry (not advancement), so the
+        step remains in_progress until it is explicitly verified.
+        """
+        mock_agent = MagicMock()
+        mock_adapter = MagicMock()
+
+        # Agent always returns click actions
+        mock_agent.act.return_value = _make_click_action()
+        mock_adapter.reset.return_value = _make_obs()
+        mock_adapter.step.return_value = (_make_obs(), False, {})
+        mock_adapter.evaluate.return_value = BenchmarkResult(
+            task_id="test-task-001", success=True, score=1.0
+        )
+
+        controller = DemoController(
+            agent=mock_agent,
+            adapter=mock_adapter,
+            demo_text=SAMPLE_DEMO,
+        )
+
+        # Verification: step 1 is "unclear" 2 times, then verified.
+        # Followed by immediate verification for steps 2 and 3.
+        # max_retries=5 so "unclear" retries without triggering replan.
+        verify_sequence = [
+            _make_unclear(),      # Step 1, attempt 1 -- retry (no advance)
+            _make_unclear(),      # Step 1, attempt 2 -- retry (no advance)
+            _make_verified(),     # Step 1, attempt 3 -- verified -> advance
+            _make_verified(),     # Step 2, attempt 1 -- verified -> advance
+            _make_verified(),     # Step 3, attempt 1 -- verified -> advance
+        ]
+        mock_verify_step.side_effect = verify_sequence
+        mock_verify_goal.return_value = _make_goal_verified()
+
+        controller.max_retries = 5
+
+        task = _make_task()
+        result = controller.execute(task, max_steps=10)
+
+        # Step 1 should have had 3 attempts (2 unclear + 1 verified)
+        assert controller.plan_state.steps[0].attempts == 3
+        assert controller.plan_state.steps[0].status == "done"
+        # Its final verification should be "verified"
+        assert controller.plan_state.steps[0].verification_result.status == "verified"
+
+        # Steps 2 and 3 should each have 1 attempt
+        assert controller.plan_state.steps[1].attempts == 1
+        assert controller.plan_state.steps[1].status == "done"
+        assert controller.plan_state.steps[2].attempts == 1
+        assert controller.plan_state.steps[2].status == "done"
+
+        # Total verify_step calls: 5 (2 unclear + 3 verified)
+        assert mock_verify_step.call_count == 5
+
+    @patch("openadapt_evals.demo_controller.verify_goal_completion")
+    @patch("openadapt_evals.demo_controller.verify_step")
+    def test_current_step_idx_increments_by_one(
+        self, mock_verify_step, mock_verify_goal
+    ):
+        """current_step_idx only increments by 1 on each _advance() call."""
+        mock_agent = MagicMock()
+        mock_adapter = MagicMock()
+
+        mock_agent.act.return_value = _make_click_action()
+        mock_adapter.reset.return_value = _make_obs()
+        mock_adapter.step.return_value = (_make_obs(), False, {})
+        mock_adapter.evaluate.return_value = BenchmarkResult(
+            task_id="test-task-001", success=True, score=1.0
+        )
+
+        controller = DemoController(
+            agent=mock_agent,
+            adapter=mock_adapter,
+            demo_text=SAMPLE_DEMO,
+        )
+
+        # Track step_idx changes
+        idx_history = [controller.plan_state.current_step_idx]
+
+        # Patch _advance to record each transition
+        original_advance = controller._advance
+
+        def tracked_advance():
+            original_advance()
+            idx_history.append(controller.plan_state.current_step_idx)
+
+        controller._advance = tracked_advance
+
+        mock_verify_step.return_value = _make_verified()
+        mock_verify_goal.return_value = _make_goal_verified()
+
+        task = _make_task()
+        controller.execute(task, max_steps=30)
+
+        # Verify each advance was exactly +1
+        for i in range(1, len(idx_history)):
+            delta = idx_history[i] - idx_history[i - 1]
+            assert delta == 1, (
+                f"Step index jumped by {delta} (from {idx_history[i-1]} to "
+                f"{idx_history[i]}). History: {idx_history}"
+            )
+
+    @patch("openadapt_evals.demo_controller.verify_goal_completion")
+    @patch("openadapt_evals.demo_controller.verify_step")
+    def test_unverified_step_blocks_advancement(
+        self, mock_verify_step, mock_verify_goal
+    ):
+        """Steps that are not_verified should not advance (within retry budget)."""
+        mock_agent = MagicMock()
+        mock_adapter = MagicMock()
+
+        mock_agent.act.return_value = _make_click_action()
+        mock_adapter.reset.return_value = _make_obs()
+        mock_adapter.step.return_value = (_make_obs(), False, {})
+        mock_adapter.evaluate.return_value = BenchmarkResult(
+            task_id="test-task-001", success=False, score=0.0
+        )
+
+        controller = DemoController(
+            agent=mock_agent,
+            adapter=mock_adapter,
+            demo_text=SAMPLE_DEMO,
+            max_retries=3,
+            max_replans=0,  # No replanning, just fail
+        )
+
+        # Step 1 always fails verification
+        mock_verify_step.return_value = _make_not_verified()
+
+        task = _make_task()
+        controller.execute(task, max_steps=15)
+
+        # Step 1 should have been attempted max_retries times
+        assert controller.plan_state.steps[0].attempts == 3
+        # Step 1 should be failed (not done)
+        assert controller.plan_state.steps[0].status == "failed"
+        # Step 2 should have been attempted too (after step 1 failed + advance)
+        # but step 3 should still be pending or in_progress, NOT done
+        # Key point: steps were not bulk-marked as done
+
+    def test_advance_only_increments_by_one(self):
+        """Direct test that _advance() only increments current_step_idx by 1."""
+        agent = MagicMock()
+        adapter = MagicMock()
+        controller = DemoController(
+            agent=agent, adapter=adapter, demo_text=SAMPLE_DEMO
+        )
+
+        # Start at step 0
+        assert controller.plan_state.current_step_idx == 0
+        controller.plan_state.steps[0].status = "in_progress"
+
+        controller._advance()
+        assert controller.plan_state.current_step_idx == 1
+
+        controller.plan_state.steps[1].status = "in_progress"
+        controller._advance()
+        assert controller.plan_state.current_step_idx == 2
+
+        controller.plan_state.steps[2].status = "in_progress"
+        controller._advance()
+        assert controller.plan_state.current_step_idx == 3
+
+        # After all 3 steps, no step was skipped
+        assert controller.plan_state.steps[0].status == "done"
+        assert controller.plan_state.steps[1].status == "done"
+        assert controller.plan_state.steps[2].status == "done"
+
+    def test_verification_status_tracked_per_step(self):
+        """Each step tracks its own verification result."""
+        agent = MagicMock()
+        adapter = MagicMock()
+        controller = DemoController(
+            agent=agent, adapter=adapter, demo_text=SAMPLE_DEMO
+        )
+
+        vr1 = _make_verified()
+        vr2 = _make_not_verified()
+
+        controller.plan_state.steps[0].verification_result = vr1
+        controller.plan_state.steps[1].verification_result = vr2
+
+        assert controller.plan_state.steps[0].verification_result.status == "verified"
+        assert controller.plan_state.steps[1].verification_result.status == "not_verified"
+        assert controller.plan_state.steps[2].verification_result is None

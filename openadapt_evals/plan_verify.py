@@ -4,6 +4,11 @@ Provides functions to verify whether individual plan steps, plan progress,
 and overall goals have been achieved, by sending screenshots to a cheap VLM
 and parsing structured JSON responses.
 
+Verification is outcome-focused: we care about whether the intended effect
+of an action is observable (e.g., text was entered, a value is present),
+NOT about incidental details like exact cursor position, cell selection
+highlight, or minor UI state differences.
+
 All verification functions gracefully degrade to "unclear" on VLM failure,
 ensuring that the calling controller never crashes due to verification issues.
 """
@@ -27,18 +32,31 @@ class VerificationResult:
     """Result of a VLM-based verification check.
 
     Attributes:
-        status: One of ``"verified"``, ``"not_verified"``, or ``"unclear"``.
+        status: One of ``"verified"``, ``"partially_verified"``,
+            ``"not_verified"``, or ``"unclear"``.
+
+            - **verified**: The core outcome is achieved as expected.
+            - **partially_verified**: The main effect is present but with
+              minor deviations (e.g., correct text entered but cursor in a
+              slightly different position, or a numeric value is correct but
+              formatting has not yet been applied).  Callers should treat
+              this the same as ``"verified"`` for step-progression purposes.
+            - **not_verified**: The expected outcome is clearly absent (the
+              action had no observable effect, or the wrong result occurred).
+            - **unclear**: Cannot determine from the screenshot.
         confidence: Float between 0.0 and 1.0 indicating VLM confidence.
         explanation: Human-readable reasoning from the VLM.
         raw_response: Full VLM response text, useful for debugging.
     """
 
-    status: str  # "verified", "not_verified", "unclear"
+    status: str  # "verified", "partially_verified", "not_verified", "unclear"
     confidence: float  # 0.0 to 1.0
     explanation: str  # VLM's reasoning
     raw_response: str  # Full VLM response for debugging
 
-    _VALID_STATUSES = frozenset({"verified", "not_verified", "unclear"})
+    _VALID_STATUSES = frozenset({
+        "verified", "partially_verified", "not_verified", "unclear",
+    })
 
     def __post_init__(self) -> None:
         if self.status not in self._VALID_STATUSES:
@@ -47,6 +65,14 @@ class VerificationResult:
                 f"must be one of {sorted(self._VALID_STATUSES)}"
             )
         self.confidence = max(0.0, min(1.0, float(self.confidence)))
+
+    @property
+    def effectively_verified(self) -> bool:
+        """Whether this result should be treated as success for step progression.
+
+        Both ``"verified"`` and ``"partially_verified"`` count as success.
+        """
+        return self.status in ("verified", "partially_verified")
 
 
 # ---------------------------------------------------------------------------
@@ -63,37 +89,59 @@ _DEFAULT_TIMEOUT = 30  # seconds
 # ---------------------------------------------------------------------------
 
 _VERIFY_STEP_SYSTEM = (
-    "You are a precise visual verification assistant. "
-    "You examine screenshots and determine whether an expected condition is met. "
-    "Always respond with valid JSON."
+    "You are an outcome-focused visual verification assistant. "
+    "You examine screenshots and determine whether the CORE INTENDED EFFECT "
+    "of an action is observable. You focus on WHAT content is present, not on "
+    "incidental details like exact cursor position, cell selection highlight, "
+    "or scroll offset. Always respond with valid JSON."
 )
 
 _VERIFY_STEP_PROMPT = """\
-Look at the screenshot and determine whether the following expectation is met:
+Look at the screenshot and determine whether the following expectation's \
+CORE OUTCOME is observable:
 
 EXPECTATION: {expect_text}
 
-Instructions:
-1. Describe what you observe in the screenshot that is relevant to the expectation.
-2. Compare your observations against the expectation.
-3. Decide whether the expectation is met.
+VERIFICATION RULES (follow strictly):
+1. Focus on OBSERVABLE OUTCOMES — is the intended content/value/state present?
+2. IGNORE incidental details that do not affect the outcome:
+   - Exact cursor position or blinking caret location
+   - Which cell/field currently has selection highlight
+   - Minor scroll position differences
+   - Whether the active cell indicator is on the exact expected cell vs. a
+     neighboring cell, AS LONG AS the correct content is in the correct cell
+3. For text/data entry steps: verify the TEXT IS PRESENT in the correct
+   location. Do NOT mark as failed just because the cursor moved after entry.
+4. For numeric values: verify the VALUE IS CORRECT (within reasonable
+   rounding). Do NOT dispute minor floating-point display differences or
+   semantic labels — if the number is correct, the step succeeded.
+5. For formatting steps (e.g., "format as percentage"): check whether the
+   VISUAL FORMAT actually changed, not just whether the action was attempted.
 
-Respond with ONLY a JSON object in this exact format (no other text):
+DECISION GUIDE:
+- "verified": The core outcome is clearly achieved as expected.
+- "partially_verified": The main intended effect IS present, but with a
+  minor deviation (e.g., text entered in correct cell but cursor moved to a
+  different cell; value is correct but formatting not yet applied). The key
+  action DID have its intended effect.
+- "not_verified": The expected outcome is clearly ABSENT — the action had no
+  observable effect, the wrong content was entered, or a fundamentally
+  different state is shown. Reserve this for REAL failures, not cosmetic
+  differences.
+- "unclear": Cannot determine from the screenshot.
+
+Respond with ONLY a JSON object (no other text):
 {{
-  "status": "verified" | "not_verified" | "unclear",
+  "status": "verified" | "partially_verified" | "not_verified" | "unclear",
   "confidence": <float between 0.0 and 1.0>,
   "explanation": "<your reasoning>"
 }}
-
-Use "verified" if the expectation is clearly met.
-Use "not_verified" if the expectation is clearly NOT met.
-Use "unclear" if you cannot determine from the screenshot.
 """
 
 _VERIFY_PLAN_PROGRESS_SYSTEM = (
-    "You are a precise visual verification assistant. "
-    "You examine screenshots and assess plan progress. "
-    "Always respond with valid JSON."
+    "You are an outcome-focused visual verification assistant. "
+    "You examine screenshots and assess plan progress based on OBSERVABLE "
+    "OUTCOMES, not incidental UI details. Always respond with valid JSON."
 )
 
 _VERIFY_PLAN_PROGRESS_PROMPT = """\
@@ -103,12 +151,20 @@ Look at the screenshot and determine which steps appear to have been completed.
 PLAN:
 {plan_text}
 
-Instructions:
-1. Examine the screenshot carefully.
-2. For each step, assess whether its expected outcome is visible in the screenshot.
-3. Identify which steps appear completed and which step should be executed next.
+VERIFICATION RULES:
+1. A step is "completed" if its CORE INTENDED EFFECT is observable:
+   - For data entry: the correct text/value is present in the correct location.
+   - For navigation: the application is on the expected screen/tab/sheet.
+   - For formatting: the visual format has changed as expected.
+2. IGNORE incidental details when assessing completion:
+   - Cursor position, cell selection highlight, scroll offset.
+   - A step that typed text into cell A1 is complete if A1 contains that
+     text, regardless of where the cursor currently sits.
+3. When in doubt, give the agent credit — if the outcome is present, mark
+   the step as completed even if the UI state is slightly different than a
+   literal reading of the step description.
 
-Respond with ONLY a JSON object in this exact format (no other text):
+Respond with ONLY a JSON object (no other text):
 {{
   "completed_steps": [<list of 0-indexed step numbers that appear done>],
   "current_step": <0-indexed step number to execute next>,
@@ -117,30 +173,40 @@ Respond with ONLY a JSON object in this exact format (no other text):
 """
 
 _VERIFY_GOAL_SYSTEM = (
-    "You are a precise visual verification assistant. "
-    "You examine screenshots and determine whether a high-level goal has been achieved. "
-    "Always respond with valid JSON."
+    "You are an outcome-focused visual verification assistant. "
+    "You examine screenshots and determine whether a high-level goal has "
+    "been achieved based on OBSERVABLE RESULTS. Always respond with valid JSON."
 )
 
 _VERIFY_GOAL_PROMPT = """\
-Look at the screenshot and determine whether the following goal has been fully achieved:
+Look at the screenshot and determine whether the following goal has been achieved:
 
 GOAL: {goal_text}
 
-Instructions:
-1. Describe the current state visible in the screenshot.
-2. Compare the current state against the goal.
-3. Decide whether the goal is fully achieved.
+VERIFICATION RULES:
+1. Focus on whether the SUBSTANTIVE OUTCOME is present:
+   - Are the required data values, text, or visual elements present?
+   - Is the application in the expected end state?
+2. DO NOT penalize for:
+   - Cursor position or cell selection state
+   - Minor formatting differences (e.g., decimal places, rounding)
+   - The order in which equivalent correct results appear
+   - Incidental UI differences that do not affect the goal's substance
+3. If the goal involves computed values, verify the values are CORRECT
+   (or reasonably close), not whether the computation method is visible.
 
-Respond with ONLY a JSON object in this exact format (no other text):
+Respond with ONLY a JSON object (no other text):
 {{
-  "status": "verified" | "not_verified" | "unclear",
+  "status": "verified" | "partially_verified" | "not_verified" | "unclear",
   "confidence": <float between 0.0 and 1.0>,
   "explanation": "<your reasoning>"
 }}
 
-Use "verified" only if the goal is FULLY achieved (not partially).
-Use "not_verified" if the goal is not yet complete.
+Use "verified" if the goal is fully achieved.
+Use "partially_verified" if the goal is substantially achieved but with minor
+    gaps (e.g., all values computed but one formatting step missing).
+Use "not_verified" if the goal is clearly not yet complete (substantive
+    elements are missing, not just cosmetic differences).
 Use "unclear" if you cannot determine from the screenshot.
 """
 

@@ -720,12 +720,12 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
     def _advance_plan_steps(self, action: BenchmarkAction) -> None:
         """Advance plan step tracking based on the action being taken.
 
-        Uses simple keyword matching between the action and the current
-        plan step description / trajectory action to heuristically detect
-        when a step is being worked on or completed.
-
-        When a new step appears to be starting (action matches a future
-        step), all prior in_progress steps are marked as done.
+        Only advances at most ONE step at a time to prevent tracking drift.
+        The current in_progress step is marked as done and the next pending
+        step becomes in_progress. This conservative approach avoids the
+        problem of keyword heuristics aggressively skipping multiple steps
+        based on superficial text matches (e.g., typing "Year" matching
+        both the header step and the data entry step).
 
         Args:
             action: The BenchmarkAction being returned to the runner.
@@ -746,7 +746,7 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
                 break
 
         if current_idx is None:
-            # No in_progress step — try to start the first pending one
+            # No in_progress step -- try to start the first pending one
             for i, step in enumerate(self._plan_steps):
                 if step["status"] == "pending":
                     step["status"] = "in_progress"
@@ -757,33 +757,33 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
                     break
             return
 
-        # Check if the action matches a future step better than current
-        best_match_idx = current_idx
-        best_score = self._match_score(action_keywords, current_idx)
+        # Check if the action matches the NEXT step better than the current
+        # one. Only consider the immediately next step to prevent multi-step
+        # jumps that cause tracking drift.
+        current_score = self._match_score(action_keywords, current_idx)
+        next_idx = current_idx + 1
 
-        for i in range(current_idx + 1, len(self._plan_steps)):
-            if self._plan_steps[i]["status"] == "done":
-                continue
-            score = self._match_score(action_keywords, i)
-            if score > best_score:
-                best_score = score
-                best_match_idx = i
+        # Find next non-done step
+        while next_idx < len(self._plan_steps):
+            if self._plan_steps[next_idx]["status"] != "done":
+                break
+            next_idx += 1
 
-        # If action matches a later step, mark intermediate steps as done
-        if best_match_idx > current_idx:
-            for i in range(current_idx, best_match_idx):
-                if self._plan_steps[i]["status"] != "done":
-                    self._plan_steps[i]["status"] = "done"
-                    logger.info(
-                        f"Plan step {self._plan_steps[i]['step_num']} "
-                        f"marked done: {self._plan_steps[i]['text'][:60]}"
-                    )
-            self._plan_steps[best_match_idx]["status"] = "in_progress"
-            logger.info(
-                f"Plan step {self._plan_steps[best_match_idx]['step_num']} "
-                f"now in_progress: "
-                f"{self._plan_steps[best_match_idx]['text'][:60]}"
-            )
+        if next_idx < len(self._plan_steps):
+            next_score = self._match_score(action_keywords, next_idx)
+            if next_score > current_score and next_score > 0:
+                # Advance exactly one step: current -> done, next -> in_progress
+                self._plan_steps[current_idx]["status"] = "done"
+                logger.info(
+                    f"Plan step {self._plan_steps[current_idx]['step_num']} "
+                    f"marked done: {self._plan_steps[current_idx]['text'][:60]}"
+                )
+                self._plan_steps[next_idx]["status"] = "in_progress"
+                logger.info(
+                    f"Plan step {self._plan_steps[next_idx]['step_num']} "
+                    f"now in_progress: "
+                    f"{self._plan_steps[next_idx]['text'][:60]}"
+                )
 
     def _extract_action_keywords(self, action: BenchmarkAction) -> set[str]:
         """Extract keywords from an action for matching against plan steps.
