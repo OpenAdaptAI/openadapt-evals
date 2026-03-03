@@ -101,6 +101,10 @@ We evaluated 6 approaches before selecting verl-agent/VAGEN:
   - [#4543](https://github.com/huggingface/trl/issues/4543): Multi-step
     training forces one shared prompt across all generations, but multi-step
     trajectories have different prefixes at each turn
+- **NEW (2026)**: TRL added OpenEnv integration with `rollout_func` for
+  multi-turn environment training (Gym-style). Works for text models. VLM
+  support blocked by #5120 (chat template flattens multimodal data before
+  rollout).
 - **Verdict**: Not viable for our use case until #5120 is resolved. Monitoring.
 
 ### B. Standalone Loss Math (our initial approach)
@@ -149,31 +153,53 @@ loop (~546 lines in `openadapt_ml/training/grpo/trainer.py`).
 
 **Repository**: [OpenRLHF/OpenRLHF](https://github.com/OpenRLHF/OpenRLHF)
 
-- Supports multimodal models, has LMM-R1 fork for multimodal RL
+- Supports multimodal models via [OpenRLHF-M](https://github.com/OpenRLHF/OpenRLHF-M)
+  fork (LMM-R1 lineage), tested with Qwen2.5-VL and InternVL
 - Implements GRPO, PPO, REINFORCE++ with Ray-based distributed training
-- **Multi-turn VLM**: Less documented, unclear if fully supported
-- **Verdict**: Viable alternative but less proven for multi-turn VLM specifically.
+- **Multi-turn agent support**: Added in 2025 — `AgentTrainer` with `env_rollout`
+  function for Gym-style interaction. Text-based multi-turn works; multi-turn
+  VLM with per-step images less documented but architecturally feasible
+- **No per-step credit assignment**: Episode-level rewards only (same limitation
+  as our standalone trainer)
+- **Verdict**: Viable alternative for multi-turn VLM with strong distributed
+  training. Lacks GiGPO-style step-level credit assignment, which is the key
+  differentiator for long-horizon desktop tasks.
 
 ### F. Unsloth
 
+**Repository**: [unslothai/unsloth](https://github.com/unslothai/unsloth)
+
 - 1.5-2x speed, 90% less VRAM for Qwen3-VL/Gemma 3
-- **Single-turn only** — not suitable for multi-step desktop automation
-- **Verdict**: Not applicable.
+- **Single-turn VLM GRPO**: Works. `UnslothGRPOTrainer` wraps TRL's GRPOTrainer
+  with kernel optimizations. Tested with Qwen2.5-VL, Gemma 3, Llama 3.2-Vision.
+- **Multi-turn text**: Supported via ART (Agent Reinforcement Training, OpenPipe
+  collaboration). Text-only multi-turn environments work with `rollout_func`.
+- **Multi-turn VLM**: NOT supported. `rollout_func` is silently ignored by
+  `UnslothGRPOTrainer` ([#3573](https://github.com/unslothai/unsloth/issues/3573)),
+  preventing custom environment interaction. Multi-GPU VLM training also broken
+  ([#3571](https://github.com/unslothai/unsloth/issues/3571)).
+- **Verdict**: Not applicable for our use case. Multi-turn VLM RL is blocked by
+  the `rollout_func` issue. If resolved, Unsloth's VRAM savings could make it
+  attractive for single-GPU experimentation, but it still lacks per-step credit
+  assignment (GiGPO) and distributed training.
 
 ### Comparison Matrix
 
-| Feature                     | TRL    | Standalone | verl-agent | VAGEN  | OpenRLHF |
-|-----------------------------|--------|------------|------------|--------|----------|
-| Single-turn VLM GRPO        | Yes    | Yes        | Yes        | Yes    | Yes      |
-| Multi-turn VLM GRPO         | **No** | Yes*       | **Yes**    | **Yes**| Unclear  |
-| Per-step credit assignment   | No     | No         | **GiGPO**  | **GAE**| No       |
-| Distributed training         | Yes    | No         | Yes        | Yes    | Yes      |
-| vLLM/sglang acceleration    | Yes    | No         | Yes        | Yes    | Yes      |
-| Qwen2.5-VL tested           | Yes    | Yes        | Yes        | Yes    | Yes      |
-| Lines of code we maintain   | ~200   | ~546       | **~250**   | ~250   | ~200     |
-| Ease of adoption             | High   | N/A        | Medium     | Medium | Medium   |
+| Feature                     | TRL    | Standalone | verl-agent | VAGEN  | OpenRLHF | Unsloth  |
+|-----------------------------|--------|------------|------------|--------|----------|----------|
+| Single-turn VLM GRPO        | Yes    | Yes        | Yes        | Yes    | Yes      | Yes      |
+| Multi-turn VLM GRPO         | **No** | Yes*       | **Yes**    | **Yes**| Partial† | **No**‡  |
+| Per-step credit assignment   | No     | No         | **GiGPO**  | **GAE**| No       | No       |
+| Distributed training         | Yes    | No         | Yes        | Yes    | Yes      | No§      |
+| vLLM/sglang acceleration    | Yes    | No         | Yes        | Yes    | Yes      | No       |
+| Qwen2.5-VL tested           | Yes    | Yes        | Yes        | Yes    | Yes      | Yes      |
+| Lines of code we maintain   | ~200   | ~546       | **~250**   | ~250   | ~200     | ~200     |
+| Ease of adoption             | High   | N/A        | Medium     | Medium | Medium   | High     |
 
 *Standalone multi-turn VLM works but only has episode-level rewards.
+†OpenRLHF has AgentTrainer for multi-turn text; VLM multi-turn less documented.
+‡Unsloth `rollout_func` silently ignored (#3573), blocking multi-turn VLM.
+§Unsloth multi-GPU VLM broken (#3571).
 
 ---
 
