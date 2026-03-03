@@ -13,6 +13,7 @@ import pytest
 from openadapt_evals.adapters.rl_env import RLEnvironment
 from openadapt_evals.adapters.verl_env import (
     WAADesktopEnv,
+    _ACTION_PATTERN,
     _build_obs_dict,
     _parse_action_str,
 )
@@ -52,13 +53,36 @@ class TestParseActionStr:
         action = _parse_action_str("DONE()")
         assert action.type == "done"
 
-    def test_scroll(self):
+    def test_scroll_with_direction(self):
         action = _parse_action_str('SCROLL(x=0.50, y=0.50, direction="down")')
         assert action.type == "scroll"
+        assert action.scroll_direction == "down"
+
+    def test_scroll_up(self):
+        action = _parse_action_str('SCROLL(x=0.50, y=0.50, direction="up")')
+        assert action.scroll_direction == "up"
+
+    def test_scroll_default_direction(self):
+        action = _parse_action_str("SCROLL(x=0.50, y=0.50)")
+        assert action.scroll_direction == "down"
 
     def test_invalid_returns_done(self):
         action = _parse_action_str("random garbage text")
         assert action.type == "done"
+
+    def test_drag_with_end_coords(self):
+        action = _parse_action_str("DRAG(x=0.20, y=0.30, end_x=0.80, end_y=0.70)")
+        assert action.type == "drag"
+        assert action.x == pytest.approx(0.20)
+        assert action.y == pytest.approx(0.30)
+        assert action.end_x == pytest.approx(0.80)
+        assert action.end_y == pytest.approx(0.70)
+
+    def test_drag_without_end_coords(self):
+        action = _parse_action_str("DRAG(x=0.20, y=0.30)")
+        assert action.type == "drag"
+        assert action.end_x is None
+        assert action.end_y is None
 
     def test_with_thinking(self):
         action = _parse_action_str(
@@ -68,6 +92,14 @@ class TestParseActionStr:
         assert action.x == pytest.approx(0.25)
         assert action.y == pytest.approx(0.75)
 
+    def test_invalid_action_not_matched(self):
+        """Unparseable input should not match the action pattern."""
+        assert _ACTION_PATTERN.search("random garbage") is None
+
+    def test_explicit_done_is_matched(self):
+        """Explicit DONE() should match the action pattern."""
+        assert _ACTION_PATTERN.search("DONE()") is not None
+
 
 # --- Observation building tests ---
 
@@ -75,7 +107,6 @@ class TestParseActionStr:
 class TestBuildObsDict:
     def test_with_screenshot(self):
         """Test obs dict with PNG bytes."""
-        # Create a minimal valid PNG (1x1 red pixel)
         from PIL import Image
         import io
 
@@ -137,6 +168,7 @@ class TestWAADesktopEnv:
         assert "obs_str" in result
         assert "CLICK" in result["obs_str"]
         assert "TYPE" in result["obs_str"]
+        assert "DRAG" in result["obs_str"]
         assert "DONE" in result["obs_str"]
 
     def test_reset_returns_obs_dict(self):
@@ -165,7 +197,6 @@ class TestWAADesktopEnv:
         asyncio.run(env.reset(seed=42))
         obs, reward, done, info = asyncio.run(env.step("DONE()"))
         assert done is True
-        # Reward should be a float from evaluation (mock evaluator)
         assert isinstance(reward, float)
 
     def test_max_steps_triggers_done(self):
@@ -186,15 +217,13 @@ class TestWAADesktopEnv:
         assert env._rl_env is None
 
     def test_full_episode_flow(self):
-        """Test a complete episode: reset → multiple steps → done → evaluate."""
+        """Test a complete episode: reset -> multiple steps -> done -> evaluate."""
         env = _make_mock_env()
         env._max_steps = 5
 
-        # Reset
         obs, info = asyncio.run(env.reset(seed=1))
         assert "obs_str" in obs
 
-        # Take some actions
         obs, r, done, _ = asyncio.run(env.step("CLICK(x=0.05, y=0.08)"))
         assert not done
         assert r == 0.0
@@ -203,7 +232,6 @@ class TestWAADesktopEnv:
         assert not done
         assert r == 0.0
 
-        # Finish
         obs, r, done, info = asyncio.run(env.step("DONE()"))
         assert done
         assert isinstance(r, float)
@@ -211,20 +239,63 @@ class TestWAADesktopEnv:
     def test_protocol_has_required_methods(self):
         """Verify WAADesktopEnv has all GymImageEnv protocol methods."""
         env = _make_mock_env()
-        assert hasattr(env, "reset")
-        assert hasattr(env, "step")
-        assert hasattr(env, "close")
-        assert hasattr(env, "system_prompt")
-        assert callable(env.reset)
-        assert callable(env.step)
-        assert callable(env.close)
-        assert callable(env.system_prompt)
+        for method in ("reset", "step", "close", "system_prompt", "health_check"):
+            assert hasattr(env, method)
+            assert callable(getattr(env, method))
 
     def test_obs_contains_image_placeholder(self):
         """Test that observations with screenshots include <image> placeholder."""
         env = _make_mock_env()
         obs, _ = asyncio.run(env.reset(seed=42))
-        # Mock adapter returns observations that may or may not have screenshots
-        # At minimum, obs_str should be present
         assert "obs_str" in obs
         assert isinstance(obs["obs_str"], str)
+
+    # --- health_check tests ---
+
+    def test_health_check_not_initialized(self):
+        """Health check before reset returns not_initialized."""
+        env = WAADesktopEnv.__new__(WAADesktopEnv)
+        env._rl_env = None
+        env._server_url = "mock"
+        env._step_count = 0
+        result = asyncio.run(env.health_check())
+        assert result["status"] == "not_initialized"
+
+    def test_health_check_ready_after_episode(self):
+        """Health check after completed episode returns ready."""
+        env = _make_mock_env()
+        asyncio.run(env.reset(seed=42))
+        asyncio.run(env.step("DONE()"))
+        result = asyncio.run(env.health_check())
+        assert result["status"] == "ready"
+
+    def test_health_check_busy_mid_episode(self):
+        """Health check mid-episode returns busy."""
+        env = _make_mock_env()
+        asyncio.run(env.reset(seed=42))
+        asyncio.run(env.step("CLICK(x=0.5, y=0.5)"))
+        result = asyncio.run(env.health_check())
+        assert result["status"] == "busy"
+
+    # --- is_action_valid tests ---
+
+    def test_is_action_valid_for_parsed_action(self):
+        """Actions that parse successfully should be marked valid."""
+        env = _make_mock_env()
+        asyncio.run(env.reset(seed=42))
+        _, _, _, info = asyncio.run(env.step("CLICK(x=0.5, y=0.5)"))
+        assert info["is_action_valid"] is True
+
+    def test_is_action_valid_for_done(self):
+        """Explicit DONE() should be marked valid."""
+        env = _make_mock_env()
+        asyncio.run(env.reset(seed=42))
+        _, _, _, info = asyncio.run(env.step("DONE()"))
+        assert info["is_action_valid"] is True
+
+    def test_is_action_invalid_for_garbage(self):
+        """Unparseable input should be marked invalid."""
+        env = _make_mock_env()
+        asyncio.run(env.reset(seed=42))
+        _, _, _, info = asyncio.run(env.step("random garbage"))
+        assert info["is_action_valid"] is False

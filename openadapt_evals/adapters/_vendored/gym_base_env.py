@@ -1,4 +1,4 @@
-# Vendored from https://github.com/mll-lab-nu/VAGEN
+# Vendored from https://github.com/RAGEN-AI/VAGEN
 # These are pure abstract base classes with no heavy dependencies.
 # Vendored to avoid requiring the full VAGEN installation.
 # Last synced: 2026-03-02
