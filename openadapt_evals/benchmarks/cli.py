@@ -890,7 +890,42 @@ def cmd_probe(args: argparse.Namespace) -> int:
         return 1
 
     server_url = args.server
+    detailed = args.detailed or args.json_output
+    layers = args.layers.split(",") if args.layers else None
+    if layers:
+        detailed = True
 
+    if detailed:
+        from openadapt_evals.infrastructure.probe import (
+            multi_layer_probe,
+            print_probe_results,
+        )
+
+        max_attempts = args.wait_attempts if args.wait else 1
+        attempt = 0
+
+        while attempt < max_attempts:
+            attempt += 1
+            result = multi_layer_probe(
+                server_url,
+                layers=layers,
+                evaluate_url=args.evaluate_url,
+            )
+            if args.json_output:
+                print(result.to_json())
+            else:
+                print_probe_results(result)
+
+            if result.overall_ready:
+                return 0
+
+            if args.wait and attempt < max_attempts:
+                print(f"Attempt {attempt}/{max_attempts}: not ready, retrying in {args.wait_interval}s...")
+                time.sleep(args.wait_interval)
+
+        return 0 if result.overall_ready else 1
+
+    # Default binary probe (unchanged)
     print(f"Probing WAA server at {server_url}...")
 
     max_attempts = args.wait_attempts if args.wait else 1
@@ -2264,6 +2299,14 @@ def main() -> int:
                              help="Max attempts when waiting")
     probe_parser.add_argument("--wait-interval", type=int, default=5,
                              help="Seconds between attempts")
+    probe_parser.add_argument("--detailed", action="store_true",
+                             help="Run 4-layer probe (screenshot, a11y, action, score)")
+    probe_parser.add_argument("--json", dest="json_output", action="store_true",
+                             help="Output JSON (implies --detailed)")
+    probe_parser.add_argument("--layers", type=str, default=None,
+                             help="Comma-separated layer subset (e.g. screenshot,a11y)")
+    probe_parser.add_argument("--evaluate-url", type=str, default=None,
+                             help="Separate URL for score layer (e.g. http://localhost:5051)")
 
     # Generate viewer
     view_parser = subparsers.add_parser("view", help="Generate HTML viewer for results")
