@@ -39,6 +39,7 @@ from openadapt_evals.adapters.rl_env import (
     RLEnvironment,
     RolloutStep,
 )
+from openadapt_evals.adapters.verl_env import WAADesktopEnv
 from openadapt_evals.adapters.waa import (
     WAAAdapter,
     WAAConfig,
@@ -69,6 +70,8 @@ __all__ = [
     "WAAMockAdapter",
     "WAALiveAdapter",
     "WAALiveConfig",
+    # verl-agent / VAGEN integration
+    "WAADesktopEnv",
     # Task ID validation
     "SyntheticTaskError",
     "is_real_waa_task_id",
