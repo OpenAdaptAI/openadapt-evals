@@ -221,12 +221,13 @@ def _escape_for_pyautogui(text: str) -> str:
         text
         .replace("\\", "\\\\")
         .replace("'", "\\'")
+        .replace("\t", "\\t")
         .replace("\r", "")
     )
 
 
 def _build_type_commands(text: str) -> str:
-    """Build pyautogui commands to type text, handling embedded newlines.
+    """Build pyautogui command body to type text, handling embedded newlines.
 
     ``pyautogui.write()`` cannot handle literal newline characters — the
     generated Python command string becomes an unterminated string literal
@@ -234,12 +235,13 @@ def _build_type_commands(text: str) -> str:
     and interleaves ``pyautogui.write()`` with ``pyautogui.press('enter')``.
 
     Returns:
-        A complete Python command string including ``import pyautogui;``.
+        A pyautogui command body string (without ``import pyautogui;`` prefix).
+        Callers must prepend the import themselves.
     """
     segments = text.split("\n")
     if len(segments) == 1:
         escaped = _escape_for_pyautogui(text)
-        return f"import pyautogui; pyautogui.write('{escaped}', interval=0.02)"
+        return f"pyautogui.write('{escaped}', interval=0.02)"
 
     commands: list[str] = []
     for i, seg in enumerate(segments):
@@ -250,8 +252,7 @@ def _build_type_commands(text: str) -> str:
                 commands.append(f"pyautogui.write('{escaped}', interval=0.02)")
             if i < len(segments) - 1:
                 commands.append("pyautogui.press('enter')")
-    body = "; ".join(commands) if commands else "pass"
-    return f"import pyautogui; {body}"
+    return "; ".join(commands) if commands else "pass"
 
 
 @dataclass
@@ -1137,7 +1138,7 @@ class WAALiveAdapter(BenchmarkAdapter):
 
         if action.type == "type":
             text = action.text or ""
-            type_cmds = _build_type_commands(text)
+            type_body = _build_type_commands(text)
             # If target_node_id is set (from type_element), click element first to focus it
             if action.target_node_id is not None:
                 elem_id = str(action.target_node_id)
@@ -1149,11 +1150,11 @@ class WAALiveAdapter(BenchmarkAdapter):
                         f"import pyautogui; import time; "
                         f"pyautogui.click({cx}, {cy}); "
                         f"time.sleep(0.2); "
-                        + type_cmds.removeprefix("import pyautogui; ")
+                        f"{type_body}"
                     )
                 else:
                     logger.warning(f"Element ID '{elem_id}' not found for type_element, typing without focus")
-            return type_cmds
+            return f"import pyautogui; {type_body}"
 
         if action.type == "key":
             return self._translate_key_action(action)
