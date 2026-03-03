@@ -11,6 +11,13 @@ Key advantages over ApiAgent:
 - Multi-turn conversation maintained across steps
 - Built-in screenshot handling via tool_result
 
+Plan progress tracking:
+- When a multi-level demo (with GOAL/PLAN/REFERENCE TRAJECTORY sections) is
+  provided, the agent tracks which plan steps are complete.
+- At each step, a dynamic plan progress summary replaces the static demo text.
+- If Claude declares "done" prematurely (while plan steps remain), the agent
+  overrides the done signal and injects a continuation prompt to keep going.
+
 Usage:
     from openadapt_evals.agents import ClaudeComputerUseAgent
 
@@ -19,6 +26,9 @@ Usage:
 
     # With demo conditioning
     agent = ClaudeComputerUseAgent(demo="Step 1: Click Start menu...")
+
+    # With multi-level demo (enables plan progress tracking)
+    agent = ClaudeComputerUseAgent(demo=open("demo_multilevel.txt").read())
 """
 
 from __future__ import annotations
@@ -26,6 +36,7 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import re
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -59,6 +70,179 @@ COMPUTER_TOOL_TYPE = "computer_20251124"
 COMPUTER_USE_BETA = "computer-use-2025-11-24"
 
 
+def _parse_multilevel_demo(demo_text: str) -> dict | None:
+    """Parse a multi-level demo into structured components.
+
+    Extracts the GOAL, PLAN steps, and REFERENCE TRAJECTORY from a demo
+    that follows the multi-level format. Returns None if the text does not
+    match the expected format (i.e., does not contain GOAL:, PLAN:, and
+    REFERENCE TRAJECTORY sections).
+
+    Args:
+        demo_text: The full demo text to parse.
+
+    Returns:
+        Dict with keys:
+            - "goal": str - the goal text
+            - "plan_steps": list[str] - ordered list of plan step descriptions
+            - "trajectory": list[dict] - list of dicts with keys
+              "step_num", "think", "action", "expect"
+        Returns None if the demo is not in multi-level format.
+    """
+    if not demo_text:
+        return None
+
+    # Check for required sections
+    has_goal = "GOAL:" in demo_text
+    has_plan = "PLAN:" in demo_text
+    has_traj = "REFERENCE TRAJECTORY" in demo_text
+
+    if not (has_goal and has_plan and has_traj):
+        return None
+
+    # Extract GOAL
+    goal_match = re.search(r"GOAL:\s*(.+?)(?:\n\n|\nPLAN:)", demo_text, re.DOTALL)
+    goal = goal_match.group(1).strip() if goal_match else ""
+
+    # Extract PLAN steps
+    plan_match = re.search(
+        r"PLAN:\s*\n(.*?)(?:\nREFERENCE TRAJECTORY|\Z)", demo_text, re.DOTALL
+    )
+    plan_steps: list[str] = []
+    if plan_match:
+        plan_text = plan_match.group(1)
+        # Match numbered lines like "1. Do something"
+        for step_match in re.finditer(r"^\d+\.\s*(.+)$", plan_text, re.MULTILINE):
+            plan_steps.append(step_match.group(1).strip())
+
+    # Extract REFERENCE TRAJECTORY steps
+    traj_match = re.search(
+        r"REFERENCE TRAJECTORY[^\n]*\n(.*)", demo_text, re.DOTALL
+    )
+    trajectory: list[dict] = []
+    if traj_match:
+        traj_text = traj_match.group(1)
+        # Split on "Step N:" headers
+        step_blocks = re.split(r"(?=^Step\s+\d+:)", traj_text, flags=re.MULTILINE)
+        for block in step_blocks:
+            block = block.strip()
+            if not block:
+                continue
+            # Parse step number
+            step_num_match = re.match(r"Step\s+(\d+):", block)
+            if not step_num_match:
+                continue
+            step_num = int(step_num_match.group(1))
+
+            # Parse Think/Action/Expect fields
+            think_match = re.search(
+                r"Think:\s*(.+?)(?=\n\s*Action:|\Z)", block, re.DOTALL
+            )
+            action_match = re.search(
+                r"Action:\s*(.+?)(?=\n\s*Expect:|\Z)", block, re.DOTALL
+            )
+            expect_match = re.search(
+                r"Expect:\s*(.+?)(?=\n\s*$|\nStep\s+\d+:|\Z)", block, re.DOTALL
+            )
+
+            trajectory.append({
+                "step_num": step_num,
+                "think": think_match.group(1).strip() if think_match else "",
+                "action": action_match.group(1).strip() if action_match else "",
+                "expect": expect_match.group(1).strip() if expect_match else "",
+            })
+
+    return {
+        "goal": goal,
+        "plan_steps": plan_steps,
+        "trajectory": trajectory,
+    }
+
+
+def _build_plan_progress_text(
+    goal: str,
+    plan_steps: list[dict],
+    trajectory: list[dict],
+    step_count: int,
+) -> str:
+    """Build a dynamic plan progress summary for injection into messages.
+
+    Args:
+        goal: The task goal text.
+        plan_steps: List of plan step dicts with "text", "status", "step_num".
+        trajectory: List of trajectory step dicts with "step_num", "think",
+            "action", "expect".
+        step_count: Current agent step count (1-indexed).
+
+    Returns:
+        Formatted plan progress text.
+    """
+    total = len(plan_steps)
+
+    done_steps = [s for s in plan_steps if s["status"] == "done"]
+    in_progress = [s for s in plan_steps if s["status"] == "in_progress"]
+    pending = [s for s in plan_steps if s["status"] == "pending"]
+
+    # Determine current step (first in_progress, or first pending)
+    current = in_progress[0] if in_progress else (pending[0] if pending else None)
+    current_num = current["step_num"] if current else total
+
+    lines = [
+        f"GOAL: {goal}",
+        "",
+        f"PLAN PROGRESS (step {current_num}/{total}):",
+    ]
+
+    # Completed steps
+    if done_steps:
+        lines.append("  Completed:")
+        for s in done_steps:
+            lines.append(f"    [{s['step_num']}] {s['text']}")
+    else:
+        lines.append("  Completed: (none yet)")
+
+    # Current step
+    if current:
+        lines.append(f"  Current: step {current['step_num']} - {current['text']}")
+    else:
+        lines.append("  Current: (all steps complete)")
+
+    # Remaining steps
+    remaining = [s for s in pending if current and s["step_num"] > current["step_num"]]
+    if remaining:
+        lines.append("  Remaining:")
+        for s in remaining:
+            lines.append(f"    [{s['step_num']}] {s['text']}")
+    elif pending and not current:
+        pass  # All done
+    else:
+        lines.append("  Remaining: (none)")
+
+    # Current step detail from trajectory
+    if current:
+        traj_step = None
+        for t in trajectory:
+            if t["step_num"] == current["step_num"]:
+                traj_step = t
+                break
+        if traj_step:
+            lines.extend([
+                "",
+                "CURRENT STEP DETAIL:",
+                f"  Think: {traj_step['think']}",
+                f"  Action: {traj_step['action']}",
+                f"  Expect: {traj_step['expect']}",
+            ])
+
+    lines.extend([
+        "",
+        "You MUST complete ALL remaining steps before declaring the task done.",
+        "Do NOT declare done until the last step is verified complete.",
+    ])
+
+    return "\n".join(lines)
+
+
 class ClaudeComputerUseAgent(BenchmarkAgent):
     """Agent using Claude's native computer_use tool.
 
@@ -66,6 +250,10 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
     structured action output. Claude predicts pixel coordinates directly
     (it was trained for this), and actions come back as typed dicts
     rather than free text that needs regex parsing.
+
+    When a multi-level demo is provided (with GOAL/PLAN/REFERENCE TRAJECTORY),
+    the agent parses the demo structure, tracks plan progress, injects dynamic
+    progress summaries at each step, and overrides premature "done" signals.
 
     Args:
         api_key: Anthropic API key. Falls back to ANTHROPIC_API_KEY env var.
@@ -80,6 +268,9 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
 
     # Minimum normalized coordinate to avoid PyAutoGUI fail-safe (top-left corner)
     _COORD_EPS = 0.005  # ~6px at 1280, ~4px at 720
+
+    # Maximum consecutive done overrides before accepting "done"
+    MAX_DONE_OVERRIDES = 3
 
     def __init__(
         self,
@@ -117,14 +308,41 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
         self._step_count = 0
         self._last_tool_use_id: str | None = None
 
-        logger.info(
-            f"ClaudeComputerUseAgent initialized: model={self.model}, "
-            f"display={self.display_width}x{self.display_height}"
-        )
-        if self.demo:
+        # Plan progress tracking (enabled when multi-level demo is provided)
+        self._parsed_demo: dict | None = _parse_multilevel_demo(demo) if demo else None
+        self._plan_steps: list[dict] = []
+        self._trajectory: list[dict] = []
+        self._goal: str = ""
+        self._consecutive_done_overrides: int = 0
+
+        if self._parsed_demo:
+            self._goal = self._parsed_demo["goal"]
+            self._trajectory = self._parsed_demo["trajectory"]
+            # Build plan step tracking list
+            for i, step_text in enumerate(self._parsed_demo["plan_steps"]):
+                self._plan_steps.append({
+                    "text": step_text,
+                    "status": "pending",
+                    "step_num": i + 1,
+                })
+            # Mark the first step as in_progress
+            if self._plan_steps:
+                self._plan_steps[0]["status"] = "in_progress"
             logger.info(
-                f"Demo provided ({len(self.demo)} chars) - persists across all steps"
+                f"Multi-level demo parsed: goal='{self._goal[:60]}...', "
+                f"{len(self._plan_steps)} plan steps, "
+                f"{len(self._trajectory)} trajectory steps"
             )
+        else:
+            logger.info(
+                f"ClaudeComputerUseAgent initialized: model={self.model}, "
+                f"display={self.display_width}x{self.display_height}"
+            )
+            if self.demo:
+                logger.info(
+                    f"Demo provided ({len(self.demo)} chars, non-multilevel) "
+                    f"- persists across all steps"
+                )
 
     def _clamp_coord(self, x_norm: float, y_norm: float) -> tuple[float, float]:
         """Clamp normalized coordinates away from (0,0) to avoid fail-safe."""
@@ -141,6 +359,19 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
         self._messages = []
         self._step_count = 0
         self._last_tool_use_id = None
+        self._consecutive_done_overrides = 0
+
+        # Re-initialize plan progress if multi-level demo was parsed
+        if self._parsed_demo:
+            self._plan_steps = []
+            for i, step_text in enumerate(self._parsed_demo["plan_steps"]):
+                self._plan_steps.append({
+                    "text": step_text,
+                    "status": "pending",
+                    "step_num": i + 1,
+                })
+            if self._plan_steps:
+                self._plan_steps[0]["status"] = "in_progress"
 
     # Maximum internal retries for screenshot/wait actions before returning
     MAX_INTERNAL_RETRIES = 5
@@ -193,7 +424,23 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
                 )
                 content: list[dict[str, Any]] = [tool_result]
                 # Re-inject demo at every step so it doesn't drift out of context
-                if self.demo:
+                if self._plan_steps:
+                    # Multi-level demo: inject dynamic plan progress
+                    progress_text = _build_plan_progress_text(
+                        self._goal,
+                        self._plan_steps,
+                        self._trajectory,
+                        self._step_count,
+                    )
+                    content.append({
+                        "type": "text",
+                        "text": (
+                            f"PLAN PROGRESS (agent step {self._step_count}):"
+                            f"\n---\n{progress_text}\n---"
+                        ),
+                    })
+                elif self.demo:
+                    # Non-multilevel demo: inject static text
                     content.append({
                         "type": "text",
                         "text": (
@@ -251,6 +498,8 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
     ) -> list[dict[str, Any]]:
         """Build the initial user message with task instruction and optional demo.
 
+        For multi-level demos, injects plan progress instead of raw demo text.
+
         Args:
             instruction: Task instruction text.
             screenshot_b64: Base64-encoded screenshot PNG.
@@ -261,13 +510,27 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
         content_parts: list[dict[str, Any]] = []
 
         # Build text prompt
-        text = f"Task: {instruction}"
-        if self.demo:
+        if self._plan_steps:
+            # Multi-level demo: use structured plan progress
+            progress_text = _build_plan_progress_text(
+                self._goal,
+                self._plan_steps,
+                self._trajectory,
+                self._step_count,
+            )
+            text = (
+                f"Here is a structured plan for the task:\n\n"
+                f"{progress_text}\n\n"
+                f"Now complete this task: {instruction}"
+            )
+        elif self.demo:
             text = (
                 f"Here is a demonstration of a similar completed task:\n\n"
                 f"{self.demo}\n\n"
                 f"Now complete this task: {instruction}"
             )
+        else:
+            text = f"Task: {instruction}"
         content_parts.append({"type": "text", "text": text})
 
         # Include initial screenshot as an image
@@ -352,7 +615,9 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
         """Extract BenchmarkAction from API response.
 
         Looks for tool_use blocks in the response content. If none found,
-        treats as task completion (done).
+        treats as task completion (done). If plan steps remain and Claude
+        declares "done" prematurely, overrides the done signal by injecting
+        a continuation prompt and re-calling the API.
 
         Args:
             response: API response object.
@@ -364,14 +629,228 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
         for block in response.content:
             if block.type == "tool_use" and block.name == "computer":
                 self._last_tool_use_id = block.id
-                return self._map_action(block.input, observation)
+                action = self._map_action(block.input, observation)
+                # Advance plan steps heuristically after returning a real action
+                self._advance_plan_steps(action)
+                # Reset consecutive done overrides since we got a real action
+                self._consecutive_done_overrides = 0
+                return action
 
         # No tool_use block — Claude considers task complete
         text_parts = [b.text for b in response.content if hasattr(b, "text")]
+
+        # Check for premature done when plan steps remain
+        if self._plan_steps and self._has_remaining_plan_steps():
+            if self._consecutive_done_overrides < self.MAX_DONE_OVERRIDES:
+                self._consecutive_done_overrides += 1
+                remaining = self._get_remaining_step_descriptions()
+                logger.warning(
+                    f"Overriding premature 'done' (override "
+                    f"{self._consecutive_done_overrides}/{self.MAX_DONE_OVERRIDES}). "
+                    f"Remaining steps: {remaining}"
+                )
+                # Inject continuation prompt
+                progress_text = _build_plan_progress_text(
+                    self._goal,
+                    self._plan_steps,
+                    self._trajectory,
+                    self._step_count,
+                )
+                continuation = (
+                    f"You declared done, but the following plan steps are NOT "
+                    f"complete yet:\n{remaining}\n\n"
+                    f"{progress_text}\n\n"
+                    f"Please continue with the next incomplete step. "
+                    f"Do NOT declare done until ALL steps are complete."
+                )
+                self._messages.append({
+                    "role": "user",
+                    "content": [{"type": "text", "text": continuation}],
+                })
+
+                # Re-call the API
+                retry_response = self._call_api()
+                if retry_response is None:
+                    return BenchmarkAction(
+                        type="error",
+                        raw_action={
+                            "reason": "api_call_failed",
+                            "error_type": "infrastructure",
+                        },
+                    )
+                self._messages.append({
+                    "role": "assistant",
+                    "content": retry_response.content,
+                })
+                # Recursively process the retry response
+                return self._process_response(retry_response, observation)
+            else:
+                logger.warning(
+                    f"Accepting 'done' after {self.MAX_DONE_OVERRIDES} "
+                    f"consecutive overrides. Remaining steps: "
+                    f"{self._get_remaining_step_descriptions()}"
+                )
+
         return BenchmarkAction(
             type="done",
             raw_action={"reason": "no_tool_use", "text": " ".join(text_parts)},
         )
+
+    def _has_remaining_plan_steps(self) -> bool:
+        """Check if any plan steps are not yet done.
+
+        Returns:
+            True if there are pending or in_progress steps.
+        """
+        return any(s["status"] != "done" for s in self._plan_steps)
+
+    def _get_remaining_step_descriptions(self) -> str:
+        """Get a formatted string of remaining plan step descriptions.
+
+        Returns:
+            Newline-separated list of remaining step numbers and descriptions.
+        """
+        remaining = [
+            f"  [{s['step_num']}] {s['text']}"
+            for s in self._plan_steps
+            if s["status"] != "done"
+        ]
+        return "\n".join(remaining)
+
+    def _advance_plan_steps(self, action: BenchmarkAction) -> None:
+        """Advance plan step tracking based on the action being taken.
+
+        Uses simple keyword matching between the action and the current
+        plan step description / trajectory action to heuristically detect
+        when a step is being worked on or completed.
+
+        When a new step appears to be starting (action matches a future
+        step), all prior in_progress steps are marked as done.
+
+        Args:
+            action: The BenchmarkAction being returned to the runner.
+        """
+        if not self._plan_steps:
+            return
+
+        # Build a representation of the action for matching
+        action_keywords = self._extract_action_keywords(action)
+        if not action_keywords:
+            return
+
+        # Find the current in_progress step
+        current_idx = None
+        for i, step in enumerate(self._plan_steps):
+            if step["status"] == "in_progress":
+                current_idx = i
+                break
+
+        if current_idx is None:
+            # No in_progress step — try to start the first pending one
+            for i, step in enumerate(self._plan_steps):
+                if step["status"] == "pending":
+                    step["status"] = "in_progress"
+                    logger.info(
+                        f"Plan step {step['step_num']} now in_progress: "
+                        f"{step['text'][:60]}"
+                    )
+                    break
+            return
+
+        # Check if the action matches a future step better than current
+        best_match_idx = current_idx
+        best_score = self._match_score(action_keywords, current_idx)
+
+        for i in range(current_idx + 1, len(self._plan_steps)):
+            if self._plan_steps[i]["status"] == "done":
+                continue
+            score = self._match_score(action_keywords, i)
+            if score > best_score:
+                best_score = score
+                best_match_idx = i
+
+        # If action matches a later step, mark intermediate steps as done
+        if best_match_idx > current_idx:
+            for i in range(current_idx, best_match_idx):
+                if self._plan_steps[i]["status"] != "done":
+                    self._plan_steps[i]["status"] = "done"
+                    logger.info(
+                        f"Plan step {self._plan_steps[i]['step_num']} "
+                        f"marked done: {self._plan_steps[i]['text'][:60]}"
+                    )
+            self._plan_steps[best_match_idx]["status"] = "in_progress"
+            logger.info(
+                f"Plan step {self._plan_steps[best_match_idx]['step_num']} "
+                f"now in_progress: "
+                f"{self._plan_steps[best_match_idx]['text'][:60]}"
+            )
+
+    def _extract_action_keywords(self, action: BenchmarkAction) -> set[str]:
+        """Extract keywords from an action for matching against plan steps.
+
+        Args:
+            action: BenchmarkAction to extract keywords from.
+
+        Returns:
+            Set of lowercase keyword strings.
+        """
+        keywords: set[str] = set()
+        keywords.add(action.type)
+
+        if action.text:
+            # Add typed text and individual words
+            keywords.add(action.text.lower())
+            for word in action.text.lower().split():
+                if len(word) > 2:
+                    keywords.add(word)
+
+        if action.key:
+            keywords.add(action.key.lower())
+
+        if action.raw_action:
+            claude_action = action.raw_action.get("claude_action", {})
+            action_name = claude_action.get("action", "")
+            if action_name:
+                keywords.add(action_name.lower())
+            click_variant = action.raw_action.get("click_variant", "")
+            if click_variant:
+                keywords.add(click_variant.lower())
+
+        return keywords
+
+    def _match_score(self, action_keywords: set[str], step_idx: int) -> int:
+        """Score how well action keywords match a plan step.
+
+        Checks both the plan step text and the corresponding trajectory
+        step's action description for keyword overlaps.
+
+        Args:
+            action_keywords: Set of keywords from the current action.
+            step_idx: Index into self._plan_steps.
+
+        Returns:
+            Integer score (higher = better match).
+        """
+        score = 0
+        step = self._plan_steps[step_idx]
+        step_text_lower = step["text"].lower()
+
+        # Check plan step text for keyword matches
+        for kw in action_keywords:
+            if kw in step_text_lower:
+                score += 1
+
+        # Check corresponding trajectory step action text
+        step_num = step["step_num"]
+        for traj in self._trajectory:
+            if traj["step_num"] == step_num:
+                traj_action_lower = traj["action"].lower()
+                for kw in action_keywords:
+                    if kw in traj_action_lower:
+                        score += 1
+                break
+
+        return score
 
     def _map_action(
         self, tool_input: dict[str, Any], observation: BenchmarkObservation
