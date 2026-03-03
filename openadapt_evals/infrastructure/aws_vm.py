@@ -6,11 +6,17 @@ to Azure.
 
 Requires: pip install boto3  (or: uv sync --extra aws)
 
-Auth uses boto3's default credential chain:
+Auth uses boto3's default credential chain (first match wins):
     1. Environment variables (AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY)
-    2. Shared credentials file (~/.aws/credentials)
-    3. AWS config file (~/.aws/config)
-    4. Instance metadata (on EC2)
+    2. IAM Identity Center / SSO (~/.aws/config with sso_session)
+    3. Shared credentials file (~/.aws/credentials)
+    4. AWS config file (~/.aws/config)
+    5. Instance metadata (on EC2)
+
+SSO is the recommended approach for interactive use:
+    aws configure sso        # one-time setup
+    aws sso login            # opens browser, caches token
+    # Then all oa-vm --cloud aws commands work automatically
 
 Example:
     from openadapt_evals.infrastructure.aws_vm import AWSVMManager
