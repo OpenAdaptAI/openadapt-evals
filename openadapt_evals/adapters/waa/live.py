@@ -678,6 +678,63 @@ class WAALiveAdapter(BenchmarkAdapter):
             logger.error(f"Fail-safe recovery request failed: {e}")
             return False
 
+    def run_powershell(self, script: str) -> str:
+        """Execute a PowerShell command on the Windows VM and return stdout.
+
+        Sends the script to the WAA server's ``/execute`` endpoint wrapped
+        in a ``python -c "..."`` command that invokes PowerShell via
+        ``subprocess.run``.
+
+        This is primarily intended for use by task verifiers that need to
+        inspect VM state (e.g., checking file counts, registry values, etc.).
+
+        Args:
+            script: PowerShell command or script to execute. Multi-line
+                scripts are supported but should be kept simple.
+
+        Returns:
+            The stdout output from the PowerShell command as a string.
+
+        Raises:
+            RuntimeError: If the command execution fails or the server
+                is unreachable.
+        """
+        import requests
+
+        # Build a python -c command that runs PowerShell via subprocess.
+        # The /execute endpoint requires the "python -c ..." format.
+        # We use repr() for safe escaping of the PowerShell script.
+        python_code = (
+            "import subprocess; "
+            f"r = subprocess.run(['powershell', '-Command', {repr(script)}], "
+            "capture_output=True, text=True, timeout=30); "
+            "print(r.stdout)"
+        )
+        command = f'python -c "{python_code}"'
+
+        try:
+            resp = requests.post(
+                f"{self.config.server_url}/execute",
+                json={"command": command},
+                timeout=self.config.timeout,
+            )
+            if resp.status_code == 200:
+                result = resp.json()
+                stdout = result.get("stdout", "")
+                stderr = result.get("stderr", "")
+                if stderr:
+                    logger.warning("PowerShell stderr: %s", stderr)
+                return stdout
+            else:
+                raise RuntimeError(
+                    f"PowerShell execution failed (HTTP {resp.status_code}): "
+                    f"{resp.text}"
+                )
+        except requests.RequestException as e:
+            raise RuntimeError(
+                f"Failed to connect to WAA server for PowerShell execution: {e}"
+            ) from e
+
     def evaluate(self, task: BenchmarkTask) -> BenchmarkResult:
         """Evaluate current state against task success criteria.
 
