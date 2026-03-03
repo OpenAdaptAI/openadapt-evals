@@ -42,14 +42,18 @@ repr(text)
 
 ### Scores
 
-| Metric | ZS (no demo) | DC (with demo) |
-|--------|-------------|----------------|
-| **Score** | 0.0 | 0.0 |
-| **Steps used** | 30/30 | 16/30 (quit early) |
-| **Time** | 20 min | 8 min |
-| **Formulas entered** | 10 (cols C + D) | 0 |
-| **Multi-line type errors** | 0 | 0 |
-| **Fail-safe crashes** | 0 | 0 |
+| Metric | ZS (no demo) | DC-rigid (old format) | DC-multilevel (new format) |
+|--------|-------------|----------------------|---------------------------|
+| **Score** | 0.0 | 0.0 | 0.0 |
+| **Steps used** | 30/30 | 16/30 (quit early) | 11/30 (quit early) |
+| **Time** | 20 min | 8 min | 13 min |
+| **Headers entered** | No | No | Yes (all 4 in 1 step) |
+| **Years entered** | No | No | Yes (2015-2019 in 1 step) |
+| **Formulas entered** | 10 (cols C + D) | 0 | 1 (col B) |
+| **Drag-fill used** | No | No | Yes (B2:B5) |
+| **Multi-line type errors** | 0 | 0 | 0 |
+| **Fail-safe crashes** | 0 | 0 | 0 |
+| **Behavior** | Productive but unfocused | Confused, opened file dialog, quit | Followed plan: headers → years → formula → drag-fill, quit too early |
 
 ### ZS Trace (30 steps)
 
@@ -89,9 +93,31 @@ repr(text)
 16:    DONE (no_tool_use — agent declared task complete)
 ```
 
-**Observations**: The DC agent never created headers, never typed formulas, never reached the actual task. It appeared to open a "Save As" or "Open" dialog, type the source file name, and declare itself done. The demo's specific UI state descriptions may have conflicted with what the agent actually saw, causing confusion.
+**Observations**: The DC-rigid agent never created headers, never typed formulas, never reached the actual task. It appeared to open a "Save As" or "Open" dialog, type the source file name, and declare itself done. The demo's specific UI state descriptions conflicted with what the agent actually saw, causing confusion.
 
-## Analysis: Why the Demo Hurt
+### DC-Multilevel Trace (11 steps → quit)
+
+```
+ 0-1:  Click sheet tab area (navigating to add new sheet)
+ 2:    TYPE "Year\tCA changes\tFA changes\tOA changes\n" ← ALL 4 HEADERS IN 1 STEP
+ 3:    Click cell A2
+ 4:    TYPE "2015\n2016\n2017\n2018\n2019\n" ← ALL 5 YEARS IN 1 STEP
+ 5:    Click cell B2
+ 6:    TYPE "=(Sheet1.B3-Sheet1.B2)/Sheet1.B2" ← CORRECT FORMULA
+ 7:    Enter (confirm formula)
+ 8:    Click B2 (select for drag-fill)
+ 9:    DRAG B2 → B5 (fill handle) ← CORRECT DRAG-FILL
+10:    Click B2 (verify?)
+11:    Screenshot → DONE (declared task complete too early)
+```
+
+**Observations**: The DC-multilevel agent followed the PLAN structure precisely: headers → years → formula → drag-fill. It entered all 4 headers and all 5 years efficiently (1 step each), typed the correct formula, and attempted drag-fill. However, it quit after completing only column B (CA changes), leaving columns C and D undone. The early quit suggests the agent didn't check its progress against the full PLAN before declaring done.
+
+**Key improvement over DC-rigid**: The multi-level format eliminated the observation mismatch problem entirely. The agent never got confused by UI state descriptions because there were none — it followed the goal-oriented PLAN + Think/Action/Expect trajectory instead.
+
+**Remaining issue**: Premature task completion. The agent needs stronger "check ALL plan steps before declaring done" framing, or the runner should detect incomplete plans and prompt continuation.
+
+## Analysis: Why the Rigid Demo Hurt
 
 ### The demo format problem
 
