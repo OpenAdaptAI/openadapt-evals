@@ -395,14 +395,36 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     print(f"Running {len(task_ids)} task(s): {', '.join(task_ids)}")
 
+    # Check if controller mode is requested
+    use_controller = getattr(args, "controller", False) and demo_text is not None
+    if use_controller:
+        print(f"Using DemoController (max_retries={args.max_retries}, max_replans={args.max_replans})")
+
     # Run evaluation
-    results = evaluate_agent_on_benchmark(
-        agent=agent,
-        adapter=adapter,
-        max_steps=args.max_steps,
-        task_ids=task_ids,
-        config=eval_config,
-    )
+    if use_controller:
+        from openadapt_evals.demo_controller import run_with_controller
+
+        results = []
+        for tid in task_ids:
+            task = adapter.load_task(tid)
+            result = run_with_controller(
+                agent=agent,
+                adapter=adapter,
+                task=task,
+                demo_text=demo_text,
+                max_steps=args.max_steps,
+                max_retries=args.max_retries,
+                max_replans=args.max_replans,
+            )
+            results.append(result)
+    else:
+        results = evaluate_agent_on_benchmark(
+            agent=agent,
+            adapter=adapter,
+            max_steps=args.max_steps,
+            task_ids=task_ids,
+            config=eval_config,
+        )
 
     # Compute and display metrics
     metrics = compute_metrics(results)
@@ -2266,6 +2288,12 @@ def main() -> int:
                            help="Name for this evaluation run")
     run_parser.add_argument("--no-open", action="store_true",
                            help="Don't auto-open browser after evaluation")
+    run_parser.add_argument("--controller", action="store_true",
+                           help="Use DemoController state machine for step-by-step plan execution with VLM verification")
+    run_parser.add_argument("--max-retries", type=int, default=2,
+                           help="Max retries per step when using --controller (default: 2)")
+    run_parser.add_argument("--max-replans", type=int, default=2,
+                           help="Max replans when using --controller (default: 2)")
 
     # Live evaluation (full control)
     live_parser = subparsers.add_parser("live", help="Run live evaluation against WAA server (full control)")
