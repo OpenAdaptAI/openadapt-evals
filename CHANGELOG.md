@@ -1,6 +1,27 @@
 # CHANGELOG
 
 
+## v0.21.1 (2026-03-03)
+
+### Bug Fixes
+
+- Address round-2 review findings across pipeline and live adapter
+  ([#79](https://github.com/OpenAdaptAI/openadapt-evals/pull/79),
+  [`54b4cba`](https://github.com/OpenAdaptAI/openadapt-evals/commit/54b4cbaf80f79c74d01c7239021732a838302992))
+
+Pipeline (run_eval_pipeline.py): - Add timeout=3600 to eval subprocess to prevent indefinite hangs -
+  Guard _ensure_waa_ready against empty vm_ip (skip tunnel reconnect) - Capture demo generation
+  output to prevent thread-interleaved stdout - Make eval_tasks a defensive copy instead of alias
+
+Live adapter (live.py): - Decouple _build_type_commands from callers: return body without import
+  prefix, eliminating fragile removeprefix coupling - Escape tab characters in _escape_for_pyautogui
+
+Tests (test_waa.py): - Add 18 tests for _escape_for_pyautogui and _build_type_commands covering edge
+  cases: empty text, newlines, tabs, quotes, formulas
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.21.0 (2026-03-03)
 
 ### Features
