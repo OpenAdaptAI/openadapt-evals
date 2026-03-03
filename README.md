@@ -286,12 +286,46 @@ OPENAI_API_KEY=sk-...
 AZURE_SUBSCRIPTION_ID=...
 AZURE_ML_RESOURCE_GROUP=...
 AZURE_ML_WORKSPACE_NAME=...
-
-# AWS (for --cloud aws VM management)
-AWS_ACCESS_KEY_ID=...
-AWS_SECRET_ACCESS_KEY=...
-AWS_DEFAULT_REGION=us-east-1
 ```
+
+### AWS authentication
+
+AWS credentials are resolved via [boto3's default credential chain](https://boto3.amazonaws.com/v1/documentation/api/latest/guide/credentials.html). **SSO (IAM Identity Center) is recommended** for interactive use:
+
+```bash
+# One-time setup — opens a guided wizard
+aws configure sso
+# Prompts for: SSO start URL, region, account, role name, profile name
+
+# Login (opens browser, caches short-lived token)
+aws sso login
+
+# Verify it works
+oa-vm smoke-test-aws
+
+# All oa-vm --cloud aws commands now work automatically
+oa-vm pool-create --cloud aws --workers 1
+```
+
+<details>
+<summary>Example <code>~/.aws/config</code> for SSO</summary>
+
+```ini
+[default]
+sso_session = my-org
+sso_account_id = 111122223333
+sso_role_name = PowerUserAccess
+region = us-east-1
+
+[sso-session my-org]
+sso_start_url = https://my-org.awsapps.com/start
+sso_region = us-east-1
+sso_registration_scopes = sso:account:access
+```
+
+</details>
+
+Static keys (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` in `.env`) also work but are not recommended for interactive use -- they don't expire and are a security risk if leaked.
 
 See [`openadapt_evals/config.py`](openadapt_evals/config.py) for all available settings.
 
