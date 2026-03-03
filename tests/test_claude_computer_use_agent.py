@@ -202,8 +202,8 @@ class TestActionMapping:
         response = create_mock_response(
             create_tool_use_block(
                 "left_click_drag",
-                startCoordinate=[128, 72],
-                endCoordinate=[640, 360],
+                start_coordinate=[128, 72],
+                coordinate=[640, 360],
             )
         )
         mock_anthropic_client.beta.messages.create.return_value = response
@@ -481,7 +481,7 @@ class TestEdgeCases:
         assert action.modifiers == ["ctrl", "shift"]
 
     def test_coordinate_edge_values(self, agent, mock_anthropic_client):
-        """Coordinates at display edges normalize correctly."""
+        """Coordinates at (0,0) get clamped to avoid PyAutoGUI fail-safe."""
         response = create_mock_response(
             create_tool_use_block("left_click", coordinate=[0, 0])
         )
@@ -490,8 +490,9 @@ class TestEdgeCases:
         action = agent.act(make_observation(), make_task())
 
         assert action.type == "click"
-        assert action.x == 0.0
-        assert action.y == 0.0
+        # (0,0) is clamped to (_COORD_EPS, _COORD_EPS) to avoid fail-safe
+        assert action.x == 0.005
+        assert action.y == 0.005
 
     def test_missing_api_key_raises(self):
         """Missing API key raises RuntimeError."""

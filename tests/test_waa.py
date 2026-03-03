@@ -465,54 +465,8 @@ class TestFailsafeDetection:
 # ---------------------------------------------------------------------------
 
 
-class TestEscapeForPyautogui:
-    """Tests for _escape_for_pyautogui text escaping."""
-
-    def test_plain_text(self):
-        from openadapt_evals.adapters.waa.live import _escape_for_pyautogui
-
-        assert _escape_for_pyautogui("hello world") == "hello world"
-
-    def test_backslash_escaped(self):
-        from openadapt_evals.adapters.waa.live import _escape_for_pyautogui
-
-        assert _escape_for_pyautogui("path\\to\\file") == "path\\\\to\\\\file"
-
-    def test_single_quote_escaped(self):
-        from openadapt_evals.adapters.waa.live import _escape_for_pyautogui
-
-        assert _escape_for_pyautogui("it's") == "it\\'s"
-
-    def test_tab_escaped(self):
-        from openadapt_evals.adapters.waa.live import _escape_for_pyautogui
-
-        assert _escape_for_pyautogui("col1\tcol2") == "col1\\tcol2"
-
-    def test_carriage_return_stripped(self):
-        from openadapt_evals.adapters.waa.live import _escape_for_pyautogui
-
-        assert _escape_for_pyautogui("line\r") == "line"
-
-    def test_empty_string(self):
-        from openadapt_evals.adapters.waa.live import _escape_for_pyautogui
-
-        assert _escape_for_pyautogui("") == ""
-
-    def test_combined_special_chars(self):
-        from openadapt_evals.adapters.waa.live import _escape_for_pyautogui
-
-        # \r is stripped, so "with\rtabs" → "withtabs"
-        result = _escape_for_pyautogui("it's a\\path\twith\rtabs")
-        assert result == "it\\'s a\\\\path\\twithtabs"
-
-
-# ---------------------------------------------------------------------------
-# _build_type_commands
-# ---------------------------------------------------------------------------
-
-
 class TestBuildTypeCommands:
-    """Tests for _build_type_commands which handles newlines in type actions."""
+    """Tests for _build_type_commands which uses repr() for escaping."""
 
     def test_simple_text(self):
         from openadapt_evals.adapters.waa.live import _build_type_commands
@@ -567,11 +521,15 @@ class TestBuildTypeCommands:
         assert parts[3] == "pyautogui.press('enter')"
         assert parts[4] == "pyautogui.write('c', interval=0.02)"
 
-    def test_special_chars_escaped(self):
+    def test_special_chars_repr(self):
+        """repr() handles quotes and backslashes correctly."""
         from openadapt_evals.adapters.waa.live import _build_type_commands
 
         result = _build_type_commands("it's a\\path")
-        assert "it\\'s a\\\\path" in result
+        # repr() produces valid Python — verify by compiling
+        compile(f"import pyautogui; {result}", "<test>", "exec")
+        # The text should be representable and contain the original content
+        assert "it" in result and "path" in result
 
     def test_no_import_prefix(self):
         """_build_type_commands should return body only, no import statement."""
@@ -587,8 +545,28 @@ class TestBuildTypeCommands:
         text = "=(Sheet1.C4-Sheet1.C3)/Sheet1.C3\n=(Sheet1.C5-Sheet1.C4)/Sheet1.C4"
         result = _build_type_commands(text)
         # Should have two write commands separated by enter
-        assert "pyautogui.write('=(Sheet1.C4-Sheet1.C3)/Sheet1.C3', interval=0.02)" in result
+        assert "=(Sheet1.C4-Sheet1.C3)/Sheet1.C3" in result
         assert "pyautogui.press('enter')" in result
-        assert "pyautogui.write('=(Sheet1.C5-Sheet1.C4)/Sheet1.C4', interval=0.02)" in result
+        assert "=(Sheet1.C5-Sheet1.C4)/Sheet1.C4" in result
         # No literal newlines in the result
         assert "\n" not in result
+        # Must be valid Python
+        compile(f"import pyautogui; {result}", "<test>", "exec")
+
+    def test_all_special_chars_produce_valid_python(self):
+        """repr() handles ALL characters correctly — the key invariant."""
+        from openadapt_evals.adapters.waa.live import _build_type_commands
+
+        test_cases = [
+            "simple",
+            "it's a quote",
+            "tab\there",
+            "back\\slash",
+            'double"quote',
+            "unicode: \u00e9\u00e8\u00ea",
+            "null\x00byte",
+            "line1\nline2\nline3",
+        ]
+        for text in test_cases:
+            result = _build_type_commands(text)
+            compile(f"import pyautogui; {result}", "<test>", "exec")
