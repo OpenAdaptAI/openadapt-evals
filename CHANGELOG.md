@@ -1,6 +1,26 @@
 # CHANGELOG
 
 
+## v0.25.1 (2026-03-03)
+
+### Bug Fixes
+
+- Address review findings in verl-agent adapter
+  ([#88](https://github.com/OpenAdaptAI/openadapt-evals/pull/88),
+  [`879c53c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/879c53c182853104a4a8c5e179e810185180d37a))
+
+- Fix SCROLL direction not forwarded to BenchmarkAction.scroll_direction - Fix DRAG parsing to
+  include end_x/end_y coordinates - Fix is_action_valid logic: use pattern match instead of inverted
+  condition - Fix fractional coord conversion: trust _use_fractional flag instead of checking value
+  ranges (0 and 1 are ambiguous between frac and pixel) - Convert drag end coordinates (end_x/end_y)
+  from fractional to pixel - Add health_check() method returning
+  ready/busy/needs_recovery/not_initialized - Add DRAG to system prompt DSL documentation - Fix
+  vendored VAGEN source URL (mll-lab-nu -> RAGEN-AI) - Add 12 new tests: scroll direction, drag
+  coords, health_check, is_action_valid
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.25.0 (2026-03-03)
 
 ### Bug Fixes
