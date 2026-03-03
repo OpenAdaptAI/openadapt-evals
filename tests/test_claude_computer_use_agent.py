@@ -527,3 +527,458 @@ class TestImport:
         from openadapt_evals import agents
 
         assert "ClaudeComputerUseAgent" in agents.__all__
+
+
+# --- Multi-level demo fixture ---
+
+SAMPLE_MULTILEVEL_DEMO = """\
+GOAL: Calculate annual asset changes in a new spreadsheet sheet
+
+PLAN:
+1. Create a new sheet for calculating annual changes
+2. Create a header row with Year, CA changes, FA changes, OA changes
+3. Enter years 2015-2019 in column A
+4. Enter CA change formula in B2 and drag-fill down
+5. Enter FA change formula in C2 and drag-fill down
+
+REFERENCE TRAJECTORY (for disambiguation -- adapt actions to your actual screen):
+
+Step 1:
+  Think: I need to create a new sheet for calculating annual changes.
+  Action: Right-click on the "Sheet1" tab at the bottom and select "Insert Sheet".
+  Expect: A new blank sheet named "Sheet2" should appear.
+
+Step 2:
+  Think: I need to create a header row.
+  Action: Click cell A1 and type "Year"
+  Expect: The text "Year" should appear in cell A1.
+
+Step 3:
+  Think: I need to enter years.
+  Action: Click cell A2 and type "2015", then press Enter and type "2016".
+  Expect: Years 2015 and 2016 appear in cells A2 and A3.
+
+Step 4:
+  Think: I need to enter the CA change formula.
+  Action: Click cell B2 and type "=(Sheet1.B3-Sheet1.B2)/Sheet1.B2"
+  Expect: Cell B2 should contain the percentage change formula.
+
+Step 5:
+  Think: I need to enter the FA change formula.
+  Action: Click cell C2 and type "=(Sheet1.C3-Sheet1.C2)/Sheet1.C2"
+  Expect: Cell C2 should contain the FA percentage change formula.
+
+If your screen doesn't match, re-evaluate based on the PLAN.
+"""
+
+
+class TestParseMultilevelDemo:
+    """Test _parse_multilevel_demo() parsing function."""
+
+    def test_parses_goal(self):
+        """Goal text is extracted correctly."""
+        from openadapt_evals.agents.claude_computer_use_agent import (
+            _parse_multilevel_demo,
+        )
+
+        result = _parse_multilevel_demo(SAMPLE_MULTILEVEL_DEMO)
+        assert result is not None
+        assert "Calculate annual asset changes" in result["goal"]
+
+    def test_parses_plan_steps(self):
+        """Plan steps are extracted as a list of strings."""
+        from openadapt_evals.agents.claude_computer_use_agent import (
+            _parse_multilevel_demo,
+        )
+
+        result = _parse_multilevel_demo(SAMPLE_MULTILEVEL_DEMO)
+        assert result is not None
+        assert len(result["plan_steps"]) == 5
+        assert "Create a new sheet" in result["plan_steps"][0]
+        assert "header row" in result["plan_steps"][1]
+        assert "FA change formula" in result["plan_steps"][4]
+
+    def test_parses_trajectory_steps(self):
+        """Trajectory steps are extracted with think/action/expect."""
+        from openadapt_evals.agents.claude_computer_use_agent import (
+            _parse_multilevel_demo,
+        )
+
+        result = _parse_multilevel_demo(SAMPLE_MULTILEVEL_DEMO)
+        assert result is not None
+        assert len(result["trajectory"]) == 5
+
+        step1 = result["trajectory"][0]
+        assert step1["step_num"] == 1
+        assert "create a new sheet" in step1["think"].lower()
+        assert "Right-click" in step1["action"]
+        assert "Sheet2" in step1["expect"]
+
+        step5 = result["trajectory"][4]
+        assert step5["step_num"] == 5
+        assert "FA change formula" in step5["think"]
+
+    def test_returns_none_for_plain_demo(self):
+        """Non-multilevel demo returns None."""
+        from openadapt_evals.agents.claude_computer_use_agent import (
+            _parse_multilevel_demo,
+        )
+
+        result = _parse_multilevel_demo("Step 1: Click Start\nStep 2: Type notepad")
+        assert result is None
+
+    def test_returns_none_for_empty_string(self):
+        """Empty string returns None."""
+        from openadapt_evals.agents.claude_computer_use_agent import (
+            _parse_multilevel_demo,
+        )
+
+        assert _parse_multilevel_demo("") is None
+
+    def test_returns_none_for_none(self):
+        """None input returns None."""
+        from openadapt_evals.agents.claude_computer_use_agent import (
+            _parse_multilevel_demo,
+        )
+
+        assert _parse_multilevel_demo(None) is None
+
+    def test_partial_format_returns_none(self):
+        """Demo with only GOAL but no PLAN or TRAJECTORY returns None."""
+        from openadapt_evals.agents.claude_computer_use_agent import (
+            _parse_multilevel_demo,
+        )
+
+        partial = "GOAL: Do something\n\nSome instructions here."
+        assert _parse_multilevel_demo(partial) is None
+
+    def test_parses_real_demo_file(self):
+        """Parse the actual multilevel demo file from the repo."""
+        from openadapt_evals.agents.claude_computer_use_agent import (
+            _parse_multilevel_demo,
+        )
+        from pathlib import Path
+
+        demo_path = Path(
+            "/Users/abrichr/oa/src/openadapt-evals/.claude/worktrees/eval-fixes/"
+            "demo_prompts_vlm/"
+            "04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS_multilevel.txt"
+        )
+        if not demo_path.exists():
+            pytest.skip("Real demo file not available")
+
+        demo_text = demo_path.read_text()
+        result = _parse_multilevel_demo(demo_text)
+        assert result is not None
+        assert len(result["plan_steps"]) == 13
+        assert len(result["trajectory"]) == 21
+        assert "annual changes" in result["goal"].lower()
+
+
+class TestBuildPlanProgressText:
+    """Test _build_plan_progress_text() formatting function."""
+
+    def test_initial_progress(self):
+        """Progress text at the start shows first step as current."""
+        from openadapt_evals.agents.claude_computer_use_agent import (
+            _build_plan_progress_text,
+        )
+
+        plan_steps = [
+            {"text": "Create sheet", "status": "in_progress", "step_num": 1},
+            {"text": "Add headers", "status": "pending", "step_num": 2},
+            {"text": "Enter data", "status": "pending", "step_num": 3},
+        ]
+        trajectory = [
+            {"step_num": 1, "think": "Need sheet", "action": "Right-click tab",
+             "expect": "New sheet"},
+        ]
+
+        text = _build_plan_progress_text("Test goal", plan_steps, trajectory, 1)
+        assert "GOAL: Test goal" in text
+        assert "step 1/3" in text
+        assert "Completed: (none yet)" in text
+        assert "Current: step 1 - Create sheet" in text
+        assert "Add headers" in text  # in remaining
+        assert "CURRENT STEP DETAIL" in text
+        assert "Right-click tab" in text
+        assert "MUST complete ALL remaining steps" in text
+
+    def test_midway_progress(self):
+        """Progress text midway through shows completed and remaining."""
+        from openadapt_evals.agents.claude_computer_use_agent import (
+            _build_plan_progress_text,
+        )
+
+        plan_steps = [
+            {"text": "Create sheet", "status": "done", "step_num": 1},
+            {"text": "Add headers", "status": "in_progress", "step_num": 2},
+            {"text": "Enter data", "status": "pending", "step_num": 3},
+        ]
+
+        text = _build_plan_progress_text("Goal", plan_steps, [], 5)
+        assert "step 2/3" in text
+        assert "[1] Create sheet" in text  # in completed
+        assert "Current: step 2 - Add headers" in text
+        assert "[3] Enter data" in text  # in remaining
+
+    def test_all_done_progress(self):
+        """Progress text when all steps are complete."""
+        from openadapt_evals.agents.claude_computer_use_agent import (
+            _build_plan_progress_text,
+        )
+
+        plan_steps = [
+            {"text": "Step A", "status": "done", "step_num": 1},
+            {"text": "Step B", "status": "done", "step_num": 2},
+        ]
+
+        text = _build_plan_progress_text("Goal", plan_steps, [], 10)
+        assert "all steps complete" in text.lower()
+
+
+class TestPlanProgressTracking:
+    """Test plan progress tracking in the agent."""
+
+    @pytest.fixture
+    def agent_with_multilevel_demo(self, mock_anthropic_client):
+        """Create a ClaudeComputerUseAgent with a multi-level demo."""
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key-123"}):
+            with patch("anthropic.Anthropic", return_value=mock_anthropic_client):
+                from openadapt_evals.agents.claude_computer_use_agent import (
+                    ClaudeComputerUseAgent,
+                )
+
+                return ClaudeComputerUseAgent(demo=SAMPLE_MULTILEVEL_DEMO)
+
+    def test_multilevel_demo_enables_tracking(self, agent_with_multilevel_demo):
+        """Multi-level demo initializes plan step tracking."""
+        agent = agent_with_multilevel_demo
+        assert len(agent._plan_steps) == 5
+        assert agent._plan_steps[0]["status"] == "in_progress"
+        assert agent._plan_steps[1]["status"] == "pending"
+        assert agent._goal != ""
+        assert len(agent._trajectory) == 5
+
+    def test_plain_demo_no_tracking(self, agent_with_demo):
+        """Non-multilevel demo does not enable tracking."""
+        assert len(agent_with_demo._plan_steps) == 0
+        assert agent_with_demo._parsed_demo is None
+
+    def test_no_demo_no_tracking(self, agent):
+        """No demo does not enable tracking."""
+        assert len(agent._plan_steps) == 0
+        assert agent._parsed_demo is None
+
+    def test_reset_reinitializes_plan(self, agent_with_multilevel_demo):
+        """Reset re-initializes plan steps to initial state."""
+        agent = agent_with_multilevel_demo
+        # Manually mark some steps as done
+        agent._plan_steps[0]["status"] = "done"
+        agent._plan_steps[1]["status"] = "in_progress"
+        agent._consecutive_done_overrides = 2
+
+        agent.reset()
+
+        assert agent._plan_steps[0]["status"] == "in_progress"
+        assert agent._plan_steps[1]["status"] == "pending"
+        assert agent._consecutive_done_overrides == 0
+
+    def test_first_step_injects_plan_progress(
+        self, agent_with_multilevel_demo, mock_anthropic_client
+    ):
+        """First step with multi-level demo uses plan progress text."""
+        response = create_mock_response(
+            create_tool_use_block("right_click", coordinate=[100, 700])
+        )
+        mock_anthropic_client.beta.messages.create.return_value = response
+
+        agent_with_multilevel_demo.act(make_observation(), make_task())
+
+        call_args = mock_anthropic_client.beta.messages.create.call_args
+        messages = call_args.kwargs["messages"]
+        content = messages[0]["content"]
+        text_parts = [p["text"] for p in content if p.get("type") == "text"]
+        full_text = " ".join(text_parts)
+        # Should have plan progress, not raw demo
+        assert "structured plan" in full_text.lower()
+        assert "PLAN PROGRESS" in full_text
+        assert "MUST complete ALL" in full_text
+
+    def test_subsequent_step_injects_plan_progress(
+        self, agent_with_multilevel_demo, mock_anthropic_client
+    ):
+        """Subsequent steps inject dynamic plan progress text."""
+        # Step 1
+        response1 = create_mock_response(
+            create_tool_use_block("right_click", coordinate=[100, 700])
+        )
+        mock_anthropic_client.beta.messages.create.return_value = response1
+        agent_with_multilevel_demo.act(make_observation(), make_task())
+
+        # Step 2
+        response2 = create_mock_response(
+            create_tool_use_block("type", text="Year")
+        )
+        mock_anthropic_client.beta.messages.create.return_value = response2
+        agent_with_multilevel_demo.act(make_observation(), make_task())
+
+        # Check that plan progress was injected in step 2
+        call_args = mock_anthropic_client.beta.messages.create.call_args
+        messages = call_args.kwargs["messages"]
+        # Find the user message for step 2 (should be at index 2)
+        step2_user = messages[2]
+        assert step2_user["role"] == "user"
+        text_parts = [
+            p["text"] for p in step2_user["content"]
+            if isinstance(p, dict) and p.get("type") == "text"
+        ]
+        assert any("PLAN PROGRESS" in t for t in text_parts)
+
+    def test_max_done_overrides_constant(self, agent_with_multilevel_demo):
+        """MAX_DONE_OVERRIDES class constant exists and defaults to 3."""
+        from openadapt_evals.agents.claude_computer_use_agent import (
+            ClaudeComputerUseAgent,
+        )
+
+        assert ClaudeComputerUseAgent.MAX_DONE_OVERRIDES == 3
+
+    def test_premature_done_override(
+        self, agent_with_multilevel_demo, mock_anthropic_client
+    ):
+        """Premature 'done' is overridden when plan steps remain."""
+        agent = agent_with_multilevel_demo
+
+        # First call: Claude declares done (text only, no tool_use)
+        done_response = create_mock_response(
+            create_text_block("Task completed successfully.")
+        )
+        # Second call (after override): Claude returns an action
+        action_response = create_mock_response(
+            create_tool_use_block("right_click", coordinate=[100, 700])
+        )
+        mock_anthropic_client.beta.messages.create.side_effect = [
+            done_response,
+            action_response,
+        ]
+
+        action = agent.act(make_observation(), make_task())
+
+        # Should NOT be done — override kicked in
+        assert action.type == "click"
+        # Verify two API calls were made
+        assert mock_anthropic_client.beta.messages.create.call_count == 2
+        # Override counter should have been incremented then reset
+        assert agent._consecutive_done_overrides == 0
+
+    def test_done_accepted_after_max_overrides(
+        self, agent_with_multilevel_demo, mock_anthropic_client
+    ):
+        """Done is accepted after MAX_DONE_OVERRIDES consecutive overrides."""
+        agent = agent_with_multilevel_demo
+        # Set overrides to the max
+        agent._consecutive_done_overrides = agent.MAX_DONE_OVERRIDES
+
+        done_response = create_mock_response(
+            create_text_block("I'm done.")
+        )
+        mock_anthropic_client.beta.messages.create.return_value = done_response
+
+        action = agent.act(make_observation(), make_task())
+
+        # Should be done since overrides are exhausted
+        assert action.type == "done"
+        # Only one API call (no retry)
+        assert mock_anthropic_client.beta.messages.create.call_count == 1
+
+    def test_done_accepted_when_all_steps_complete(
+        self, agent_with_multilevel_demo, mock_anthropic_client
+    ):
+        """Done is accepted when all plan steps are marked done."""
+        agent = agent_with_multilevel_demo
+        # Mark all steps as done
+        for step in agent._plan_steps:
+            step["status"] = "done"
+
+        done_response = create_mock_response(
+            create_text_block("Task completed successfully.")
+        )
+        mock_anthropic_client.beta.messages.create.return_value = done_response
+
+        action = agent.act(make_observation(), make_task())
+
+        assert action.type == "done"
+        # Only one API call (no retry since all steps are done)
+        assert mock_anthropic_client.beta.messages.create.call_count == 1
+
+
+class TestPlanStepAdvancement:
+    """Test heuristic plan step advancement."""
+
+    @pytest.fixture
+    def agent_with_multilevel_demo(self, mock_anthropic_client):
+        """Create agent with multi-level demo for advancement tests."""
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key-123"}):
+            with patch("anthropic.Anthropic", return_value=mock_anthropic_client):
+                from openadapt_evals.agents.claude_computer_use_agent import (
+                    ClaudeComputerUseAgent,
+                )
+
+                return ClaudeComputerUseAgent(demo=SAMPLE_MULTILEVEL_DEMO)
+
+    def test_type_action_matches_header_step(self, agent_with_multilevel_demo):
+        """Typing 'Year' matches the header step."""
+        agent = agent_with_multilevel_demo
+        # Step 1 is in_progress (create sheet). Typing "Year" matches step 2 better.
+        action = BenchmarkAction(
+            type="type",
+            text="Year",
+            raw_action={"claude_action": {"action": "type", "text": "Year"}},
+        )
+        agent._advance_plan_steps(action)
+        # Step 1 should be done, step 2 should be in_progress
+        assert agent._plan_steps[0]["status"] == "done"
+        assert agent._plan_steps[1]["status"] == "in_progress"
+
+    def test_click_action_stays_on_current(self, agent_with_multilevel_demo):
+        """A generic click stays on the current step."""
+        agent = agent_with_multilevel_demo
+        action = BenchmarkAction(
+            type="click",
+            x=0.5, y=0.5,
+            raw_action={"claude_action": {"action": "left_click"},
+                        "click_variant": "left_click"},
+        )
+        agent._advance_plan_steps(action)
+        # Step 1 should still be in_progress (generic click matches many steps)
+        assert agent._plan_steps[0]["status"] == "in_progress"
+
+    def test_extract_action_keywords(self, agent_with_multilevel_demo):
+        """Keywords are extracted from various action types."""
+        agent = agent_with_multilevel_demo
+
+        # Type action
+        action = BenchmarkAction(
+            type="type",
+            text="=(Sheet1.B3-Sheet1.B2)/Sheet1.B2",
+            raw_action={"claude_action": {"action": "type"}},
+        )
+        keywords = agent._extract_action_keywords(action)
+        assert "type" in keywords
+        assert "=(sheet1.b3-sheet1.b2)/sheet1.b2" in keywords
+
+        # Key action
+        action2 = BenchmarkAction(
+            type="key",
+            key="Return",
+            raw_action={"claude_action": {"action": "key"}},
+        )
+        keywords2 = agent._extract_action_keywords(action2)
+        assert "key" in keywords2
+        assert "return" in keywords2
+
+    def test_no_plan_steps_no_crash(self, agent):
+        """Advancement with no plan steps does not crash."""
+        action = BenchmarkAction(type="click", x=0.5, y=0.5, raw_action={})
+        # Should be a no-op, not crash
+        agent._advance_plan_steps(action)

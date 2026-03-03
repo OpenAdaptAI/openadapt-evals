@@ -215,6 +215,28 @@ def main() -> int:
     parser.add_argument("--vm-user", default="azureuser", help="VM SSH user")
     parser.add_argument("--zs-only", action="store_true", help="Run zero-shot only (no demo)")
     parser.add_argument("--dc-only", action="store_true", help="Run demo-conditioned only")
+    parser.add_argument(
+        "--controller",
+        action="store_true",
+        help=(
+            "Use the DemoController state machine for DC runs. "
+            "The controller drives the agent step-by-step through the plan "
+            "with VLM verification at each step, retry on failure, and "
+            "replanning when retries are exhausted."
+        ),
+    )
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=2,
+        help="Max retries per step when using --controller (default: 2)",
+    )
+    parser.add_argument(
+        "--max-replans",
+        type=int,
+        default=2,
+        help="Max replans when using --controller (default: 2)",
+    )
     args = parser.parse_args()
 
     demo_dir = Path(args.demo_dir)
@@ -256,6 +278,8 @@ def main() -> int:
     vm_ip = resolve_vm_ip(args.vm_ip)
 
     print(f"Eval: {len(conditions)} runs ({len(task_ids)} tasks) with {args.agent}")
+    if args.controller:
+        print(f"Controller: ENABLED (max_retries={args.max_retries}, max_replans={args.max_replans})")
     print(f"VM: {vm_ip}")
     print()
 
@@ -301,6 +325,12 @@ def main() -> int:
         ]
         if demo_path:
             cmd.extend(["--demo", str(demo_path.resolve())])
+        if args.controller and demo_path:
+            cmd.extend([
+                "--controller",
+                "--max-retries", str(args.max_retries),
+                "--max-replans", str(args.max_replans),
+            ])
 
         result = subprocess.run(cmd)
         elapsed = time.time() - task_start
