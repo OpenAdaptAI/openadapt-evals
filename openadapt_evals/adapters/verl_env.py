@@ -81,6 +81,7 @@ def _parse_action_str(action_str: str) -> BenchmarkAction:
         TYPE(text="hello world")
         KEY(key="enter")
         SCROLL(x=0.50, y=0.50, direction="down")
+        DRAG(x=0.20, y=0.30, end_x=0.80, end_y=0.70)
         WAIT()
         DONE()
     """
@@ -113,6 +114,7 @@ def _parse_action_str(action_str: str) -> BenchmarkAction:
             type="scroll",
             x=float(kwargs.get("x", 0.5)),
             y=float(kwargs.get("y", 0.5)),
+            scroll_direction=kwargs.get("direction", "down"),
         )
     elif cmd == "WAIT":
         return BenchmarkAction(type="wait")
@@ -123,6 +125,8 @@ def _parse_action_str(action_str: str) -> BenchmarkAction:
             type="drag",
             x=float(kwargs.get("x", 0.5)),
             y=float(kwargs.get("y", 0.5)),
+            end_x=float(kwargs["end_x"]) if "end_x" in kwargs else None,
+            end_y=float(kwargs["end_y"]) if "end_y" in kwargs else None,
         )
     else:
         return BenchmarkAction(type="done")
@@ -163,6 +167,7 @@ SYSTEM_PROMPT = (
     "  TYPE(text=\"<text>\") - type text\n"
     "  KEY(key=\"<name>\") - press a key (enter, tab, escape, ctrl+a, etc.)\n"
     "  SCROLL(x=<frac>, y=<frac>, direction=\"up\"|\"down\") - scroll\n"
+    "  DRAG(x=<frac>, y=<frac>, end_x=<frac>, end_y=<frac>) - drag\n"
     "  WAIT() - wait for the screen to update\n"
     "  DONE() - task is complete\n"
     "\n"
@@ -215,6 +220,42 @@ class WAADesktopEnv(_GymImageEnvBase):
         )
         self._rl_env = RLEnvironment(adapter, default_task_id=self._task_id)
         return self._rl_env
+
+    async def health_check(self) -> dict[str, Any]:
+        """Check environment health status.
+
+        Returns a dict with:
+            status: "ready" | "busy" | "needs_recovery" | "not_initialized"
+            server_url: The WAA server URL
+            step_count: Current step count in episode
+
+        Use this from a pool controller to decide whether to send work
+        to this environment or retire/restart it.
+        """
+        if self._rl_env is None:
+            return {"status": "not_initialized", "server_url": self._server_url}
+
+        adapter = self._rl_env.adapter
+        # Check if the WAA server is reachable
+        try:
+            check_fn = getattr(adapter, "check_connection", None)
+            reachable = await asyncio.to_thread(check_fn) if check_fn else True
+        except Exception:
+            reachable = False
+
+        if not reachable:
+            return {
+                "status": "needs_recovery",
+                "server_url": self._server_url,
+                "step_count": self._step_count,
+            }
+
+        status = "busy" if self._step_count > 0 and not self._rl_env.done else "ready"
+        return {
+            "status": status,
+            "server_url": self._server_url,
+            "step_count": self._step_count,
+        }
 
     async def close(self) -> None:
         """Release resources."""
@@ -270,13 +311,20 @@ class WAADesktopEnv(_GymImageEnvBase):
         # Parse the LLM output into a BenchmarkAction
         action = _parse_action_str(action_str)
 
-        # Handle fractional → pixel coordinate conversion
+        # Handle fractional → pixel coordinate conversion.
+        # When _use_fractional is True, all coordinates from the parser are
+        # fractions (0.0-1.0). We convert unconditionally rather than checking
+        # value ranges, since pixel values 0 and 1 would be ambiguous.
         if self._use_fractional and action.type in ("click", "scroll", "drag"):
             w, h = env.screen_size
-            if action.x is not None and 0.0 <= action.x <= 1.0:
+            if action.x is not None:
                 action.x = int(action.x * w)
-            if action.y is not None and 0.0 <= action.y <= 1.0:
+            if action.y is not None:
                 action.y = int(action.y * h)
+            if action.end_x is not None:
+                action.end_x = int(action.end_x * w)
+            if action.end_y is not None:
+                action.end_y = int(action.end_y * h)
 
         # Execute action in a thread
         rollout_step = await asyncio.to_thread(env.step, action)
@@ -287,7 +335,8 @@ class WAADesktopEnv(_GymImageEnvBase):
         # Compute reward
         reward = 0.0
         info: dict[str, Any] = rollout_step.info
-        info["is_action_valid"] = action.type != "done" or action_str.strip() == ""
+        # Action is valid if it was explicitly parsed (not the fallback for unparseable input)
+        info["is_action_valid"] = _ACTION_PATTERN.search(action_str) is not None
 
         if done and self._evaluate_at_done:
             try:
