@@ -247,6 +247,27 @@ class TestWAADesktopEnv:
             assert hasattr(env, method)
             assert callable(getattr(env, method))
 
+    def test_is_action_valid_on_good_action(self):
+        """Valid actions (parseable) should have is_action_valid=True."""
+        env = _make_mock_env()
+        asyncio.run(env.reset(seed=42))
+        _, _, _, info = asyncio.run(env.step("CLICK(x=0.5, y=0.5)"))
+        assert info["is_action_valid"] is True
+
+    def test_is_action_valid_on_done(self):
+        """Explicit DONE() should have is_action_valid=True."""
+        env = _make_mock_env()
+        asyncio.run(env.reset(seed=42))
+        _, _, _, info = asyncio.run(env.step("DONE()"))
+        assert info["is_action_valid"] is True
+
+    def test_is_action_valid_on_garbage(self):
+        """Unparseable actions should have is_action_valid=False."""
+        env = _make_mock_env()
+        asyncio.run(env.reset(seed=42))
+        _, _, _, info = asyncio.run(env.step("random garbage text"))
+        assert info["is_action_valid"] is False
+
     def test_obs_contains_image_placeholder(self):
         """Test that observations with screenshots include <image> placeholder."""
         env = _make_mock_env()
@@ -281,28 +302,6 @@ class TestWAADesktopEnv:
         result = asyncio.run(env.health_check())
         assert result["status"] == "busy"
 
-    # --- is_action_valid tests ---
-
-    def test_is_action_valid_for_parsed_action(self):
-        """Actions that parse successfully should be marked valid."""
-        env = _make_mock_env()
-        asyncio.run(env.reset(seed=42))
-        _, _, _, info = asyncio.run(env.step("CLICK(x=0.5, y=0.5)"))
-        assert info["is_action_valid"] is True
-
-    def test_is_action_valid_for_done(self):
-        """Explicit DONE() should be marked valid."""
-        env = _make_mock_env()
-        asyncio.run(env.reset(seed=42))
-        _, _, _, info = asyncio.run(env.step("DONE()"))
-        assert info["is_action_valid"] is True
-
-    def test_is_action_invalid_for_garbage(self):
-        """Unparseable input should be marked invalid."""
-        env = _make_mock_env()
-        asyncio.run(env.reset(seed=42))
-        _, _, _, info = asyncio.run(env.step("random garbage"))
-        assert info["is_action_valid"] is False
 
 
 # --- VAGEN registration helpers tests ---

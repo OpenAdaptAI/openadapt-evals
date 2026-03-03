@@ -23,9 +23,11 @@ set -euo pipefail
 CONDA_ENV="verl-agent"
 VLLM_VERSION="0.11.0"
 FLASH_ATTN_VERSION="2.7.4.post1"
-VERL_AGENT_REPO="https://github.com/langfengQ/verl-agent.git"
+# VAGEN includes verl as a submodule + the GymImageEnv protocol, env registry,
+# and GymAgentLoop that we integrate with.
+VERL_AGENT_REPO="https://github.com/RAGEN-AI/VAGEN.git"
 OPENADAPT_EVALS_REPO="https://github.com/OpenAdaptAI/openadapt-evals.git"
-OPENADAPT_EVALS_BRANCH="spike/verl-agent-integration"
+OPENADAPT_EVALS_BRANCH="main"
 
 log() { echo "=== [$(date '+%H:%M:%S')] $*"; }
 
@@ -69,13 +71,13 @@ pip3 install "flash-attn==$FLASH_ATTN_VERSION" --no-build-isolation --no-cache-d
 
 # --- Clone and install verl-agent ---
 if [ ! -d "$HOME/verl-agent" ]; then
-    log "Cloning verl-agent..."
-    git clone "$VERL_AGENT_REPO" "$HOME/verl-agent"
+    log "Cloning VAGEN..."
+    git clone --recurse-submodules "$VERL_AGENT_REPO" "$HOME/verl-agent"
 else
-    log "verl-agent already cloned, pulling latest..."
-    cd "$HOME/verl-agent" && git pull
+    log "VAGEN already cloned, pulling latest..."
+    cd "$HOME/verl-agent" && git pull && git submodule update --init --recursive
 fi
-log "Installing verl-agent..."
+log "Installing VAGEN..."
 cd "$HOME/verl-agent"
 pip install -e .
 
@@ -103,10 +105,10 @@ python -c "from openadapt_evals.adapters.verl_env import WAADesktopEnv; print('W
 
 log "Setup complete! Activate with: conda activate $CONDA_ENV"
 log ""
-log "To start training:"
-log "  cd ~/verl-agent"
-log "  python3 -m verl.trainer.main_ppo \\"
-log "    algorithm.adv_estimator=gigpo \\"
-log "    env.env_name=openadapt_evals.adapters.verl_env.WAADesktopEnv \\"
-log "    trainer.n_gpus_per_node=$GPU_COUNT \\"
-log "    ..."
+log "To start training, use the orchestration script:"
+log "  python scripts/train_verl_e2e.py --gpu-ip \$(hostname -I | awk '{print \$1}') --task-id <WAA_UUID>"
+log ""
+log "Or via oa-vm CLI:"
+log "  oa-vm gpu-train --gpu-ip \$(hostname -I | awk '{print \$1}') --task-id <WAA_UUID>"
+log ""
+log "GPU count: $GPU_COUNT"

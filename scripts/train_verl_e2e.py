@@ -166,7 +166,7 @@ def prepare_training_data(ip: str, group_size: int = 8, username: str = "ubuntu"
         raise RuntimeError("Data preparation failed")
 
 
-def register_waa_env(ip: str, waa_server: str, task_id: str, max_steps: int = 15, username: str = "ubuntu"):
+def register_waa_env(ip: str, username: str = "ubuntu"):
     """Register WAADesktopEnv in VAGEN's env registry on the GPU VM.
 
     VAGEN uses a YAML registry (vagen/configs/env_registry.yaml) to dispatch
@@ -354,7 +354,7 @@ def launch_training(
     4. Launch training via VAGEN's entry point
     """
     # Step 1: Register WAADesktopEnv in VAGEN's env registry
-    register_waa_env(ip, waa_server, task_id, max_steps=max_turns, username=username)
+    register_waa_env(ip, username=username)
 
     # Step 2: Prepare parquet data files (required by VAGEN's AgenticDataset)
     prepare_training_data(ip, group_size=group_size, username=username)

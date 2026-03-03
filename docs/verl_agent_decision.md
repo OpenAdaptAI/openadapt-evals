@@ -138,7 +138,7 @@ loop (~546 lines in `openadapt_ml/training/grpo/trainer.py`).
 
 ### D. VAGEN / VAGEN-Lite
 
-**Repository**: [mll-lab-nu/VAGEN](https://github.com/mll-lab-nu/VAGEN)
+**Repository**: [RAGEN-AI/VAGEN](https://github.com/RAGEN-AI/VAGEN)
 
 - Built on verl's `agent_loop` abstraction (same ecosystem as verl-agent)
 - **Bi-Level GAE** for turn-aware credit assignment
@@ -299,7 +299,7 @@ scaling to multi-VM env pools.
    Works, well-tested (56 unit tests + 5 E2E tests). Episode-level rewards only.
 
 2. **Spike complete**: `WAADesktopEnv` adapter in openadapt-evals (PR #84, merged).
-   21 tests passing. Implements GymImageEnv protocol.
+   40 tests passing. Implements GymImageEnv protocol.
 
 3. **Next**: Test end-to-end with verl-agent on a GPU machine. If successful,
    the standalone trainer becomes a reference implementation / fallback, and
@@ -360,8 +360,8 @@ To validate the verl-agent integration provides real value over standalone:
 
 ## References
 
-- [verl-agent](https://github.com/langfengQ/verl-agent) — GiGPO paper implementation
-- [VAGEN](https://github.com/mll-lab-nu/VAGEN) — Multi-turn VLM agent training
+- [VAGEN](https://github.com/RAGEN-AI/VAGEN) — Multi-turn VLM agent training (GiGPO)
+- [verl-agent](https://github.com/langfengQ/verl-agent) — GiGPO paper's original codebase
 - [verl](https://github.com/verl-project/verl) — Volcano Engine RL for LLMs
 - [GiGPO paper](https://arxiv.org/html/2505.10978) — Group-in-Group Policy Optimization
 - [VAGEN paper](https://arxiv.org/abs/2510.16907) — World Model Reasoning for VLM Agents

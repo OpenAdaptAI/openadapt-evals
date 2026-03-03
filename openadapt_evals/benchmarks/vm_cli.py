@@ -7919,49 +7919,15 @@ def cmd_gpu_train(args):
                 print(f"ERROR: Setup failed")
                 return 1
 
-    # Launch training via the E2E script (handles data prep, env registration, config)
-    # Import here to avoid circular deps
+    # Delegate to the E2E script's launch_training() which handles:
+    # - env registry registration
+    # - training data preparation
+    # - training config generation
+    # - training launch
+    # This avoids duplicating the Hydra overrides in two places.
     import sys
     sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts"))
-    from train_verl_e2e import prepare_training_data, register_waa_env
-
-    print("Registering WAADesktopEnv in VAGEN env registry...")
-    register_waa_env(ip, args.waa_server, args.task_id, username=username)
-
-    print("Preparing training data...")
-    prepare_training_data(ip, group_size=8, username=username)
-
-    # Hydra overrides for verl training loop + VAGEN env config.
-    # WAADesktopEnv is registered in VAGEN's env_registry.yaml as 'WAADesktop'.
-    # The env connects to WAA server via HTTP (GymImageEnv protocol).
-    train_cmd = (
-        f"cd ~/verl-agent && "
-        f"conda run -n verl-agent python3 -m verl.trainer.main_ppo "
-        f"algorithm.adv_estimator={args.algorithm} "
-        f"algorithm.gamma={'0.95' if args.algorithm == 'gigpo' else '1.0'} "
-        f"actor_rollout_ref.model.path={args.model} "
-        f"actor_rollout_ref.rollout.name=vllm "
-        f"actor_rollout_ref.rollout.tensor_model_parallel_size={args.n_gpus} "
-        f"actor_rollout_ref.rollout.gpu_memory_utilization=0.6 "
-        f"actor_rollout_ref.rollout.enable_chunked_prefill=False "
-        f"actor_rollout_ref.actor.ppo_mini_batch_size=64 "
-        f"actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=8 "
-        f"data.train_files=$HOME/data/verl-agent/visual/train.parquet "
-        f"data.val_files=$HOME/data/verl-agent/visual/test.parquet "
-        f"data.train_batch_size=8 "
-        f"data.val_batch_size=128 "
-        f"data.max_prompt_length=2048 "
-        f"data.max_response_length=512 "
-        f"data.return_raw_chat=True "
-        f"data.filter_overlong_prompts=True "
-        f"trainer.n_gpus_per_node={args.n_gpus} "
-        f"trainer.nnodes=1 "
-        f"trainer.total_epochs={args.epochs} "
-        f"trainer.test_freq=5 "
-        f"trainer.experiment_name={args.algorithm}_waa_desktop "
-        f"trainer.logger=['console','wandb'] "
-        f"trainer.project_name=openadapt-waa-rl"
-    )
+    from train_verl_e2e import launch_training
 
     print(f"Launching {args.algorithm} training on {args.n_gpus} GPU(s)...")
     print(f"Model: {args.model}")
@@ -7969,8 +7935,17 @@ def cmd_gpu_train(args):
     print(f"Task: {args.task_id}")
 
     try:
-        result = ssh_run(ip, train_cmd, username=username, stream=True)
-        return result.returncode
+        exit_code = launch_training(
+            ip=ip,
+            waa_server=args.waa_server,
+            task_id=args.task_id,
+            algorithm=args.algorithm,
+            model=args.model,
+            n_gpus=args.n_gpus,
+            epochs=args.epochs,
+            username=username,
+        )
+        return exit_code
     finally:
         if args.cleanup and not args.gpu_ip:
             print(f"Deallocating GPU VM '{gpu_vm_name}'...")
