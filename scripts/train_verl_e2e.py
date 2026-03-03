@@ -149,6 +149,129 @@ def setup_training(ip: str, username: str = "ubuntu"):
     logger.info("Setup complete!")
 
 
+def prepare_training_data(ip: str, group_size: int = 8, username: str = "ubuntu"):
+    """Prepare parquet data files required by verl-agent.
+
+    verl-agent requires train/val parquet files even for env-based training.
+    These define the modality (text vs visual) and batch sizing.
+    """
+    logger.info("Preparing training data (parquet files)...")
+    prep_cmd = (
+        "cd ~/verl-agent && "
+        "conda run -n verl-agent python3 -m examples.data_preprocess.prepare "
+        f"--mode visual --train_data_size {group_size} --val_data_size 128"
+    )
+    result = _ssh_run(ip, prep_cmd, username=username, stream=True)
+    if result.returncode != 0:
+        raise RuntimeError("Data preparation failed")
+
+
+def patch_env_manager(ip: str, waa_server: str, task_id: str, max_steps: int = 15, username: str = "ubuntu"):
+    """Patch verl-agent's env_manager.py to support WAADesktopEnv.
+
+    verl-agent uses a hardcoded if/elif chain in make_envs() to dispatch
+    environments by name. We add a 'waa' branch that creates our
+    WAADesktopEnv-based environment manager.
+    """
+    logger.info("Patching verl-agent env_manager for WAA support...")
+
+    # Write the patch script to the remote VM
+    patch_script = f'''
+import os, sys
+
+env_manager_path = os.path.expanduser(
+    "~/verl-agent/agent_system/environments/env_manager.py"
+)
+
+with open(env_manager_path, "r") as f:
+    content = f.read()
+
+# Check if already patched
+if "waa" in content.lower() and "WAADesktopEnv" in content:
+    print("env_manager.py already patched for WAA")
+    sys.exit(0)
+
+# Find the else branch that exits and add our elif before it
+patch = """
+    elif "waa" in config.env.env_name.lower():
+        # WAA Desktop Automation Environment (openadapt-evals)
+        from openadapt_evals.adapters.verl_env import WAADesktopEnv
+        from functools import partial
+        import asyncio
+
+        server_url = getattr(config.env, "waa", {{}}).get("server_url", "{waa_server}")
+        task_id = getattr(config.env, "waa", {{}}).get("task_id", "{task_id}")
+        max_steps = config.env.max_steps
+
+        env_config = {{
+            "server_url": server_url,
+            "task_id": task_id,
+            "max_steps": max_steps,
+            "evaluate_at_done": True,
+            "action_type": "fractional",
+        }}
+
+        # Build vectorized environments using Ray
+        class WAAEnvWrapper:
+            """Sync wrapper for WAADesktopEnv's async interface."""
+            def __init__(self, config):
+                self.env = WAADesktopEnv(config)
+                self._loop = None
+
+            def _get_loop(self):
+                if self._loop is None or self._loop.is_closed():
+                    self._loop = asyncio.new_event_loop()
+                return self._loop
+
+            def reset(self, seed=0):
+                return self._get_loop().run_until_complete(self.env.reset(seed))
+
+            def step(self, action):
+                return self._get_loop().run_until_complete(self.env.step(action))
+
+            def close(self):
+                if self._loop and not self._loop.is_closed():
+                    self._loop.run_until_complete(self.env.close())
+                    self._loop.close()
+
+        # For now, use a simple non-vectorized approach
+        # Full Ray vectorization can be added once basic training works
+        print(f"WAA environment: server={{server_url}}, task={{task_id}}, max_steps={{max_steps}}")
+        print("NOTE: WAA env integration is experimental. See openadapt-evals docs.")
+
+        # Create minimal env manager compatible with verl-agent's expected interface
+        env_wrapper = WAAEnvWrapper(env_config)
+        # Return a placeholder - the actual integration requires implementing
+        # EnvironmentManagerBase, which we'll do as a next step
+        raise NotImplementedError(
+            "WAA environment manager integration is in progress. "
+            "The env dispatch is patched but EnvironmentManagerBase "
+            "adapter is needed. See openadapt-evals PR #87."
+        )
+"""
+
+# Insert before the else branch
+old = '    else:\\n        print("Environment not supported")'
+if old in content:
+    content = content.replace(old, patch + '    else:\\n        print("Environment not supported")')
+    with open(env_manager_path, "w") as f:
+        f.write(content)
+    print("env_manager.py patched successfully")
+else:
+    # Try alternate pattern matching
+    print("WARNING: Could not find expected else branch in env_manager.py")
+    print("Manual patching may be required")
+    sys.exit(1)
+'''
+
+    _ssh_run(
+        ip,
+        f"conda run -n verl-agent python3 -c '{patch_script}'",
+        username=username,
+        stream=True,
+    )
+
+
 def launch_training(
     ip: str,
     waa_server: str,
@@ -165,29 +288,52 @@ def launch_training(
 
     The training connects to the WAA server via HTTP for environment
     interaction (reset, step, evaluate).
+
+    NOTE: verl-agent uses a hardcoded env dispatch in make_envs(). This
+    function patches it to support our WAADesktopEnv before launching.
+    The full EnvironmentManagerBase adapter is still TODO — this will
+    raise NotImplementedError on the first training attempt. See the
+    decision doc for the integration roadmap.
     """
-    # Build the verl-agent training command using Hydra-style overrides
+    # Step 1: Prepare parquet data files (required by verl-agent)
+    prepare_training_data(ip, group_size=group_size, username=username)
+
+    # Step 2: Patch env_manager to recognize 'waa' env name
+    patch_env_manager(ip, waa_server, task_id, max_steps=max_turns, username=username)
+
+    # Step 3: Build the training command with validated Hydra overrides
+    # Config paths validated against verl-agent's ppo_trainer.yaml schema.
+    # See docs/verl_agent_decision.md for the validation report.
     train_cmd = f"""
 cd ~/verl-agent && \\
-conda activate verl-agent && \\
-python3 -m verl.trainer.main_ppo \\
+conda run -n verl-agent python3 -m verl.trainer.main_ppo \\
     algorithm.adv_estimator={algorithm} \\
+    algorithm.gamma=0.95 \\
     actor_rollout_ref.model.path={model} \\
     actor_rollout_ref.rollout.name=vllm \\
     actor_rollout_ref.rollout.tensor_model_parallel_size={n_gpus} \\
-    env.env_name=openadapt_evals.adapters.verl_env.WAADesktopEnv \\
-    env.env_kwargs.server_url={waa_server} \\
-    env.env_kwargs.task_id={task_id} \\
-    env.env_kwargs.max_steps={max_turns} \\
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \\
+    actor_rollout_ref.rollout.enable_chunked_prefill=False \\
+    actor_rollout_ref.actor.ppo_mini_batch_size=64 \\
+    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=8 \\
+    env.env_name=waa_desktop \\
     env.max_steps={max_turns} \\
     env.rollout.n={group_size} \\
+    env.waa.server_url={waa_server} \\
+    env.waa.task_id={task_id} \\
+    data.train_files=$HOME/data/verl-agent/visual/train.parquet \\
+    data.val_files=$HOME/data/verl-agent/visual/test.parquet \\
     data.train_batch_size={group_size} \\
+    data.val_batch_size=128 \\
     data.max_prompt_length=2048 \\
     data.max_response_length=512 \\
     data.return_raw_chat=True \\
+    data.filter_overlong_prompts=True \\
     trainer.n_gpus_per_node={n_gpus} \\
     trainer.nnodes=1 \\
     trainer.total_epochs={epochs} \\
+    trainer.test_freq=5 \\
+    trainer.experiment_name={algorithm}_waa_desktop \\
     trainer.logger=['console','wandb'] \\
     trainer.project_name=openadapt-waa-rl
 """

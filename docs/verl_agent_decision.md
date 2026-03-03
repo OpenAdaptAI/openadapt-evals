@@ -250,12 +250,37 @@ By delegating to verl-agent, we avoid building and maintaining:
 
 ---
 
+## Integration Gap: verl-agent Environment Protocol
+
+Our `WAADesktopEnv` implements VAGEN's `GymImageEnv` protocol (async
+`reset`/`step`/`close`). However, verl-agent uses a **different, synchronous
+environment protocol** (`EnvironmentManagerBase`) with a **hardcoded dispatch**
+in `agent_system/environments/env_manager.py` — you cannot pass a Python class
+path as `env.env_name`.
+
+To integrate with verl-agent, we need to:
+
+1. **Patch `make_envs()`** — add an `elif "waa" in config.env.env_name.lower()`
+   branch (automated by `scripts/train_verl_e2e.py`)
+2. **Implement `EnvironmentManagerBase`** — wraps our async `WAADesktopEnv` in
+   verl-agent's sync vectorized env interface (`reset`, `step`, `build_text_obs`,
+   `success_evaluator`)
+3. **Prepare parquet data** — verl-agent requires `data.train_files` and
+   `data.val_files` even for env-based training
+4. **Use env-specific config** — `env.waa.server_url` instead of `env.env_kwargs`
+
+The `GymImageEnv` protocol remains our **portable interface**. The verl-agent
+`EnvironmentManagerBase` adapter is a thin sync wrapper around it. If we switch
+to a different framework, only the wrapper changes.
+
+---
+
 ## Migration Path
 
 1. **Current state**: Standalone trainer in openadapt-ml (PR #34, merged).
    Works, well-tested (56 unit tests + 5 E2E tests). Episode-level rewards only.
 
-2. **Spike complete**: `WAADesktopEnv` adapter in openadapt-evals (PR #84).
+2. **Spike complete**: `WAADesktopEnv` adapter in openadapt-evals (PR #84, merged).
    21 tests passing. Implements GymImageEnv protocol.
 
 3. **Next**: Test end-to-end with verl-agent on a GPU machine. If successful,

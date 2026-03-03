@@ -7919,28 +7919,49 @@ def cmd_gpu_train(args):
                 print(f"ERROR: Setup failed")
                 return 1
 
-    # Launch training
+    # Launch training via the E2E script (handles data prep, env patching, config)
+    # Import here to avoid circular deps
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts"))
+    from train_verl_e2e import prepare_training_data, patch_env_manager
+
+    print("Preparing training data...")
+    prepare_training_data(ip, group_size=8, username=username)
+
+    print("Patching verl-agent for WAA environment...")
+    patch_env_manager(ip, args.waa_server, args.task_id, username=username)
+
+    # Validated Hydra config (see docs/verl_agent_decision.md)
     train_cmd = (
         f"cd ~/verl-agent && "
-        f"conda activate verl-agent && "
-        f"python3 -m verl.trainer.main_ppo "
+        f"conda run -n verl-agent python3 -m verl.trainer.main_ppo "
         f"algorithm.adv_estimator={args.algorithm} "
+        f"algorithm.gamma=0.95 "
         f"actor_rollout_ref.model.path={args.model} "
         f"actor_rollout_ref.rollout.name=vllm "
         f"actor_rollout_ref.rollout.tensor_model_parallel_size={args.n_gpus} "
-        f"env.env_name=openadapt_evals.adapters.verl_env.WAADesktopEnv "
-        f"env.env_kwargs.server_url={args.waa_server} "
-        f"env.env_kwargs.task_id={args.task_id} "
-        f"env.env_kwargs.max_steps=15 "
+        f"actor_rollout_ref.rollout.gpu_memory_utilization=0.6 "
+        f"actor_rollout_ref.rollout.enable_chunked_prefill=False "
+        f"actor_rollout_ref.actor.ppo_mini_batch_size=64 "
+        f"actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=8 "
+        f"env.env_name=waa_desktop "
         f"env.max_steps=15 "
         f"env.rollout.n=8 "
+        f"env.waa.server_url={args.waa_server} "
+        f"env.waa.task_id={args.task_id} "
+        f"data.train_files=$HOME/data/verl-agent/visual/train.parquet "
+        f"data.val_files=$HOME/data/verl-agent/visual/test.parquet "
         f"data.train_batch_size=8 "
+        f"data.val_batch_size=128 "
         f"data.max_prompt_length=2048 "
         f"data.max_response_length=512 "
         f"data.return_raw_chat=True "
+        f"data.filter_overlong_prompts=True "
         f"trainer.n_gpus_per_node={args.n_gpus} "
         f"trainer.nnodes=1 "
         f"trainer.total_epochs={args.epochs} "
+        f"trainer.test_freq=5 "
+        f"trainer.experiment_name={args.algorithm}_waa_desktop "
         f"trainer.logger=['console','wandb'] "
         f"trainer.project_name=openadapt-waa-rl"
     )
