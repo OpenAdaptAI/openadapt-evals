@@ -10,7 +10,7 @@ Evaluation infrastructure for GUI agent benchmarks, built for [OpenAdapt](https:
 
 ## What is OpenAdapt Evals?
 
-OpenAdapt Evals is a unified framework for evaluating GUI automation agents against standardized benchmarks such as [Windows Agent Arena (WAA)](https://microsoft.github.io/WindowsAgentArena/). It provides benchmark adapters, agent interfaces, Azure VM infrastructure for parallel evaluation, and result visualization -- everything needed to go from "I have a GUI agent" to "here are its benchmark scores."
+OpenAdapt Evals is a unified framework for evaluating GUI automation agents against standardized benchmarks such as [Windows Agent Arena (WAA)](https://microsoft.github.io/WindowsAgentArena/). It provides benchmark adapters, agent interfaces, cloud VM infrastructure (Azure and AWS) for parallel evaluation, and result visualization -- everything needed to go from "I have a GUI agent" to "here are its benchmark scores."
 
 ## Benchmark Viewer
 
@@ -23,7 +23,7 @@ OpenAdapt Evals is a unified framework for evaluating GUI automation agents agai
 
 ![Task Detail View](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/main/docs/screenshots/desktop_task_detail.png)
 
-**Cost Tracking Dashboard** -- real-time Azure VM cost monitoring with tiered sizing and spot instances:
+**Cost Tracking Dashboard** -- real-time VM cost monitoring with tiered sizing and spot instances:
 
 ![Cost Dashboard](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/main/screenshots/cost_dashboard_preview.png)
 
@@ -34,7 +34,7 @@ OpenAdapt Evals is a unified framework for evaluating GUI automation agents agai
 - **Benchmark adapters** for WAA (live, mock, and local modes), with an extensible base for OSWorld, WebArena, and others
 - **Task setup handlers** -- `verify_apps` and `install_apps` ensure required applications are present on the Windows VM before evaluation begins
 - **Agent interfaces** including `ApiAgent` (Claude / GPT), `ClaudeComputerUseAgent`, `RetrievalAugmentedAgent`, `RandomAgent`, and `PolicyAgent`
-- **Azure VM infrastructure** with `AzureVMManager`, `PoolManager`, `SSHTunnelManager`, and `VMMonitor` for running evaluations at scale
+- **Multi-cloud VM infrastructure** with `AzureVMManager`, `AWSVMManager`, `PoolManager`, `SSHTunnelManager`, and `VMMonitor` for running evaluations at scale on Azure or AWS
 - **CLI tools** -- `oa-vm` for VM and pool management (50+ commands), benchmark CLI for running evals
 - **Cost optimization** -- tiered VM sizing, spot instance support, and real-time cost tracking
 - **Results visualization** -- HTML viewer with step-by-step screenshot replay, execution logs, and domain breakdowns
@@ -51,6 +51,7 @@ With optional dependencies:
 
 ```bash
 pip install openadapt-evals[azure]      # Azure VM management
+pip install openadapt-evals[aws]        # AWS EC2 management
 pip install openadapt-evals[retrieval]  # Demo retrieval agent
 pip install openadapt-evals[viewer]     # Live results viewer
 pip install openadapt-evals[all]        # Everything
@@ -67,9 +68,13 @@ openadapt-evals mock --tasks 10
 ### Run a live evaluation against a WAA server
 
 ```bash
-# Start with a single Azure VM
+# Start with a single VM (Azure by default)
 oa-vm pool-create --workers 1
 oa-vm pool-wait
+
+# Or use AWS
+oa-vm pool-create --cloud aws --workers 1
+oa-vm pool-wait --cloud aws
 
 # Run evaluation
 openadapt-evals run --agent api-claude --task notepad_1
@@ -129,13 +134,18 @@ python scripts/record_waa_demos.py eval \
   --tasks 04d9aeaf,0a0faba3
 ```
 
-### Parallel evaluation on Azure
+### Parallel evaluation
 
 ```bash
-# Create a pool of VMs and distribute tasks
+# Create a pool of VMs and distribute tasks (Azure)
 oa-vm pool-create --workers 5
 oa-vm pool-wait
 oa-vm pool-run --tasks 50
+
+# Same workflow on AWS
+oa-vm pool-create --cloud aws --workers 5
+oa-vm pool-wait --cloud aws
+oa-vm pool-run --cloud aws --tasks 50
 
 # Or use Azure ML orchestration
 openadapt-evals azure --workers 10 --waa-path /path/to/WindowsAgentArena
@@ -153,8 +163,9 @@ openadapt_evals/
 ├── adapters/             # Benchmark adapters
 │   ├── base.py           #   BenchmarkAdapter ABC + data classes
 │   └── waa/              #   WAA live, mock, and local adapters
-├── infrastructure/       # Azure VM and pool management
+├── infrastructure/       # Cloud VM and pool management
 │   ├── azure_vm.py       #   AzureVMManager
+│   ├── aws_vm.py         #   AWSVMManager
 │   ├── pool.py           #   PoolManager
 │   ├── ssh_tunnel.py     #   SSHTunnelManager
 │   └── vm_monitor.py     #   VMMonitor dashboard
@@ -177,7 +188,7 @@ openadapt_evals/
 ### How it fits together
 
 ```
-LOCAL MACHINE                          AZURE VM (Ubuntu)
+LOCAL MACHINE                          CLOUD VM (Azure or AWS, Ubuntu)
 ┌─────────────────────┐                ┌──────────────────────────────┐
 │  oa-vm CLI          │   SSH Tunnel   │  Docker                      │
 │  (pool management)  │ ─────────────> │  ├─ evaluate_server (:5050)  │
@@ -189,6 +200,10 @@ LOCAL MACHINE                          AZURE VM (Ubuntu)
 │                     │                │     └─ Agent                 │
 └─────────────────────┘                └──────────────────────────────┘
 ```
+
+Both backends use the same `VMProvider` protocol. Pass `--cloud azure` (default) or `--cloud aws` to any pool command. AWS requires `m5.metal` instances ($4.61/hr) for KVM/QEMU nested virtualization; Azure uses `Standard_D8ds_v5` ($0.38/hr).
+
+![Windows 11 on AWS EC2](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/main/docs/aws-waa-windows-desktop.png)
 
 ## WAA Task Setup & App Management
 
@@ -252,6 +267,9 @@ When a task config includes `related_apps`, the live adapter automatically prepe
 | `image-list`    | List available golden images             |
 | `vm monitor`    | Dashboard with SSH tunnels               |
 | `vm setup-waa`  | Deploy WAA container on a VM             |
+| `smoke-test-aws`| Verify AWS credentials, AMI, VPC, lifecycle |
+
+All pool commands accept `--cloud azure` (default) or `--cloud aws`.
 
 Run `oa-vm --help` for the full list of 50+ commands.
 
@@ -264,10 +282,15 @@ Settings are loaded automatically from environment variables or a `.env` file in
 ANTHROPIC_API_KEY=sk-ant-...
 OPENAI_API_KEY=sk-...
 
-# Azure (required for VM management)
+# Azure (for --cloud azure VM management)
 AZURE_SUBSCRIPTION_ID=...
 AZURE_ML_RESOURCE_GROUP=...
 AZURE_ML_WORKSPACE_NAME=...
+
+# AWS (for --cloud aws VM management)
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+AWS_DEFAULT_REGION=us-east-1
 ```
 
 See [`openadapt_evals/config.py`](openadapt_evals/config.py) for all available settings.
