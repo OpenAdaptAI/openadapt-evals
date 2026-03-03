@@ -1,6 +1,71 @@
 # CHANGELOG
 
 
+## v0.24.0 (2026-03-03)
+
+### Documentation
+
+- Document AWS SSO as recommended auth method
+  ([#80](https://github.com/OpenAdaptAI/openadapt-evals/pull/80),
+  [`8812e7c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/8812e7c69294d9f80c3cde723fa8838b02cad550))
+
+- Update README: replace static key instructions with SSO guide including example ~/.aws/config and
+  aws configure sso workflow - Update CLAUDE.md AWS section with SSO note - Update aws_vm.py
+  docstring to include SSO in credential chain
+
+No code changes needed — boto3's default credential chain already handles SSO transparently.
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+- Update README with recent features from PRs #58-#75
+  ([#82](https://github.com/OpenAdaptAI/openadapt-evals/pull/82),
+  [`840f9ef`](https://github.com/OpenAdaptAI/openadapt-evals/commit/840f9efcdb7561fdad43bf80f6c87e0483443f2d))
+
+Add coverage for RL training environment, end-to-end eval pipeline, annotation pipeline, 4-layer
+  probe diagnostics, demo recording persistence, review artifacts, coordinate clamping, and
+  multi-cloud VMProvider protocol. Update architecture tree with new modules (rl_env.py, probe.py,
+  annotation.py, vlm.py, vm_provider.py, evaluation/) and scripts directory. Add openadapt-consilium
+  to related projects.
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+### Features
+
+- Add self-contained GRPO training example script
+  ([#81](https://github.com/OpenAdaptAI/openadapt-evals/pull/81),
+  [`97c144b`](https://github.com/OpenAdaptAI/openadapt-evals/commit/97c144bbd346292eaa6c0a8b4ef5d3185868387d))
+
+* feat: add self-contained GRPO training example script
+
+250-line example showing the full RL training loop: model loading → rollout collection → GRPO loss →
+  weight update → checkpoint.
+
+No openadapt-ml dependency — all GRPO math, action parsing, and log-prob computation are inline.
+  Uses RLEnvironment from openadapt-evals.
+
+Includes --mock flag for testing without a VM.
+
+Usage: python scripts/train_grpo_example.py --mock --num-steps 3 python
+  scripts/train_grpo_example.py --server http://localhost:5001 --task-id <UUID>
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* fix: align GRPO training example with openadapt-ml trainer
+
+- Align SYSTEM_PROMPT with openadapt_ml.datasets.next_action.SYSTEM_PROMPT - Use chat template for
+  prompt construction (not raw string concatenation) - Fix screen height default: 1080 (was 1200) -
+  Fix LoRA target_modules: 4 projections (was 2) matching ml trainer - Fix coordinate fallback: use
+  format_action_as_text with normalized fractions (was using raw pixel coords like x=960) - Add
+  WAIT() handler in parse_action (was falling through to DONE) - Fix TYPE regex to handle escaped
+  quotes and backslashes - Fix loss scaling: divide by (n_valid * num_steps) matching ml trainer -
+  Rename grpo_loss to policy_gradient_loss with honest docstring - Add build_agent_messages and
+  format_action_as_text helper functions
+
+---------
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.23.1 (2026-03-03)
 
 ### Bug Fixes
