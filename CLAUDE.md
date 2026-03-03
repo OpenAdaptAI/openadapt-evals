@@ -12,6 +12,19 @@
 
 This is a hard rule with NO exceptions, even for "small" changes.
 
+## MANDATORY: Never Remove Worktrees You Didn't Create
+
+**NEVER run `git worktree remove` or `git worktree prune` without confirming no other sessions are using them.**
+
+Removing a worktree that another Claude session is using as its working directory **kills that session permanently** — every command fails with "Working directory no longer exists" and the session cannot recover. Uncommitted work is lost.
+
+Before removing ANY worktree:
+1. **Ask the user** if other agents/sessions are running
+2. Only remove worktrees **you created in this session**
+3. Never batch-remove worktrees — each one could be another session's home
+
+This rule also applies to `git clean`, `rm -rf` on worktree paths, and any operation that deletes directories under `.claude/worktrees/`.
+
 ### PR Titles MUST Use Conventional Commit Format
 
 PR titles become the squash merge commit message on main. `python-semantic-release` parses these to decide version bumps. **If the PR title doesn't follow the format, no release is created.**
