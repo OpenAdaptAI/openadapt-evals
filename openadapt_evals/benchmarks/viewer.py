@@ -261,6 +261,7 @@ def generate_benchmark_viewer(
     benchmark_dir: Path,
     output_path: Path | None = None,
     embed_screenshots: bool = False,
+    compact: bool = False,
 ) -> Path:
     """Generate HTML viewer for benchmark results.
 
@@ -270,6 +271,9 @@ def generate_benchmark_viewer(
         output_path: Path for output HTML file. Defaults to benchmark_dir/benchmark.html.
         embed_screenshots: If True, embed screenshots as base64 data URLs.
             This creates a larger but fully standalone HTML file.
+        compact: If True, hide the navigation header, summary panel, and filter
+            bar to maximize space for the task list and screenshots. Useful when
+            generating screenshots for animations.
 
     Returns:
         Path to generated HTML file.
@@ -294,6 +298,7 @@ def generate_benchmark_viewer(
         domain_stats=domain_stats,
         benchmark_dir=benchmark_dir,
         embed_screenshots=embed_screenshots,
+        compact=compact,
     )
 
     # Write output
@@ -312,6 +317,7 @@ def _generate_benchmark_viewer_html(
     domain_stats: dict[str, dict[str, int]],
     benchmark_dir: Path,
     embed_screenshots: bool = False,
+    compact: bool = False,
 ) -> str:
     """Generate the HTML content for benchmark viewer.
 
@@ -322,6 +328,7 @@ def _generate_benchmark_viewer_html(
         domain_stats: Per-domain statistics.
         benchmark_dir: Base directory for resolving relative paths.
         embed_screenshots: If True, embed screenshots as base64.
+        compact: If True, hide header, summary, and filter bar.
 
     Returns:
         HTML string.
@@ -366,6 +373,8 @@ def _generate_benchmark_viewer_html(
     num_tasks = len(tasks)
     num_success = sum(1 for t in tasks if t.get("execution", {}).get("success", False))
     success_rate = (num_success / num_tasks * 100) if num_tasks > 0 else 0
+
+    body_class = ' class="compact"' if compact else ''
 
     html = f'''<!DOCTYPE html>
 <html lang="en">
@@ -1116,9 +1125,23 @@ def _generate_benchmark_viewer_html(
 
         /* Keyboard Shortcuts */
         {keyboard_shortcuts_css}
+
+        /* Compact mode: hide chrome to maximize screenshot area */
+        body.compact .unified-header {{ display: none; }}
+        body.compact .summary-panel {{ display: none; }}
+        body.compact .filter-bar {{ display: none; }}
+        body.compact .keyboard-hint {{ display: none; }}
+        body.compact .container {{ padding: 8px; }}
+        body.compact .main-content {{ gap: 8px; }}
+        body.compact .task-list {{ max-height: calc(100vh - 40px); }}
+        body.compact .task-detail-header {{ padding: 8px 12px; }}
+        body.compact .task-detail-header h2 {{ font-size: 0.85rem; margin-bottom: 4px; }}
+        body.compact .task-detail-instruction {{ padding: 6px; margin-top: 4px; font-size: 0.8rem; }}
+        body.compact .step-viewer {{ padding: 8px; gap: 8px; }}
+        body.compact .log-panel {{ display: none; }}
     </style>
 </head>
-<body>
+<body{body_class}>
     {shared_header_html}
 
     <div class="container">

@@ -14,7 +14,7 @@ OpenAdapt Evals is a unified framework for evaluating GUI automation agents agai
 
 ## Benchmark Viewer
 
-![Benchmark Viewer Animation](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/main/animations/benchmark-viewer.gif)
+![Benchmark Viewer Animation](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/main/animations/benchmark-viewer.webp)
 
 <details>
 <summary>More screenshots</summary>
