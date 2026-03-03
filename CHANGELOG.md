@@ -9,24 +9,17 @@
   ([#90](https://github.com/OpenAdaptAI/openadapt-evals/pull/90),
   [`ca6a936`](https://github.com/OpenAdaptAI/openadapt-evals/commit/ca6a9362556852bd6ad040ba9ac7a5dfe3a7d880))
 
-Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
-
 ### Features
 
 - Add TaskVerifierRegistry for custom task verification
   ([#89](https://github.com/OpenAdaptAI/openadapt-evals/pull/89),
   [`639a6a2`](https://github.com/OpenAdaptAI/openadapt-evals/commit/639a6a2ba2a15e0c7a2a3bd65fa57a38f6966965))
-
-Add a registry pattern for custom task verifiers that can inspect VM state after task execution.
-  This enables GoTo IT Autopilot (and other integrators) to register domain-specific verification
-  functions without subclassing BenchmarkAdapter.
-
-- TaskVerifierRegistry with decorator and programmatic registration - VerificationResult dataclass
-  with success/score/details - WAALiveAdapter.run_powershell() for executing PowerShell on the VM -
-  Built-in clear_browsing_data reference verifier - 33 tests covering registry operations and
-  built-in verifiers - Exports from evaluation package and main package __init__
-
-Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+  - TaskVerifierRegistry with decorator and programmatic registration
+  - VerificationResult dataclass with success/score/details
+  - WAALiveAdapter.run_powershell() for executing PowerShell on the VM
+  - Built-in clear_browsing_data reference verifier
+  - 33 tests covering registry operations and built-in verifiers
+  - Exports from evaluation package and main package __init__
 
 
 ## v0.25.1 (2026-03-03)
@@ -36,17 +29,15 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 - Address review findings in verl-agent adapter
   ([#88](https://github.com/OpenAdaptAI/openadapt-evals/pull/88),
   [`879c53c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/879c53c182853104a4a8c5e179e810185180d37a))
-
-- Fix SCROLL direction not forwarded to BenchmarkAction.scroll_direction - Fix DRAG parsing to
-  include end_x/end_y coordinates - Fix is_action_valid logic: use pattern match instead of inverted
-  condition - Fix fractional coord conversion: trust _use_fractional flag instead of checking value
-  ranges (0 and 1 are ambiguous between frac and pixel) - Convert drag end coordinates (end_x/end_y)
-  from fractional to pixel - Add health_check() method returning
-  ready/busy/needs_recovery/not_initialized - Add DRAG to system prompt DSL documentation - Fix
-  vendored VAGEN source URL (mll-lab-nu -> RAGEN-AI) - Add 12 new tests: scroll direction, drag
-  coords, health_check, is_action_valid
-
-Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+  - Fix SCROLL direction not forwarded to BenchmarkAction.scroll_direction
+  - Fix DRAG parsing to include end_x/end_y coordinates
+  - Fix is_action_valid logic: use pattern match instead of inverted condition
+  - Fix fractional coord conversion: trust _use_fractional flag
+  - Convert drag end coordinates from fractional to pixel
+  - Add health_check() method returning ready/busy/needs_recovery/not_initialized
+  - Add DRAG to system prompt DSL documentation
+  - Fix vendored VAGEN source URL (mll-lab-nu -> RAGEN-AI)
+  - Add 12 new tests
 
 
 ## v0.25.0 (2026-03-03)
@@ -56,86 +47,31 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 - **agent**: Replace manual string escaping with repr() and fix CU agent bugs
   ([#83](https://github.com/OpenAdaptAI/openadapt-evals/pull/83),
   [`ffcb41d`](https://github.com/OpenAdaptAI/openadapt-evals/commit/ffcb41d9a2dd6cc53eae4bf478d2d3b139d22b84))
-
-* fix(agent): replace manual string escaping with repr() and fix CU agent bugs
-
-Five reliability fixes for eval runs:
-
-1. Replace _escape_for_pyautogui() with repr() in _build_type_commands() - eliminates entire class
-  of string-embedding bugs (newlines, tabs, quotes, unicode) using Python's own escaping mechanism
-
-2. Fix drag coordinate field names: startCoordinate/endCoordinate (camelCase) →
-  start_coordinate/coordinate (snake_case) per Claude computer_use API
-
-3. Add _clamp_coord() to prevent (0,0) coordinates from triggering PyAutoGUI fail-safe, applied to
-  click, drag, and mouse_move actions
-
-4. Re-inject demo text at every step in tool_result messages to prevent context drift in
-  demo-conditioned evaluation
-
-5. Add command logging in WAALiveAdapter.step() for debugging
-
-Also adds docs/eval_analysis_2026_03_02.md documenting ZS vs DC eval results and literature review
-  on demo-conditioning approaches.
-
-Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
-
-* feat: add multi-level demo format transform and fix tests
-
-- Add scripts/transform_demo_format.py: transforms rigid {Observation, Intent, Action, Result} demos
-  into adaptive {Think, Action, Expect} format with PLAN section (Option D from eval analysis) -
-  LLM-assisted mode (default): uses vlm_call() for semantic transform - Rule-based mode (--no-llm):
-  free, no API calls needed - Supports --dry-run for preview
-
-- Fix tests for repr() escaping and coordinate clamping: - Remove TestEscapeForPyautogui (tests
-  deleted function) - Update TestBuildTypeCommands for repr() output format - Add
-  test_all_special_chars_produce_valid_python invariant test - Fix drag test to use snake_case field
-  names - Fix coordinate edge test to expect clamped (0.005, 0.005)
-
-- Regenerate uv.lock for consilium package name resolution
-
-* docs: add DC-multilevel eval results to analysis
-
-DC-multilevel (new {Think, Action, Expect} + PLAN format) showed clear improvement over DC-rigid:
-  agent followed the plan, entered all headers and years, typed correct formula, used drag-fill.
-  Still scored 0.0 due to premature task completion (finished 1/3 columns), but qualitatively the
-  best behavior across all three conditions.
-
----------
-
-Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+  1. Replace `_escape_for_pyautogui()` with `repr()` in `_build_type_commands()`
+  2. Fix drag coordinate field names: camelCase to snake_case per Claude computer_use API
+  3. Add `_clamp_coord()` to prevent (0,0) coordinates from triggering PyAutoGUI fail-safe
+  4. Re-inject demo text at every step to prevent context drift in demo-conditioned evaluation
+  5. Add command logging in WAALiveAdapter.step() for debugging
+  - Add `scripts/transform_demo_format.py`: transforms rigid demos into adaptive format
+  - Fix tests for repr() escaping and coordinate clamping
+  - Add eval analysis document with ZS vs DC results
 
 ### Features
 
 - Add VAGEN/verl-agent environment adapter for VLM RL training
   ([`0183321`](https://github.com/OpenAdaptAI/openadapt-evals/commit/018332168389b4be74660ecbc754eef5768f6b51))
 
-* feat: add VAGEN/verl-agent environment adapter for VLM RL training
-
-WAADesktopEnv implements the GymImageEnv protocol from VAGEN, enabling desktop GUI automation
+  WAADesktopEnv implements the GymImageEnv protocol from VAGEN, enabling desktop GUI automation
   training with verl-agent's multi-turn VLM RL pipeline (GiGPO, GRPO, PPO).
-
-The adapter translates between openadapt-evals BenchmarkObservation (PNG bytes + a11y tree) and
-  VAGEN's observation format (obs_str + multi_modal_input with PIL images).
-
-- Async interface (reset/step/close/system_prompt) - Action DSL parsing (CLICK, TYPE, KEY, SCROLL,
-  WAIT, DONE) - Fractional coordinate support (0.0-1.0) - Lazy adapter initialization - 21 tests
-  passing with mock adapter - Example VAGEN training config included
-
-Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
-
-* docs: add comprehensive verl-agent decision document
-
-Records the full reasoning chain for choosing verl-agent/VAGEN: - Framework comparison (TRL,
-  standalone, verl-agent, VAGEN, OpenRLHF, Unsloth) - Key insight: per-step verification via GiGPO
-  for long-horizon GUI tasks - TRL multi-turn VLM blocker (issues #5119, #5120) - "Environment is
-  the moat" strategic framing - Architecture diagram and migration path
-
-* feat: add verl-agent as optional dependency
-
-* feat: vendor GymImageEnv base classes from VAGEN
-
-* docs: fact-check framework review in verl decision doc
+  - Async interface (reset/step/close/system_prompt)
+  - Action DSL parsing (CLICK, TYPE, KEY, SCROLL, WAIT, DONE)
+  - Fractional coordinate support (0.0-1.0)
+  - Lazy adapter initialization
+  - 21 tests passing with mock adapter
+  - Example VAGEN training config included
+  - Comprehensive verl-agent decision document
+  - Vendor GymImageEnv base classes from VAGEN
+  - Fact-check framework review in verl decision doc
 
 Update Sections E (OpenRLHF), F (Unsloth), TRL, and comparison matrix with accurate details from
   thorough review:

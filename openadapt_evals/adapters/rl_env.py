@@ -348,6 +348,34 @@ class RLEnvironment:
             return self._last_obs
         raise RuntimeError("Call reset() before observe().")
 
+    def observe_pil(self) -> "PIL.Image.Image":
+        """Get current screenshot as a PIL Image.
+
+        Convenience wrapper around observe() for VLM/RL training pipelines
+        that work with PIL images directly.
+
+        If the underlying adapter has an ``observe_pil()`` method (e.g.,
+        WAALiveAdapter), delegates to it. Otherwise calls observe() and
+        converts the screenshot bytes to a PIL Image.
+
+        Returns:
+            PIL.Image.Image of the current desktop state.
+
+        Raises:
+            RuntimeError: If no screenshot is available (call reset() first).
+        """
+        if hasattr(self._adapter, "observe_pil"):
+            return self._adapter.observe_pil()
+
+        import io
+
+        from PIL import Image
+
+        obs = self.observe()
+        if not obs.screenshot:
+            raise RuntimeError("No screenshot available from adapter")
+        return Image.open(io.BytesIO(obs.screenshot))
+
     def evaluate(self) -> float:
         """Run the WAA evaluator on the current VM state.
 
