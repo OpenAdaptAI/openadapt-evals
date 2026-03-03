@@ -10,8 +10,8 @@ The adapter translates between:
 
 Dependencies:
     - openadapt-evals (always required)
-    - vagen (optional; without it, the class implements the same protocol
-      but doesn't inherit from GymImageEnv)
+    - vagen (optional; a vendored copy of the GymImageEnv ABC is used
+      as fallback when the full vagen package is not installed)
 
 Usage with VAGEN training:
     Register in env_registry.yaml:
@@ -57,13 +57,14 @@ try:
 except ImportError:
     Image = None  # type: ignore[misc, assignment]
 
-# Try importing VAGEN's base class for proper inheritance
+# Import VAGEN's GymImageEnv base class.
+# Prefer the real vagen package; fall back to our vendored copy.
 try:
     from vagen.envs.gym_image_env import GymImageEnv as _GymImageEnvBase
-
-    _HAS_VAGEN = True
 except ImportError:
-    _HAS_VAGEN = False
+    from openadapt_evals.adapters._vendored.gym_image_env import (
+        GymImageEnv as _GymImageEnvBase,
+    )
 
 # --- Action parsing (matches openadapt-ml trainer DSL) ---
 
@@ -171,19 +172,8 @@ SYSTEM_PROMPT = (
 
 # --- Main environment class ---
 
-# Dynamically choose base class
-if _HAS_VAGEN:
-    _Base = _GymImageEnvBase
-else:
 
-    class _Base:  # type: ignore[no-redef]
-        """Stub base when VAGEN is not installed."""
-
-        def __init__(self, env_config: dict[str, Any]) -> None:
-            pass
-
-
-class WAADesktopEnv(_Base):
+class WAADesktopEnv(_GymImageEnvBase):
     """VAGEN-compatible environment for WAA desktop automation.
 
     Implements the GymImageEnv protocol (async reset/step/close/system_prompt)

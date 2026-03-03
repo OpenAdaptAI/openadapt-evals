@@ -234,12 +234,58 @@ By delegating to verl-agent, we avoid building and maintaining:
 
 3. **Next**: Test end-to-end with verl-agent on a GPU machine. If successful,
    the standalone trainer becomes a reference implementation / fallback, and
-   verl-agent becomes the recommended training path.
+   verl-agent becomes the recommended training path. **Note**: Both backends
+   coexist — see the [Dual Backend Strategy](#dual-backend-strategy) section
+   for the comparison plan and dependency approach.
 
 4. **Future**: If TRL resolves #5120 (multi-turn VLM support), evaluate whether
    to switch. TRL has broader adoption; switching would reduce the dependency
    footprint. But only if TRL also adds per-step credit assignment comparable
    to GiGPO.
+
+---
+
+## Dual Backend Strategy
+
+Rather than deprecating the standalone trainer immediately, we maintain both
+backends for comparison:
+
+### Backend 1: Standalone (openadapt-ml)
+
+- **Code**: `openadapt_ml/training/grpo/trainer.py` (~546 lines)
+- **When to use**: Quick experiments, single-GPU, no Ray/vLLM dependency
+- **Limitations**: Episode-level rewards only, no GiGPO, no distributed training
+- **Config**: `GRPOConfig(backend="standalone", ...)`
+
+### Backend 2: verl-agent (openadapt-evals)
+
+- **Code**: `openadapt_evals/adapters/verl_env.py` (~250 lines adapter)
+- **When to use**: Production training, multi-GPU, GiGPO per-step credit
+- **Advantages**: Distributed training, vLLM/sglang, step-level advantages
+- **Config**: `configs/train_waa_vagen.yaml`
+
+### Dependency Strategy
+
+The `GymImageEnv` and `GymBaseEnv` abstract base classes (~150 lines) are
+**vendored** into `openadapt_evals/adapters/_vendored/` to avoid requiring the
+full VAGEN installation. The vendored classes are pure interfaces with only a
+`Pillow` dependency. Import priority:
+
+1. `from vagen.envs.gym_image_env import GymImageEnv` (if VAGEN installed)
+2. `from openadapt_evals.adapters._vendored.gym_image_env import GymImageEnv` (fallback)
+
+The full VAGEN/verl-agent stack (Ray, vLLM, etc.) is only needed when actually
+running distributed training, not for defining or testing environments.
+
+### Comparison Plan
+
+To validate the verl-agent integration provides real value over standalone:
+
+1. Train on the same WAA task with both backends
+2. Compare: final reward, training wall time, GPU memory usage
+3. Specifically measure whether GiGPO's per-step credit improves sample
+   efficiency on long-horizon tasks (15+ steps)
+4. Document results in a comparison report
 
 ---
 
