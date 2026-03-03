@@ -124,7 +124,9 @@ oa-vm pool-cleanup -y
 
 ### AWS Support
 
-WAA also runs on AWS EC2 using the same pool commands with `--cloud aws`:
+WAA also runs on AWS EC2 using the same pool commands with `--cloud aws`.
+
+**Auth**: Uses boto3's default credential chain. SSO is recommended: `aws configure sso` (one-time), then `aws sso login` before each session. Static keys (`AWS_ACCESS_KEY_ID`) also work.
 
 ```bash
 # Verify AWS setup (read-only, free)
