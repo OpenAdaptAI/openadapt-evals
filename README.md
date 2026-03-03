@@ -33,8 +33,13 @@ OpenAdapt Evals is a unified framework for evaluating GUI automation agents agai
 
 - **Benchmark adapters** for WAA (live, mock, and local modes), with an extensible base for OSWorld, WebArena, and others
 - **Task setup handlers** -- `verify_apps` and `install_apps` ensure required applications are present on the Windows VM before evaluation begins
-- **Agent interfaces** including `ApiAgent` (Claude / GPT), `ClaudeComputerUseAgent`, `RetrievalAugmentedAgent`, `RandomAgent`, and `PolicyAgent`
+- **Agent interfaces** including `ApiAgent` (Claude / GPT), `ClaudeComputerUseAgent` (with coordinate clamping and fail-safe recovery), `RetrievalAugmentedAgent`, `RandomAgent`, and `PolicyAgent`
 - **Multi-cloud VM infrastructure** with `AzureVMManager`, `AWSVMManager`, `PoolManager`, `SSHTunnelManager`, and `VMMonitor` for running evaluations at scale on Azure or AWS
+- **End-to-end eval pipeline** (`scripts/run_eval_pipeline.py`) -- orchestrates demo generation, VM lifecycle, SSH tunnels, and ZS/DC evaluation in a single command
+- **RL training environment** -- `RLEnvironment` wrapper provides a Gymnasium-style `reset`/`step`/`evaluate` interface for online RL (GRPO, PPO) with outcome-based rewards from WAA scores
+- **Annotation pipeline** -- VLM-based screenshot annotation (`annotation.py`, `vlm.py`) migrated from openadapt-ml so the full record-annotate-evaluate workflow runs within this repo
+- **4-layer WAA probe** -- `probe --detailed` checks screenshot capture, accessibility tree, action pipeline, and scoring independently; supports `--json` and `--layers` filtering
+- **Demo recording and review** -- VNC-based demo capture with auto-persistence (incremental `meta.json`, hardlinked PNGs), JPEG thumbnail deduplication, and markdown review artifact generation
 - **CLI tools** -- `oa-vm` for VM and pool management (50+ commands), benchmark CLI for running evals
 - **Cost optimization** -- tiered VM sizing, spot instance support, and real-time cost tracking
 - **Results visualization** -- HTML viewer with step-by-step screenshot replay, execution logs, and domain breakdowns
@@ -134,6 +139,24 @@ python scripts/record_waa_demos.py eval \
   --tasks 04d9aeaf,0a0faba3
 ```
 
+### End-to-end eval pipeline
+
+For a fully automated flow (demo generation, VM lifecycle, SSH tunnels, ZS and DC evaluation):
+
+```bash
+# Run for all recordings that have demos
+python scripts/run_eval_pipeline.py
+
+# Specific task(s)
+python scripts/run_eval_pipeline.py --tasks 04d9aeaf
+
+# Dry run
+python scripts/run_eval_pipeline.py --tasks 04d9aeaf --dry-run
+
+# AWS instead of Azure
+python scripts/run_eval_pipeline.py --cloud aws --vm-name waa-pool-00
+```
+
 ### Parallel evaluation
 
 ```bash
@@ -158,20 +181,26 @@ openadapt_evals/
 ├── agents/               # Agent implementations
 │   ├── base.py           #   BenchmarkAgent ABC
 │   ├── api_agent.py      #   ApiAgent (Claude, GPT)
+│   ├── claude_computer_use_agent.py  # ClaudeComputerUseAgent (coord clamping, fail-safe)
 │   ├── retrieval_agent.py#   RetrievalAugmentedAgent
 │   └── policy_agent.py   #   PolicyAgent (trained models)
 ├── adapters/             # Benchmark adapters
 │   ├── base.py           #   BenchmarkAdapter ABC + data classes
+│   ├── rl_env.py         #   RLEnvironment (Gymnasium-style wrapper for GRPO/PPO)
 │   └── waa/              #   WAA live, mock, and local adapters
 ├── infrastructure/       # Cloud VM and pool management
 │   ├── azure_vm.py       #   AzureVMManager
 │   ├── aws_vm.py         #   AWSVMManager
+│   ├── vm_provider.py    #   VMProvider protocol (multi-cloud abstraction)
 │   ├── pool.py           #   PoolManager
+│   ├── probe.py          #   4-layer WAA probe (screenshot, a11y, action, score)
 │   ├── ssh_tunnel.py     #   SSHTunnelManager
 │   └── vm_monitor.py     #   VMMonitor dashboard
+├── evaluation/           # Shared evaluation utilities
+│   └── metrics.py        #   fuzzy_match and scoring functions
 ├── benchmarks/           # Evaluation runner, CLI, viewers
 │   ├── runner.py         #   evaluate_agent_on_benchmark()
-│   ├── cli.py            #   Benchmark CLI (run, mock, live, view)
+│   ├── cli.py            #   Benchmark CLI (run, mock, live, view, probe)
 │   ├── vm_cli.py         #   VM/Pool CLI (oa-vm, 50+ commands)
 │   ├── viewer.py         #   HTML results viewer
 │   ├── pool_viewer.py    #   Pool results viewer
@@ -180,9 +209,18 @@ openadapt_evals/
 │   ├── evaluate_server.py#   Flask server (port 5050): /setup, /evaluate, /task
 │   ├── Dockerfile        #   QEMU + Windows 11 + pre-downloaded apps
 │   └── tools_config.json #   App installer URLs and configs
+├── annotation.py         # VLM-based demo annotation pipeline
+├── vlm.py                # VLM provider abstraction (OpenAI, Anthropic)
 ├── server/               # WAA server extensions
 ├── config.py             # Settings (pydantic-settings, .env)
 └── __init__.py
+scripts/
+├── run_eval_pipeline.py      # End-to-end eval: demo gen + VM + ZS/DC eval
+├── record_waa_demos.py       # Record demos via VNC
+├── generate_demo_review.py   # Markdown review artifacts with thumbnails
+├── run_grpo_rollout.py       # Example: collect RL rollouts from WAA
+├── refine_demo.py            # Two-pass LLM demo refinement
+└── run_dc_eval.py            # Demo-conditioned evaluation
 ```
 
 ### How it fits together
@@ -248,7 +286,7 @@ When a task config includes `related_apps`, the live adapter automatically prepe
 | `live`       | Run against a WAA server (full control)        |
 | `eval-suite` | Automated full-cycle evaluation (ZS + DC)      |
 | `azure`      | Run parallel evaluation on Azure ML            |
-| `probe`      | Check if a WAA server is ready                 |
+| `probe`      | Check WAA readiness (`--detailed` for 4-layer diagnostics, `--json`, `--layers`) |
 | `view`       | Generate HTML viewer for results               |
 | `estimate`   | Estimate Azure costs                           |
 
@@ -370,6 +408,7 @@ See [CLAUDE.md](https://github.com/OpenAdaptAI/openadapt-evals/blob/main/CLAUDE.
 | [OpenAdapt](https://github.com/OpenAdaptAI/OpenAdapt) | Desktop automation with demo-conditioned AI agents |
 | [openadapt-ml](https://github.com/OpenAdaptAI/openadapt-ml) | Training and policy runtime |
 | [openadapt-capture](https://github.com/OpenAdaptAI/openadapt-capture) | Screen recording and demo sharing |
+| [openadapt-consilium](https://github.com/OpenAdaptAI/openadapt-consilium) | Multi-model consensus library |
 | [openadapt-grounding](https://github.com/OpenAdaptAI/openadapt-grounding) | UI element localization |
 
 ## License
