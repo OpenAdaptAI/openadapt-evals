@@ -1,6 +1,31 @@
 # CHANGELOG
 
 
+## v0.28.0 (2026-03-03)
+
+### Features
+
+- **agent**: Add closed-loop demo-conditioned controller
+  ([#92](https://github.com/OpenAdaptAI/openadapt-evals/pull/92),
+  [`53d0b22`](https://github.com/OpenAdaptAI/openadapt-evals/commit/53d0b22b5c173ac0d51f241831cf7fa5f48233cb))
+
+Add VLM-based step verification (plan_verify.py), demo-conditioned controller state machine
+  (demo_controller.py), and plan progress tracking in the CU agent. Enables the agent to verify each
+  step's expected outcome via screenshot, override premature "done" signals, and retry/replan failed
+  steps.
+
+Key additions: - plan_verify.py: verify_step(), verify_plan_progress(), verify_goal_completion() -
+  demo_controller.py: DemoController state machine with step-by-step execution -
+  claude_computer_use_agent.py: plan parsing, progress injection, done override - CLI --controller
+  flag for both openadapt-evals and run_dc_eval.py - 120 tests (31 plan_verify + 36 demo_controller
+  + 53 agent)
+
+Validated offline: - Level 1: 91% accuracy on real eval screenshots (10/11 correct) - Level 2:
+  Done-override correctly prevents premature quit
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.27.1 (2026-03-03)
 
 ### Bug Fixes
