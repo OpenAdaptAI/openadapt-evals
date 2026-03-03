@@ -1,6 +1,25 @@
 # CHANGELOG
 
 
+## v0.27.1 (2026-03-03)
+
+### Bug Fixes
+
+- Add direct pixel path for pixel_action bypassing element routing
+  ([#91](https://github.com/OpenAdaptAI/openadapt-evals/pull/91),
+  [`a5f3aea`](https://github.com/OpenAdaptAI/openadapt-evals/commit/a5f3aeafcec40e09cd436c723716d2e2e1b12d52))
+
+Extract command-sending logic from step() into _send_command() helper. Rewrite pixel_action() to
+  build pyautogui commands directly via _build_pixel_command() and send them through
+  _send_command(), bypassing _translate_action/_translate_click_action entirely.
+
+This eliminates unnecessary element-resolution routing for actions that already have absolute pixel
+  coordinates. The step() method continues to use the element-based _translate_action path for agent
+  actions.
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.27.0 (2026-03-03)
 
 ### Features
