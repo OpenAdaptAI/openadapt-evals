@@ -1,6 +1,34 @@
 # CHANGELOG
 
 
+## v0.26.0 (2026-03-03)
+
+### Documentation
+
+- Add EC2 setup guide for WAA deployment
+  ([#90](https://github.com/OpenAdaptAI/openadapt-evals/pull/90),
+  [`ca6a936`](https://github.com/OpenAdaptAI/openadapt-evals/commit/ca6a9362556852bd6ad040ba9ac7a5dfe3a7d880))
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+### Features
+
+- Add TaskVerifierRegistry for custom task verification
+  ([#89](https://github.com/OpenAdaptAI/openadapt-evals/pull/89),
+  [`639a6a2`](https://github.com/OpenAdaptAI/openadapt-evals/commit/639a6a2ba2a15e0c7a2a3bd65fa57a38f6966965))
+
+Add a registry pattern for custom task verifiers that can inspect VM state after task execution.
+  This enables GoTo IT Autopilot (and other integrators) to register domain-specific verification
+  functions without subclassing BenchmarkAdapter.
+
+- TaskVerifierRegistry with decorator and programmatic registration - VerificationResult dataclass
+  with success/score/details - WAALiveAdapter.run_powershell() for executing PowerShell on the VM -
+  Built-in clear_browsing_data reference verifier - 33 tests covering registry operations and
+  built-in verifiers - Exports from evaluation package and main package __init__
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.25.1 (2026-03-03)
 
 ### Bug Fixes
