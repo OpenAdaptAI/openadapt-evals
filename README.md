@@ -239,7 +239,7 @@ LOCAL MACHINE                          CLOUD VM (Azure or AWS, Ubuntu)
 └─────────────────────┘                └──────────────────────────────┘
 ```
 
-Both backends use the same `VMProvider` protocol. Pass `--cloud azure` (default) or `--cloud aws` to any pool command. AWS requires `m5.metal` instances ($4.61/hr) for KVM/QEMU nested virtualization; Azure uses `Standard_D8ds_v5` ($0.38/hr).
+Both backends use the same `VMProvider` protocol. Pass `--cloud azure` (default) or `--cloud aws` to any pool command. AWS now supports nested virtualization on C8i/M8i/R8i instances (from ~$0.19/hr, Feb 2026), though GPU families (g5, g6) still require metal instances. Azure uses `Standard_D8ds_v5` ($0.38/hr).
 
 ![Windows 11 on AWS EC2](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/main/docs/aws-waa-windows-desktop.png)
 
