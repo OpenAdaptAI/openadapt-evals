@@ -982,3 +982,139 @@ class TestPlanStepAdvancement:
         action = BenchmarkAction(type="click", x=0.5, y=0.5, raw_action={})
         # Should be a no-op, not crash
         agent._advance_plan_steps(action)
+
+    def test_no_multi_step_jump_on_keyword_match(self, agent_with_multilevel_demo):
+        """Action matching a distant step should NOT skip intermediate steps.
+
+        This is the core drift fix: previously, typing a formula like
+        '=(Sheet1.B3-Sheet1.B2)' would match step 4 (CA formula) better
+        than step 1 (create sheet), causing steps 1-3 to all be marked
+        done without any VLM verification. Now it should advance at most
+        one step at a time.
+        """
+        agent = agent_with_multilevel_demo
+        # Step 1 is in_progress (create sheet)
+        assert agent._plan_steps[0]["status"] == "in_progress"
+
+        # Type a formula that in the old code would match step 4 (CA formula)
+        # better than the current step 1 (create sheet), causing steps 1-3
+        # to all be marked done
+        action = BenchmarkAction(
+            type="type",
+            text="=(Sheet1.B3-Sheet1.B2)/Sheet1.B2",
+            raw_action={"claude_action": {"action": "type",
+                        "text": "=(Sheet1.B3-Sheet1.B2)/Sheet1.B2"}},
+        )
+        agent._advance_plan_steps(action)
+
+        # With the fix: should advance at most one step (step 1 -> step 2)
+        # Step 1 should be done (at most)
+        # Step 3 should still be pending (NOT done)
+        # Step 4 should still be pending (NOT in_progress)
+        assert agent._plan_steps[2]["status"] == "pending"
+        assert agent._plan_steps[3]["status"] == "pending"
+
+    def test_sequential_advancement_requires_multiple_calls(
+        self, agent_with_multilevel_demo
+    ):
+        """Advancing through all 5 steps requires 5 separate calls.
+
+        Each call to _advance_plan_steps should advance at most one step,
+        so reaching step 5 from step 1 requires at least 4 advancement calls.
+        """
+        agent = agent_with_multilevel_demo
+        assert agent._plan_steps[0]["status"] == "in_progress"
+
+        # Simulate step 1 -> step 2 (type "Year" matches header step)
+        action1 = BenchmarkAction(
+            type="type", text="Year",
+            raw_action={"claude_action": {"action": "type", "text": "Year"}},
+        )
+        agent._advance_plan_steps(action1)
+        assert agent._plan_steps[0]["status"] == "done"
+        assert agent._plan_steps[1]["status"] == "in_progress"
+        assert agent._plan_steps[2]["status"] == "pending"
+
+        # Step 2 -> step 3 (type "2015" matches years step)
+        action2 = BenchmarkAction(
+            type="type", text="2015",
+            raw_action={"claude_action": {"action": "type", "text": "2015"}},
+        )
+        agent._advance_plan_steps(action2)
+        assert agent._plan_steps[1]["status"] == "done"
+        assert agent._plan_steps[2]["status"] == "in_progress"
+        assert agent._plan_steps[3]["status"] == "pending"
+
+        # Verify that after 2 calls, we are at step 3 -- NOT at step 5
+        assert agent._plan_steps[4]["status"] == "pending"
+
+    def test_drift_scenario_from_live_eval(self, agent_with_multilevel_demo):
+        """Reproduce the exact drift scenario from the Level 3 live eval.
+
+        In the live eval, at agent step 3 the tracking jumped from step 1
+        to step 6, marking steps 2-5 as done without verification. This
+        test ensures that cannot happen with the fix.
+        """
+        agent = agent_with_multilevel_demo
+        assert len(agent._plan_steps) == 5
+
+        # Simulate a single action that could heuristically match many steps
+        # (e.g., right_click matches "Right-click on Sheet1 tab" in step 1,
+        # but also generic click references in other steps)
+        action = BenchmarkAction(
+            type="click", x=0.1, y=0.9,
+            raw_action={
+                "claude_action": {"action": "right_click", "coordinate": [128, 648]},
+                "click_variant": "right_click",
+            },
+        )
+
+        # Call advance 1 time
+        agent._advance_plan_steps(action)
+
+        # Count how many steps are now done
+        done_count = sum(1 for s in agent._plan_steps if s["status"] == "done")
+        # At most 1 step should be marked done (the current one, if next matched better)
+        assert done_count <= 1, (
+            f"Expected at most 1 step done after single advance, got {done_count}. "
+            f"Steps: {[(s['step_num'], s['status']) for s in agent._plan_steps]}"
+        )
+
+        # Steps 3, 4, 5 must still be pending
+        assert agent._plan_steps[2]["status"] == "pending"
+        assert agent._plan_steps[3]["status"] == "pending"
+        assert agent._plan_steps[4]["status"] == "pending"
+
+    def test_external_step_control_suppresses_heuristic(
+        self, agent_with_multilevel_demo
+    ):
+        """When _external_step_control is True, _advance_plan_steps is a no-op.
+
+        The DemoController sets this flag so that step progression is driven
+        by VLM verification, not the agent's keyword heuristic.
+        """
+        agent = agent_with_multilevel_demo
+        assert agent._plan_steps[0]["status"] == "in_progress"
+
+        # Enable external step control (as DemoController does)
+        agent._external_step_control = True
+
+        # This action would normally advance step 1 -> step 2
+        action = BenchmarkAction(
+            type="type", text="Year",
+            raw_action={"claude_action": {"action": "type", "text": "Year"}},
+        )
+        agent._advance_plan_steps(action)
+
+        # With external control enabled, nothing should have changed
+        assert agent._plan_steps[0]["status"] == "in_progress"
+        assert agent._plan_steps[1]["status"] == "pending"
+
+    def test_external_step_control_default_false(
+        self, agent_with_multilevel_demo
+    ):
+        """_external_step_control defaults to False so the agent works
+        standalone (without DemoController).
+        """
+        agent = agent_with_multilevel_demo
+        assert agent._external_step_control is False

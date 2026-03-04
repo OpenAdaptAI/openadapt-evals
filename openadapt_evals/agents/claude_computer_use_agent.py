@@ -315,6 +315,12 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
         self._goal: str = ""
         self._consecutive_done_overrides: int = 0
 
+        # When True, _advance_plan_steps() is a no-op.  The DemoController
+        # sets this flag so that step progression is driven exclusively by
+        # VLM verification, preventing drift between the agent's keyword
+        # heuristic and the controller's verifier.
+        self._external_step_control: bool = False
+
         if self._parsed_demo:
             self._goal = self._parsed_demo["goal"]
             self._trajectory = self._parsed_demo["trajectory"]
@@ -356,6 +362,8 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
 
     def reset(self) -> None:
         """Reset agent state between episodes."""
+        # Note: _external_step_control is not reset here because the controller
+        # that set it persists across resets
         self._messages = []
         self._step_count = 0
         self._last_tool_use_id = None
@@ -423,8 +431,12 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
                     screenshot_b64, self._last_tool_use_id
                 )
                 content: list[dict[str, Any]] = [tool_result]
-                # Re-inject demo at every step so it doesn't drift out of context
-                if self._plan_steps:
+                # Re-inject demo at every step so it doesn't drift out of context.
+                # When _external_step_control is True the DemoController provides
+                # its own step-aware prompt via the augmented task instruction, so
+                # skip injecting the agent's (stale) plan progress to avoid
+                # conflicting step-tracking signals.
+                if self._plan_steps and not self._external_step_control:
                     # Multi-level demo: inject dynamic plan progress
                     progress_text = _build_plan_progress_text(
                         self._goal,
@@ -439,7 +451,7 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
                             f"\n---\n{progress_text}\n---"
                         ),
                     })
-                elif self.demo:
+                elif self.demo and not self._external_step_control:
                     # Non-multilevel demo: inject static text
                     content.append({
                         "type": "text",
@@ -509,8 +521,11 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
         """
         content_parts: list[dict[str, Any]] = []
 
-        # Build text prompt
-        if self._plan_steps:
+        # Build text prompt.
+        # When _external_step_control is True the DemoController supplies its
+        # own step-aware instruction, so we skip injecting the agent's
+        # (potentially stale) plan progress to avoid conflicting signals.
+        if self._plan_steps and not self._external_step_control:
             # Multi-level demo: use structured plan progress
             progress_text = _build_plan_progress_text(
                 self._goal,
@@ -523,7 +538,7 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
                 f"{progress_text}\n\n"
                 f"Now complete this task: {instruction}"
             )
-        elif self.demo:
+        elif self.demo and not self._external_step_control:
             text = (
                 f"Here is a demonstration of a similar completed task:\n\n"
                 f"{self.demo}\n\n"
@@ -639,8 +654,15 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
         # No tool_use block — Claude considers task complete
         text_parts = [b.text for b in response.content if hasattr(b, "text")]
 
-        # Check for premature done when plan steps remain
-        if self._plan_steps and self._has_remaining_plan_steps():
+        # Check for premature done when plan steps remain.
+        # When _external_step_control is True the DemoController handles
+        # done-override logic, so the agent should not also override based
+        # on its own (stale) plan steps.
+        if (
+            self._plan_steps
+            and not self._external_step_control
+            and self._has_remaining_plan_steps()
+        ):
             if self._consecutive_done_overrides < self.MAX_DONE_OVERRIDES:
                 self._consecutive_done_overrides += 1
                 remaining = self._get_remaining_step_descriptions()
@@ -720,16 +742,23 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
     def _advance_plan_steps(self, action: BenchmarkAction) -> None:
         """Advance plan step tracking based on the action being taken.
 
-        Uses simple keyword matching between the action and the current
-        plan step description / trajectory action to heuristically detect
-        when a step is being worked on or completed.
+        Only advances at most ONE step at a time to prevent tracking drift.
+        The current in_progress step is marked as done and the next pending
+        step becomes in_progress. This conservative approach avoids the
+        problem of keyword heuristics aggressively skipping multiple steps
+        based on superficial text matches (e.g., typing "Year" matching
+        both the header step and the data entry step).
 
-        When a new step appears to be starting (action matches a future
-        step), all prior in_progress steps are marked as done.
+        When ``_external_step_control`` is True (set by :class:`DemoController`),
+        this method is a no-op because step progression is managed by VLM
+        verification in the controller.
 
         Args:
             action: The BenchmarkAction being returned to the runner.
         """
+        if self._external_step_control:
+            return
+
         if not self._plan_steps:
             return
 
@@ -746,7 +775,7 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
                 break
 
         if current_idx is None:
-            # No in_progress step — try to start the first pending one
+            # No in_progress step -- try to start the first pending one
             for i, step in enumerate(self._plan_steps):
                 if step["status"] == "pending":
                     step["status"] = "in_progress"
@@ -757,33 +786,33 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
                     break
             return
 
-        # Check if the action matches a future step better than current
-        best_match_idx = current_idx
-        best_score = self._match_score(action_keywords, current_idx)
+        # Check if the action matches the NEXT step better than the current
+        # one. Only consider the immediately next step to prevent multi-step
+        # jumps that cause tracking drift.
+        current_score = self._match_score(action_keywords, current_idx)
+        next_idx = current_idx + 1
 
-        for i in range(current_idx + 1, len(self._plan_steps)):
-            if self._plan_steps[i]["status"] == "done":
-                continue
-            score = self._match_score(action_keywords, i)
-            if score > best_score:
-                best_score = score
-                best_match_idx = i
+        # Find next non-done step
+        while next_idx < len(self._plan_steps):
+            if self._plan_steps[next_idx]["status"] != "done":
+                break
+            next_idx += 1
 
-        # If action matches a later step, mark intermediate steps as done
-        if best_match_idx > current_idx:
-            for i in range(current_idx, best_match_idx):
-                if self._plan_steps[i]["status"] != "done":
-                    self._plan_steps[i]["status"] = "done"
-                    logger.info(
-                        f"Plan step {self._plan_steps[i]['step_num']} "
-                        f"marked done: {self._plan_steps[i]['text'][:60]}"
-                    )
-            self._plan_steps[best_match_idx]["status"] = "in_progress"
-            logger.info(
-                f"Plan step {self._plan_steps[best_match_idx]['step_num']} "
-                f"now in_progress: "
-                f"{self._plan_steps[best_match_idx]['text'][:60]}"
-            )
+        if next_idx < len(self._plan_steps):
+            next_score = self._match_score(action_keywords, next_idx)
+            if next_score > current_score and next_score > 0:
+                # Advance exactly one step: current -> done, next -> in_progress
+                self._plan_steps[current_idx]["status"] = "done"
+                logger.info(
+                    f"Plan step {self._plan_steps[current_idx]['step_num']} "
+                    f"marked done: {self._plan_steps[current_idx]['text'][:60]}"
+                )
+                self._plan_steps[next_idx]["status"] = "in_progress"
+                logger.info(
+                    f"Plan step {self._plan_steps[next_idx]['step_num']} "
+                    f"now in_progress: "
+                    f"{self._plan_steps[next_idx]['text'][:60]}"
+                )
 
     def _extract_action_keywords(self, action: BenchmarkAction) -> set[str]:
         """Extract keywords from an action for matching against plan steps.
