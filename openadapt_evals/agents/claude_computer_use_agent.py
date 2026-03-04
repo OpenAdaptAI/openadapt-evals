@@ -315,6 +315,12 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
         self._goal: str = ""
         self._consecutive_done_overrides: int = 0
 
+        # When True, _advance_plan_steps() is a no-op.  The DemoController
+        # sets this flag so that step progression is driven exclusively by
+        # VLM verification, preventing drift between the agent's keyword
+        # heuristic and the controller's verifier.
+        self._external_step_control: bool = False
+
         if self._parsed_demo:
             self._goal = self._parsed_demo["goal"]
             self._trajectory = self._parsed_demo["trajectory"]
@@ -727,9 +733,16 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
         based on superficial text matches (e.g., typing "Year" matching
         both the header step and the data entry step).
 
+        When ``_external_step_control`` is True (set by :class:`DemoController`),
+        this method is a no-op because step progression is managed by VLM
+        verification in the controller.
+
         Args:
             action: The BenchmarkAction being returned to the runner.
         """
+        if self._external_step_control:
+            return
+
         if not self._plan_steps:
             return
 

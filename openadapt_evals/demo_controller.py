@@ -155,6 +155,13 @@ class DemoController:
         # Parse the demo into a structured plan
         self.plan_state = self._parse_demo(demo_text)
 
+        # Disable the agent's internal heuristic step advancement so that
+        # step progression is driven exclusively by VLM verification here
+        # in the controller.  This prevents drift between the agent's
+        # keyword-based heuristic and the controller's verifier.
+        if hasattr(agent, "_external_step_control"):
+            agent._external_step_control = True
+
         logger.info(
             "DemoController initialized: goal=%r, %d plan steps, %d trajectory steps",
             self.plan_state.goal[:80],
@@ -742,7 +749,9 @@ class DemoController:
     def _verify_goal(self, observation: BenchmarkObservation) -> bool:
         """Verify whether the overall goal has been achieved.
 
-        Delegates to :func:`plan_verify.verify_goal_completion`.
+        Delegates to :func:`plan_verify.verify_goal_completion`, augmenting
+        the goal text with a summary of per-step verification outcomes so
+        that the VLM knows which steps were only ``partially_verified``.
 
         Args:
             observation: Current observation with screenshot.
@@ -755,13 +764,58 @@ class DemoController:
             logger.warning("No screenshot for goal verification; assuming not done")
             return False
 
+        # Build step verification summary so goal verifier is aware of
+        # partial completions and failures.
+        step_summary = self._build_step_verification_summary()
+        augmented_goal = self.plan_state.goal
+        if step_summary:
+            augmented_goal = (
+                f"{self.plan_state.goal}\n\n"
+                f"STEP VERIFICATION SUMMARY (for context):\n{step_summary}"
+            )
+
         result = verify_goal_completion(
             screenshot_bytes,
-            self.plan_state.goal,
+            augmented_goal,
             model=self.verify_model,
             provider=self.verify_provider,
         )
         return result.effectively_verified
+
+    def _build_step_verification_summary(self) -> str:
+        """Build a concise summary of per-step verification outcomes.
+
+        Returns:
+            A multi-line string summarising each step's verification status
+            and any partial-verification explanations, or an empty string
+            if there is nothing noteworthy to report.
+        """
+        lines: list[str] = []
+        has_noteworthy = False
+
+        for step in self.plan_state.steps:
+            vr = step.verification_result
+            if vr is None:
+                status_text = step.status
+            else:
+                status_text = vr.status
+                if vr.status == "partially_verified":
+                    has_noteworthy = True
+
+            line = f"  Step {step.step_num} ({step.action[:60]}): {status_text}"
+            if vr and vr.status == "partially_verified":
+                line += f" -- {vr.explanation[:120]}"
+            elif step.status == "failed":
+                has_noteworthy = True
+                if vr:
+                    line += f" -- {vr.explanation[:120]}"
+            lines.append(line)
+
+        if not has_noteworthy:
+            # All steps fully verified or done; no extra context needed
+            return ""
+
+        return "\n".join(lines)
 
     # ------------------------------------------------------------------
     # Helpers

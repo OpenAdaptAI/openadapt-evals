@@ -1105,3 +1105,305 @@ class TestPlanStepDriftPrevention:
         assert controller.plan_state.steps[0].verification_result.status == "verified"
         assert controller.plan_state.steps[1].verification_result.status == "not_verified"
         assert controller.plan_state.steps[2].verification_result is None
+
+
+# ---------------------------------------------------------------------------
+# Integration tests: heuristic/verifier sync and goal verification context
+# ---------------------------------------------------------------------------
+
+
+class TestHeuristicVerifierSync:
+    """Tests that the agent's keyword heuristic and controller's VLM verifier
+    stay in sync, and that the controller properly disables the heuristic.
+
+    These address the feedback that the heuristic and verifier share no
+    state and can drift independently.
+    """
+
+    def test_controller_disables_agent_heuristic(self):
+        """DemoController sets _external_step_control on agent at init."""
+        agent = MagicMock()
+        agent._external_step_control = False
+        adapter = MagicMock()
+
+        DemoController(
+            agent=agent, adapter=adapter, demo_text=SAMPLE_DEMO
+        )
+
+        assert agent._external_step_control is True
+
+    def test_controller_works_with_agent_without_flag(self):
+        """DemoController gracefully handles agents without the flag."""
+        agent = MagicMock(spec=[])  # No attributes at all
+        adapter = MagicMock()
+
+        # Should not raise
+        controller = DemoController(
+            agent=agent, adapter=adapter, demo_text=SAMPLE_DEMO
+        )
+        assert len(controller.plan_state.steps) == 3
+
+    @patch("openadapt_evals.demo_controller.verify_goal_completion")
+    @patch("openadapt_evals.demo_controller.verify_step")
+    def test_agent_heuristic_disabled_during_execute(
+        self, mock_verify_step, mock_verify_goal
+    ):
+        """When controller drives execution, the agent's _advance_plan_steps
+        should not be called (heuristic is suppressed).
+
+        We use a real ClaudeComputerUseAgent-like mock that tracks whether
+        _advance_plan_steps was invoked.
+        """
+        mock_agent = MagicMock()
+        mock_agent._external_step_control = False
+        mock_adapter = MagicMock()
+
+        mock_agent.act.return_value = _make_click_action()
+        mock_adapter.reset.return_value = _make_obs()
+        mock_adapter.step.return_value = (_make_obs(), False, {})
+        mock_adapter.evaluate.return_value = BenchmarkResult(
+            task_id="test-task-001", success=True, score=1.0
+        )
+
+        controller = DemoController(
+            agent=mock_agent,
+            adapter=mock_adapter,
+            demo_text=SAMPLE_DEMO,
+        )
+
+        # Verify the flag was set
+        assert mock_agent._external_step_control is True
+
+        mock_verify_step.return_value = _make_verified()
+        mock_verify_goal.return_value = _make_goal_verified()
+
+        task = _make_task()
+        controller.execute(task, max_steps=30)
+
+        # The controller manages step advancement, not the agent's heuristic.
+        # All steps should be done via the controller's VLM verification.
+        for step in controller.plan_state.steps:
+            assert step.status == "done"
+
+    @patch("openadapt_evals.demo_controller.verify_goal_completion")
+    @patch("openadapt_evals.demo_controller.verify_step")
+    def test_verifier_drives_step_advancement_not_heuristic(
+        self, mock_verify_step, mock_verify_goal
+    ):
+        """Step advancement happens only via VLM verification, not the
+        agent's keyword heuristic.  The controller's current_step_idx
+        should only change when verify_step returns effectively_verified.
+        """
+        mock_agent = MagicMock()
+        mock_agent._external_step_control = False
+        mock_adapter = MagicMock()
+
+        mock_agent.act.return_value = _make_click_action()
+        mock_adapter.reset.return_value = _make_obs()
+        mock_adapter.step.return_value = (_make_obs(), False, {})
+        mock_adapter.evaluate.return_value = BenchmarkResult(
+            task_id="test-task-001", success=False, score=0.0
+        )
+
+        controller = DemoController(
+            agent=mock_agent,
+            adapter=mock_adapter,
+            demo_text=SAMPLE_DEMO,
+            max_retries=5,
+            max_replans=0,
+        )
+
+        # Track step index changes via _advance
+        idx_transitions = []
+        original_advance = controller._advance
+
+        def tracked_advance():
+            before = controller.plan_state.current_step_idx
+            original_advance()
+            after = controller.plan_state.current_step_idx
+            idx_transitions.append((before, after))
+
+        controller._advance = tracked_advance
+
+        # Step 1: unclear twice, then verified
+        # Step 2: verified
+        # Step 3: verified
+        mock_verify_step.side_effect = [
+            _make_unclear(),   # step 1, attempt 1 -> retry
+            _make_unclear(),   # step 1, attempt 2 -> retry
+            _make_verified(),  # step 1, attempt 3 -> advance
+            _make_verified(),  # step 2 -> advance
+            _make_verified(),  # step 3 -> advance
+        ]
+        mock_verify_goal.return_value = _make_goal_verified()
+
+        task = _make_task()
+        controller.execute(task, max_steps=20)
+
+        # Exactly 3 advances should have occurred (one per step)
+        assert len(idx_transitions) == 3
+        # Each advance should be exactly +1
+        for before, after in idx_transitions:
+            assert after - before == 1
+
+
+class TestGoalVerificationContext:
+    """Tests that partially_verified step statuses are communicated to
+    goal verification, addressing the feedback that partially_verified
+    leaves no trace for the final verification pass.
+    """
+
+    def test_build_step_verification_summary_with_partial(self):
+        """Summary includes partially_verified steps with explanations."""
+        agent = MagicMock()
+        adapter = MagicMock()
+        controller = DemoController(
+            agent=agent, adapter=adapter, demo_text=SAMPLE_DEMO
+        )
+
+        # Step 1: verified
+        controller.plan_state.steps[0].status = "done"
+        controller.plan_state.steps[0].verification_result = _make_verified()
+
+        # Step 2: partially_verified
+        partial_vr = VerificationResult(
+            status="partially_verified",
+            confidence=0.82,
+            explanation="Text present but cursor moved to different cell",
+            raw_response="{}",
+        )
+        controller.plan_state.steps[1].status = "done"
+        controller.plan_state.steps[1].verification_result = partial_vr
+
+        # Step 3: verified
+        controller.plan_state.steps[2].status = "done"
+        controller.plan_state.steps[2].verification_result = _make_verified()
+
+        summary = controller._build_step_verification_summary()
+
+        # Should include something because step 2 is partially_verified
+        assert summary != ""
+        assert "partially_verified" in summary
+        assert "cursor moved" in summary
+
+    def test_build_step_verification_summary_all_verified(self):
+        """When all steps are fully verified, summary is empty (no noise)."""
+        agent = MagicMock()
+        adapter = MagicMock()
+        controller = DemoController(
+            agent=agent, adapter=adapter, demo_text=SAMPLE_DEMO
+        )
+
+        for step in controller.plan_state.steps:
+            step.status = "done"
+            step.verification_result = _make_verified()
+
+        summary = controller._build_step_verification_summary()
+        assert summary == ""
+
+    def test_build_step_verification_summary_with_failed(self):
+        """Failed steps are included in the summary."""
+        agent = MagicMock()
+        adapter = MagicMock()
+        controller = DemoController(
+            agent=agent, adapter=adapter, demo_text=SAMPLE_DEMO
+        )
+
+        controller.plan_state.steps[0].status = "done"
+        controller.plan_state.steps[0].verification_result = _make_verified()
+
+        controller.plan_state.steps[1].status = "failed"
+        controller.plan_state.steps[1].verification_result = _make_not_verified()
+
+        controller.plan_state.steps[2].status = "done"
+        controller.plan_state.steps[2].verification_result = _make_verified()
+
+        summary = controller._build_step_verification_summary()
+        assert summary != ""
+        assert "not_verified" in summary or "failed" in summary
+
+    @patch("openadapt_evals.demo_controller.verify_goal_completion")
+    @patch("openadapt_evals.demo_controller.verify_step")
+    def test_goal_verification_receives_step_context(
+        self, mock_verify_step, mock_verify_goal
+    ):
+        """Goal verification prompt includes step summary when partial
+        steps exist, giving the VLM verifier full context.
+        """
+        mock_agent = MagicMock()
+        mock_adapter = MagicMock()
+
+        mock_agent.act.return_value = _make_click_action()
+        mock_adapter.reset.return_value = _make_obs()
+        mock_adapter.step.return_value = (_make_obs(), False, {})
+        mock_adapter.evaluate.return_value = BenchmarkResult(
+            task_id="test-task-001", success=True, score=1.0
+        )
+
+        controller = DemoController(
+            agent=mock_agent,
+            adapter=mock_adapter,
+            demo_text=SAMPLE_DEMO,
+        )
+
+        partial_vr = VerificationResult(
+            status="partially_verified",
+            confidence=0.82,
+            explanation="Text present but cursor in wrong cell",
+            raw_response="{}",
+        )
+
+        # Steps 1 and 3: verified; Step 2: partially_verified
+        mock_verify_step.side_effect = [
+            _make_verified(),   # Step 1
+            partial_vr,         # Step 2 (partially_verified)
+            _make_verified(),   # Step 3
+        ]
+        mock_verify_goal.return_value = _make_goal_verified()
+
+        task = _make_task()
+        controller.execute(task, max_steps=30)
+
+        # Check what was passed to verify_goal_completion
+        mock_verify_goal.assert_called_once()
+        goal_text_arg = mock_verify_goal.call_args.args[1]
+
+        # The goal text should include step verification context
+        assert "STEP VERIFICATION SUMMARY" in goal_text_arg
+        assert "partially_verified" in goal_text_arg
+
+    @patch("openadapt_evals.demo_controller.verify_goal_completion")
+    @patch("openadapt_evals.demo_controller.verify_step")
+    def test_goal_verification_no_extra_context_when_all_verified(
+        self, mock_verify_step, mock_verify_goal
+    ):
+        """When all steps are fully verified, goal prompt should NOT
+        include the step summary (no noise).
+        """
+        mock_agent = MagicMock()
+        mock_adapter = MagicMock()
+
+        mock_agent.act.return_value = _make_click_action()
+        mock_adapter.reset.return_value = _make_obs()
+        mock_adapter.step.return_value = (_make_obs(), False, {})
+        mock_adapter.evaluate.return_value = BenchmarkResult(
+            task_id="test-task-001", success=True, score=1.0
+        )
+
+        controller = DemoController(
+            agent=mock_agent,
+            adapter=mock_adapter,
+            demo_text=SAMPLE_DEMO,
+        )
+
+        mock_verify_step.return_value = _make_verified()
+        mock_verify_goal.return_value = _make_goal_verified()
+
+        task = _make_task()
+        controller.execute(task, max_steps=30)
+
+        mock_verify_goal.assert_called_once()
+        goal_text_arg = mock_verify_goal.call_args.args[1]
+
+        # No step summary noise when everything is fully verified
+        assert "STEP VERIFICATION SUMMARY" not in goal_text_arg

@@ -1084,3 +1084,37 @@ class TestPlanStepAdvancement:
         assert agent._plan_steps[2]["status"] == "pending"
         assert agent._plan_steps[3]["status"] == "pending"
         assert agent._plan_steps[4]["status"] == "pending"
+
+    def test_external_step_control_suppresses_heuristic(
+        self, agent_with_multilevel_demo
+    ):
+        """When _external_step_control is True, _advance_plan_steps is a no-op.
+
+        The DemoController sets this flag so that step progression is driven
+        by VLM verification, not the agent's keyword heuristic.
+        """
+        agent = agent_with_multilevel_demo
+        assert agent._plan_steps[0]["status"] == "in_progress"
+
+        # Enable external step control (as DemoController does)
+        agent._external_step_control = True
+
+        # This action would normally advance step 1 -> step 2
+        action = BenchmarkAction(
+            type="type", text="Year",
+            raw_action={"claude_action": {"action": "type", "text": "Year"}},
+        )
+        agent._advance_plan_steps(action)
+
+        # With external control enabled, nothing should have changed
+        assert agent._plan_steps[0]["status"] == "in_progress"
+        assert agent._plan_steps[1]["status"] == "pending"
+
+    def test_external_step_control_default_false(
+        self, agent_with_multilevel_demo
+    ):
+        """_external_step_control defaults to False so the agent works
+        standalone (without DemoController).
+        """
+        agent = agent_with_multilevel_demo
+        assert agent._external_step_control is False
