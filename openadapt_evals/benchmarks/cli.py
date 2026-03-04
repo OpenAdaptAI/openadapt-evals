@@ -142,6 +142,50 @@ def _resolve_vm_context(args: argparse.Namespace) -> tuple[str, str] | None:
     return name, rg
 
 
+def _requested_environment_flags(args: argparse.Namespace) -> dict[str, str | bool | None]:
+    """Collect requested desktop-parity flags from CLI args."""
+    return {
+        "clean_desktop": bool(getattr(args, "clean_desktop", False)),
+        "force_tray_icons": bool(getattr(args, "force_tray_icons", False)),
+        "waa_image_version": getattr(args, "waa_image_version", None),
+    }
+
+
+def _write_run_environment_metadata(
+    benchmark_dir: Path,
+    *,
+    requested: dict[str, str | bool | None],
+    adapter,
+    server_url: str,
+    evaluate_url: str | None,
+) -> None:
+    """Persist run environment flags/profile into benchmark metadata.json."""
+    metadata_path = benchmark_dir / "metadata.json"
+    metadata: dict = {}
+    if metadata_path.exists():
+        try:
+            metadata = json.loads(metadata_path.read_text())
+        except Exception as e:
+            logger.warning("Could not parse metadata.json for environment patch: %s", e)
+            metadata = {}
+
+    observed = {}
+    if hasattr(adapter, "get_environment_profile"):
+        try:
+            observed = adapter.get_environment_profile() or {}
+        except Exception as e:
+            logger.debug("Could not read adapter environment profile: %s", e)
+
+    metadata["environment"] = {
+        "requested": requested,
+        "observed": observed,
+        "server_url": server_url,
+        "evaluate_url": evaluate_url,
+    }
+    benchmark_dir.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(json.dumps(metadata, indent=2))
+
+
 def cmd_mock(args: argparse.Namespace) -> int:
     """Run mock evaluation (no Windows VM required)."""
     from openadapt_evals.benchmarks import (
@@ -289,6 +333,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         evaluate_url=evaluate_url,
         max_steps=args.max_steps,
         waa_examples_path=waa_examples_path,
+        clean_desktop=getattr(args, "clean_desktop", False),
+        force_tray_icons=getattr(args, "force_tray_icons", False),
+        waa_image_version=getattr(args, "waa_image_version", None),
     )
     adapter = WAALiveAdapter(config)
 
@@ -437,6 +484,13 @@ def cmd_run(args: argparse.Namespace) -> int:
     print(f"Avg score:    {metrics['avg_score']:.3f}")
     print(f"Avg steps:    {metrics['avg_steps']:.1f}")
     benchmark_dir = Path(eval_config.output_dir) / eval_config.run_name
+    _write_run_environment_metadata(
+        benchmark_dir,
+        requested=_requested_environment_flags(args),
+        adapter=adapter,
+        server_url=server_url,
+        evaluate_url=evaluate_url,
+    )
     print(f"\nResults saved to: {benchmark_dir}")
 
     no_open = getattr(args, "no_open", False)
@@ -479,6 +533,9 @@ def cmd_live(args: argparse.Namespace) -> int:
         evaluate_url=evaluate_url,
         max_steps=args.max_steps,
         waa_examples_path=waa_examples_path,
+        clean_desktop=getattr(args, "clean_desktop", False),
+        force_tray_icons=getattr(args, "force_tray_icons", False),
+        waa_image_version=getattr(args, "waa_image_version", None),
     )
     adapter = WAALiveAdapter(config)
 
@@ -633,6 +690,14 @@ def cmd_live(args: argparse.Namespace) -> int:
     print(f"Avg steps:    {metrics['avg_steps']:.1f}")
 
     if eval_config:
+        benchmark_dir = Path(eval_config.output_dir) / eval_config.run_name
+        _write_run_environment_metadata(
+            benchmark_dir,
+            requested=_requested_environment_flags(args),
+            adapter=adapter,
+            server_url=args.server,
+            evaluate_url=evaluate_url,
+        )
         print(f"\nResults saved to: {eval_config.output_dir}/{eval_config.run_name}")
 
     return 0
@@ -865,7 +930,15 @@ docker ps -f name=winarena --format "Container: {{.Names}}, Status: {{.Status}}"
         print("[6/6] Running single-task live evaluation...")
 
         agent = ScriptedAgent([BenchmarkAction(type="done")])
-        adapter = WAALiveAdapter(WAALiveConfig(server_url=server_url, max_steps=args.max_steps))
+        adapter = WAALiveAdapter(
+            WAALiveConfig(
+                server_url=server_url,
+                max_steps=args.max_steps,
+                clean_desktop=getattr(args, "clean_desktop", False),
+                force_tray_icons=getattr(args, "force_tray_icons", False),
+                waa_image_version=getattr(args, "waa_image_version", None),
+            )
+        )
 
         eval_config = EvaluationConfig(
             max_steps=args.max_steps,
@@ -891,6 +964,15 @@ docker ps -f name=winarena --format "Container: {{.Names}}, Status: {{.Status}}"
         print(f"Success rate: {metrics['success_rate']:.1%}")
         print(f"Avg score:    {metrics['avg_score']:.3f}")
         print(f"Avg steps:    {metrics['avg_steps']:.1f}")
+        benchmark_dir = Path(eval_config.output_dir) / eval_config.run_name
+        _write_run_environment_metadata(
+            benchmark_dir,
+            requested=_requested_environment_flags(args),
+            adapter=adapter,
+            server_url=server_url,
+            evaluate_url=None,
+        )
+        print(f"\nResults saved to: {benchmark_dir}")
 
         return 0
 
@@ -2299,6 +2381,12 @@ def main() -> int:
                            help="Max retries per step when using --controller (default: 2)")
     run_parser.add_argument("--max-replans", type=int, default=2,
                            help="Max replans when using --controller (default: 2)")
+    run_parser.add_argument("--clean-desktop", action="store_true",
+                           help="Apply deterministic clean-desktop policy (disable OneDrive/toast/taskbar noise)")
+    run_parser.add_argument("--force-tray-icons", action="store_true",
+                           help="Force network/audio tray icons visible for stable click-coordinate tasks")
+    run_parser.add_argument("--waa-image-version", type=str, default=None,
+                           help="Pinned WAA image version label to record in run metadata")
 
     # Live evaluation (full control)
     live_parser = subparsers.add_parser("live", help="Run live evaluation against WAA server (full control)")
@@ -2321,6 +2409,12 @@ def main() -> int:
                             help="Path to WAA evaluation_examples_windows directory for task configs")
     live_parser.add_argument("--output", type=str, help="Output directory for traces")
     live_parser.add_argument("--run-name", type=str, help="Name for this evaluation run")
+    live_parser.add_argument("--clean-desktop", action="store_true",
+                            help="Apply deterministic clean-desktop policy (disable OneDrive/toast/taskbar noise)")
+    live_parser.add_argument("--force-tray-icons", action="store_true",
+                            help="Force network/audio tray icons visible for stable click-coordinate tasks")
+    live_parser.add_argument("--waa-image-version", type=str, default=None,
+                            help="Pinned WAA image version label to record in run metadata")
 
     # Probe server
     probe_parser = subparsers.add_parser("probe", help="Check if WAA server is reachable")
@@ -2487,6 +2581,12 @@ def main() -> int:
                                   help="Save execution traces (viewer artifacts)")
     smoke_live_parser.add_argument("--no-stop-vm", dest="stop_vm", action="store_false",
                                   help="Do not deallocate VM after smoke test")
+    smoke_live_parser.add_argument("--clean-desktop", action="store_true",
+                                  help="Apply deterministic clean-desktop policy before smoke task")
+    smoke_live_parser.add_argument("--force-tray-icons", action="store_true",
+                                  help="Force network/audio tray icons visible during smoke task")
+    smoke_live_parser.add_argument("--waa-image-version", type=str, default=None,
+                                  help="Pinned WAA image version label to record in run metadata")
     smoke_live_parser.set_defaults(stop_vm=True)
 
     dashboard_parser = subparsers.add_parser("dashboard", help="Generate VM usage dashboard")

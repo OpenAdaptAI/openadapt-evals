@@ -28,6 +28,10 @@ Usage:
 
     # Use AWS instead of Azure
     python scripts/run_eval_pipeline.py --cloud aws --vm-name waa-pool-00
+
+    # Train/eval UI parity mode (suppresses OneDrive/toast noise, pins image tag)
+    python scripts/run_eval_pipeline.py --tasks 04d9aeaf --clean-desktop \\
+        --force-tray-icons --waa-image-version win11-24h2-2026-03-04
 """
 
 from __future__ import annotations
@@ -436,6 +440,9 @@ def _run_eval(
     vm_ip: str,
     vm_user: str,
     tunnel_manager: SSHTunnelManager,
+    clean_desktop: bool = False,
+    force_tray_icons: bool = False,
+    waa_image_version: str | None = None,
 ) -> dict[str, dict]:
     """Run all eval conditions sequentially with health checks."""
     results = {}
@@ -479,6 +486,12 @@ def _run_eval(
             "--output", str(output_dir),
             "--run-name", run_name,
         ]
+        if clean_desktop:
+            cmd.append("--clean-desktop")
+        if force_tray_icons:
+            cmd.append("--force-tray-icons")
+        if waa_image_version:
+            cmd.extend(["--waa-image-version", waa_image_version])
         if demo_path:
             cmd.extend(["--demo", str(demo_path.resolve())])
 
@@ -577,6 +590,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--agent", default="api-claude-cu", help="Agent type")
     parser.add_argument("--max-steps", type=int, default=15)
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT))
+    parser.add_argument(
+        "--clean-desktop",
+        action="store_true",
+        help="Apply deterministic clean-desktop policy (OneDrive/toast suppression + tray parity)",
+    )
+    parser.add_argument(
+        "--force-tray-icons",
+        action="store_true",
+        help="Force network/audio tray icons visible before each run",
+    )
+    parser.add_argument(
+        "--waa-image-version",
+        default=None,
+        help="Pinned WAA image version label to record in run metadata",
+    )
     parser.add_argument("--server", default="http://localhost:5001")
     parser.add_argument("--evaluate-url", default="http://localhost:5050")
     parser.add_argument(
@@ -823,6 +851,9 @@ def main() -> int:
         vm_ip=vm_ip or "",
         vm_user=vm_user,
         tunnel_manager=tunnel_manager,
+        clean_desktop=args.clean_desktop,
+        force_tray_icons=args.force_tray_icons,
+        waa_image_version=args.waa_image_version,
     )
 
     # ── Phase 4: Summary ──────────────────────────────────────────────
