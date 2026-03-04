@@ -313,7 +313,7 @@ class TestGenerateEnvSpec:
         assert spec["name"] == ENV_REGISTRY_KEY
         assert spec["n_envs"] == 8
         assert spec["max_turns"] == 15
-        assert spec["config"]["server_url"] == "http://localhost:5001"
+        assert spec["config"]["server_url"] == "http://localhost:5000"
         assert spec["config"]["action_type"] == "fractional"
 
     def test_custom_spec(self):
