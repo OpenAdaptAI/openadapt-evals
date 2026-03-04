@@ -85,7 +85,10 @@ def _find_recordings_needing_demos(
             if not any(task_id.startswith(f) for f in task_filter):
                 continue
 
-        demo_path = demo_dir / f"{task_id}.txt"
+        # Prefer multilevel demo (Option D format) over plain .txt
+        demo_path = demo_dir / f"{task_id}_multilevel.txt"
+        if not demo_path.exists():
+            demo_path = demo_dir / f"{task_id}.txt"
         if not demo_path.exists():
             missing.append((task_dir, task_id))
 
@@ -410,7 +413,10 @@ def _build_conditions(
         if not dc_only:
             conditions.append((tid, f"val_zs_{sid}", None))
         if not zs_only:
-            demo_path = demo_dir / f"{tid}.txt"
+            # Prefer multilevel demo (Option D format) over plain .txt
+            demo_path = demo_dir / f"{tid}_multilevel.txt"
+            if not demo_path.exists():
+                demo_path = demo_dir / f"{tid}.txt"
             if not demo_path.exists():
                 demo_path = demo_dir / f"{tid}.json"
             if demo_path.exists():

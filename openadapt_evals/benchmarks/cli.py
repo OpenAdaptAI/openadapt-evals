@@ -2049,15 +2049,20 @@ def _suite_task_short_name(task_id: str) -> str:
 
 
 def _suite_find_demo(demo_dir: Path, task_id: str) -> Path | None:
-    """Find demo file (.txt preferred, then .json) for a task ID.
+    """Find demo file for a task ID.
 
-    Prefers .txt (natural language) over .json because:
-    - .txt demos describe actions in human-readable terms
-    - .json demos contain normalized coordinates (0-1) that mismatch
-      the agent's pixel coordinate action space
+    Preference order:
+    1. ``{task_id}_multilevel.txt`` — Option D multi-level conditioning format
+    2. ``{task_id}.txt`` — plain natural-language demo
+    3. ``{task_id}.json`` — structured JSON (normalized coords, less useful)
+
+    Multilevel demos are preferred because the rigid plain-text format can
+    cause demo-conditioned agents to abandon the task when UI state doesn't
+    exactly match the description.  The multilevel format uses PLAN +
+    {Think, Action, Expect} steps with "adapt if needed" framing.
     """
-    for ext in (".txt", ".json"):
-        p = demo_dir / f"{task_id}{ext}"
+    for suffix in ("_multilevel.txt", ".txt", ".json"):
+        p = demo_dir / f"{task_id}{suffix}"
         if p.exists():
             return p
     return None

@@ -118,12 +118,17 @@ def generate_comparison_viewer(
     # Match tasks across runs
     matched = _match_tasks(loaded_runs)
 
-    # Load demo prompts if available
+    # Load demo prompts if available.
+    # When both {id}.txt and {id}_multilevel.txt exist, prefer multilevel.
     demo_prompts: dict[str, str] = {}
     if demo_prompts_dir and demo_prompts_dir.exists():
-        for f in demo_prompts_dir.glob("*.txt"):
+        for f in sorted(demo_prompts_dir.glob("*.txt")):
+            stem = f.stem
+            # Strip _multilevel suffix for the lookup key so multilevel
+            # demos replace plain ones (sorted order: plain before _multilevel).
+            key = stem.removesuffix("_multilevel")
             with open(f) as fh:
-                demo_prompts[f.stem] = fh.read()
+                demo_prompts[key] = fh.read()
 
     # Build the data structure for JS
     comparison_data: list[dict[str, Any]] = []
