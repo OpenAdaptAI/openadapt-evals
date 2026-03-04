@@ -1,6 +1,61 @@
 # CHANGELOG
 
 
+## v0.30.1 (2026-03-04)
+
+### Bug Fixes
+
+- Correct training entry point, env config, and GPU defaults for VAGEN
+  ([#101](https://github.com/OpenAdaptAI/openadapt-evals/pull/101),
+  [`ac7437d`](https://github.com/OpenAdaptAI/openadapt-evals/commit/ac7437d0c5702c7d36c4bd586c3337973c41837c))
+
+Five blockers for running verl-agent training on g5.xlarge:
+
+A) n_gpus default: 2 -> 1 (g5.xlarge has 1 GPU; multi-GPU is for g5.12xlarge) - train_verl_e2e.py
+  argparse default - train_waa_vagen.yaml trainer.n_gpus_per_node - vm_cli.py gpu-train --n-gpus
+  default
+
+B) n_envs: 8 -> 1 (single WAA VM; GRPO group size is rollout.n, not n_envs) - train_waa_vagen.yaml
+  envs[0].n_envs
+
+C) Training entry point: verl.trainer.main_ppo -> vagen.main_ppo - VAGEN has its own entry point
+  with Hydra config support - Added --config-path and --config-name Hydra args
+
+D) Generated config: full training config -> env spec only - _generate_training_config now emits
+  only the envs section - Algorithm, trainer, and rollout settings are Hydra overrides on CLI -
+  data.train_files/val_files point to the env spec YAML
+
+E) Rollout config: added VAGEN-required Hydra overrides - multi_turn.enable=True for multi-step
+  desktop tasks - rollout.n={group_size} for GRPO group size - FSDP param/optimizer offload for
+  single-GPU memory - gradient checkpointing enabled - total_training_steps replaces total_epochs
+  (VAGEN uses steps) - Added evaluate_url to log output
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+### Documentation
+
+- Add AWS spot instance cost analysis for GPU training
+  ([#100](https://github.com/OpenAdaptAI/openadapt-evals/pull/100),
+  [`c7a9177`](https://github.com/OpenAdaptAI/openadapt-evals/commit/c7a9177fa421efd998ce8e0a49452b9ea86511c0))
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+- Add first training run runbook with pre-flight checklist
+  ([#99](https://github.com/OpenAdaptAI/openadapt-evals/pull/99),
+  [`dd6b6fc`](https://github.com/OpenAdaptAI/openadapt-evals/commit/dd6b6fc8938f5422bb92c9cd721ec603035a8644))
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+- Add UNIX socket bridge section to README
+  ([#98](https://github.com/OpenAdaptAI/openadapt-evals/pull/98),
+  [`f7d4be9`](https://github.com/OpenAdaptAI/openadapt-evals/commit/f7d4be967bc5d313b4c8a88b5be6314637b52cde))
+
+Add concise section explaining the nsenter+socat workaround for Docker port 5050 broken by QEMU
+  NET_ADMIN, with recovery steps and link to the detailed architecture doc.
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.30.0 (2026-03-04)
 
 ### Bug Fixes
