@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v0.32.0 (2026-03-04)
+
+### Features
+
+- **evals**: Add clean-desktop parity mode and env metadata
+  ([`899b36d`](https://github.com/OpenAdaptAI/openadapt-evals/commit/899b36db83218edd27ae3f1cfe2db2dca6ce095b))
+
+
 ## v0.31.0 (2026-03-04)
 
 ### Documentation
