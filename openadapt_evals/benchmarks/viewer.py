@@ -373,6 +373,19 @@ def _generate_benchmark_viewer_html(
     num_tasks = len(tasks)
     num_success = sum(1 for t in tasks if t.get("execution", {}).get("success", False))
     success_rate = (num_success / num_tasks * 100) if num_tasks > 0 else 0
+    num_infra = sum(
+        1
+        for t in tasks
+        if (t.get("execution", {}) or {}).get("error_type") == "infrastructure"
+    )
+    num_non_infra = max(0, num_tasks - num_infra)
+    non_infra_success = sum(
+        1
+        for t in tasks
+        if (t.get("execution", {}) or {}).get("error_type") != "infrastructure"
+        and (t.get("execution", {}) or {}).get("success", False)
+    )
+    adj_success_rate = (non_infra_success / num_non_infra * 100) if num_non_infra > 0 else 0
 
     body_class = ' class="compact"' if compact else ''
 
@@ -636,6 +649,10 @@ def _generate_benchmark_viewer_html(
         .task-item .task-status.fail {{
             background: rgba(255, 95, 95, 0.2);
             color: var(--error);
+        }}
+        .task-item .task-status.infra {{
+            background: rgba(245, 158, 11, 0.2);
+            color: #f59e0b;
         }}
         .task-item .task-info {{
             font-size: 0.75rem;
@@ -1169,8 +1186,16 @@ def _generate_benchmark_viewer_html(
                     <div class="stat-label">Failed</div>
                 </div>
                 <div class="stat-card">
+                    <div class="stat-value" style="color:#f59e0b;">{num_infra}</div>
+                    <div class="stat-label">Infra Fails</div>
+                </div>
+                <div class="stat-card">
                     <div class="stat-value {'success' if success_rate >= 50 else 'error'}">{success_rate:.1f}%</div>
                     <div class="stat-label">Success Rate</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value {'success' if adj_success_rate >= 50 else 'error'}">{adj_success_rate:.1f}%</div>
+                    <div class="stat-label">Adj Success</div>
                 </div>
             </div>
             <div class="domain-breakdown" id="domain-breakdown"></div>
@@ -1200,6 +1225,7 @@ def _generate_benchmark_viewer_html(
                     <option value="all">All</option>
                     <option value="success">Passed</option>
                     <option value="fail">Failed</option>
+                    <option value="infra">Infra</option>
                 </select>
             </div>
             <span class="filter-count" id="filter-count">{num_tasks} tasks</span>
@@ -1284,14 +1310,18 @@ def _generate_benchmark_viewer_html(
             const def = task.definition || {{}};
             const exec = task.execution || {{}};
             const success = exec.success || false;
+            const errorType = exec.error_type || '';
+            const isInfra = errorType === 'infrastructure';
+            const statusKey = success ? 'success' : (isInfra ? 'infra' : 'fail');
+            const statusLabel = success ? 'PASS' : (isInfra ? 'INFRA' : 'FAIL');
             const domain = def.domain || 'unknown';
             const numSteps = exec.num_steps || 0;
 
             html += `
-                <div class="task-item" data-idx="${{idx}}" data-domain="${{domain}}" data-status="${{success ? 'success' : 'fail'}}" onclick="selectTask(${{idx}})">
+                <div class="task-item" data-idx="${{idx}}" data-domain="${{domain}}" data-status="${{statusKey}}" onclick="selectTask(${{idx}})">
                     <div class="task-header">
                         <span class="task-id">${{task.task_id}}</span>
-                        <span class="task-status ${{success ? 'success' : 'fail'}}">${{success ? 'PASS' : 'FAIL'}}</span>
+                        <span class="task-status ${{statusKey}}">${{statusLabel}}</span>
                     </div>
                     <div class="task-info">
                         <span class="task-domain">${{domain}}</span>
@@ -1444,16 +1474,20 @@ def _generate_benchmark_viewer_html(
         const exec = task.execution || {{}};
         const steps = exec.steps || [];
         const success = exec.success || false;
+        const isInfra = (exec.error_type || '') === 'infrastructure';
+        const statusColor = success ? 'var(--success)' : (isInfra ? '#f59e0b' : 'var(--error)');
+        const statusLabel = success ? 'PASSED' : (isInfra ? 'INFRA FAILURE' : 'FAILED');
 
         const container = document.getElementById('task-detail-content');
         container.innerHTML = `
             <div class="task-detail-header">
-                <h2>${{task.task_id}} - <span style="color: ${{success ? 'var(--success)' : 'var(--error)'}}">${{success ? 'PASSED' : 'FAILED'}}</span></h2>
+                <h2>${{task.task_id}} - <span style="color: ${{statusColor}}">${{statusLabel}}</span></h2>
                 <div class="task-detail-meta">
                     Domain: <strong>${{def.domain || 'unknown'}}</strong> |
                     Steps: <strong>${{exec.num_steps || steps.length}}</strong> |
                     Time: <strong>${{(exec.total_time_seconds || 0).toFixed(1)}}s</strong>
                     ${{exec.error ? `<br>Error: <span style="color:var(--error)">${{exec.error}}</span>` : ''}}
+                    ${{exec.error_type ? `<br>Error Type: <strong>${{exec.error_type}}</strong>` : ''}}
                 </div>
                 <div class="task-detail-instruction">
                     ${{def.instruction || 'No instruction available'}}

@@ -325,6 +325,7 @@ class ExecutionTraceCollector:
             "total_time_seconds": result.total_time_seconds,
             "error": result.error,
             "reason": result.reason,
+            "error_type": result.error_type,
             "steps": [asdict(step) for step in self._current_steps],
             "logs": logs,
         }
@@ -360,6 +361,21 @@ class ExecutionTraceCollector:
             "avg_score": sum(r.score for r in all_results) / len(all_results) if all_results else 0.0,
             "avg_steps": sum(r.num_steps for r in all_results) / len(all_results) if all_results else 0.0,
             "avg_time_seconds": sum(r.total_time_seconds for r in all_results) / len(all_results) if all_results else 0.0,
+            "num_infrastructure_failures": sum(
+                1 for r in all_results if r.error_type == "infrastructure"
+            ),
+            "num_tasks_excluding_infra": sum(
+                1 for r in all_results if r.error_type != "infrastructure"
+            ),
+            "num_success_excluding_infra": sum(
+                1 for r in all_results if r.error_type != "infrastructure" and r.success
+            ),
+            "success_rate_excluding_infra": (
+                sum(1 for r in all_results if r.error_type != "infrastructure" and r.success)
+                / sum(1 for r in all_results if r.error_type != "infrastructure")
+                if any(r.error_type != "infrastructure" for r in all_results)
+                else 0.0
+            ),
             "tasks": [
                 {
                     "task_id": r.task_id,
@@ -367,6 +383,8 @@ class ExecutionTraceCollector:
                     "score": r.score,
                     "num_steps": r.num_steps,
                     "error": r.error,
+                    "reason": r.reason,
+                    "error_type": r.error_type,
                 }
                 for r in all_results
             ],
