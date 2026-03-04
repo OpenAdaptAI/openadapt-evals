@@ -1664,7 +1664,6 @@ $obj | ConvertTo-Json -Compress
         except Exception as e:
             logger.debug("Failed to collect environment profile: %s", e)
             return {}
-        logger.debug("Dismissed system notifications")
 
     def _is_libreoffice_task(self, raw_config: dict) -> bool:
         """Return True if task setup implies LibreOffice app usage."""
@@ -1726,6 +1725,21 @@ $obj | ConvertTo-Json -Compress
                 json={"config": open_steps},
                 timeout=60.0,
             )
+            payload = (
+                resp.json()
+                if resp.headers.get("content-type", "").startswith("application/json")
+                else {}
+            )
+            results = payload.get("results", [])
+            if results:
+                # Keep diagnostics tied to the most recent remediation attempt.
+                self._last_setup_results = results
+            elif resp.status_code != 200:
+                self._last_setup_results = [{
+                    "type": "open",
+                    "status": "error",
+                    "error": f"HTTP {resp.status_code}: {resp.text[:200]}",
+                }]
             if resp.status_code != 200:
                 logger.warning(
                     "Open-step remediation failed: HTTP %s %s",
