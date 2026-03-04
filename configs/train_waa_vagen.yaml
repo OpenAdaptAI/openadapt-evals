@@ -4,7 +4,10 @@
 # using GRPO/GiGPO via the VAGEN framework (verl-agent).
 #
 # Prerequisites:
-#   1. WAA server running (via SSH tunnel): ssh -L 5001:localhost:5050 azureuser@<VM_IP>
+#   1. WAA server reachable (via SSH tunnel if needed):
+#        ssh -N -L 5000:localhost:5000 -L 5001:localhost:5050 azureuser@<VM_IP>
+#      Port 5000: WAA Flask API (/screenshot, /execute_windows)
+#      Port 5001: evaluate_server (/setup, /evaluate) via socat bridge from container :5050
 #   2. VAGEN installed on GPU VM (see scripts/setup_gpu_training.sh)
 #   3. openadapt-evals installed on GPU VM (pip install openadapt-evals)
 #   4. Register env in VAGEN's env_registry.yaml:
@@ -53,7 +56,8 @@ envs:
     max_turns: 15                # Max actions per episode
     response_length_per_turn: 512
     config:
-      server_url: "http://localhost:5001"
+      server_url: "http://localhost:5000"       # WAA Flask API (screenshots, actions)
+      evaluate_url: "http://localhost:5001"     # evaluate_server (setup, evaluate)
       task_id: "REPLACE_WITH_WAA_TASK_UUID"
       max_steps: 15
       evaluate_at_done: true

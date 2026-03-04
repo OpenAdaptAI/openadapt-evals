@@ -7923,13 +7923,17 @@ def cmd_gpu_train(args):
     # - training config generation
     # - training launch
     # This avoids duplicating the Hydra overrides in two places.
-    import sys
-    sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts"))
-    from train_verl_e2e import launch_training
+    import importlib.util
+    _script_path = Path(__file__).parent.parent.parent / "scripts" / "train_verl_e2e.py"
+    _spec = importlib.util.spec_from_file_location("train_verl_e2e", _script_path)
+    _mod = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+    launch_training = _mod.launch_training
 
     print(f"Launching {args.algorithm} training on {args.n_gpus} GPU(s)...")
     print(f"Model: {args.model}")
     print(f"WAA server: {args.waa_server}")
+    print(f"Evaluate server: {args.evaluate_server}")
     print(f"Task: {args.task_id}")
 
     try:
@@ -7942,6 +7946,7 @@ def cmd_gpu_train(args):
             n_gpus=args.n_gpus,
             epochs=args.epochs,
             username=username,
+            evaluate_url=args.evaluate_server,
         )
         return exit_code
     finally:
@@ -9097,8 +9102,12 @@ Examples:
         help="Use an existing GPU VM (skip provisioning)",
     )
     p_gpu_train.add_argument(
-        "--waa-server", type=str, default="http://localhost:5001",
-        help="WAA server URL accessible from GPU VM",
+        "--waa-server", type=str, default="http://localhost:5000",
+        help="WAA Flask API URL (screenshots, actions) (default: http://localhost:5000)",
+    )
+    p_gpu_train.add_argument(
+        "--evaluate-server", type=str, default="http://localhost:5001",
+        help="Evaluate server URL (setup, evaluate) (default: http://localhost:5001)",
     )
     p_gpu_train.add_argument(
         "--task-id", type=str, required=True,

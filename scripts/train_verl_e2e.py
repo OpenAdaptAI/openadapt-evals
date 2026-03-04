@@ -20,7 +20,8 @@ Usage:
     # Azure (provisions GPU VM + connects to existing WAA server)
     python scripts/train_verl_e2e.py \\
         --cloud azure \\
-        --waa-server http://localhost:5001 \\
+        --waa-server http://localhost:5000 \\
+        --evaluate-server http://localhost:5001 \\
         --task-id <WAA_UUID>
 
     # AWS (provisions both GPU VM and WAA VM)
@@ -34,7 +35,8 @@ Usage:
     # Use existing GPU VM
     python scripts/train_verl_e2e.py \\
         --gpu-ip 52.170.1.100 \\
-        --waa-server http://localhost:5001 \\
+        --waa-server http://localhost:5000 \\
+        --evaluate-server http://localhost:5001 \\
         --task-id <WAA_UUID>
 """
 
@@ -240,30 +242,29 @@ print(f"Registered WAADesktop in {registry_path}")
 print(f"Registry now contains: {list(registry.keys())}")
 '''
 
+    # Write script to a temp file to avoid nested quoting issues
+    _ssh_run(
+        ip,
+        f"cat > /tmp/_register_env.py << 'PYEOF'\n{register_script}\nPYEOF",
+        username=username,
+        stream=False,
+    )
     result = _ssh_run(
         ip,
-        f"conda run -n verl-agent python3 -c '{register_script}'",
+        "conda run -n verl-agent python3 /tmp/_register_env.py",
         username=username,
         stream=True,
     )
     if result.returncode != 0:
         logger.warning("Registry update failed; trying programmatic registration...")
         # Fallback: use our register_in_vagen() helper
-        fallback_script = '''
-import sys
-sys.path.insert(0, ".")
-from openadapt_evals.adapters.verl_env import register_in_vagen
-if not register_in_vagen():
-    print("WARNING: Could not register WAADesktopEnv. Manual registration required.")
-    print("Add to vagen/configs/env_registry.yaml:")
-    print("  WAADesktop: openadapt_evals.adapters.verl_env.WAADesktopEnv")
-'''
-        _ssh_run(
-            ip,
-            f"conda run -n verl-agent python3 -c '{fallback_script}'",
-            username=username,
-            stream=True,
+        fallback_cmd = (
+            "conda run -n verl-agent python3 -c "
+            '"from openadapt_evals.adapters.verl_env import register_in_vagen; '
+            "register_in_vagen() or print("
+            "'WARNING: Could not register WAADesktopEnv')\""
         )
+        _ssh_run(ip, fallback_cmd, username=username, stream=True)
 
 
 def _generate_training_config(
@@ -277,6 +278,7 @@ def _generate_training_config(
     group_size: int,
     epochs: int,
     username: str,
+    evaluate_url: str | None = None,
 ) -> str:
     """Generate a VAGEN training config YAML on the GPU VM.
 
@@ -298,6 +300,7 @@ def _generate_training_config(
                 "response_length_per_turn": 512,
                 "config": {
                     "server_url": waa_server,
+                    **({"evaluate_url": evaluate_url} if evaluate_url else {}),
                     "task_id": task_id,
                     "max_steps": max_turns,
                     "evaluate_at_done": True,
@@ -357,6 +360,7 @@ def launch_training(
     group_size: int = 8,
     epochs: int = 100,
     username: str = "ubuntu",
+    evaluate_url: str | None = None,
 ):
     """Launch VAGEN training on the GPU VM.
 
@@ -388,6 +392,7 @@ def launch_training(
         group_size=group_size,
         epochs=epochs,
         username=username,
+        evaluate_url=evaluate_url,
     )
 
     # Step 4: Launch training
@@ -454,8 +459,12 @@ def main():
         help="Use an existing GPU VM instead of provisioning one",
     )
     parser.add_argument(
-        "--waa-server", type=str, default="http://localhost:5001",
-        help="WAA server URL accessible from GPU VM (default: http://localhost:5001)",
+        "--waa-server", type=str, default="http://localhost:5000",
+        help="WAA Flask API URL (screenshots, actions) (default: http://localhost:5000)",
+    )
+    parser.add_argument(
+        "--evaluate-server", type=str, default="http://localhost:5001",
+        help="Evaluate server URL (setup, evaluate) (default: http://localhost:5001)",
     )
     parser.add_argument(
         "--task-id", type=str, required=True,
@@ -536,6 +545,7 @@ def main():
             n_gpus=args.n_gpus,
             epochs=args.epochs,
             username=username,
+            evaluate_url=args.evaluate_server,
         )
 
         if exit_code != 0:
