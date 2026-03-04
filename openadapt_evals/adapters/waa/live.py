@@ -388,6 +388,8 @@ class WAALiveAdapter(BenchmarkAdapter):
         self._actual_screen_size: tuple[int, int] | None = None
         self._clean_desktop_applied = False
         self._environment_profile: dict[str, Any] = {}
+        self._last_setup_results: list[dict[str, Any]] = []
+        self._last_foreground_title: str | None = None
 
     @property
     def name(self) -> str:
@@ -1427,6 +1429,7 @@ class WAALiveAdapter(BenchmarkAdapter):
             raw_config: Task configuration with setup commands.
         """
         config = raw_config.get("config", [])
+        self._last_setup_results = []
 
         related_apps = raw_config.get("related_apps", [])
         if related_apps:
@@ -1450,6 +1453,7 @@ class WAALiveAdapter(BenchmarkAdapter):
             )
             payload = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
             results = payload.get("results", [])
+            self._last_setup_results = results
             for r in results:
                 status = r.get("status", "unknown")
                 logger.info(f"Setup {r.get('type')}: {status}")
@@ -1874,7 +1878,64 @@ $obj | ConvertTo-Json -Compress
             "Post-setup focus: could not confirm target app is in foreground "
             "after deterministic remediation."
         )
+        diagnostics = self._capture_focus_diagnostics(patterns)
+        if diagnostics:
+            logger.warning("Post-setup focus diagnostics: %s", diagnostics)
         return False
+
+    def _capture_focus_diagnostics(self, patterns: list[str]) -> dict[str, Any]:
+        """Capture foreground/window state and last open-step setup result."""
+        diagnostics: dict[str, Any] = {
+            "expected_patterns": patterns,
+            "last_foreground_title": self._last_foreground_title,
+        }
+
+        open_results = [
+            r for r in self._last_setup_results
+            if isinstance(r, dict) and r.get("type") == "open"
+        ]
+        if open_results:
+            diagnostics["last_open_setup_result"] = open_results[-1]
+
+        script = r"""
+$ErrorActionPreference='SilentlyContinue'
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class OAWinApi {
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
+  public static string GetForegroundTitle() {
+    var sb = new StringBuilder(512);
+    var h = GetForegroundWindow();
+    GetWindowText(h, sb, sb.Capacity);
+    return sb.ToString();
+  }
+}
+"@
+$fg = [OAWinApi]::GetForegroundTitle()
+$wins = Get-Process | Where-Object { $_.MainWindowTitle -and $_.MainWindowTitle.Trim() -ne '' } | Select-Object -First 25 ProcessName, MainWindowTitle
+[pscustomobject]@{
+  foreground_title = $fg
+  windows = $wins
+} | ConvertTo-Json -Depth 4 -Compress
+"""
+        try:
+            output = self.run_powershell(script).strip()
+            parsed_snapshot = False
+            for line in reversed(output.splitlines()):
+                line = line.strip()
+                if line.startswith("{") and line.endswith("}"):
+                    diagnostics["window_snapshot"] = json.loads(line)
+                    parsed_snapshot = True
+                    break
+            if not parsed_snapshot and output:
+                diagnostics["window_snapshot_raw"] = output[-1000:]
+        except Exception as e:
+            diagnostics["window_snapshot_error"] = str(e)
+
+        return diagnostics
 
     def _try_activate_patterns(
         self,
@@ -1959,6 +2020,7 @@ $obj | ConvertTo-Json -Compress
             title = (self._extract_window_title(a11y_tree) or "").strip()
             if not title:
                 return False
+            self._last_foreground_title = title
             title_lower = title.lower()
             for pattern in patterns:
                 if pattern.lower() in title_lower:
