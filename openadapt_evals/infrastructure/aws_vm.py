@@ -45,12 +45,33 @@ INSTANCE_TYPE_FALLBACKS = [
     ("c5.metal", 4.080),
     ("m5a.xlarge", 0.172),  # Non-KVM fallback (won't run QEMU, for testing only)
 ]
+
+# GPU instance types for verl-agent RL training.
+# verl-agent requires 2+ GPUs for distributed VLM training.
+# p3.8xlarge: 4x V100 16GB NVLink — recommended for Qwen2.5-VL-3B training.
+# g5.12xlarge: 4x A10G 24GB — budget option (no NVLink).
+# p3.2xlarge: 1x V100 16GB — single-GPU baseline (tight for 3B).
+GPU_INSTANCE_TYPE_FALLBACKS = [
+    # Prefer Ampere (g5) over Volta (p3) — the AWS Deep Learning OSS NVIDIA
+    # Driver AMI uses the open-source nvidia.ko which requires GPU System
+    # Processor (GSP), only available on Turing (T4) and newer architectures.
+    # V100 (Volta/p3) will fail with "not supported by open nvidia.ko".
+    ("g5.xlarge", 1.006),       # 1x A10G 24GB — cheapest Ampere option
+    ("g5.2xlarge", 1.212),      # 1x A10G 24GB, more CPU/RAM
+    ("g5.12xlarge", 7.09),      # 4x A10G 96GB — multi-GPU training
+    ("p3.2xlarge", 3.06),       # 1x V100 16GB — requires proprietary driver
+]
+
 # Regions to try in order of preference
 AWS_REGIONS = ["us-east-1", "us-west-2", "us-east-2", "eu-west-1"]
 
 # Ubuntu 22.04 LTS AMI name pattern (Canonical official)
 _UBUNTU_AMI_NAME = "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"
 _UBUNTU_AMI_OWNER = "099720109477"  # Canonical
+
+# AWS Deep Learning AMI (Ubuntu 22.04, NVIDIA OSS driver pre-installed)
+_DL_AMI_NAME = "Deep Learning OSS Nvidia Driver AMI GPU PyTorch *Ubuntu 22.04*"
+_DL_AMI_OWNER = "898082745236"  # Amazon (AWS Deep Learning team)
 
 # Tag used to identify pool resources
 _POOL_TAG_KEY = "waa-pool"
@@ -147,6 +168,36 @@ class AWSVMManager:
             raise RuntimeError(
                 f"No Ubuntu 22.04 AMI found in {region or self.region}"
             )
+        return images[0]["ImageId"]
+
+    def _find_latest_dl_ami(self, region: str | None = None) -> str:
+        """Find the latest AWS Deep Learning AMI (Ubuntu 22.04, NVIDIA OSS driver).
+
+        This AMI comes with NVIDIA drivers, CUDA, and PyTorch pre-installed,
+        suitable for GPU training workloads. Falls back to the standard Ubuntu
+        AMI if no Deep Learning AMI is found in the region.
+        """
+        import boto3
+
+        ec2 = boto3.client("ec2", region_name=region or self.region)
+        resp = ec2.describe_images(
+            Owners=[_DL_AMI_OWNER],
+            Filters=[
+                {"Name": "name", "Values": [_DL_AMI_NAME]},
+                {"Name": "architecture", "Values": ["x86_64"]},
+                {"Name": "state", "Values": ["available"]},
+            ],
+        )
+        images = sorted(
+            resp["Images"], key=lambda x: x["CreationDate"], reverse=True
+        )
+        if not images:
+            logger.warning(
+                "No Deep Learning AMI found in %s, falling back to Ubuntu",
+                region or self.region,
+            )
+            return self._find_latest_ubuntu_ami(region)
+        logger.info("Using Deep Learning AMI: %s", images[0]["Name"])
         return images[0]["ImageId"]
 
     def _ensure_vpc_infrastructure(self, region: str | None = None) -> dict:
@@ -318,6 +369,7 @@ class AWSVMManager:
         image: str = "",
         admin_username: str = "ubuntu",
         image_id: str | None = None,
+        gpu: bool = False,
     ) -> dict[str, Any]:
         """Create an EC2 instance.
 
@@ -327,7 +379,9 @@ class AWSVMManager:
             size: EC2 instance type (e.g., "m5.2xlarge").
             image: Unused (kept for protocol compatibility).
             admin_username: SSH username (default: "ubuntu").
-            image_id: AMI ID. If None, uses latest Ubuntu 22.04 LTS.
+            image_id: AMI ID. If None, auto-selected based on gpu flag.
+            gpu: If True, use the Deep Learning AMI with pre-installed
+                NVIDIA drivers and CUDA. Required for GPU training.
 
         Returns:
             Dict with at least "publicIpAddress" key.
@@ -335,7 +389,6 @@ class AWSVMManager:
         Raises:
             RuntimeError: If instance creation fails.
         """
-        import boto3
 
         # Update manager's region so subsequent operations find this instance
         if region != self.region:
@@ -349,7 +402,12 @@ class AWSVMManager:
 
         try:
             infra = self._ensure_vpc_infrastructure(region)
-            ami_id = image_id or self._find_latest_ubuntu_ami(region)
+            if image_id:
+                ami_id = image_id
+            elif gpu:
+                ami_id = self._find_latest_dl_ami(region)
+            else:
+                ami_id = self._find_latest_ubuntu_ami(region)
 
             # Launch instance
             instances = ec2_resource.create_instances(
@@ -507,7 +565,7 @@ class AWSVMManager:
         A more robust approach would use CloudWatch Events + Lambda.
         """
         try:
-            from openadapt_evals.infrastructure.azure_vm import SSH_OPTS, ssh_run
+            from openadapt_evals.infrastructure.azure_vm import ssh_run
 
             ip = self.get_vm_ip(name)
             if not ip:
@@ -526,10 +584,16 @@ class AWSVMManager:
             logger.warning(f"Failed to set auto-shutdown for {name}: {e}")
             return False
 
-    def find_available_size_and_region(self) -> tuple[str, str, float]:
+    def find_available_size_and_region(
+        self, gpu: bool = False,
+    ) -> tuple[str, str, float]:
         """Find a working EC2 instance type and region.
 
         Checks instance type availability in each region.
+
+        Args:
+            gpu: If True, try GPU instances (for verl-agent training).
+                Otherwise try CPU/metal instances (for WAA evaluation).
 
         Returns:
             Tuple of (instance_type, region, cost_per_hour).
@@ -539,7 +603,8 @@ class AWSVMManager:
         """
         import boto3
 
-        for instance_type, cost in INSTANCE_TYPE_FALLBACKS:
+        fallbacks = GPU_INSTANCE_TYPE_FALLBACKS if gpu else INSTANCE_TYPE_FALLBACKS
+        for instance_type, cost in fallbacks:
             for region in AWS_REGIONS:
                 try:
                     ec2 = boto3.client("ec2", region_name=region)

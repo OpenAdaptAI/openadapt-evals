@@ -138,7 +138,7 @@ loop (~546 lines in `openadapt_ml/training/grpo/trainer.py`).
 
 ### D. VAGEN / VAGEN-Lite
 
-**Repository**: [mll-lab-nu/VAGEN](https://github.com/mll-lab-nu/VAGEN)
+**Repository**: [RAGEN-AI/VAGEN](https://github.com/RAGEN-AI/VAGEN)
 
 - Built on verl's `agent_loop` abstraction (same ecosystem as verl-agent)
 - **Bi-Level GAE** for turn-aware credit assignment
@@ -250,13 +250,56 @@ By delegating to verl-agent, we avoid building and maintaining:
 
 ---
 
+## Integration: VAGEN Environment Registry
+
+Our `WAADesktopEnv` implements VAGEN's `GymImageEnv` protocol (async
+`reset`/`step`/`close`/`system_prompt`), which is the **native environment
+interface** for VAGEN. No additional adapter is needed.
+
+**Note**: Earlier analysis referenced an `EnvironmentManagerBase` ABC and a
+`make_envs()` dispatch function. These do not exist in the current VAGEN
+codebase. The actual architecture uses:
+
+- `GymBaseEnv` → `GymImageEnv` — the environment ABC (which we implement)
+- `vagen/envs/registry.py` — YAML-based env registry for dispatch
+- `GymAgentLoop` — training-time rollout orchestrator that instantiates envs
+
+Integration steps (automated by `scripts/train_verl_e2e.py`):
+
+1. **Register in VAGEN's env registry** — add `WAADesktop:
+   openadapt_evals.adapters.verl_env.WAADesktopEnv` to
+   `vagen/configs/env_registry.yaml`. This is the only configuration needed.
+2. **Prepare parquet data** — VAGEN's `AgenticDataset` requires train/val
+   parquet files even for env-based training
+3. **Configure training** — provide env spec (server URL, task ID, max turns)
+   via the VAGEN training YAML (see `configs/train_waa_vagen.yaml`)
+
+The `GymImageEnv` protocol is our **portable interface**. If we switch to a
+different framework, only the ~250-line `WAADesktopEnv` adapter changes. The
+environment, evaluation, and infrastructure code remain untouched.
+
+### VAGEN Remote Env Pattern (Optional)
+
+For production deployments where the WAA VM and GPU VM have poor connectivity,
+VAGEN provides a remote env service pattern:
+
+- **Server** (WAA VM): `BaseGymHandler` + `build_gym_service()` → FastAPI
+- **Client** (GPU VM): `GymImageEnvClient` (registered as `RemoteEnv`)
+
+This adds HTTP session management, multipart encoding (JSON + images), and
+automatic retry/failover. Currently unnecessary since `WAADesktopEnv` already
+handles remote connectivity via the WAA Flask API, but documented for future
+scaling to multi-VM env pools.
+
+---
+
 ## Migration Path
 
 1. **Current state**: Standalone trainer in openadapt-ml (PR #34, merged).
    Works, well-tested (56 unit tests + 5 E2E tests). Episode-level rewards only.
 
-2. **Spike complete**: `WAADesktopEnv` adapter in openadapt-evals (PR #84).
-   21 tests passing. Implements GymImageEnv protocol.
+2. **Spike complete**: `WAADesktopEnv` adapter in openadapt-evals (PR #84, merged).
+   40 tests passing. Implements GymImageEnv protocol.
 
 3. **Next**: Test end-to-end with verl-agent on a GPU machine. If successful,
    the standalone trainer becomes a reference implementation / fallback, and
@@ -317,8 +360,8 @@ To validate the verl-agent integration provides real value over standalone:
 
 ## References
 
-- [verl-agent](https://github.com/langfengQ/verl-agent) — GiGPO paper implementation
-- [VAGEN](https://github.com/mll-lab-nu/VAGEN) — Multi-turn VLM agent training
+- [VAGEN](https://github.com/RAGEN-AI/VAGEN) — Multi-turn VLM agent training (GiGPO)
+- [verl-agent](https://github.com/langfengQ/verl-agent) — GiGPO paper's original codebase
 - [verl](https://github.com/verl-project/verl) — Volcano Engine RL for LLMs
 - [GiGPO paper](https://arxiv.org/html/2505.10978) — Group-in-Group Policy Optimization
 - [VAGEN paper](https://arxiv.org/abs/2510.16907) — World Model Reasoning for VLM Agents

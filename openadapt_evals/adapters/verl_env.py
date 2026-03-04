@@ -14,11 +14,15 @@ Dependencies:
       as fallback when the full vagen package is not installed)
 
 Usage with VAGEN training:
-    Register in env_registry.yaml:
+    1. Register the env on the GPU VM:
+        from openadapt_evals.adapters.verl_env import register_in_vagen
+        register_in_vagen("/path/to/vagen/configs/env_registry.yaml")
+
+    2. Or manually add to vagen/configs/env_registry.yaml:
         env_registry:
             WAADesktop: openadapt_evals.adapters.verl_env.WAADesktopEnv
 
-    Training config:
+    3. Training config (envs section):
         envs:
             - name: WAADesktop
               n_envs: 8
@@ -27,13 +31,18 @@ Usage with VAGEN training:
               max_turns: 15
               response_length_per_turn: 512
               config:
-                server_url: "http://localhost:5001"
+                server_url: "http://localhost:5000"
+                evaluate_url: "http://localhost:5001"
                 task_id: "<WAA_UUID>"
 
 Usage standalone (without VAGEN):
     from openadapt_evals.adapters.verl_env import WAADesktopEnv
 
-    env = WAADesktopEnv({"server_url": "http://localhost:5001", "task_id": "..."})
+    env = WAADesktopEnv({
+        "server_url": "http://localhost:5000",       # Windows VM Flask API
+        "evaluate_url": "http://localhost:5001",      # evaluate_server.py
+        "task_id": "...",
+    })
     obs, info = await env.reset(seed=42)
     obs, reward, done, info = await env.step("CLICK(x=0.50, y=0.30)")
 """
@@ -44,6 +53,7 @@ import asyncio
 import io
 import logging
 import re
+from pathlib import Path
 from typing import Any
 
 from openadapt_evals.adapters.base import BenchmarkAction, BenchmarkObservation
@@ -188,7 +198,11 @@ class WAADesktopEnv(_GymImageEnvBase):
     WAALiveAdapter for remote VM interaction.
 
     Config keys (passed via env_config dict):
-        server_url: WAA server URL (default: "http://localhost:5001")
+        server_url: WAA Windows VM Flask API URL (default: "http://localhost:5000").
+            Provides /screenshot, /execute_windows, /accessibility endpoints.
+        evaluate_url: Evaluate server URL (default: None, falls back to server_url).
+            Provides /setup, /evaluate, /probe, /task endpoints. Set this when
+            the evaluate server runs on a different port than the Windows VM API.
         task_id: WAA task UUID to train on
         max_steps: Max steps per episode (default: 15)
         evaluate_at_done: Whether to call WAA evaluator at episode end (default: True)
@@ -198,7 +212,8 @@ class WAADesktopEnv(_GymImageEnvBase):
     def __init__(self, env_config: dict[str, Any]) -> None:
         super().__init__(env_config)
         self.config = env_config
-        self._server_url = env_config.get("server_url", "http://localhost:5001")
+        self._server_url = env_config.get("server_url", "http://localhost:5000")
+        self._evaluate_url = env_config.get("evaluate_url")
         self._task_id = env_config.get("task_id")
         self._max_steps = env_config.get("max_steps", 15)
         self._evaluate_at_done = env_config.get("evaluate_at_done", True)
@@ -216,7 +231,10 @@ class WAADesktopEnv(_GymImageEnvBase):
         from openadapt_evals.adapters.waa.live import WAALiveAdapter, WAALiveConfig
 
         adapter = WAALiveAdapter(
-            WAALiveConfig(server_url=self._server_url)
+            WAALiveConfig(
+                server_url=self._server_url,
+                evaluate_url=self._evaluate_url,
+            )
         )
         self._rl_env = RLEnvironment(adapter, default_task_id=self._task_id)
         return self._rl_env
@@ -354,3 +372,118 @@ class WAADesktopEnv(_GymImageEnvBase):
         )
 
         return obs_dict, reward, done, info
+
+
+# --- VAGEN registration helpers ---
+
+ENV_REGISTRY_KEY = "WAADesktop"
+ENV_CLASS_PATH = "openadapt_evals.adapters.verl_env.WAADesktopEnv"
+
+
+def register_in_vagen(registry_yaml_path: str | Path | None = None) -> bool:
+    """Register WAADesktopEnv in VAGEN's env_registry.yaml.
+
+    If VAGEN is installed and importable, also registers via the Python API.
+    Otherwise, edits the YAML file directly.
+
+    Args:
+        registry_yaml_path: Path to vagen/configs/env_registry.yaml.
+            If None, attempts to find it from the vagen package location.
+
+    Returns:
+        True if registration succeeded.
+    """
+    # Try programmatic registration first (if vagen is installed)
+    try:
+        from vagen.envs.registry import register_env
+
+        register_env(ENV_REGISTRY_KEY, WAADesktopEnv)
+        logger.info("Registered %s in VAGEN env registry (Python API)", ENV_REGISTRY_KEY)
+        return True
+    except ImportError:
+        pass
+
+    # Fall back to YAML file editing
+    if registry_yaml_path is None:
+        # Try to find it from common locations
+        candidates = [
+            Path.home() / "verl-agent" / "vagen" / "configs" / "env_registry.yaml",
+            Path.home() / "VAGEN" / "vagen" / "configs" / "env_registry.yaml",
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                registry_yaml_path = candidate
+                break
+
+    if registry_yaml_path is not None:
+        registry_yaml_path = Path(registry_yaml_path)
+        if not registry_yaml_path.exists():
+            logger.warning("Registry file not found: %s", registry_yaml_path)
+            return False
+
+    if registry_yaml_path is None:
+        logger.warning(
+            "Cannot find env_registry.yaml. Register manually by adding:\n"
+            "  %s: %s\n"
+            "to vagen/configs/env_registry.yaml",
+            ENV_REGISTRY_KEY,
+            ENV_CLASS_PATH,
+        )
+        return False
+
+    content = registry_yaml_path.read_text()
+
+    if ENV_REGISTRY_KEY in content:
+        logger.info("%s already registered in %s", ENV_REGISTRY_KEY, registry_yaml_path)
+        return True
+
+    # Add entry to the env_registry section
+    entry = f"  {ENV_REGISTRY_KEY}: {ENV_CLASS_PATH}\n"
+    if "env_registry:" in content:
+        content = content.replace("env_registry:\n", f"env_registry:\n{entry}", 1)
+    else:
+        content += f"\nenv_registry:\n{entry}"
+
+    registry_yaml_path.write_text(content)
+    logger.info("Registered %s in %s", ENV_REGISTRY_KEY, registry_yaml_path)
+    return True
+
+
+def generate_env_spec(
+    server_url: str = "http://localhost:5000",
+    evaluate_url: str | None = None,
+    task_id: str = "REPLACE_WITH_WAA_TASK_UUID",
+    n_envs: int = 8,
+    max_turns: int = 15,
+) -> dict[str, Any]:
+    """Generate a VAGEN EnvSpec dict for WAA desktop training.
+
+    Returns a dict suitable for inclusion in a VAGEN training config YAML
+    under the ``envs`` key.
+
+    Example:
+        spec = generate_env_spec(
+            server_url="http://localhost:5000",
+            evaluate_url="http://localhost:5001",
+            task_id="abc-123",
+        )
+        # Write to YAML or pass to AgenticDataset
+    """
+    config: dict[str, Any] = {
+        "server_url": server_url,
+        "task_id": task_id,
+        "max_steps": max_turns,
+        "evaluate_at_done": True,
+        "action_type": "fractional",
+    }
+    if evaluate_url:
+        config["evaluate_url"] = evaluate_url
+    return {
+        "name": ENV_REGISTRY_KEY,
+        "n_envs": n_envs,
+        "data_source": "waa",
+        "seed": [1, 100, 1],
+        "max_turns": max_turns,
+        "response_length_per_turn": 512,
+        "config": config,
+    }

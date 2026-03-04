@@ -352,8 +352,7 @@ def cmd_create(args):
 
     if not vm_created:
         log("CREATE", "ERROR: Could not create VM in any region with any size")
-        if use_fast:
-            log("CREATE", "Tried sizes: " + ", ".join(s[0] for s in sizes_to_try))
+        log("CREATE", "Tried sizes: " + ", ".join(s[0] for s in sizes_to_try))
         return 1
 
     log(
@@ -594,7 +593,7 @@ def cmd_pool_status(args):
             if remaining_min > 0:
                 print(f"Auto-shutdown: in {remaining_min:.0f} minutes")
             else:
-                print(f"Auto-shutdown: OVERDUE (check VM status)")
+                print("Auto-shutdown: OVERDUE (check VM status)")
         except ValueError:
             pass
     print(f"Tasks: {pool.completed_tasks}/{pool.total_tasks}")
@@ -1577,7 +1576,6 @@ def cmd_image_create(args):
     """
     init_logging()
     from openadapt_evals.infrastructure.azure_vm import AzureVMManager
-    from openadapt_evals.infrastructure.pool import PoolManager
     from openadapt_evals.infrastructure.vm_monitor import VMPoolRegistry
 
     vm_manager = AzureVMManager(resource_group=RESOURCE_GROUP)
@@ -7785,6 +7783,179 @@ def cmd_resources(args):
 
 
 # =============================================================================
+# GPU Training Commands
+# =============================================================================
+
+
+def _get_gpu_vm_manager(cloud: str):
+    """Get VM manager for GPU training."""
+    if cloud == "azure":
+        from openadapt_evals.infrastructure.azure_vm import AzureVMManager
+        return AzureVMManager()
+    elif cloud == "aws":
+        from openadapt_evals.infrastructure.aws_vm import AWSVMManager
+        return AWSVMManager()
+    raise ValueError(f"Unknown cloud: {cloud}")
+
+
+def cmd_gpu_setup(args):
+    """Provision a GPU VM and install verl-agent for RL training."""
+    import time
+    from pathlib import Path
+
+    from openadapt_evals.infrastructure.azure_vm import ssh_run
+
+    cloud = getattr(args, "cloud", "azure")
+    vm = _get_gpu_vm_manager(cloud)
+    username = vm.ssh_username
+    gpu_vm_name = "verl-train-00"
+
+    if args.gpu_ip:
+        ip = args.gpu_ip
+        print(f"Using existing GPU VM: {ip}")
+    else:
+        print("Finding available GPU VM size...")
+        vm_size, region, cost = vm.find_available_size_and_region(gpu=True)
+        print(f"Selected: {vm_size} (${cost:.2f}/hr) in {region}")
+
+        if args.dry_run:
+            print(f"[DRY RUN] Would provision {vm_size} in {region}")
+            return 0
+
+        print(f"Creating GPU VM '{gpu_vm_name}'...")
+        info = vm.create_vm(name=gpu_vm_name, region=region, size=vm_size)
+        ip = info.get("publicIpAddress") or vm.get_vm_ip(gpu_vm_name)
+        vm.set_auto_shutdown(gpu_vm_name, hours=6)
+
+        # Wait for SSH
+        print("Waiting for SSH...")
+        for _ in range(30):
+            try:
+                result = ssh_run(ip, "echo ready", username=username, stream=False)
+                if result.returncode == 0:
+                    break
+            except Exception:
+                pass
+            time.sleep(10)
+        else:
+            print(f"ERROR: SSH not ready after 5 minutes: {ip}")
+            return 1
+
+    # Upload and run setup script
+    setup_script = Path(__file__).parent.parent.parent / "scripts" / "setup_gpu_training.sh"
+    if not setup_script.exists():
+        print(f"ERROR: Setup script not found: {setup_script}")
+        return 1
+
+    from openadapt_evals.infrastructure.azure_vm import SSH_OPTS
+    import subprocess
+
+    print("Uploading setup script...")
+    subprocess.run(
+        ["scp", *SSH_OPTS, str(setup_script), f"{username}@{ip}:/tmp/setup_gpu_training.sh"],
+        check=True,
+    )
+
+    print("Running setup (this may take 15-30 minutes)...")
+    result = ssh_run(ip, "bash /tmp/setup_gpu_training.sh", username=username, stream=True)
+    if result.returncode != 0:
+        print(f"ERROR: Setup failed with exit code {result.returncode}")
+        return 1
+
+    print(f"\nGPU VM ready at: {ip}")
+    print(f"SSH: ssh {username}@{ip}")
+    return 0
+
+
+def cmd_gpu_train(args):
+    """Launch verl-agent training on a GPU VM."""
+    import time
+    from pathlib import Path
+
+    from openadapt_evals.infrastructure.azure_vm import ssh_run
+
+    cloud = getattr(args, "cloud", "azure")
+    vm = _get_gpu_vm_manager(cloud)
+    username = vm.ssh_username
+    gpu_vm_name = "verl-train-00"
+
+    if args.gpu_ip:
+        ip = args.gpu_ip
+        print(f"Using existing GPU VM: {ip}")
+    else:
+        # Provision GPU VM
+        print("Finding available GPU VM size...")
+        vm_size, region, cost = vm.find_available_size_and_region(gpu=True)
+        print(f"Selected: {vm_size} (${cost:.2f}/hr) in {region}")
+        print(f"Creating GPU VM '{gpu_vm_name}'...")
+        info = vm.create_vm(name=gpu_vm_name, region=region, size=vm_size)
+        ip = info.get("publicIpAddress") or vm.get_vm_ip(gpu_vm_name)
+        vm.set_auto_shutdown(gpu_vm_name, hours=6)
+
+        # Wait for SSH
+        for _ in range(30):
+            try:
+                result = ssh_run(ip, "echo ready", username=username, stream=False)
+                if result.returncode == 0:
+                    break
+            except Exception:
+                pass
+            time.sleep(10)
+
+    # Setup if needed
+    if not args.skip_setup:
+        setup_script = Path(__file__).parent.parent.parent / "scripts" / "setup_gpu_training.sh"
+        if setup_script.exists():
+            from openadapt_evals.infrastructure.azure_vm import SSH_OPTS
+            import subprocess
+            subprocess.run(
+                ["scp", *SSH_OPTS, str(setup_script), f"{username}@{ip}:/tmp/setup_gpu_training.sh"],
+                check=True,
+            )
+            result = ssh_run(ip, "bash /tmp/setup_gpu_training.sh", username=username, stream=True)
+            if result.returncode != 0:
+                print("ERROR: Setup failed")
+                return 1
+
+    # Delegate to the E2E script's launch_training() which handles:
+    # - env registry registration
+    # - training data preparation
+    # - training config generation
+    # - training launch
+    # This avoids duplicating the Hydra overrides in two places.
+    import importlib.util
+    _script_path = Path(__file__).parent.parent.parent / "scripts" / "train_verl_e2e.py"
+    _spec = importlib.util.spec_from_file_location("train_verl_e2e", _script_path)
+    _mod = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+    launch_training = _mod.launch_training
+
+    print(f"Launching {args.algorithm} training on {args.n_gpus} GPU(s)...")
+    print(f"Model: {args.model}")
+    print(f"WAA server: {args.waa_server}")
+    print(f"Evaluate server: {args.evaluate_server}")
+    print(f"Task: {args.task_id}")
+
+    try:
+        exit_code = launch_training(
+            ip=ip,
+            waa_server=args.waa_server,
+            task_id=args.task_id,
+            algorithm=args.algorithm,
+            model=args.model,
+            n_gpus=args.n_gpus,
+            epochs=args.epochs,
+            username=username,
+            evaluate_url=args.evaluate_server,
+        )
+        return exit_code
+    finally:
+        if args.cleanup and not args.gpu_ip:
+            print(f"Deallocating GPU VM '{gpu_vm_name}'...")
+            vm.deallocate_vm(gpu_vm_name)
+
+
+# =============================================================================
 # Main
 # =============================================================================
 
@@ -8897,6 +9068,76 @@ Examples:
         help="Don't auto-open browser",
     )
     p_view_pool.set_defaults(func=cmd_view_pool)
+
+    # --- GPU Training Commands ---
+
+    p_gpu_setup = subparsers.add_parser(
+        "gpu-setup",
+        help="Provision a GPU VM and install verl-agent for RL training",
+    )
+    p_gpu_setup.add_argument(
+        "--cloud", choices=["azure", "aws"], default="azure",
+        help="Cloud provider (default: azure)",
+    )
+    p_gpu_setup.add_argument(
+        "--gpu-ip", type=str, default=None,
+        help="Use an existing GPU VM (skip provisioning)",
+    )
+    p_gpu_setup.add_argument(
+        "--dry-run", action="store_true",
+        help="Show what would happen without doing it",
+    )
+    p_gpu_setup.set_defaults(func=cmd_gpu_setup)
+
+    p_gpu_train = subparsers.add_parser(
+        "gpu-train",
+        help="Launch verl-agent training on a GPU VM",
+    )
+    p_gpu_train.add_argument(
+        "--cloud", choices=["azure", "aws"], default="azure",
+        help="Cloud provider (default: azure)",
+    )
+    p_gpu_train.add_argument(
+        "--gpu-ip", type=str, default=None,
+        help="Use an existing GPU VM (skip provisioning)",
+    )
+    p_gpu_train.add_argument(
+        "--waa-server", type=str, default="http://localhost:5000",
+        help="WAA Flask API URL (screenshots, actions) (default: http://localhost:5000)",
+    )
+    p_gpu_train.add_argument(
+        "--evaluate-server", type=str, default="http://localhost:5001",
+        help="Evaluate server URL (setup, evaluate) (default: http://localhost:5001)",
+    )
+    p_gpu_train.add_argument(
+        "--task-id", type=str, required=True,
+        help="WAA task UUID to train on",
+    )
+    p_gpu_train.add_argument(
+        "--algorithm", choices=["gigpo", "grpo", "ppo"], default="gigpo",
+        help="RL algorithm (default: gigpo)",
+    )
+    p_gpu_train.add_argument(
+        "--model", type=str, default="Qwen/Qwen2.5-VL-3B-Instruct",
+        help="Model to train",
+    )
+    p_gpu_train.add_argument(
+        "--n-gpus", type=int, default=2,
+        help="Number of GPUs (default: 2)",
+    )
+    p_gpu_train.add_argument(
+        "--epochs", type=int, default=100,
+        help="Training epochs (default: 100)",
+    )
+    p_gpu_train.add_argument(
+        "--skip-setup", action="store_true",
+        help="Skip setup (VM already configured)",
+    )
+    p_gpu_train.add_argument(
+        "--cleanup", action="store_true",
+        help="Deallocate GPU VM after training",
+    )
+    p_gpu_train.set_defaults(func=cmd_gpu_train)
 
     args = parser.parse_args()
 
