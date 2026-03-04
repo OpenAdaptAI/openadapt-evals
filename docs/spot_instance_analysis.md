@@ -67,7 +67,7 @@ With ~7% interruption rate and 15-min checkpoints, expect ~10-15% overhead from 
 
 ## Implementation TODO
 
-- [ ] Add spot instance support to `aws_vm.py` (`create_vm` with `InstanceMarketOptions`)
+- [x] Add spot instance support to `aws_vm.py` (`create_vm` with `InstanceMarketOptions`)
 - [ ] Add S3 checkpoint upload to training loop
 - [ ] Add termination handler (metadata polling + checkpoint trigger)
 - [ ] Add g6 instance types to `GPU_INSTANCE_TYPE_FALLBACKS` in `aws_vm.py`

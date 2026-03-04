@@ -87,8 +87,15 @@ def _scp_upload(ip: str, local_path: Path, remote_path: str, username: str = "ub
         raise RuntimeError(f"SCP failed: {result.stderr}")
 
 
-def provision_gpu_vm(cloud: str, dry_run: bool = False) -> tuple[str, str, str]:
+def provision_gpu_vm(
+    cloud: str, dry_run: bool = False, spot: bool = False,
+) -> tuple[str, str, str]:
     """Provision a GPU VM and return (ip, size, region).
+
+    Args:
+        cloud: Cloud provider ("azure" or "aws").
+        dry_run: If True, show what would happen without creating anything.
+        spot: If True, request a spot instance for cost savings (AWS only).
 
     Returns:
         Tuple of (public_ip, vm_size, region).
@@ -98,14 +105,20 @@ def provision_gpu_vm(cloud: str, dry_run: bool = False) -> tuple[str, str, str]:
 
     logger.info("Finding available GPU VM size...")
     vm_size, region, cost = vm.find_available_size_and_region(gpu=True)
-    logger.info("Selected: %s ($%.2f/hr) in %s", vm_size, cost, region)
+    spot_label = " (spot)" if spot else ""
+    logger.info("Selected: %s ($%.2f/hr)%s in %s", vm_size, cost, spot_label, region)
 
     if dry_run:
-        logger.info("[DRY RUN] Would create %s in %s", GPU_VM_NAME, region)
+        logger.info("[DRY RUN] Would create %s%s in %s", GPU_VM_NAME, spot_label, region)
         return ("DRY_RUN_IP", vm_size, region)
 
-    logger.info("Creating GPU VM '%s'...", GPU_VM_NAME)
-    info = vm.create_vm(name=GPU_VM_NAME, region=region, size=vm_size)
+    logger.info("Creating GPU VM '%s'%s...", GPU_VM_NAME, spot_label)
+    create_kwargs: dict = dict(name=GPU_VM_NAME, region=region, size=vm_size, gpu=True)
+    if spot and cloud == "aws":
+        create_kwargs["spot"] = True
+    elif spot and cloud != "aws":
+        logger.warning("--spot is only supported on AWS; ignoring for %s", cloud)
+    info = vm.create_vm(**create_kwargs)
     ip = info.get("publicIpAddress") or vm.get_vm_ip(GPU_VM_NAME)
 
     if not ip:
@@ -477,6 +490,10 @@ def main():
         help="Training epochs (default: 100)",
     )
     parser.add_argument(
+        "--spot", action="store_true",
+        help="Use spot instances for cost savings (AWS only, ~50%% cheaper)",
+    )
+    parser.add_argument(
         "--setup-only", action="store_true",
         help="Only provision and setup, don't start training",
     )
@@ -511,7 +528,9 @@ def main():
             ip = args.gpu_ip
             logger.info("Using existing GPU VM: %s", ip)
         else:
-            ip, vm_size, region = provision_gpu_vm(args.cloud, dry_run=args.dry_run)
+            ip, vm_size, region = provision_gpu_vm(
+                args.cloud, dry_run=args.dry_run, spot=args.spot,
+            )
             if args.dry_run:
                 logger.info("[DRY RUN] Would setup and train on %s", vm_size)
                 return
