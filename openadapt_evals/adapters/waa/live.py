@@ -534,6 +534,13 @@ class WAALiveAdapter(BenchmarkAdapter):
         # Delay for UI to settle after setup (WAA uses 5s)
         time.sleep(5.0)
 
+        # Ensure the target application is focused and visible.
+        # After setup (close_all -> verify_apps -> download -> open), the
+        # opened application may be behind other windows, still loading, or
+        # obscured by notifications.  This wastes agent steps recovering.
+        if task.raw_config:
+            self._ensure_app_focused(task.raw_config)
+
         return self._get_observation()
 
     def _send_command(self, command: str) -> None:
@@ -1374,6 +1381,294 @@ class WAALiveAdapter(BenchmarkAdapter):
             except Exception:
                 pass  # Best-effort; don't fail reset if notification kill fails
         logger.debug("Dismissed system notifications")
+
+    # --- App-name to window-title mapping for post-setup focus ---
+
+    # Maps canonical app names (from related_apps / _normalize_app_name) to
+    # substrings that should appear in the window title when the app is open.
+    # The first match in the list wins.  These are case-insensitive substrings.
+    _APP_WINDOW_PATTERNS: dict[str, list[str]] = {
+        "libreoffice_calc": ["LibreOffice Calc", "Calc"],
+        "libreoffice_writer": ["LibreOffice Writer", "Writer"],
+        "libreoffice_impress": ["LibreOffice Impress", "Impress"],
+        "libreoffice": ["LibreOffice"],
+        "notepad": ["Notepad"],
+        "chrome": ["Google Chrome", "Chrome"],
+        "vs_code": ["Visual Studio Code", "VS Code"],
+        "vlc": ["VLC media player", "VLC"],
+        "file_explorer": ["File Explorer", "Explorer"],
+        "paint": ["Paint"],
+        "word": ["Word"],
+        "excel": ["Excel"],
+        "powerpoint": ["PowerPoint"],
+    }
+
+    @staticmethod
+    def _normalize_app_name(name: str) -> str:
+        """Canonicalize app names (mirrors evaluate_server._normalize_app_name)."""
+        import re as _re
+
+        key = _re.sub(r"[\s\-]+", "_", name.strip().lower())
+        aliases = {
+            "vscode": "vs_code",
+            "vs_code": "vs_code",
+            "libreoffice": "libreoffice_calc",
+        }
+        return aliases.get(key, key)
+
+    def _get_expected_window_patterns(self, raw_config: dict) -> list[str]:
+        """Determine window title substrings expected after task setup.
+
+        Examines ``related_apps`` (primary signal) and the ``config`` array
+        (looks for ``open`` steps whose file extension implies an app) to
+        build a list of case-insensitive substrings that the foreground
+        window title should contain.
+
+        Args:
+            raw_config: Task configuration dict.
+
+        Returns:
+            List of window-title substrings to search for, ordered by
+            priority (most specific first).  Empty if nothing can be
+            inferred.
+        """
+        patterns: list[str] = []
+
+        # 1. related_apps is the most direct signal
+        related_apps = raw_config.get("related_apps", [])
+        for app in related_apps:
+            canonical = self._normalize_app_name(app)
+            app_patterns = self._APP_WINDOW_PATTERNS.get(canonical, [])
+            patterns.extend(app_patterns)
+
+        # 2. Infer from "open" steps in the config array
+        config_steps = raw_config.get("config", [])
+        for step in config_steps:
+            if step.get("type") == "open":
+                path = step.get("parameters", {}).get("path", "")
+                if not path:
+                    continue
+                ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+                ext_app_map = {
+                    "xlsx": "libreoffice_calc",
+                    "xls": "libreoffice_calc",
+                    "ods": "libreoffice_calc",
+                    "csv": "libreoffice_calc",
+                    "docx": "libreoffice_writer",
+                    "doc": "libreoffice_writer",
+                    "odt": "libreoffice_writer",
+                    "pptx": "libreoffice_impress",
+                    "ppt": "libreoffice_impress",
+                    "odp": "libreoffice_impress",
+                    "txt": "notepad",
+                    "html": "chrome",
+                    "htm": "chrome",
+                    "pdf": "chrome",
+                }
+                if ext in ext_app_map:
+                    canonical = ext_app_map[ext]
+                    app_patterns = self._APP_WINDOW_PATTERNS.get(canonical, [])
+                    for p in app_patterns:
+                        if p not in patterns:
+                            patterns.extend(app_patterns)
+                            break
+
+                # Also add the filename itself as a fallback pattern,
+                # since many apps put the filename in the title bar
+                import os
+                filename = os.path.basename(path)
+                if filename and filename not in patterns:
+                    patterns.append(filename)
+
+        return patterns
+
+    def _ensure_app_focused(self, raw_config: dict) -> None:
+        """Ensure the target application is focused after task setup.
+
+        Uses a multi-strategy approach with retries:
+
+        1. Determine what window should be in the foreground from the task
+           config (related_apps, open file extensions).
+        2. Try the WAA server's ``/setup/activate_window`` endpoint for each
+           expected window pattern (this is the same mechanism WAA uses in
+           its own postconfig).
+        3. If ``activate_window`` does not succeed, fall back to a
+           pyautogui ``Alt+Tab`` keystroke which foregrounds whatever was
+           most recently opened (should be the target app after setup).
+        4. Retry with increasing delays to handle apps that are still loading.
+
+        This runs as part of ``reset()`` and does **not** count against
+        the agent's step budget.
+
+        Args:
+            raw_config: Task configuration dict.
+        """
+        patterns = self._get_expected_window_patterns(raw_config)
+        if not patterns:
+            logger.info("No expected window patterns; skipping post-setup focus")
+            return
+
+        logger.info(
+            "Post-setup focus: looking for windows matching %r", patterns
+        )
+
+        import requests
+
+        evaluate_base = self.config.evaluate_url or self.config.server_url
+        max_retries = 3
+        retry_delays = [2.0, 3.0, 5.0]  # seconds to wait between retries
+
+        for attempt in range(max_retries):
+            # Strategy 1: Use activate_window for each pattern.
+            # The WAA server's /setup/activate_window uses win32gui to find
+            # and foreground windows by (sub)title match.
+            for pattern in patterns:
+                try:
+                    resp = requests.post(
+                        f"{evaluate_base}/setup",
+                        json={"config": [
+                            {
+                                "type": "activate_window",
+                                "parameters": {"window_name": pattern},
+                            },
+                        ]},
+                        timeout=15.0,
+                    )
+                    if resp.status_code == 200:
+                        # activate_window succeeded (HTTP 200). Verify by
+                        # checking the foreground window title via a11y.
+                        time.sleep(0.5)
+                        if self._check_foreground_matches(patterns, requests):
+                            logger.info(
+                                "Post-setup focus: activated '%s' on attempt %d",
+                                pattern,
+                                attempt + 1,
+                            )
+                            time.sleep(0.5)
+                            return
+                except Exception as e:
+                    logger.debug(
+                        "Post-setup focus: activate_window('%s') failed: %s",
+                        pattern,
+                        e,
+                    )
+
+            # Strategy 2: Use pyautogui to click the desktop center, then
+            # Alt+Tab to foreground the most recently used window.
+            # After the setup sequence (close_all -> open file), the target
+            # app should be the only app on the taskbar.
+            try:
+                self._send_command(
+                    "import pyautogui; import time; "
+                    "pyautogui.hotkey('alt', 'tab'); time.sleep(0.5)"
+                )
+                time.sleep(0.5)
+                if self._check_foreground_matches(patterns, requests):
+                    logger.info(
+                        "Post-setup focus: Alt+Tab brought target to front "
+                        "on attempt %d",
+                        attempt + 1,
+                    )
+                    time.sleep(0.5)
+                    return
+            except Exception as e:
+                logger.debug(
+                    "Post-setup focus: Alt+Tab attempt %d failed: %s",
+                    attempt + 1,
+                    e,
+                )
+
+            # Wait before retry (app may still be loading)
+            if attempt < max_retries - 1:
+                delay = retry_delays[attempt]
+                logger.info(
+                    "Post-setup focus: window not found on attempt %d; "
+                    "waiting %.1fs before retry...",
+                    attempt + 1,
+                    delay,
+                )
+                time.sleep(delay)
+
+        # All retries exhausted.
+        logger.warning(
+            "Post-setup focus: could not confirm target app is in foreground "
+            "after %d attempts. The agent may need to navigate to the app.",
+            max_retries,
+        )
+
+    def _check_foreground_matches(
+        self,
+        patterns: list[str],
+        requests_module: Any,
+    ) -> bool:
+        """Check whether the current foreground window matches any pattern.
+
+        Uses pyautogui's ``getActiveWindowTitle()`` (via the /execute_windows
+        endpoint on the WAA server) to get the foreground window title.  This
+        avoids the escaping issues of multi-layer PowerShell commands.
+
+        Args:
+            patterns: Window title substrings to match (case-insensitive).
+            requests_module: The ``requests`` module (avoids re-import).
+
+        Returns:
+            True if the foreground window title contains any of the patterns.
+        """
+        # Try two approaches to get the foreground window title:
+        # 1. pygetwindow (dependency of pyautogui on Windows)
+        # 2. ctypes + win32 API (always available on Windows)
+        commands = [
+            (
+                "import pygetwindow; "
+                "w = pygetwindow.getActiveWindow(); "
+                "t = w.title if w else ''; "
+                "print('ACTIVE_TITLE:' + t)"
+            ),
+            (
+                "import ctypes; import ctypes.wintypes; "
+                "h = ctypes.windll.user32.GetForegroundWindow(); "
+                "b = ctypes.create_unicode_buffer(256); "
+                "ctypes.windll.user32.GetWindowTextW(h, b, 256); "
+                "print('ACTIVE_TITLE:' + b.value)"
+            ),
+        ]
+        for cmd in commands:
+            try:
+                resp = requests_module.post(
+                    f"{self.config.server_url}/execute_windows",
+                    json={"command": cmd},
+                    timeout=10.0,
+                )
+                if resp.status_code == 200:
+                    result = resp.json()
+                    stdout = (result.get("stdout", "") or "").lower()
+                    stderr = (result.get("stderr", "") or "").lower()
+                    combined = stdout + stderr
+
+                    # If the command errored (import failure), try next
+                    if "error" in stderr or "traceback" in stderr:
+                        continue
+
+                    # Extract the title from our marker
+                    if "active_title:" in combined:
+                        title_line = combined.split("active_title:")[-1].strip()
+                        for pattern in patterns:
+                            if pattern.lower() in title_line:
+                                logger.debug(
+                                    "Foreground check: matched '%s' in '%s'",
+                                    pattern,
+                                    title_line[:100],
+                                )
+                                return True
+                        logger.debug(
+                            "Foreground check: no pattern matched in '%s'",
+                            title_line[:100],
+                        )
+                        return False  # Got a title, just didn't match
+            except Exception as e:
+                logger.debug("Foreground check command failed: %s", e)
+
+        return False
 
     def _clamp_pixel_coords(self, x: int, y: int) -> tuple[int, int]:
         """Clamp pixel coordinates to a safe margin from screen edges.

@@ -468,3 +468,225 @@ class TestLiveAdapterVerifyAppsInjection:
             posted_config = call_args.kwargs.get("json", {}).get("config", [])
             assert len(posted_config) == 1
             assert posted_config[0]["type"] == "verify_apps"
+
+
+# ---------------------------------------------------------------------------
+# Post-setup app focus: _ensure_app_focused and helpers
+# ---------------------------------------------------------------------------
+
+
+class TestAppWindowPatterns:
+    """Test _get_expected_window_patterns and _normalize_app_name."""
+
+    def _make_adapter(self):
+        from openadapt_evals.adapters import WAALiveAdapter, WAALiveConfig
+        return WAALiveAdapter(WAALiveConfig(
+            server_url="http://test:5000",
+            evaluate_url="http://test:5050",
+        ))
+
+    def test_related_apps_libreoffice(self):
+        adapter = self._make_adapter()
+        patterns = adapter._get_expected_window_patterns({
+            "related_apps": ["libreoffice"],
+        })
+        assert "LibreOffice Calc" in patterns
+        assert "Calc" in patterns
+
+    def test_related_apps_chrome(self):
+        adapter = self._make_adapter()
+        patterns = adapter._get_expected_window_patterns({
+            "related_apps": ["chrome"],
+        })
+        assert "Google Chrome" in patterns
+
+    def test_related_apps_notepad(self):
+        adapter = self._make_adapter()
+        patterns = adapter._get_expected_window_patterns({
+            "related_apps": ["notepad"],
+        })
+        assert "Notepad" in patterns
+
+    def test_open_xlsx_infers_libreoffice_calc(self):
+        adapter = self._make_adapter()
+        patterns = adapter._get_expected_window_patterns({
+            "config": [
+                {"type": "open", "parameters": {"path": "C:/Users/Docker/data.xlsx"}},
+            ],
+        })
+        assert "LibreOffice Calc" in patterns
+        assert "data.xlsx" in patterns
+
+    def test_open_txt_infers_notepad(self):
+        adapter = self._make_adapter()
+        patterns = adapter._get_expected_window_patterns({
+            "config": [
+                {"type": "open", "parameters": {"path": "C:/temp/notes.txt"}},
+            ],
+        })
+        assert "Notepad" in patterns
+        assert "notes.txt" in patterns
+
+    def test_open_html_infers_chrome(self):
+        adapter = self._make_adapter()
+        patterns = adapter._get_expected_window_patterns({
+            "config": [
+                {"type": "open", "parameters": {"path": "C:/docs/page.html"}},
+            ],
+        })
+        assert "Google Chrome" in patterns
+        assert "page.html" in patterns
+
+    def test_empty_config_returns_empty(self):
+        adapter = self._make_adapter()
+        patterns = adapter._get_expected_window_patterns({})
+        assert patterns == []
+
+    def test_config_with_no_open_returns_empty(self):
+        adapter = self._make_adapter()
+        patterns = adapter._get_expected_window_patterns({
+            "config": [
+                {"type": "download", "parameters": {"files": []}},
+            ],
+        })
+        assert patterns == []
+
+    def test_related_apps_combined_with_open(self):
+        """Both related_apps and open steps contribute patterns."""
+        adapter = self._make_adapter()
+        patterns = adapter._get_expected_window_patterns({
+            "related_apps": ["libreoffice_calc"],
+            "config": [
+                {"type": "open", "parameters": {"path": "C:/data/report.xlsx"}},
+            ],
+        })
+        assert "LibreOffice Calc" in patterns
+        assert "report.xlsx" in patterns
+
+    def test_normalize_app_name_variants(self):
+        adapter = self._make_adapter()
+        assert adapter._normalize_app_name("LibreOffice") == "libreoffice_calc"
+        assert adapter._normalize_app_name("libreoffice") == "libreoffice_calc"
+        assert adapter._normalize_app_name("vs code") == "vs_code"
+        assert adapter._normalize_app_name("vscode") == "vs_code"
+        assert adapter._normalize_app_name("VS-Code") == "vs_code"
+        assert adapter._normalize_app_name("notepad") == "notepad"
+        assert adapter._normalize_app_name("chrome") == "chrome"
+
+
+class TestEnsureAppFocused:
+    """Test _ensure_app_focused integration."""
+
+    def _make_adapter(self):
+        from openadapt_evals.adapters import WAALiveAdapter, WAALiveConfig
+        return WAALiveAdapter(WAALiveConfig(
+            server_url="http://test:5000",
+            evaluate_url="http://test:5050",
+        ))
+
+    def test_skips_when_no_patterns(self):
+        """Does nothing for tasks with no related_apps or open steps."""
+        adapter = self._make_adapter()
+
+        with patch("requests.post") as mock_post:
+            adapter._ensure_app_focused({})
+            mock_post.assert_not_called()
+
+    def test_calls_activate_window_with_patterns(self):
+        """Calls activate_window setup step for each pattern."""
+        adapter = self._make_adapter()
+
+        # Simulate activate_window success (activate sends to /setup)
+        # and foreground check success (sends to /execute_windows)
+        call_count = 0
+
+        def _fake_post(url, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            resp = MagicMock()
+            resp.status_code = 200
+            if "/execute_windows" in url:
+                resp.json.return_value = {
+                    "stdout": "ACTIVE_TITLE:LibreOffice Calc - data.xlsx",
+                    "stderr": "",
+                }
+            else:
+                resp.json.return_value = {"results": [{"type": "activate_window", "status": "ok"}]}
+                resp.text = '{"results": [{"type": "activate_window", "status": "ok"}]}'
+            return resp
+
+        with patch("requests.post", side_effect=_fake_post), \
+             patch("time.sleep"):
+            adapter._ensure_app_focused({
+                "related_apps": ["libreoffice_calc"],
+            })
+
+        # Should have called activate_window at least once and check at least once
+        assert call_count >= 2
+
+    def test_retries_on_foreground_mismatch(self):
+        """Retries when foreground check does not match expected pattern."""
+        adapter = self._make_adapter()
+
+        call_history = []
+
+        def _fake_post(url, **kwargs):
+            call_history.append(url)
+            resp = MagicMock()
+            resp.status_code = 200
+            if "/execute_windows" in url:
+                # Always report desktop as foreground (mismatch)
+                resp.json.return_value = {
+                    "stdout": "ACTIVE_TITLE:Desktop",
+                    "stderr": "",
+                }
+            else:
+                resp.json.return_value = {"results": [{"type": "activate_window", "status": "ok"}]}
+                resp.text = '{"results": [{"type": "activate_window", "status": "ok"}]}'
+            return resp
+
+        with patch("requests.post", side_effect=_fake_post), \
+             patch("time.sleep"):
+            adapter._ensure_app_focused({
+                "related_apps": ["notepad"],
+            })
+
+        # Should have tried multiple times (3 retries * patterns + checks + alt-tab)
+        setup_calls = [u for u in call_history if "/setup" in u]
+        execute_calls = [u for u in call_history if "/execute_windows" in u]
+        assert len(setup_calls) >= 3  # At least 3 retry attempts
+        assert len(execute_calls) >= 3  # At least 3 foreground checks
+
+    def test_succeeds_on_second_attempt(self):
+        """If first attempt fails but second succeeds, returns after second."""
+        adapter = self._make_adapter()
+
+        attempt_count = [0]
+
+        def _fake_post(url, **kwargs):
+            resp = MagicMock()
+            resp.status_code = 200
+            if "/execute_windows" in url:
+                attempt_count[0] += 1
+                if attempt_count[0] <= 2:
+                    # First attempt: wrong window
+                    resp.json.return_value = {
+                        "stdout": "ACTIVE_TITLE:Desktop",
+                        "stderr": "",
+                    }
+                else:
+                    # Second attempt: correct window
+                    resp.json.return_value = {
+                        "stdout": "ACTIVE_TITLE:LibreOffice Calc",
+                        "stderr": "",
+                    }
+            else:
+                resp.json.return_value = {"results": []}
+                resp.text = '{"results": []}'
+            return resp
+
+        with patch("requests.post", side_effect=_fake_post), \
+             patch("time.sleep"):
+            adapter._ensure_app_focused({
+                "related_apps": ["libreoffice_calc"],
+            })
