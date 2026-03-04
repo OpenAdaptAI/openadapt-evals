@@ -58,7 +58,11 @@ uvicorn:          0.40.0
 httpx:            0.28.1
 requests:         2.32.5
 
---- Full pip install (130+ packages) ---
+--- Full pip install (130+ packages, from initial vLLM install) ---
+
+NOTE: This list is from the vLLM install (Stage 5). VAGEN (Stage 7) later
+downgraded uvicorn from 0.41.0 to 0.40.0. The "Key Dependencies" section
+above reflects the final environment state.
 
 MarkupSafe-3.0.3 aiohappyeyeballs-2.6.1 aiohttp-3.13.3 aiosignal-1.4.0
 annotated-doc-0.0.4 annotated-types-0.7.0 anyio-4.12.1 astor-0.8.1

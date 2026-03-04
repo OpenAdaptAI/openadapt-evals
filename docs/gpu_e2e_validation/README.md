@@ -116,6 +116,7 @@ dc1f81f fix: correct is_action_valid logic, scroll_direction, stale refs, and DR
 e73df70 fix: add evaluate_url support and E2E validation test
 17c919b fix: use Deep Learning AMI for GPU instances and fix setup issues
 c2555ef docs: add GPU E2E validation report with artifacts
+b7efb4f fix: resolve port inconsistencies and add missing context in validation docs
 ```
 
 ## Next Steps
