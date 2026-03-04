@@ -70,9 +70,18 @@ conda activate "$CONDA_ENV"
 log "Installing vLLM $VLLM_VERSION..."
 pip3 install "vllm==$VLLM_VERSION"
 
-# --- Install flash-attn ---
-log "Installing flash-attn $FLASH_ATTN_VERSION (this may take a few minutes)..."
-pip3 install "flash-attn==$FLASH_ATTN_VERSION" --no-build-isolation --no-cache-dir
+# --- Install flash-attn (Ampere+ GPUs only) ---
+# Flash Attention 2 requires compute capability >= 8.0 (Ampere: sm_80+).
+# V100 (sm_70) and older GPUs are NOT supported — the build will fail or
+# produce runtime errors.  We detect the GPU architecture via nvidia-smi
+# and skip the install on unsupported hardware.
+GPU_CC=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1 | tr -d '.')
+if [ "${GPU_CC:-0}" -ge "80" ]; then
+    log "GPU compute capability ${GPU_CC} >= 80 — installing flash-attn $FLASH_ATTN_VERSION..."
+    pip3 install "flash-attn==$FLASH_ATTN_VERSION" --no-build-isolation --no-cache-dir
+else
+    log "GPU compute capability ${GPU_CC:-unknown} < 80 — skipping flash-attn (requires Ampere+)"
+fi
 
 # --- Clone and install verl-agent ---
 if [ ! -d "$HOME/verl-agent" ]; then

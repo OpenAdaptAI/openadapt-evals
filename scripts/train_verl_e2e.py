@@ -154,6 +154,9 @@ def prepare_training_data(ip: str, group_size: int = 8, username: str = "ubuntu"
 
     verl-agent requires train/val parquet files even for env-based training.
     These define the modality (text vs visual) and batch sizing.
+
+    After running VAGEN's data preprocessor, validates that the expected
+    output files exist and are non-empty.
     """
     logger.info("Preparing training data (parquet files)...")
     prep_cmd = (
@@ -164,6 +167,20 @@ def prepare_training_data(ip: str, group_size: int = 8, username: str = "ubuntu"
     result = _ssh_run(ip, prep_cmd, username=username, stream=True)
     if result.returncode != 0:
         raise RuntimeError("Data preparation failed")
+
+    # Validate output files exist and are non-empty
+    validate_cmd = (
+        'for f in ~/data/verl-agent/visual/train.parquet ~/data/verl-agent/visual/test.parquet; do '
+        '  if [ ! -s "$f" ]; then echo "MISSING_OR_EMPTY: $f"; exit 1; fi; '
+        '  echo "OK: $f ($(stat --format=%s "$f" 2>/dev/null || stat -f%z "$f") bytes)"; '
+        'done'
+    )
+    result = _ssh_run(ip, validate_cmd, username=username, stream=True)
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Training data validation failed: expected train.parquet and "
+            "test.parquet in ~/data/verl-agent/visual/"
+        )
 
 
 def register_waa_env(ip: str, username: str = "ubuntu"):
