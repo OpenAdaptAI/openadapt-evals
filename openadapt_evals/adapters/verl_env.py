@@ -37,7 +37,11 @@ Usage with VAGEN training:
 Usage standalone (without VAGEN):
     from openadapt_evals.adapters.verl_env import WAADesktopEnv
 
-    env = WAADesktopEnv({"server_url": "http://localhost:5001", "task_id": "..."})
+    env = WAADesktopEnv({
+        "server_url": "http://localhost:5000",       # Windows VM Flask API
+        "evaluate_url": "http://localhost:5001",      # evaluate_server.py
+        "task_id": "...",
+    })
     obs, info = await env.reset(seed=42)
     obs, reward, done, info = await env.step("CLICK(x=0.50, y=0.30)")
 """
@@ -193,7 +197,11 @@ class WAADesktopEnv(_GymImageEnvBase):
     WAALiveAdapter for remote VM interaction.
 
     Config keys (passed via env_config dict):
-        server_url: WAA server URL (default: "http://localhost:5001")
+        server_url: WAA Windows VM Flask API URL (default: "http://localhost:5000").
+            Provides /screenshot, /execute_windows, /accessibility endpoints.
+        evaluate_url: Evaluate server URL (default: None, falls back to server_url).
+            Provides /setup, /evaluate, /probe, /task endpoints. Set this when
+            the evaluate server runs on a different port than the Windows VM API.
         task_id: WAA task UUID to train on
         max_steps: Max steps per episode (default: 15)
         evaluate_at_done: Whether to call WAA evaluator at episode end (default: True)
@@ -203,7 +211,8 @@ class WAADesktopEnv(_GymImageEnvBase):
     def __init__(self, env_config: dict[str, Any]) -> None:
         super().__init__(env_config)
         self.config = env_config
-        self._server_url = env_config.get("server_url", "http://localhost:5001")
+        self._server_url = env_config.get("server_url", "http://localhost:5000")
+        self._evaluate_url = env_config.get("evaluate_url")
         self._task_id = env_config.get("task_id")
         self._max_steps = env_config.get("max_steps", 15)
         self._evaluate_at_done = env_config.get("evaluate_at_done", True)
@@ -221,7 +230,10 @@ class WAADesktopEnv(_GymImageEnvBase):
         from openadapt_evals.adapters.waa.live import WAALiveAdapter, WAALiveConfig
 
         adapter = WAALiveAdapter(
-            WAALiveConfig(server_url=self._server_url)
+            WAALiveConfig(
+                server_url=self._server_url,
+                evaluate_url=self._evaluate_url,
+            )
         )
         self._rl_env = RLEnvironment(adapter, default_task_id=self._task_id)
         return self._rl_env
@@ -437,7 +449,8 @@ def register_in_vagen(registry_yaml_path: str | Path | None = None) -> bool:
 
 
 def generate_env_spec(
-    server_url: str = "http://localhost:5001",
+    server_url: str = "http://localhost:5000",
+    evaluate_url: str | None = None,
     task_id: str = "REPLACE_WITH_WAA_TASK_UUID",
     n_envs: int = 8,
     max_turns: int = 15,
@@ -448,9 +461,22 @@ def generate_env_spec(
     under the ``envs`` key.
 
     Example:
-        spec = generate_env_spec(server_url="http://10.0.0.5:5001", task_id="abc-123")
+        spec = generate_env_spec(
+            server_url="http://localhost:5000",
+            evaluate_url="http://localhost:5001",
+            task_id="abc-123",
+        )
         # Write to YAML or pass to AgenticDataset
     """
+    config: dict[str, Any] = {
+        "server_url": server_url,
+        "task_id": task_id,
+        "max_steps": max_turns,
+        "evaluate_at_done": True,
+        "action_type": "fractional",
+    }
+    if evaluate_url:
+        config["evaluate_url"] = evaluate_url
     return {
         "name": ENV_REGISTRY_KEY,
         "n_envs": n_envs,
@@ -458,11 +484,5 @@ def generate_env_spec(
         "seed": [1, 100, 1],
         "max_turns": max_turns,
         "response_length_per_turn": 512,
-        "config": {
-            "server_url": server_url,
-            "task_id": task_id,
-            "max_steps": max_turns,
-            "evaluate_at_done": True,
-            "action_type": "fractional",
-        },
+        "config": config,
     }
