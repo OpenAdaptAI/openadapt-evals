@@ -1026,7 +1026,7 @@ class WAALiveAdapter(BenchmarkAdapter):
 
         Args:
             action_type: One of "click", "double_click", "right_click", "type",
-                "key", "scroll", "done", "error", "wait".
+                "key", "scroll", "drag", "done", "error", "wait".
             x: X pixel coordinate (absolute).
             y: Y pixel coordinate (absolute).
             text: Text to type (for action_type="type").
@@ -1071,6 +1071,24 @@ class WAALiveAdapter(BenchmarkAdapter):
 
         if action_type == "scroll":
             return f"import pyautogui; pyautogui.scroll(-3, x={px}, y={py})"
+
+        if action_type == "drag":
+            # drag needs end coordinates passed via text as "end_x,end_y"
+            ex, ey = px, py
+            if text:
+                parts = text.split(",")
+                if len(parts) == 2:
+                    ex, ey = self._clamp_pixel_coords(int(parts[0]), int(parts[1]))
+            return (
+                f"import pyautogui; import time; "
+                f"pyautogui.moveTo({px}, {py}); "
+                f"time.sleep(0.3); "
+                f"pyautogui.mouseDown(button='left'); "
+                f"time.sleep(0.1); "
+                f"pyautogui.moveTo({ex}, {ey}, duration=1.0); "
+                f"time.sleep(0.1); "
+                f"pyautogui.mouseUp(button='left')"
+            )
 
         logger.warning(f"Unknown pixel action type: {action_type}")
         return None
@@ -1469,7 +1487,16 @@ class WAALiveAdapter(BenchmarkAdapter):
             start_x, start_y = self._clamp_pixel_coords(int(start_x), int(start_y))
             end_x, end_y = self._clamp_pixel_coords(int(end_x), int(end_y))
 
-            return f"import pyautogui; pyautogui.moveTo({start_x}, {start_y}); pyautogui.drag({end_x - start_x}, {end_y - start_y}, duration=0.5)"
+            return (
+                f"import pyautogui; import time; "
+                f"pyautogui.moveTo({start_x}, {start_y}); "
+                f"time.sleep(0.3); "
+                f"pyautogui.mouseDown(button='left'); "
+                f"time.sleep(0.1); "
+                f"pyautogui.moveTo({end_x}, {end_y}, duration=1.0); "
+                f"time.sleep(0.1); "
+                f"pyautogui.mouseUp(button='left')"
+            )
 
         logger.warning(f"Unknown action type: {action.type}")
         return None
