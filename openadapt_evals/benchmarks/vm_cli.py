@@ -9122,8 +9122,8 @@ Examples:
         help="Model to train",
     )
     p_gpu_train.add_argument(
-        "--n-gpus", type=int, default=2,
-        help="Number of GPUs (default: 2)",
+        "--n-gpus", type=int, default=1,
+        help="Number of GPUs (default: 1, use 4 for g5.12xlarge)",
     )
     p_gpu_train.add_argument(
         "--epochs", type=int, default=100,
