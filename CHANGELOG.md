@@ -1,13 +1,60 @@
 # CHANGELOG
 
 
+## v0.29.0 (2026-03-03)
+
+### Documentation
+
+- Add worktree safety rule to CLAUDE.md
+  ([#94](https://github.com/OpenAdaptAI/openadapt-evals/pull/94),
+  [`9071fca`](https://github.com/OpenAdaptAI/openadapt-evals/commit/9071fca368dd90a03ac2ff44709bda0f19ede758))
+
+Adds a MANDATORY section warning against removing worktrees that other sessions may be using.
+  Removing a worktree kills any Claude session using it as its working directory, with no recovery
+  possible.
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+- Switch benchmark viewer animation to WebP with compact layout
+  ([#86](https://github.com/OpenAdaptAI/openadapt-evals/pull/86),
+  [`4ab4a2a`](https://github.com/OpenAdaptAI/openadapt-evals/commit/4ab4a2a5114456c81ffdee877faaed30e3fb7857))
+
+* docs: update benchmark viewer GIF with multi-task eval results
+
+Replace the old single-task (0% success) GIF with a new animation showing the phase0_multi_domain_v3
+  evaluation (5 tasks, 2 pass, 3 fail, 40% success rate). The new GIF cycles through the overview,
+  task selection, and step-by-step screenshot replay for both passing and failing tasks across
+  different Windows application domains.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* docs: switch benchmark viewer animation to WebP with compact layout
+
+Replace lossy GIF (256 colors, 749KB) with high-quality animated WebP (quality 90, 588KB) for the
+  README benchmark viewer animation.
+
+Changes: - Add compact mode to viewer HTML (compact=True hides nav header, summary panel, filter
+  bar, and log panel via CSS) so screenshots are fully visible in animation frames - Add
+  scripts/generate_viewer_animation.py using Playwright for frame capture and Pillow for animated
+  WebP assembly - Update README to reference .webp instead of .gif - Remove old benchmark-viewer.gif
+
+---------
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+### Features
+
+- Add docs sync trigger ([#96](https://github.com/OpenAdaptAI/openadapt-evals/pull/96),
+  [`a7c3f53`](https://github.com/OpenAdaptAI/openadapt-evals/commit/a7c3f5368014225fd9f752038cae3fa58afa4e5e))
+
+
 ## v0.28.0 (2026-03-03)
 
 ### Features
 
 - **agent**: Add closed-loop demo-conditioned controller
   ([#92](https://github.com/OpenAdaptAI/openadapt-evals/pull/92),
-  [`53d0b22`](https://github.com/OpenAdaptAI/openadapt-evals/commit/53d0b22b5c173ac0d51f241831cf7fa5f48233cb))
+  [`b59f342`](https://github.com/OpenAdaptAI/openadapt-evals/commit/b59f3424d3bda4882c9da6c2a8eeb01dcc0b061c))
 
 Add VLM-based step verification (plan_verify.py), demo-conditioned controller state machine
   (demo_controller.py), and plan progress tracking in the CU agent. Enables the agent to verify each
@@ -32,7 +79,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Add direct pixel path for pixel_action bypassing element routing
   ([#91](https://github.com/OpenAdaptAI/openadapt-evals/pull/91),
-  [`a5f3aea`](https://github.com/OpenAdaptAI/openadapt-evals/commit/a5f3aeafcec40e09cd436c723716d2e2e1b12d52))
+  [`e25b15b`](https://github.com/OpenAdaptAI/openadapt-evals/commit/e25b15b798747f232eac5fdff1f9fb78c50dad39))
 
 Extract command-sending logic from step() into _send_command() helper. Rewrite pixel_action() to
   build pyautogui commands directly via _build_pixel_command() and send them through
@@ -51,7 +98,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Add observe_pil() convenience method for PIL image output
   ([#93](https://github.com/OpenAdaptAI/openadapt-evals/pull/93),
-  [`5c0aa52`](https://github.com/OpenAdaptAI/openadapt-evals/commit/5c0aa527fbf6d7a404bb6289f588bf8fdfe32800))
+  [`9793efc`](https://github.com/OpenAdaptAI/openadapt-evals/commit/9793efca74069a06e31fe6c351328759ffeb6fbb))
 
 Add observe_pil() to WAALiveAdapter and RLEnvironment for VLM/RL pipelines that work with PIL images
   directly. Also clean up changelog formatting (remove leaked Co-authored-by trailer lines, fix
@@ -66,7 +113,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Add EC2 setup guide for WAA deployment
   ([#90](https://github.com/OpenAdaptAI/openadapt-evals/pull/90),
-  [`ca6a936`](https://github.com/OpenAdaptAI/openadapt-evals/commit/ca6a9362556852bd6ad040ba9ac7a5dfe3a7d880))
+  [`06d3338`](https://github.com/OpenAdaptAI/openadapt-evals/commit/06d33381a7162ddff915a309f1b59f4ad0008980))
 
 Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
@@ -74,11 +121,11 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Add TaskVerifierRegistry for custom task verification
   ([#89](https://github.com/OpenAdaptAI/openadapt-evals/pull/89),
-  [`639a6a2`](https://github.com/OpenAdaptAI/openadapt-evals/commit/639a6a2ba2a15e0c7a2a3bd65fa57a38f6966965))
+  [`c9dc404`](https://github.com/OpenAdaptAI/openadapt-evals/commit/c9dc404e114e2ef5623d6fecab09e04f376d0310))
 
 Add a registry pattern for custom task verifiers that can inspect VM state after task execution.
-  This enables integrators to register domain-specific verification
-  functions without subclassing BenchmarkAdapter.
+  This enables integrators to register domain-specific verification functions without subclassing
+  BenchmarkAdapter.
 
 - TaskVerifierRegistry with decorator and programmatic registration - VerificationResult dataclass
   with success/score/details - WAALiveAdapter.run_powershell() for executing PowerShell on the VM -
@@ -94,7 +141,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Address review findings in verl-agent adapter
   ([#88](https://github.com/OpenAdaptAI/openadapt-evals/pull/88),
-  [`879c53c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/879c53c182853104a4a8c5e179e810185180d37a))
+  [`a6d725a`](https://github.com/OpenAdaptAI/openadapt-evals/commit/a6d725ab18c41891a025f960f4d6d3cc604a2176))
 
 - Fix SCROLL direction not forwarded to BenchmarkAction.scroll_direction - Fix DRAG parsing to
   include end_x/end_y coordinates - Fix is_action_valid logic: use pattern match instead of inverted
@@ -114,7 +161,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - **agent**: Replace manual string escaping with repr() and fix CU agent bugs
   ([#83](https://github.com/OpenAdaptAI/openadapt-evals/pull/83),
-  [`ffcb41d`](https://github.com/OpenAdaptAI/openadapt-evals/commit/ffcb41d9a2dd6cc53eae4bf478d2d3b139d22b84))
+  [`9bbf729`](https://github.com/OpenAdaptAI/openadapt-evals/commit/9bbf729dd138b9cac8a9f9b4c95bfb786e221a98))
 
 * fix(agent): replace manual string escaping with repr() and fix CU agent bugs
 
@@ -167,7 +214,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 ### Features
 
 - Add VAGEN/verl-agent environment adapter for VLM RL training
-  ([`0183321`](https://github.com/OpenAdaptAI/openadapt-evals/commit/018332168389b4be74660ecbc754eef5768f6b51))
+  ([`c7845ff`](https://github.com/OpenAdaptAI/openadapt-evals/commit/c7845ffe9b03490250230d7826134e2bf21e6127))
 
 * feat: add VAGEN/verl-agent environment adapter for VLM RL training
 
@@ -215,7 +262,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Document AWS SSO as recommended auth method
   ([#80](https://github.com/OpenAdaptAI/openadapt-evals/pull/80),
-  [`8812e7c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/8812e7c69294d9f80c3cde723fa8838b02cad550))
+  [`3da971e`](https://github.com/OpenAdaptAI/openadapt-evals/commit/3da971ef3b295bc8988760ac3bbb370f6c25410b))
 
 - Update README: replace static key instructions with SSO guide including example ~/.aws/config and
   aws configure sso workflow - Update CLAUDE.md AWS section with SSO note - Update aws_vm.py
@@ -227,7 +274,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Update README with recent features from PRs #58-#75
   ([#82](https://github.com/OpenAdaptAI/openadapt-evals/pull/82),
-  [`840f9ef`](https://github.com/OpenAdaptAI/openadapt-evals/commit/840f9efcdb7561fdad43bf80f6c87e0483443f2d))
+  [`0a3d929`](https://github.com/OpenAdaptAI/openadapt-evals/commit/0a3d929ce3041ce024b3cd1598c86339867303b9))
 
 Add coverage for RL training environment, end-to-end eval pipeline, annotation pipeline, 4-layer
   probe diagnostics, demo recording persistence, review artifacts, coordinate clamping, and
@@ -241,7 +288,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Add self-contained GRPO training example script
   ([#81](https://github.com/OpenAdaptAI/openadapt-evals/pull/81),
-  [`97c144b`](https://github.com/OpenAdaptAI/openadapt-evals/commit/97c144bbd346292eaa6c0a8b4ef5d3185868387d))
+  [`0cdee7f`](https://github.com/OpenAdaptAI/openadapt-evals/commit/0cdee7f67e264710e47d7ca94bdbd1031636b00a))
 
 * feat: add self-contained GRPO training example script
 
@@ -280,7 +327,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Add coordinate clamping and drag safety to prevent fail-safe triggers
   ([#74](https://github.com/OpenAdaptAI/openadapt-evals/pull/74),
-  [`92c83d2`](https://github.com/OpenAdaptAI/openadapt-evals/commit/92c83d2f314fceed30a4c4992e7a1561be9688f1))
+  [`795e02b`](https://github.com/OpenAdaptAI/openadapt-evals/commit/795e02bac10b91b972192f27719f68657bca97c3))
 
 - Add _clamp_pixel_coords() to keep mouse 5px from screen edges - Apply clamping in
   _translate_click_action (element and coordinate paths) - Fix drag handler: skip drags with None or
@@ -295,7 +342,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Add 4-layer WAA probe for per-layer diagnostics
   ([#75](https://github.com/OpenAdaptAI/openadapt-evals/pull/75),
-  [`7a22ec1`](https://github.com/OpenAdaptAI/openadapt-evals/commit/7a22ec1e3f1c069a5dc89159c73da1474325c9d2))
+  [`96b726e`](https://github.com/OpenAdaptAI/openadapt-evals/commit/96b726e91fddec7aaa02f0200c40613582ca2e05))
 
 Add multi-layer probe that tests screenshot (PNG capture), accessibility (a11y tree), action
   (pyautogui pipeline), and score (evaluate endpoint) layers individually using existing WAA
@@ -314,7 +361,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Add RL environment wrapper for GRPO training
   ([#73](https://github.com/OpenAdaptAI/openadapt-evals/pull/73),
-  [`e147d7d`](https://github.com/OpenAdaptAI/openadapt-evals/commit/e147d7dfcdc6d6ca98954339e3d4b6d19ac025fe))
+  [`2678f43`](https://github.com/OpenAdaptAI/openadapt-evals/commit/2678f4346e16e271ef131fbda46664614c8eddd0))
 
 * feat: add `smoke-test-aws` CLI command with full lifecycle test
 
@@ -370,7 +417,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Address round-2 review findings across pipeline and live adapter
   ([#79](https://github.com/OpenAdaptAI/openadapt-evals/pull/79),
-  [`54b4cba`](https://github.com/OpenAdaptAI/openadapt-evals/commit/54b4cbaf80f79c74d01c7239021732a838302992))
+  [`32a2542`](https://github.com/OpenAdaptAI/openadapt-evals/commit/32a254250b6ceda7577dd72ee171a597a4f8355e))
 
 Pipeline (run_eval_pipeline.py): - Add timeout=3600 to eval subprocess to prevent indefinite hangs -
   Guard _ensure_waa_ready against empty vm_ip (skip tunnel reconnect) - Capture demo generation
@@ -391,7 +438,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Add end-to-end eval pipeline script
   ([#68](https://github.com/OpenAdaptAI/openadapt-evals/pull/68),
-  [`a6b3852`](https://github.com/OpenAdaptAI/openadapt-evals/commit/a6b3852fe586f643da25ba90f1ed5bf0ce280c06))
+  [`f6cd170`](https://github.com/OpenAdaptAI/openadapt-evals/commit/f6cd170037341e0b7582a80d133c60cc4f990ecf))
 
 * feat: add end-to-end eval pipeline script
 
@@ -502,7 +549,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Add smoke-test-aws CLI command with full lifecycle test
   ([#72](https://github.com/OpenAdaptAI/openadapt-evals/pull/72),
-  [`47a8168`](https://github.com/OpenAdaptAI/openadapt-evals/commit/47a8168b7801080352fa17ba11566dee48c78539))
+  [`4171af6`](https://github.com/OpenAdaptAI/openadapt-evals/commit/4171af68537347975cfd4461cb242dede8080a11))
 
 * feat: add `smoke-test-aws` CLI command with full lifecycle test
 
@@ -552,7 +599,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Unify fuzzy_match metrics into shared evaluation.metrics module
   ([#71](https://github.com/OpenAdaptAI/openadapt-evals/pull/71),
-  [`2e1c547`](https://github.com/OpenAdaptAI/openadapt-evals/commit/2e1c54736743b066034e9487a79328c07330a28f))
+  [`99e5b23`](https://github.com/OpenAdaptAI/openadapt-evals/commit/99e5b23b8b9128ee319627aba5a7aaea937cfde5))
 
 Extract metric functions (exact_match, fuzzy_match, contains, boolean, file_exists) into
   evaluation/metrics.py as the single source of truth. Both client.py and evaluate_endpoint.py now
@@ -568,7 +615,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Rename consilium dependency to openadapt-consilium and revert Python 3.11 requirement
   ([#69](https://github.com/OpenAdaptAI/openadapt-evals/pull/69),
-  [`6dc97e6`](https://github.com/OpenAdaptAI/openadapt-evals/commit/6dc97e60d0f45f7853802315c3e339e3970110f3))
+  [`e42607d`](https://github.com/OpenAdaptAI/openadapt-evals/commit/e42607dbd5f2139d2a32f555c2bfcc793cfe193b))
 
 The `consilium` name on PyPI belongs to another project. `openadapt-consilium` v0.3.2 is now
   published with requires-python >=3.10, so we can revert our temporary Python 3.11 bump and use the
@@ -587,7 +634,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Add multi-cloud VM support with AWS backend and VMProvider protocol
   ([#66](https://github.com/OpenAdaptAI/openadapt-evals/pull/66),
-  [`7a27d60`](https://github.com/OpenAdaptAI/openadapt-evals/commit/7a27d60977f144bcc04aa3646af69bc183cc870b))
+  [`d09e822`](https://github.com/OpenAdaptAI/openadapt-evals/commit/d09e8227ad0a397956c87bf8db1b1558a34a13ca))
 
 * feat: add multi-cloud VM support with AWS backend and VMProvider protocol
 
@@ -638,7 +685,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Migrate annotation pipeline from openadapt-ml to openadapt-evals
   ([#64](https://github.com/OpenAdaptAI/openadapt-evals/pull/64),
-  [`7896051`](https://github.com/OpenAdaptAI/openadapt-evals/commit/7896051e514aedd647faeba0383e4acba9bea5ab))
+  [`7ee817d`](https://github.com/OpenAdaptAI/openadapt-evals/commit/7ee817d75f171bf26ddde02449060eaa6d6979a2))
 
 * feat: migrate annotation pipeline from openadapt-ml to openadapt-evals
 
@@ -683,7 +730,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Deduplicate recording artifacts and use JPEG thumbnails
   ([#65](https://github.com/OpenAdaptAI/openadapt-evals/pull/65),
-  [`f60df10`](https://github.com/OpenAdaptAI/openadapt-evals/commit/f60df10a56cea3031e254a4f573a8487dc73b5e3))
+  [`053d991`](https://github.com/OpenAdaptAI/openadapt-evals/commit/053d9910a81c0ef2265a1035efc66658f31833d5))
 
 - Remove docs/artifacts/full/ (was a copy of waa_recordings/ PNGs) - Thumbnails now link to
   originals in waa_recordings/ for full-res - Switch thumbnails from PNG to JPEG (1.5 MB vs 3.0 MB
@@ -700,7 +747,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Remove bash syntax error in socat nohup fallback
   ([#63](https://github.com/OpenAdaptAI/openadapt-evals/pull/63),
-  [`1ae7540`](https://github.com/OpenAdaptAI/openadapt-evals/commit/1ae7540a6f18b5b3874aae38e6f443579845f1c0))
+  [`55f8129`](https://github.com/OpenAdaptAI/openadapt-evals/commit/55f812964e5e06e6bafea1eb2bccfec9a49a09aa))
 
 `&;` is a syntax error in bash — `&` already acts as a command terminator, so the trailing `;`
   causes a parse error. This broke the socat nohup fallback on VMs without the systemd service.
@@ -715,7 +762,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 ### Features
 
 - Add demo review artifact generator ([#60](https://github.com/OpenAdaptAI/openadapt-evals/pull/60),
-  [`caf0311`](https://github.com/OpenAdaptAI/openadapt-evals/commit/caf031153c083a3e86ac88c806d41efebb3782a7))
+  [`8c17c4b`](https://github.com/OpenAdaptAI/openadapt-evals/commit/8c17c4bb99e0ae59abaf39fc011f2fbf95e94a14))
 
 * feat: add demo review artifact generator
 
@@ -753,7 +800,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Auto-persist WAA recordings to prevent data loss
   ([#62](https://github.com/OpenAdaptAI/openadapt-evals/pull/62),
-  [`e64368e`](https://github.com/OpenAdaptAI/openadapt-evals/commit/e64368e8ff6fa602efa3d58165a55383f064fa90))
+  [`cc894be`](https://github.com/OpenAdaptAI/openadapt-evals/commit/cc894be422ca53af1eacc1f3a9f157a992976053))
 
 - Add waa_recordings/ to .gitignore (immune to git stash -u, git clean -f) - Add _backup_file()
   helper: hardlinks PNGs + meta.json to ~/oa/recordings/ (zero extra disk, falls back to copy on
@@ -771,7 +818,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Add build-time and runtime validation for evaluate_server.py deployment
   ([#56](https://github.com/OpenAdaptAI/openadapt-evals/pull/56),
-  [`b040805`](https://github.com/OpenAdaptAI/openadapt-evals/commit/b0408053ec6b137a154f66b4b12f421522d56c00))
+  [`4e99ab1`](https://github.com/OpenAdaptAI/openadapt-evals/commit/4e99ab18bab00cb6cc07a391802d34594f8c5a89))
 
 The evaluate_server.py inside the Docker container was found to be a symlink to /proc/self/fd/0
   (stdin) instead of the actual file, causing the evaluate server to start with 0 routes.
@@ -800,7 +847,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Add consilium integration, autossh, checkpoint/resume, and auto-recovery
   ([#58](https://github.com/OpenAdaptAI/openadapt-evals/pull/58),
-  [`26da34c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/26da34cfe78d56187980f3bae7999fe6bce45402))
+  [`9645d6f`](https://github.com/OpenAdaptAI/openadapt-evals/commit/9645d6f70314fb02d425ba17e27df34747789826))
 
 * fix: replace LibreOffice screenshot with full desktop view
 
@@ -980,7 +1027,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Add VM IP auto-detection and screen stability detection
   ([#57](https://github.com/OpenAdaptAI/openadapt-evals/pull/57),
-  [`3463f9d`](https://github.com/OpenAdaptAI/openadapt-evals/commit/3463f9d9daac783e12dad787a8c41f7045d8c53d))
+  [`2b11aad`](https://github.com/OpenAdaptAI/openadapt-evals/commit/2b11aad469b20479abca04792156cfce577816b5))
 
 * fix: replace LibreOffice screenshot with full desktop view
 
@@ -1058,7 +1105,7 @@ Step 15: VLM described after-state instead of before-state, and referenced C3 in
 
 * Revert "fix: correct VLM annotation errors in 04d9aeaf demo (steps 15, 17-18)"
 
-This reverts commit 27b14bb72a5d76629a6bff24fbc7e88da967ed5b.
+This reverts commit 8fbd2d788c7917dbb616dc7b3b65689dd4a123e2.
 
 * fix: remove dead code, fix KeyError risk, add trailing newlines
 
@@ -1097,7 +1144,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Add QEMU monitor restart for Windows VM
   ([#55](https://github.com/OpenAdaptAI/openadapt-evals/pull/55),
-  [`42b3847`](https://github.com/OpenAdaptAI/openadapt-evals/commit/42b384738af4dd4447938464043878db97d5c58e))
+  [`04af5b6`](https://github.com/OpenAdaptAI/openadapt-evals/commit/04af5b61d07c486f26a6215204c9230a0f5e8c02))
 
 * feat: add QEMU monitor restart for Windows VM
 
@@ -1154,7 +1201,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Version fix, fail-safe recovery, auto-open viewer, socat systemd service
   ([#54](https://github.com/OpenAdaptAI/openadapt-evals/pull/54),
-  [`ed47b7c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/ed47b7ca703a742388c7d78eb6a471ce0a6bad92))
+  [`029cabf`](https://github.com/OpenAdaptAI/openadapt-evals/commit/029cabfc6f8d600687fb7e84505b364a0772d674))
 
 * fix: version from importlib.metadata, fail-safe recovery, auto-open viewer
 
@@ -1195,7 +1242,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Add two-phase app install pipeline with verify/install handlers
   ([#52](https://github.com/OpenAdaptAI/openadapt-evals/pull/52),
-  [`3896869`](https://github.com/OpenAdaptAI/openadapt-evals/commit/389686901c570f628f809a192fb3ca9ff4e8eb5d))
+  [`6df10ef`](https://github.com/OpenAdaptAI/openadapt-evals/commit/6df10ef82a3212fff2f2022c049f513a274105f4))
 
 * feat: add two-phase app install pipeline with verify/install handlers
 
@@ -1230,7 +1277,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Improve element ID prompt and parse XML to dict for a11y tree
   ([#51](https://github.com/OpenAdaptAI/openadapt-evals/pull/51),
-  [`5d30c56`](https://github.com/OpenAdaptAI/openadapt-evals/commit/5d30c562e42453b64bc8349d9111208116337af8))
+  [`484061a`](https://github.com/OpenAdaptAI/openadapt-evals/commit/484061af80724361c2548611bcbc52eddc0aa8a7))
 
 * fix: improve element ID prompt and parse XML to dict for a11y tree
 
@@ -1262,7 +1309,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Resolve element grounding for AT-SPI a11y tree format
   ([#50](https://github.com/OpenAdaptAI/openadapt-evals/pull/50),
-  [`d4bbb6a`](https://github.com/OpenAdaptAI/openadapt-evals/commit/d4bbb6aeb8158c6b97db319e1d1ca3e6c00c201e))
+  [`50d2a0c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/50d2a0cdf036601c12d008c46eb6ad706d53fc81))
 
 The WAA live adapter's XML parser only handled UIA format (uppercase Name, AutomationId,
   BoundingRectangle) but the actual a11y tree from WAA uses AT-SPI format (lowercase name,
@@ -1285,7 +1332,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Update agent improvement strategy to v3 with element grounding focus
   ([#48](https://github.com/OpenAdaptAI/openadapt-evals/pull/48),
-  [`e170006`](https://github.com/OpenAdaptAI/openadapt-evals/commit/e17000682cc56ea865008b1e84fe89020729565b))
+  [`6c6ea88`](https://github.com/OpenAdaptAI/openadapt-evals/commit/6c6ea884741a494edfc8832e9882343c701de3c3))
 
 * docs: update agent improvement strategy to v3 with element grounding focus
 
@@ -1309,7 +1356,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Add SmolOperatorAgent wrapping SmolVLM2-2.2B for GUI automation
   ([#49](https://github.com/OpenAdaptAI/openadapt-evals/pull/49),
-  [`c886173`](https://github.com/OpenAdaptAI/openadapt-evals/commit/c8861730107af44292faf26ebeddadc2292cdd19))
+  [`b13c0cd`](https://github.com/OpenAdaptAI/openadapt-evals/commit/b13c0cd2cd5abb750d1f7415645bae83bad7d2ed))
 
 Wraps smolagents/SmolVLM2-2.2B-Instruct-Agentic-GUI as a BenchmarkAgent. Coordinates are natively
   [0,1] — no conversion needed. Supports click, double_click, long_press, type, press, scroll, drag,
@@ -1324,7 +1371,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Add accessibility tree grounding to ApiAgent (Claude)
   ([#47](https://github.com/OpenAdaptAI/openadapt-evals/pull/47),
-  [`d23ca64`](https://github.com/OpenAdaptAI/openadapt-evals/commit/d23ca645fc0455edb16e6c3e97793aece9f1f7c7))
+  [`2cb15fe`](https://github.com/OpenAdaptAI/openadapt-evals/commit/2cb15fea1b99d4650fdcebeca917c6b28330ecf0))
 
 Add element-based actions (click_element, type_element) to the ApiAgent, enabling Claude to interact
   with UI elements by accessibility tree ID instead of pixel coordinates.
@@ -1343,7 +1390,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Parse XML accessibility tree in live adapter for element grounding
   ([#46](https://github.com/OpenAdaptAI/openadapt-evals/pull/46),
-  [`49461b3`](https://github.com/OpenAdaptAI/openadapt-evals/commit/49461b3a5e7aab4318a62ae232fee032626725e0))
+  [`7066cb5`](https://github.com/OpenAdaptAI/openadapt-evals/commit/7066cb52cdea34b3987f6d1375ef2b327c0c1261))
 
 The WAA server may return the accessibility tree as XML (UIA format) instead of a dict. Previously,
   XML responses caused rect extraction to be skipped entirely (TODO at line 731), which meant
@@ -1363,7 +1410,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Add accessibility tree grounding to Qwen3VL agent
   ([#45](https://github.com/OpenAdaptAI/openadapt-evals/pull/45),
-  [`0d7076c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/0d7076c9e7815da65309026fdda75f4cba6afc13))
+  [`671471d`](https://github.com/OpenAdaptAI/openadapt-evals/commit/671471da5fdc88aa3ed00a8e421b7444734501c4))
 
 Sidestep coordinate prediction (the root cause of 0% scores) by supporting element-based actions via
   the accessibility tree. New actions click_element(id) and type_element(id, text) let the agent
@@ -1385,7 +1432,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - **qwen3vl**: Accept positional args and float coords in action parser
   ([#44](https://github.com/OpenAdaptAI/openadapt-evals/pull/44),
-  [`89bd9c5`](https://github.com/OpenAdaptAI/openadapt-evals/commit/89bd9c5ab2f48bea421877dddafe87ca0a768bcc))
+  [`97309d7`](https://github.com/OpenAdaptAI/openadapt-evals/commit/97309d7709cf215921c9389daeb4563a77903169))
 
 Fine-tuned models output positional args like click(589, 965) instead of keyword args click(x=589,
   y=965). The parser regexes now accept both formats. Also handles float coordinates (0.589) from
@@ -1400,7 +1447,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - **docs**: Require conventional commit format for PR titles
   ([#43](https://github.com/OpenAdaptAI/openadapt-evals/pull/43),
-  [`3f7a4b2`](https://github.com/OpenAdaptAI/openadapt-evals/commit/3f7a4b2ff055256ae1cef3518c59b6b59d53cc22))
+  [`fda7d38`](https://github.com/OpenAdaptAI/openadapt-evals/commit/fda7d385ff4a153a929ebb796b1a0eb0c25b60b2))
 
 PR titles become squash merge commit messages. Without the fix:/feat: prefix,
   python-semantic-release skips the release. Document this requirement prominently in CLAUDE.md.
@@ -1411,7 +1458,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Add mandatory branch/PR rule to CLAUDE.md
   ([#39](https://github.com/OpenAdaptAI/openadapt-evals/pull/39),
-  [`f0d0c4f`](https://github.com/OpenAdaptAI/openadapt-evals/commit/f0d0c4f15cac490e8881fe53864d5dc2e8c1c940))
+  [`6d6eda1`](https://github.com/OpenAdaptAI/openadapt-evals/commit/6d6eda1f4d7a76b9f2e4798045a06788f82a0f6b))
 
 Adds explicit instruction that all changes must go through feature branches and pull requests.
   enforce_admins has been enabled on GitHub to prevent admin bypass of branch protection.
@@ -1424,7 +1471,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 ### Features
 
 - **qwen3vl**: Add remote inference via Modal and HTTP endpoints
-  ([`d85363b`](https://github.com/OpenAdaptAI/openadapt-evals/commit/d85363ba507eafb2350f58dd9997846c0c20018f))
+  ([`4c07885`](https://github.com/OpenAdaptAI/openadapt-evals/commit/4c0788525d76aa544fb3ef97b202b724556e46f8))
 
 - Add model_endpoint parameter to Qwen3VLAgent for remote inference - Support 'modal' endpoint (uses
   openadapt_ml.cloud.modal_cloud.call_inference) - Support HTTP endpoint (POST /infer with messages
@@ -1439,7 +1486,7 @@ Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
 ### Features
 
 - **qwen3vl**: Add PEFT adapter loading support
-  ([`7ed1629`](https://github.com/OpenAdaptAI/openadapt-evals/commit/7ed1629f152d76264edc31b27042b6a7280b4491))
+  ([`c84c5e1`](https://github.com/OpenAdaptAI/openadapt-evals/commit/c84c5e16ba69e52860b452dbd15da6418dd12f78))
 
 Qwen3VLAgent._load_model() now detects PEFT adapter directories (containing adapter_config.json) and
   automatically loads the base model first, then applies the adapter via
@@ -1456,7 +1503,7 @@ Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
 ### Features
 
 - **agents**: Implement Qwen3VL agent with demo-conditioned inference
-  ([`b234a42`](https://github.com/OpenAdaptAI/openadapt-evals/commit/b234a425ed95c8676b9cccb5959dcc99d75e25bd))
+  ([`cbcd008`](https://github.com/OpenAdaptAI/openadapt-evals/commit/cbcd008e686a188d39a50eff7603194bf47fafd8))
 
 Full BenchmarkAgent implementation for Qwen3-VL models with: - Action parsing for all 9 action types
   (click, double_click, right_click, type, press, scroll, drag, wait, finished) - Coordinate
@@ -1476,7 +1523,7 @@ Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Add DEBIAN_FRONTEND=noninteractive and 128GB OS disk
   ([#38](https://github.com/OpenAdaptAI/openadapt-evals/pull/38),
-  [`9cf161a`](https://github.com/OpenAdaptAI/openadapt-evals/commit/9cf161a87b3f86cb3917314918c541d11c5b46b9))
+  [`07fb936`](https://github.com/OpenAdaptAI/openadapt-evals/commit/07fb93619d39f6cdd06f3306f18e9877f92649b9))
 
 * fix: add DEBIAN_FRONTEND=noninteractive and 128GB disk for CLI path
 
@@ -1498,7 +1545,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Use persistent storage for Docker data-root instead of ephemeral /mnt
   ([#37](https://github.com/OpenAdaptAI/openadapt-evals/pull/37),
-  [`4665f33`](https://github.com/OpenAdaptAI/openadapt-evals/commit/4665f33ca9657a3c694d25b7d6619950747393de))
+  [`e48b39f`](https://github.com/OpenAdaptAI/openadapt-evals/commit/e48b39f90173b7efe3091a231ab03c8b77f2d24d))
 
 The Azure ephemeral disk (/mnt) gets wiped on VM deallocate, causing Docker images to be lost and
   pool-resume to fail with WAA timeout. Move Docker data-root to /home/azureuser/docker (OS disk,
@@ -1513,14 +1560,14 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - **docs**: Use absolute URLs for README images and links on PyPI
   ([#36](https://github.com/OpenAdaptAI/openadapt-evals/pull/36),
-  [`0143911`](https://github.com/OpenAdaptAI/openadapt-evals/commit/01439117c4e822c2ad13cd4f6b92f9cef1d6078b))
+  [`26d9483`](https://github.com/OpenAdaptAI/openadapt-evals/commit/26d948368a53c7c3ccdcc20ba06d39044d24fd41))
 
 Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 ### Documentation
 
 - Update README with eval-suite, demo pipeline, golden images, and CI badge
-  ([`444d014`](https://github.com/OpenAdaptAI/openadapt-evals/commit/444d014e7104ab90be2ca159eb3f4b5ade5954aa))
+  ([`94208c0`](https://github.com/OpenAdaptAI/openadapt-evals/commit/94208c02973e3b045af8653d16eb4e833845e7d5))
 
 - Add Tests CI badge - Add ClaudeComputerUseAgent to agents list - Add demo-conditioned evaluation
   section (record-waa, annotate, eval) - Add eval-suite to benchmark CLI table - Add pool-pause,
@@ -1536,7 +1583,7 @@ Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Waa eval pipeline — recording, annotation, golden images, and CI
   ([#35](https://github.com/OpenAdaptAI/openadapt-evals/pull/35),
-  [`19a11ee`](https://github.com/OpenAdaptAI/openadapt-evals/commit/19a11ee36938d4adb3b585e25ffb972424ea52db))
+  [`51a0b3c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/51a0b3cb146b863256d0f458e8f69aabd7841d0f))
 
 * fix(recording): replace busy-wait loop with time.sleep
 
@@ -1726,7 +1773,7 @@ Also includes: - 28 unit tests for all action types, conversation management, de
 * docs: add eval suite v2 results — 6/6 tasks scored 1.00
 
 Claude Computer Use (Sonnet 4.6) achieves 100% success on all 3 WAA tasks in both zero-shot and
-  demo-conditioned modes after the screenshot/wait internal retry fix (commit 0b185eb).
+  demo-conditioned modes after the screenshot/wait internal retry fix (commit 137b51c).
 
 * feat(pool): add pool-pause and pool-resume for deallocate/resume lifecycle
 
@@ -1781,7 +1828,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 ### Bug Fixes
 
 - **pool**: Use waa-auto image instead of broken windowsarena/winarena
-  ([`8879be6`](https://github.com/OpenAdaptAI/openadapt-evals/commit/8879be66fa9448442129808b89a69a0f752e2538))
+  ([`8e25046`](https://github.com/OpenAdaptAI/openadapt-evals/commit/8e250460abf516a7f51b119cf71717340cfb8803))
 
 WAA_START_SCRIPT and setup-waa were using windowsarena/winarena:latest (dockurr/windows v0.00, can't
   download ISO) instead of waa-auto:latest (dockurr/windows:latest v5.14, auto-downloads ISO).
@@ -1796,7 +1843,7 @@ Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
 
 - **ci**: Use v9 branch config for python-semantic-release
   ([#34](https://github.com/OpenAdaptAI/openadapt-evals/pull/34),
-  [`0630b0f`](https://github.com/OpenAdaptAI/openadapt-evals/commit/0630b0f6f4c34990ec1ad27e9b876546c65f5b07))
+  [`ed72e35`](https://github.com/OpenAdaptAI/openadapt-evals/commit/ed72e3539d664626b7981fc9ecc691656bbe53c3))
 
 Replace `branch = "main"` (v7/v8 key) with `[tool.semantic_release.branches.main]` table (v9 key).
   The old key is silently ignored by v9, causing releases to never trigger on the main branch.
@@ -1806,17 +1853,17 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 ### Documentation
 
 - Add screenshots back to README
-  ([`ed5e9b5`](https://github.com/OpenAdaptAI/openadapt-evals/commit/ed5e9b58df0e8a75509133bee4d8d3cbf20d6cda))
+  ([`70ce5e9`](https://github.com/OpenAdaptAI/openadapt-evals/commit/70ce5e9e259b32f9c6bfaab11568e9894ba733d9))
 
 Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Rewrite CLAUDE.md — remove stale sections, match current architecture
-  ([`f4f5eb7`](https://github.com/OpenAdaptAI/openadapt-evals/commit/f4f5eb73b83fbddb43452ba6aef526a0c0713843))
+  ([`36a40d6`](https://github.com/OpenAdaptAI/openadapt-evals/commit/36a40d6872eb099fbd6ad0f550bbab252e0bcfee))
 
 Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Rewrite README for professional open-source style
-  ([`9e3e904`](https://github.com/OpenAdaptAI/openadapt-evals/commit/9e3e904f867d6198d8c4829b3fd299261050100c))
+  ([`63754e3`](https://github.com/OpenAdaptAI/openadapt-evals/commit/63754e3bcf23f4fedc9c714ad8c8cc4de4a61c07))
 
 Replace changelog-style README with clean structure following popular AI OSS conventions. Fix broken
   build badge (publish.yml → release.yml). Remove placeholder data, excessive viewer docs, and
@@ -1825,7 +1872,7 @@ Replace changelog-style README with clean structure following popular AI OSS con
 Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
 
 - **ci**: Correct release workflow comment — root cause was branch protection, not merge type
-  ([`8f18cf5`](https://github.com/OpenAdaptAI/openadapt-evals/commit/8f18cf5c620065bb5209cc09c91136a156e26d9a))
+  ([`11bfdea`](https://github.com/OpenAdaptAI/openadapt-evals/commit/11bfdea0e6d5070d1a73a83fc9e6c22fde47eec4))
 
 Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
 
@@ -1835,7 +1882,7 @@ Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
 ### Bug Fixes
 
 - **ci**: Document squash-merge requirement to prevent orphaned tags
-  ([`c696ec2`](https://github.com/OpenAdaptAI/openadapt-evals/commit/c696ec20df67c736e39a097dd52cd4fd677901d0))
+  ([`7eb8c91`](https://github.com/OpenAdaptAI/openadapt-evals/commit/7eb8c913cc29ac9dcc79ca9ddfd76fc48438a1d6))
 
 PyPI rejected 0.3.0 upload because the old orphaned release already published that version. This
   commit triggers 0.3.1 release and documents the squash-merge requirement that prevents recurrence.
@@ -1849,7 +1896,7 @@ Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
 
 - **ci**: Fix release automation — use ADMIN_TOKEN to push to protected branches
   ([#28](https://github.com/OpenAdaptAI/openadapt-evals/pull/28),
-  [`9132540`](https://github.com/OpenAdaptAI/openadapt-evals/commit/91325400a98013edea50c5b8433edb783f2fa693))
+  [`921bf4b`](https://github.com/OpenAdaptAI/openadapt-evals/commit/921bf4bb7751106178bfc0583af1d4072fc66d2d))
 
 Root cause: GITHUB_TOKEN cannot push commits to protected branches. Semantic-release created the
   v0.3.0 tag (tags bypass protection) but the "chore: release 0.3.0" commit that bumps
@@ -1865,7 +1912,7 @@ repository settings.
 Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - **ci**: Fix semantic-release config and delete orphaned v0.3.0 tag
-  ([`a09f88e`](https://github.com/OpenAdaptAI/openadapt-evals/commit/a09f88e9725a11963759462a3dcf148f12f7dee4))
+  ([`92da526`](https://github.com/OpenAdaptAI/openadapt-evals/commit/92da52643e3bc1a698aea2476f91266dd72355c4))
 
 The v0.3.0 tag was on a commit not reachable from HEAD (orphaned by a non-squash merge of PR #27).
   semantic-release walked past it and computed 0.3.0 from v0.2.0, then refused because "0.3.0 has
@@ -1879,7 +1926,7 @@ Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
 
 - **cli**: Fix --task flag concatenation bug and three other issues
   ([#31](https://github.com/OpenAdaptAI/openadapt-evals/pull/31),
-  [`b0e09e9`](https://github.com/OpenAdaptAI/openadapt-evals/commit/b0e09e92aee9159379209fe31867a216c7bdfd52))
+  [`e15bdac`](https://github.com/OpenAdaptAI/openadapt-evals/commit/e15bdacfdb5ccdc5407af5b99c8938534cb0116f))
 
 * fix(cli): fix --task flag concatenation bug and three other issues
 
@@ -1910,7 +1957,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Remove synthetic demos that don't match WAA tasks
   ([#26](https://github.com/OpenAdaptAI/openadapt-evals/pull/26),
-  [`272edcb`](https://github.com/OpenAdaptAI/openadapt-evals/commit/272edcbf3aa07f1bf1729a962b1abaeb983f9956))
+  [`332e386`](https://github.com/OpenAdaptAI/openadapt-evals/commit/332e3862106b666817b73a9b176233166061ea2a))
 
 The synthetic_demos/ directory contained 154 generic template demos (e.g., "Open Notepad", "Navigate
   to example.com") that don't match actual WAA task IDs (UUIDs like
@@ -1934,7 +1981,7 @@ Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com>
 
 - Update CLAUDE.md for unified evaluation CLI
   ([#30](https://github.com/OpenAdaptAI/openadapt-evals/pull/30),
-  [`12b6189`](https://github.com/OpenAdaptAI/openadapt-evals/commit/12b6189330c55832015b3736604c620cd22809cc))
+  [`f4bb419`](https://github.com/OpenAdaptAI/openadapt-evals/commit/f4bb419947579250b1c5856c1cae5df98eb93597))
 
 All VM/pool management now lives in openadapt-evals (migrated from openadapt-ml in PR #29). Update
   CLAUDE.md to reflect:
@@ -1949,7 +1996,7 @@ Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - Migrate evaluation infrastructure from openadapt-ml
   ([#29](https://github.com/OpenAdaptAI/openadapt-evals/pull/29),
-  [`ca791bf`](https://github.com/OpenAdaptAI/openadapt-evals/commit/ca791bf859526a6ea62b52b5dafec8af8a5f5ad4))
+  [`00ceb88`](https://github.com/OpenAdaptAI/openadapt-evals/commit/00ceb884b2655546ee90ff92630fc4988bc625b7))
 
 * feat: migrate evaluation infrastructure from openadapt-ml
 
@@ -1977,7 +2024,7 @@ Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
 Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
 
 - **demos**: Add WAA demo recording workflow
-  ([`312f608`](https://github.com/OpenAdaptAI/openadapt-evals/commit/312f6080af658734ec5fdda596c4f9b38af7af30))
+  ([`3d12e6d`](https://github.com/OpenAdaptAI/openadapt-evals/commit/3d12e6d9c73b2b0f6bff1f750d0a9b67b3b5d869))
 
 - Add scripts/record_waa_demos.py for guided demo recording - Auto-installs dependencies
   (openadapt-capture, magic-wormhole) - Shows step-by-step instructions for each task - Supports
@@ -1994,7 +2041,7 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
 - **azure**: Implement Azure ML parallelization for WAA evaluation
   ([#24](https://github.com/OpenAdaptAI/openadapt-evals/pull/24),
-  [`077f339`](https://github.com/OpenAdaptAI/openadapt-evals/commit/077f339408001b9e95f890865897cf95999c2668))
+  [`62b8540`](https://github.com/OpenAdaptAI/openadapt-evals/commit/62b854012588ecf0295f93ebb872a35b0820288a))
 
 * docs: replace aspirational claims with honest placeholders
 
@@ -2143,7 +2190,7 @@ Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com>
 ### Bug Fixes
 
 - **ci**: Remove build_command from semantic-release config
-  ([`ed933f6`](https://github.com/OpenAdaptAI/openadapt-evals/commit/ed933f6c9befea483c76cfb0a3d27c16006bce13))
+  ([`8a54a68`](https://github.com/OpenAdaptAI/openadapt-evals/commit/8a54a68255410e081a2ce28d451abe16d683a9fd))
 
 The python-semantic-release action runs in a Docker container where uv is not available. Let the
   workflow handle building instead.
@@ -2153,7 +2200,7 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 ### Continuous Integration
 
 - Add auto-release workflow
-  ([`d221c19`](https://github.com/OpenAdaptAI/openadapt-evals/commit/d221c19c13dbe3ac0d9f567ac932e6b6c0ae351c))
+  ([`955439e`](https://github.com/OpenAdaptAI/openadapt-evals/commit/955439e9b2b3e7daee24591422216979d7a606c8))
 
 Automatically bumps version and creates tags on PR merge: - feat: minor version bump - fix/perf:
   patch version bump - docs/style/refactor/test/chore/ci/build: patch version bump
@@ -2163,7 +2210,7 @@ Triggers publish.yml which deploys to PyPI.
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
 - Switch to python-semantic-release for automated versioning
-  ([`7ed3de2`](https://github.com/OpenAdaptAI/openadapt-evals/commit/7ed3de237b5a4c481aaa293383a0e753897fea6a))
+  ([`7f6d586`](https://github.com/OpenAdaptAI/openadapt-evals/commit/7f6d586a044a658fb7dc51b017ee7877a9dae18d))
 
 Replaces manual commit parsing with python-semantic-release: - Automatic version bumping based on
   conventional commits - feat: -> minor, fix:/perf: -> patch - Creates GitHub releases automatically
@@ -2189,7 +2236,7 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
 - Update screenshot URLs from feature branch to main
-  ([`65b7c1a`](https://github.com/OpenAdaptAI/openadapt-evals/commit/65b7c1a2d7e06f166fc6efd6f1838a9b68a76f60))
+  ([`4b0940b`](https://github.com/OpenAdaptAI/openadapt-evals/commit/4b0940bedd7a39bec079f750bb813fdb6a6a0782))
 
 The embedded screenshots in README.md were pointing to the old feature/benchmark-viewer-screenshots
   branch which no longer exists after PR #6 was merged. Updated all screenshot URLs to point to the
@@ -2206,7 +2253,7 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
 - Use filename-based GitHub Actions badge URL
   ([#3](https://github.com/OpenAdaptAI/openadapt-evals/pull/3),
-  [`f3280ff`](https://github.com/OpenAdaptAI/openadapt-evals/commit/f3280ffa6a1fc27543ca3869e300b435ee595e57))
+  [`f49b3ab`](https://github.com/OpenAdaptAI/openadapt-evals/commit/f49b3ab75c5a2d96a2b2ae7de0b2652f9904edd0))
 
 The workflow-name-based badge URL was showing "no status" because GitHub requires workflow runs on
   the specified branch. Using the filename-based URL format
@@ -2237,7 +2284,7 @@ This runtime state file is now gitignored and will no longer be tracked.
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
 - **beads**: Initialize task tracking with P0 priorities
-  ([`861b8ae`](https://github.com/OpenAdaptAI/openadapt-evals/commit/861b8ae6e9ccec955fa284d036aff779b7e99849))
+  ([`999bec1`](https://github.com/OpenAdaptAI/openadapt-evals/commit/999bec1fb0e671c994b9e046fd222d6de99892c3))
 
 Added Beads for structured task tracking: - openadapt-evals-c3f: Complete WAA validation (ready) -
   openadapt-evals-0ms: Run 20-50 task evaluation (blocked) - openadapt-evals-5o8: Analyze evaluation
@@ -2246,7 +2293,7 @@ Added Beads for structured task tracking: - openadapt-evals-c3f: Complete WAA va
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
 - **docs**: Simplify CLAUDE.md - remove verbose sections
-  ([`0b9306c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/0b9306cc3d5da052dc7265164bcc691d8113f3c1))
+  ([`11f205a`](https://github.com/OpenAdaptAI/openadapt-evals/commit/11f205a23d451e259ff4a5ecf84a90a711db0cc3))
 
 Removed redundant details that belong in --help or separate docs: - Simplified Recent Improvements
   section - Removed duplicate file listings - Streamlined Quick Start examples
@@ -2256,7 +2303,7 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 ### Continuous Integration
 
 - Remove TestPyPI publishing step
-  ([`bf37489`](https://github.com/OpenAdaptAI/openadapt-evals/commit/bf3748971aa3a93fae3a0bcd6478b0cad8b4054c))
+  ([`2884d36`](https://github.com/OpenAdaptAI/openadapt-evals/commit/2884d36a78763f90f318ce4e797b1071e1782db3))
 
 TestPyPI trusted publishing was not configured, causing CI to fail even though main PyPI publishing
   succeeded. Removing the TestPyPI step since it's not essential for this project.
@@ -2266,7 +2313,7 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 ### Documentation
 
 - Add comprehensive screenshot generation documentation
-  ([`10d9f49`](https://github.com/OpenAdaptAI/openadapt-evals/commit/10d9f49b30425c807cf1b3aed4eebc761adc789b))
+  ([`b86565c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/b86565c546f112a2374a053b3ab73edacb65d002))
 
 - Add SCREENSHOT_TOOLING_REVIEW.md with technical review - Add docs/SCREENSHOT_WORKFLOW.md with
   user-friendly guide - Add 3 example screenshots in docs/screenshots/ - Document all 3 components:
@@ -2282,7 +2329,7 @@ Verified: Existing viewer displays screenshots correctly
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
 - Add RECURRING_ISSUES.md to prevent repeated fixes
-  ([`27fe6d6`](https://github.com/OpenAdaptAI/openadapt-evals/commit/27fe6d612a5755d161119dfc42238cc566133314))
+  ([`ab91a37`](https://github.com/OpenAdaptAI/openadapt-evals/commit/ab91a378f706e7c5cd44fe2a3e2f9f4db5021aff))
 
 Problem: Context compaction causes amnesia - we solve problems then forget solutions.
 
@@ -2305,7 +2352,7 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
 - Reorganize markdown files into docs subdirectories
   ([#18](https://github.com/OpenAdaptAI/openadapt-evals/pull/18),
-  [`d2cc046`](https://github.com/OpenAdaptAI/openadapt-evals/commit/d2cc046cf79a52f569c6f218495f37bc5b42bfb6))
+  [`0f8cb54`](https://github.com/OpenAdaptAI/openadapt-evals/commit/0f8cb549097d950f11e79e338b24961caf4db3d4))
 
 Move existing markdown documentation files into organized subdirectories: - docs/azure/ -
   Azure-related documentation (4 files) - docs/cost/ - Cost tracking and optimization docs (3 files)
@@ -2318,7 +2365,7 @@ Total: 23 files moved, no content changes.
 Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com>
 
 - Update documentation for Azure fix, cost optimization, and screenshot validation
-  ([`378fb75`](https://github.com/OpenAdaptAI/openadapt-evals/commit/378fb758a635f6e780dff4e762bc016f5013b71d))
+  ([`9be548a`](https://github.com/OpenAdaptAI/openadapt-evals/commit/9be548aa5d938451c35f7a5c3f89653262d28790))
 
 Comprehensive documentation updates for v0.2.0 reflecting three major improvements:
 
@@ -2345,7 +2392,7 @@ Key Improvements Documented: - Azure reliability: 0% → 95%+ success rate targe
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
 - Update RECURRING_ISSUES.md with RCA findings
-  ([`cdcb4b0`](https://github.com/OpenAdaptAI/openadapt-evals/commit/cdcb4b008657178d29b8a02ca0a48d4d42585141))
+  ([`20d8399`](https://github.com/OpenAdaptAI/openadapt-evals/commit/20d8399ee02c5cbf447f25b7c6ef71ece0f1b00a))
 
 Root cause identified: VERSION mismatch (Dockerfile=11e, CLI=11) Added correct fix checklist and
   prior attempt history.
@@ -2370,7 +2417,7 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
 - Add benchmark viewer screenshots and auto-screenshot tool (P1 features)
   ([#6](https://github.com/OpenAdaptAI/openadapt-evals/pull/6),
-  [`ca8761c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/ca8761c8ae55c4730942299fbb3be87e2335ea65))
+  [`83a8dff`](https://github.com/OpenAdaptAI/openadapt-evals/commit/83a8dffd1fb24dbe2361f5e9c4a06ed7363ec51a))
 
 * feat: Add benchmark viewer screenshots and auto-screenshot tool
 
@@ -2529,7 +2576,7 @@ Add a sample demo library containing text-based demonstrations of common Windows
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
 - Consolidate benchmark infrastructure (v0.1.1)
-  ([`212725c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/212725ca9a702f756f2c36d0a6e263c1afc53372))
+  ([`61ddc86`](https://github.com/OpenAdaptAI/openadapt-evals/commit/61ddc868e36a0408e3fecff7feda4cb8b2c2a926))
 
 * feat: consolidate benchmark infrastructure
 
@@ -2617,7 +2664,7 @@ Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com>
 
 - P0 fixes - API parsing and evaluate endpoint
   ([#1](https://github.com/OpenAdaptAI/openadapt-evals/pull/1),
-  [`215cfd3`](https://github.com/OpenAdaptAI/openadapt-evals/commit/215cfd33eebf5b7d68c435a2d00dd976244d561f))
+  [`922debc`](https://github.com/OpenAdaptAI/openadapt-evals/commit/922debc507e7ff751937c85aa4b5018102eaa75c))
 
 - Add robust API response parsing with 6 strategies (50% crash rate → 0%) - Add /evaluate endpoint
   for WAA server integration - Add retry logic with clarification prompt on parse failure - Add loop
@@ -2644,7 +2691,7 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 
 - **dashboard**: Add Azure monitoring dashboard with real-time costs
   ([#20](https://github.com/OpenAdaptAI/openadapt-evals/pull/20),
-  [`cbe26c9`](https://github.com/OpenAdaptAI/openadapt-evals/commit/cbe26c992455a84abfa96410dcd0be1f4482f4f0))
+  [`0ae212c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/0ae212c709e45fc0113517e2e15340615f8df33d))
 
 * feat(dashboard): add Azure monitoring dashboard with real-time costs
 
@@ -2671,7 +2718,7 @@ Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com>
 
 - **screenshots**: Add simple screenshot validation (~60 lines)
   ([#19](https://github.com/OpenAdaptAI/openadapt-evals/pull/19),
-  [`cb831ab`](https://github.com/OpenAdaptAI/openadapt-evals/commit/cb831ab98472f5eca441f70c1ae48e8c779a8bcc))
+  [`e4969fc`](https://github.com/OpenAdaptAI/openadapt-evals/commit/e4969fc89ab6a03058024a4e76dd4e7518eecdbf))
 
 Adds a simple validation module to detect blank/idle screenshots using pixel variance analysis.
   Includes validate_screenshot(), validate_directory(), and summarize_results() functions.
@@ -2680,7 +2727,7 @@ Co-authored-by: Claude Opus 4.5 <noreply@anthropic.com>
 
 - **wandb**: Add Weights & Biases integration with fixtures and reports
   ([#21](https://github.com/OpenAdaptAI/openadapt-evals/pull/21),
-  [`44697a1`](https://github.com/OpenAdaptAI/openadapt-evals/commit/44697a1c8c32c0a1dd23cca32df0dac84e8b8b14))
+  [`af16262`](https://github.com/OpenAdaptAI/openadapt-evals/commit/af16262feb982e0b2098d9d0d6a0b77a7df58a99))
 
 * docs: add WAA integration guide for vanilla approach
 
