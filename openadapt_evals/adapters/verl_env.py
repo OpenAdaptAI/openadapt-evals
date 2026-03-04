@@ -31,7 +31,8 @@ Usage with VAGEN training:
               max_turns: 15
               response_length_per_turn: 512
               config:
-                server_url: "http://localhost:5001"
+                server_url: "http://localhost:5000"
+                evaluate_url: "http://localhost:5001"
                 task_id: "<WAA_UUID>"
 
 Usage standalone (without VAGEN):

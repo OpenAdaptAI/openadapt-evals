@@ -5,7 +5,7 @@
 #
 # Prerequisites:
 #   1. WAA server reachable (via SSH tunnel if needed):
-#        ssh -N -L 5000:localhost:5000 -L 5001:localhost:5050 azureuser@<VM_IP>
+#        ssh -N -L 5000:localhost:5000 -L 5001:localhost:5051 azureuser@<VM_IP>
 #      Port 5000: WAA Flask API (/screenshot, /execute_windows)
 #      Port 5001: evaluate_server (/setup, /evaluate) via socat bridge from container :5050
 #   2. VAGEN installed on GPU VM (see scripts/setup_gpu_training.sh)
