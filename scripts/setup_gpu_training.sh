@@ -27,7 +27,7 @@ FLASH_ATTN_VERSION="2.7.4.post1"
 # and GymAgentLoop that we integrate with.
 VERL_AGENT_REPO="https://github.com/RAGEN-AI/VAGEN.git"
 OPENADAPT_EVALS_REPO="https://github.com/OpenAdaptAI/openadapt-evals.git"
-OPENADAPT_EVALS_BRANCH="main"
+OPENADAPT_EVALS_BRANCH="${OPENADAPT_EVALS_BRANCH:-main}"
 
 log() { echo "=== [$(date '+%H:%M:%S')] $*"; }
 
@@ -51,6 +51,11 @@ else
     log "Miniconda already installed"
 fi
 eval "$("$HOME/miniconda3/bin/conda" shell.bash hook)"
+
+# --- Accept conda TOS (required since Miniconda 2025) ---
+log "Accepting conda Terms of Service..."
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main 2>/dev/null || true
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r 2>/dev/null || true
 
 # --- Create conda env ---
 if conda env list | grep -q "^${CONDA_ENV} "; then
