@@ -1,19 +1,11 @@
 GOAL: In a new sheet with 4 headers "Year", "CA changes", "FA changes", and "OA changes", calculate the annual changes for the Current Assets, Fixed Assets, and Other Assets columns
 
 PLAN:
-1. Create a new sheet for calculating and displaying annual changes in asset categories
-2. Create a header row for organizing annual asset changes
-3. Begin entering annual data by specifying the first year in the "Year" column
-4. Calculate the annual percentage change for Current Assets using data from Sheet1
-5. Confirm and apply the formula entered in cell B2 for calculating annual changes in Current Assets
-6. Copy the formula in B2 down the column so that annual changes for "CA changes" are calculated for each year
-7. Calculate the annual change for Fixed Assets as a percentage using data from Sheet1
-8. Confirm or complete the entry of a formula or value in the spreadsheet
-9. Apply the formula in C2 to the rest of the rows in the "CA changes" column for consistent annual change calculations
-10. Calculate the annual percentage change for the "OA changes" column using data from Sheet1
-11. Compute the annual percentage change for Other Assets in the new sheet
-12. Copy the formula in D2 down the "OA changes" column for all relevant rows
-13. Select the range of calculated annual changes and their corresponding years for further formatting or analysis
+1. Create a new sheet in the workbook for annual asset changes
+2. Set up headers in row 1 (Year, CA changes, FA changes, OA changes)
+3. Enter years 2015-2019 in column A
+4. For each asset column (B=CA, C=FA, D=OA), enter the percentage-change formula and drag-fill down for all years
+5. Select the data range and format as percentage
 
 REFERENCE TRAJECTORY (for disambiguation -- adapt actions to your actual screen):
 
