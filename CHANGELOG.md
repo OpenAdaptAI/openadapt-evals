@@ -1,6 +1,36 @@
 # CHANGELOG
 
 
+## v0.30.2 (2026-03-04)
+
+### Bug Fixes
+
+- Condense multilevel demo PLAN from 13 to 5 phases
+  ([`7a63fa1`](https://github.com/OpenAdaptAI/openadapt-evals/commit/7a63fa134de5a2602341a898d8606e89112f0857))
+
+Research (ShowUI-Aloha) recommends 3-7 high-level phases in the PLAN section. The rule-based
+  generator produced 13 granular steps (one per demo action), which defeats the purpose of having an
+  abstract plan.
+
+Condensed to 5 phases: create sheet, headers, years, formulas+fill, format as percentage.
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+- Prefer multilevel demo files over plain .txt in eval scripts
+  ([#103](https://github.com/OpenAdaptAI/openadapt-evals/pull/103),
+  [`eb9bc3e`](https://github.com/OpenAdaptAI/openadapt-evals/commit/eb9bc3eeff06c58ea359eb2c4e56e76365b5b561))
+
+When both {task_id}_multilevel.txt and {task_id}.txt exist in the demo directory, all demo file
+  lookup paths now prefer the multilevel (Option D) format. Falls back to plain .txt, then .json for
+  backwards compatibility.
+
+Files changed: - scripts/run_dc_eval.py - scripts/run_eval_pipeline.py -
+  openadapt_evals/benchmarks/cli.py (_suite_find_demo) -
+  openadapt_evals/benchmarks/comparison_viewer.py
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.30.1 (2026-03-04)
 
 ### Bug Fixes
