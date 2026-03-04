@@ -23,12 +23,17 @@ GPU VM (AWS g5.xlarge)                    WAA VM (Azure waa-pool-00)
 |  +- WAADesktopEnv         |   HTTP      |  +- QEMU (Windows 11)    |
 |  +- RLEnvironment         | ---------> |     +- WAA Flask API      |
 |  +- WAALiveAdapter        |  :5000     |     |  /screenshot        |
-|                           |  :5001     |     |  /execute_windows   |
+|                           |  :5051*    |     |  /execute_windows   |
 |  PyTorch 2.8.0            |             |     +- evaluate_server   |
 |  vLLM 0.11.0              |             |        /setup            |
 |  Ray 2.54.0               |             |        /evaluate         |
 +---------------------------+             +---------------------------+
       3.236.121.184                            172.173.66.131
+
+* evaluate_server.py listens on port 5050 inside the Docker container.
+  Docker port forwarding for 5050 is broken by QEMU NET_ADMIN, so a
+  socat/nsenter UNIX socket bridge exposes it as port 5051 on the VM host.
+  See architecture.md for details.
 ```
 
 See [architecture.md](architecture.md) for the proxy chain deep dive.
@@ -64,18 +69,20 @@ Full version listing: [artifacts/gpu_vm_stack_versions.txt](artifacts/gpu_vm_sta
 
 ## Validation Steps and Results
 
-| # | Test                                    | Result |
-|---|----------------------------------------|--------|
-| 1 | GPU detected (`nvidia-smi`)            | PASS   |
-| 2 | Miniconda + conda env creation         | PASS (after TOS fix) |
-| 3 | vLLM 0.11.0 install + import           | PASS   |
-| 4 | PyTorch 2.8.0 CUDA available           | PASS   |
-| 5 | VAGEN install + env registry load      | PASS   |
-| 6 | WAA Flask API reachable (port 5000)    | PASS   |
-| 7 | evaluate_server reachable (port 5001)  | PASS   |
-| 8 | WAADesktopEnv reset + screenshot       | PASS   |
-| 9 | WAALiveAdapter execute action          | PASS   |
-| 10 | Full RLEnvironment step loop          | PASS   |
+| # | Test                                     | Artifact Stage | Result |
+|---|------------------------------------------|----------------|--------|
+| 1 | GPU detected (`nvidia-smi`)              | Stage 1        | PASS   |
+| 2 | Miniconda + conda env creation           | Stages 2-3b    | PASS (after TOS fix) |
+| 3 | V100 -> A10G instance swap               | Stage 4        | PASS   |
+| 4 | vLLM 0.11.0 install + import             | Stage 5        | PASS   |
+| 5 | PyTorch 2.8.0 CUDA available             | Stage 6        | PASS   |
+| 6 | VAGEN install + env registry load        | Stage 7*       | PASS   |
+| 7 | Docker port 5050 socat bridge            | Stage 7        | PASS   |
+| 8 | WAADesktopEnv reset + screenshot         | Stage 8        | PASS   |
+| 9 | WAALiveAdapter execute action            | Stage 8        | PASS   |
+| 10 | Full RLEnvironment step loop            | Stage 8        | PASS   |
+
+\* VAGEN install output also in [artifacts/vagen_registry_output.txt](artifacts/vagen_registry_output.txt).
 
 ## Issues Discovered
 
@@ -108,6 +115,7 @@ dc1f81f fix: correct is_action_valid logic, scroll_direction, stale refs, and DR
 308cade fix: resolve lint errors (undefined use_fast, unused imports, f-strings)
 e73df70 fix: add evaluate_url support and E2E validation test
 17c919b fix: use Deep Learning AMI for GPU instances and fix setup issues
+c2555ef docs: add GPU E2E validation report with artifacts
 ```
 
 ## Next Steps

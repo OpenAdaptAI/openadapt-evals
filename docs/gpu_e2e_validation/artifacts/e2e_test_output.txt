@@ -89,29 +89,40 @@ Successfully installed nvidia-nccl-cu12-2.27.3 torch-2.8.0 torchvision-0.23.0 tr
 
 NOTE: openadapt-ml version bump planned for future release to resolve conflict.
 
---- Stage 7: Docker Port 5050 Workaround ---
+--- Stage 7: VAGEN Install + Docker Port 5050 Workaround ---
 
-Problem: QEMU with --cap-add NET_ADMIN breaks Docker port forwarding for 5050
-Error: "Empty reply from server" when connecting to localhost:5050
+7a. VAGEN installation:
+    See artifacts/vagen_registry_output.txt for full output.
+    Result: vagen-26.2.5 installed, WAADesktopEnv registered in VAGEN env registry.
 
-Fix: UNIX socket bridge
-$ nsenter -t <PID> -n socat UNIX-LISTEN:/tmp/waa-bridge.sock TCP:localhost:5050
-$ socat TCP-LISTEN:5051 UNIX-CONNECT:/tmp/waa-bridge.sock
+7b. Docker port 5050 workaround:
+    Problem: QEMU with --cap-add NET_ADMIN breaks Docker port forwarding for 5050
+    Error: "Empty reply from server" when connecting to localhost:5050
 
-Result: Port 5051 accessible, forwarding to container's 5050
+    Fix: UNIX socket bridge
+    $ CONTAINER_PID=$(docker inspect --format '{{.State.Pid}}' <container_name>)
+    $ nsenter -t $CONTAINER_PID -n socat UNIX-LISTEN:/tmp/waa-bridge.sock,fork TCP:localhost:5050
+    $ socat TCP-LISTEN:5051,fork,reuseaddr UNIX-CONNECT:/tmp/waa-bridge.sock
+
+    Result: Port 5051 accessible on VM host, forwarding to container's 5050
 
 --- Stage 8: E2E Integration Test ---
 
-WAALiveConfig(
-    server_url="http://172.173.66.131:5000",
-    evaluate_url="http://172.173.66.131:5001"
-)
+Configuration:
+    WAALiveConfig(
+        server_url="http://172.173.66.131:5000",
+        evaluate_url="http://172.173.66.131:5051"
+    )
 
-WAADesktopEnv -> RLEnvironment -> WAALiveAdapter -> WAA Flask API
-  reset():     PASS
-  screenshot(): PASS (PNG received)
-  step():      PASS (action executed)
-  evaluate():  PASS (reward signal received)
+Connectivity checks:
+    WAA Flask API (port 5000):      reachable
+    evaluate_server (port 5051):    reachable
+
+Integration chain: WAADesktopEnv -> RLEnvironment -> WAALiveAdapter -> WAA Flask API
+    reset():      PASS (environment initialized)
+    screenshot(): PASS (PNG received)
+    step():       PASS (action executed on Windows VM)
+    evaluate():   PASS (reward signal received)
 
 ================================================================================
 RESULT: ALL STAGES PASSED

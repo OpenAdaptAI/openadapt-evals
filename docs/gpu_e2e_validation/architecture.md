@@ -10,23 +10,27 @@ The WAA VM exposes two independent services. Both must be reachable from the
 GPU VM for the RL training loop to function.
 
 ```
-Port 5000: WAA Flask API (WAALiveAdapter)
+Port 5000 (host): WAA Flask API (WAALiveAdapter)
   Endpoints:
-    POST /screenshot     -> returns current Windows screen (PNG)
+    POST /screenshot      -> returns current Windows screen (PNG)
     POST /execute_windows -> executes pyautogui action on Windows VM
+  Note: Standard Docker port forwarding (-p 5000:5000). Works normally.
 
-Port 5001: evaluate_server.py (WAADesktopEnv)
+Port 5051 (host) -> 5050 (container): evaluate_server.py (WAADesktopEnv)
   Endpoints:
-    POST /setup          -> initialize task environment
-    POST /evaluate       -> run evaluation after agent actions
+    POST /setup           -> initialize task environment
+    POST /evaluate        -> run evaluation after agent actions
+  Note: Docker port forwarding for 5050 is broken by QEMU NET_ADMIN.
+        Exposed via socat/nsenter UNIX socket bridge as 5051 on the host.
+        See "UNIX Socket Bridge" section below.
 ```
 
 The GPU VM's `WAALiveConfig` holds both URLs:
 
 ```python
 WAALiveConfig(
-    server_url="http://172.173.66.131:5000",      # Flask API
-    evaluate_url="http://172.173.66.131:5001",     # evaluate_server.py
+    server_url="http://172.173.66.131:5000",       # Flask API (direct Docker port forward)
+    evaluate_url="http://172.173.66.131:5051",     # evaluate_server.py (via socat bridge)
 )
 ```
 
@@ -98,6 +102,10 @@ config = WAALiveConfig(
 )
 ```
 
+> **Note**: During the initial validation the evaluate port was configured as
+> 5001 in some test scripts. The canonical mapping is **5051** (host) ->
+> **5050** (container) via the socat bridge described above.
+
 ### Recovery After Container Restart
 
 The socat processes and UNIX socket do not survive a container restart. After
@@ -126,27 +134,31 @@ config = WAALiveConfig(
 )
 ```
 
+> **Tip**: When using SSH tunnels, the socat bridge is still required on the
+> WAA VM host — SSH tunnels forward traffic to the host ports, not directly
+> into the Docker container.
+
 ## Full Data Flow
 
 ```
 1. RLEnvironment.reset()
    -> WAADesktopEnv.reset()
-   -> POST evaluate_url/setup  (port 5001/5051)
+   -> POST evaluate_url/setup  (host :5051 -> container :5050)
    -> evaluate_server.py initializes task
 
 2. RLEnvironment.step(action)
    -> WAALiveAdapter.execute(action)
-   -> POST server_url/execute_windows  (port 5000)
+   -> POST server_url/execute_windows  (host :5000 -> container :5000)
    -> pyautogui executes action in Windows VM
 
 3. RLEnvironment.observe()
    -> WAALiveAdapter.screenshot()
-   -> POST server_url/screenshot  (port 5000)
+   -> POST server_url/screenshot  (host :5000 -> container :5000)
    -> returns PNG of current Windows screen
 
 4. RLEnvironment.evaluate()
    -> WAADesktopEnv.evaluate()
-   -> POST evaluate_url/evaluate  (port 5001/5051)
+   -> POST evaluate_url/evaluate  (host :5051 -> container :5050)
    -> evaluate_server.py checks task completion
    -> returns reward signal
 ```
@@ -156,8 +168,7 @@ config = WAALiveConfig(
 - **Never `az vm restart` for SSH issues** — it kills the QEMU Windows
   session, forcing a 35+ minute cold boot. Retry SSH instead.
 - **Port 5050 vs 5051**: evaluate_server.py listens on 5050 _inside_ the
-  container. The socat bridge exposes it as 5051 on the host. Some configs
-  use 5001 instead of 5051 — either works as long as the socat chain maps
-  correctly.
+  container. The socat bridge exposes it as 5051 on the host. The canonical
+  `evaluate_url` port is **5051**.
 - **First WAA boot takes 35+ min** (fresh Windows install). Subsequent
   resumes from deallocated state take ~1 min.
