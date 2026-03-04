@@ -1407,3 +1407,178 @@ class TestGoalVerificationContext:
 
         # No step summary noise when everything is fully verified
         assert "STEP VERIFICATION SUMMARY" not in goal_text_arg
+
+
+# ---------------------------------------------------------------------------
+# Integration tests: agent plan-progress suppression under external control
+# ---------------------------------------------------------------------------
+
+
+class TestAgentPlanProgressSuppression:
+    """Tests that the agent suppresses its own stale plan progress injection
+    when _external_step_control is True (set by DemoController).
+
+    This addresses the drift issue where the agent and controller could
+    show conflicting step progress to the Claude model.
+    """
+
+    def test_agent_does_not_inject_stale_progress_under_external_control(self):
+        """When _external_step_control=True, the agent should NOT inject
+        plan progress text from its own (stale) _plan_steps into messages.
+
+        The controller provides its own step-aware prompt via the augmented
+        task instruction.
+        """
+        from openadapt_evals.agents.claude_computer_use_agent import (
+            ClaudeComputerUseAgent,
+        )
+
+        agent = ClaudeComputerUseAgent.__new__(ClaudeComputerUseAgent)
+        # Minimally initialize the fields needed for _build_initial_messages
+        agent._plan_steps = [
+            {"step_num": 1, "text": "Create sheet", "status": "in_progress"},
+            {"step_num": 2, "text": "Type headers", "status": "pending"},
+        ]
+        agent._goal = "Test goal"
+        agent._trajectory = []
+        agent._step_count = 1
+        agent.demo = "demo text"
+        agent._external_step_control = True
+
+        # Call the first message builder
+        messages = agent._build_initial_messages(
+            instruction="Controller says: do step 3",
+            screenshot_b64="fake_b64",
+        )
+
+        # The text should NOT contain plan progress from the agent's stale state
+        msg_text = messages[0]["content"][0]["text"]
+        assert "PLAN PROGRESS" not in msg_text
+        assert "Create sheet" not in msg_text
+        # It should contain the controller's instruction directly
+        assert "Controller says: do step 3" in msg_text
+
+    def test_agent_injects_progress_without_external_control(self):
+        """When _external_step_control=False (default), the agent should
+        inject plan progress normally.
+        """
+        from openadapt_evals.agents.claude_computer_use_agent import (
+            ClaudeComputerUseAgent,
+        )
+
+        agent = ClaudeComputerUseAgent.__new__(ClaudeComputerUseAgent)
+        agent._plan_steps = [
+            {"step_num": 1, "text": "Create sheet", "status": "in_progress"},
+            {"step_num": 2, "text": "Type headers", "status": "pending"},
+        ]
+        agent._goal = "Test goal"
+        agent._trajectory = []
+        agent._step_count = 1
+        agent.demo = "demo text"
+        agent._external_step_control = False
+
+        messages = agent._build_initial_messages(
+            instruction="Do the task",
+            screenshot_b64="fake_b64",
+        )
+
+        msg_text = messages[0]["content"][0]["text"]
+        assert "PLAN PROGRESS" in msg_text or "structured plan" in msg_text
+        assert "Create sheet" in msg_text
+
+    @patch("openadapt_evals.demo_controller.verify_goal_completion")
+    @patch("openadapt_evals.demo_controller.verify_step")
+    def test_controller_sets_external_control_preventing_stale_progress(
+        self, mock_verify_step, mock_verify_goal
+    ):
+        """End-to-end: DemoController sets _external_step_control on agent,
+        which prevents the agent from injecting its own stale plan progress.
+
+        This is the integration test that verifies all three components work
+        together: controller init -> flag set -> agent suppresses progress.
+        """
+        mock_agent = MagicMock()
+        mock_agent._external_step_control = False
+        mock_adapter = MagicMock()
+
+        mock_agent.act.return_value = _make_click_action()
+        mock_adapter.reset.return_value = _make_obs()
+        mock_adapter.step.return_value = (_make_obs(), False, {})
+        mock_adapter.evaluate.return_value = BenchmarkResult(
+            task_id="test-task-001", success=True, score=1.0
+        )
+
+        controller = DemoController(
+            agent=mock_agent,
+            adapter=mock_adapter,
+            demo_text=SAMPLE_DEMO,
+        )
+
+        # Verify the flag was set
+        assert mock_agent._external_step_control is True
+
+        mock_verify_step.return_value = _make_verified()
+        mock_verify_goal.return_value = _make_goal_verified()
+
+        task = _make_task()
+        controller.execute(task, max_steps=30)
+
+        # Verify that the augmented task passed to agent.act() contains
+        # the controller's step prompt, not the agent's stale progress
+        assert mock_agent.act.call_count >= 3
+        for call in mock_agent.act.call_args_list:
+            augmented_task = call.args[1]  # second arg is task
+            # The controller's prompt contains these markers
+            assert "GOAL:" in augmented_task.instruction
+            assert "YOUR CURRENT TASK:" in augmented_task.instruction
+
+    @patch("openadapt_evals.demo_controller.verify_goal_completion")
+    @patch("openadapt_evals.demo_controller.verify_step")
+    def test_done_override_handled_by_controller_not_agent(
+        self, mock_verify_step, mock_verify_goal
+    ):
+        """When the agent returns 'done' prematurely, the CONTROLLER should
+        handle the override (not the agent's internal done-override logic).
+
+        With _external_step_control=True, the agent's done-override should
+        be skipped, allowing the controller to manage it.
+        """
+        mock_agent = MagicMock()
+        mock_agent._external_step_control = False
+        mock_adapter = MagicMock()
+
+        # Agent says done on first call, then gives click actions
+        mock_agent.act.side_effect = [
+            _make_done_action(),    # Step 1: agent says done prematurely
+            _make_click_action(),   # Step 2 (after controller override)
+            _make_click_action(),   # Step 3
+        ]
+        mock_adapter.reset.return_value = _make_obs()
+        mock_adapter.step.return_value = (_make_obs(), False, {})
+        mock_adapter.evaluate.return_value = BenchmarkResult(
+            task_id="test-task-001", success=True, score=1.0
+        )
+
+        controller = DemoController(
+            agent=mock_agent,
+            adapter=mock_adapter,
+            demo_text=SAMPLE_DEMO,
+        )
+
+        # The controller should have set the flag
+        assert mock_agent._external_step_control is True
+
+        mock_verify_step.side_effect = [
+            _make_verified(),  # Step 2
+            _make_verified(),  # Step 3
+        ]
+        mock_verify_goal.return_value = _make_goal_verified()
+
+        task = _make_task()
+        result = controller.execute(task, max_steps=30)
+
+        # Step 1 was force-marked done by the controller's override
+        assert controller.plan_state.steps[0].status == "done"
+        # Steps 2 and 3 completed normally
+        assert controller.plan_state.steps[1].status == "done"
+        assert controller.plan_state.steps[2].status == "done"

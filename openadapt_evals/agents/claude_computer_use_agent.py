@@ -429,8 +429,12 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
                     screenshot_b64, self._last_tool_use_id
                 )
                 content: list[dict[str, Any]] = [tool_result]
-                # Re-inject demo at every step so it doesn't drift out of context
-                if self._plan_steps:
+                # Re-inject demo at every step so it doesn't drift out of context.
+                # When _external_step_control is True the DemoController provides
+                # its own step-aware prompt via the augmented task instruction, so
+                # skip injecting the agent's (stale) plan progress to avoid
+                # conflicting step-tracking signals.
+                if self._plan_steps and not self._external_step_control:
                     # Multi-level demo: inject dynamic plan progress
                     progress_text = _build_plan_progress_text(
                         self._goal,
@@ -445,7 +449,7 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
                             f"\n---\n{progress_text}\n---"
                         ),
                     })
-                elif self.demo:
+                elif self.demo and not self._external_step_control:
                     # Non-multilevel demo: inject static text
                     content.append({
                         "type": "text",
@@ -515,8 +519,11 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
         """
         content_parts: list[dict[str, Any]] = []
 
-        # Build text prompt
-        if self._plan_steps:
+        # Build text prompt.
+        # When _external_step_control is True the DemoController supplies its
+        # own step-aware instruction, so we skip injecting the agent's
+        # (potentially stale) plan progress to avoid conflicting signals.
+        if self._plan_steps and not self._external_step_control:
             # Multi-level demo: use structured plan progress
             progress_text = _build_plan_progress_text(
                 self._goal,
@@ -529,7 +536,7 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
                 f"{progress_text}\n\n"
                 f"Now complete this task: {instruction}"
             )
-        elif self.demo:
+        elif self.demo and not self._external_step_control:
             text = (
                 f"Here is a demonstration of a similar completed task:\n\n"
                 f"{self.demo}\n\n"
@@ -645,8 +652,15 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
         # No tool_use block — Claude considers task complete
         text_parts = [b.text for b in response.content if hasattr(b, "text")]
 
-        # Check for premature done when plan steps remain
-        if self._plan_steps and self._has_remaining_plan_steps():
+        # Check for premature done when plan steps remain.
+        # When _external_step_control is True the DemoController handles
+        # done-override logic, so the agent should not also override based
+        # on its own (stale) plan steps.
+        if (
+            self._plan_steps
+            and not self._external_step_control
+            and self._has_remaining_plan_steps()
+        ):
             if self._consecutive_done_overrides < self.MAX_DONE_OVERRIDES:
                 self._consecutive_done_overrides += 1
                 remaining = self._get_remaining_step_descriptions()
