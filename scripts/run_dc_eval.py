@@ -265,7 +265,10 @@ def main() -> int:
         if not args.dc_only:
             conditions.append((tid, f"val_zs_{sid}", None))
         if not args.zs_only:
-            demo_path = demo_dir / f"{tid}.txt"
+            # Prefer multilevel demo (Option D format) over plain .txt
+            demo_path = demo_dir / f"{tid}_multilevel.txt"
+            if not demo_path.exists():
+                demo_path = demo_dir / f"{tid}.txt"
             if not demo_path.exists():
                 demo_path = demo_dir / f"{tid}.json"
             if not demo_path.exists():
