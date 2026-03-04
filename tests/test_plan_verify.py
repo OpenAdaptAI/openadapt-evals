@@ -622,6 +622,10 @@ class TestFalseNegativeRegressions:
 
     These verify that the updated prompts and status model correctly handle
     cases where the old verifier would produce false negatives.
+
+    Note: These tests validate the parsing pipeline, not the VLM's actual
+    response to the new prompts. Live eval is needed to validate prompt
+    effectiveness.
     """
 
     # -- Scenario 1: Header typed correctly, cursor moved after entry ------

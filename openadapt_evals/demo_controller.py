@@ -159,6 +159,8 @@ class DemoController:
         # step progression is driven exclusively by VLM verification here
         # in the controller.  This prevents drift between the agent's
         # keyword-based heuristic and the controller's verifier.
+        # hasattr works correctly for real agents; MagicMock auto-creates attrs
+        # but that's fine since we're setting the value anyway
         if hasattr(agent, "_external_step_control"):
             agent._external_step_control = True
 

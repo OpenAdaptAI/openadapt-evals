@@ -94,6 +94,7 @@ all = [
 ]
 test = [
     "anthropic>=0.76.0",
+    "flask>=3.0.0",
 ]
 
 [project.scripts]

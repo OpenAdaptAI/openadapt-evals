@@ -362,6 +362,8 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
 
     def reset(self) -> None:
         """Reset agent state between episodes."""
+        # Note: _external_step_control is not reset here because the controller
+        # that set it persists across resets
         self._messages = []
         self._step_count = 0
         self._last_tool_use_id = None
