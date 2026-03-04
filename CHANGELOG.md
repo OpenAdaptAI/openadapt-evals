@@ -1,6 +1,30 @@
 # CHANGELOG
 
 
+## v0.31.0 (2026-03-04)
+
+### Documentation
+
+- Update AWS nested virtualization info for Feb 2026 announcement
+  ([`845f8a4`](https://github.com/OpenAdaptAI/openadapt-evals/commit/845f8a4048b87ea8d7d3de6249539f438ab0c29d))
+
+AWS now supports nested virt on C8i/M8i/R8i (Intel Xeon 6) instances from ~$0.19/hr. GPU families
+  (g5, g6) still require metal instances.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+### Features
+
+- Add spot instance support to AWS VM creation
+  ([`6f3b261`](https://github.com/OpenAdaptAI/openadapt-evals/commit/6f3b2619a8a381009cd0d14d24a1b579032fc51c))
+
+Add spot=True parameter to AWSVMManager.create_vm() which sets InstanceMarketOptions for one-time
+  spot pricing with terminate-on-interruption behavior. Wire --spot flag through train_verl_e2e.py
+  CLI. Saves ~50% on GPU training costs (e.g. g5.xlarge $0.43/hr vs $1.006/hr).
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.30.2 (2026-03-04)
 
 ### Bug Fixes
