@@ -1,6 +1,251 @@
 # CHANGELOG
 
 
+## v0.30.0 (2026-03-04)
+
+### Bug Fixes
+
+- **controller**: Prevent plan step drift and reduce VLM false negatives
+  ([#97](https://github.com/OpenAdaptAI/openadapt-evals/pull/97),
+  [`f1f3870`](https://github.com/OpenAdaptAI/openadapt-evals/commit/f1f3870c3d0dd1740b2943b9d25b28b14583e4a4))
+
+* fix(controller): prevent plan step drift and reduce VLM false negatives
+
+Two improvements to the closed-loop demo-conditioned controller:
+
+1. Plan step tracking drift prevention: _advance_plan_steps() now only compares current step vs next
+  step, advancing at most one step per call. Previously, bulk keyword matching could jump 5+ steps
+  on a single action.
+
+2. VLM verification prompt tuning: Added "partially_verified" status for cases where the core
+  outcome is achieved but with minor deviations (cursor position, formatting). Rewrote all
+  verification prompts to be outcome-focused, reducing false negatives from live eval scenarios.
+
+Adds 68 new tests (8 drift prevention + 21 VLM prompt + 9 false-negative regressions + 30 existing
+  test updates). All 147 controller tests pass.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* docs(cost): add LLM agent economics analysis
+
+Analyzes unit economics of the closed-loop controller architecture: Claude agent costs, VLM verifier
+  costs, scaling projections, and a three-phase strategy from loop-as-product to
+  trained-model-as-product.
+
+* fix(agent): replace pyautogui.drag() with mouseDown/moveTo/mouseUp
+
+pyautogui.drag() uses relative coordinates that compound with starting position errors, making it
+  unreliable for small targets like LibreOffice fill handles (~3x3 pixels). Replace with explicit
+  mouseDown/moveTo/mouseUp sequence with timing delays for reliable drag operations.
+
+Also adds drag case to _build_pixel_command() for the pixel_action() path.
+
+* fix: prevent heuristic/verifier drift and surface partial steps in goal verification
+
+Three issues addressed:
+
+1. Heuristic/verifier step drift: The agent's keyword-based _advance_plan_steps() heuristic and the
+  DemoController's VLM verifier operated on independent state, allowing them to disagree on which
+  step was current. Fix: add _external_step_control flag to the agent that the DemoController sets
+  at init, making _advance_plan_steps() a no-op when the controller manages step progression via VLM
+  verification.
+
+2. partially_verified invisible to goal verification: When steps were marked partially_verified, the
+  final goal verification pass had no visibility into which steps had partial completions. Fix:
+  _verify_goal() now builds a step verification summary and augments the goal text with it when
+  noteworthy statuses (partially_verified, failed) exist.
+
+3. Missing integration tests: Added TestHeuristicVerifierSync (4 tests) and
+  TestGoalVerificationContext (5 tests) that verify the heuristic is properly disabled under
+  controller management, step advancement is driven by VLM verification, and partial/failed step
+  context reaches goal verification. Also added 2 agent-level tests for _external_step_control
+  behavior.
+
+* fix: suppress stale agent plan progress under external step control
+
+When DemoController sets _external_step_control=True, the agent's internal plan progress injection
+  and done-override logic now become no-ops. This prevents the agent from sending conflicting
+  step-tracking signals to the Claude model (agent says "step 1 in progress" while controller says
+  "step 3 is current").
+
+Three specific suppressions: 1. _build_initial_messages skips plan progress text injection 2.
+  Follow-up messages skip plan progress / demo re-injection 3. Premature "done" override is left to
+  the controller
+
+Adds integration tests exercising agent+controller interaction: - Agent suppresses progress under
+  external control - Agent injects progress normally without external control - Controller's
+  augmented task instruction reaches the agent - Done override handled by controller, not agent
+
+* fix(adapter): ensure target app is focused after task setup
+
+After WAA setup (close_all → verify_apps → download → open), the target application may be behind
+  other windows, still loading, or obscured by notifications. This wastes 6+ agent steps recovering.
+
+Add _ensure_app_focused() with multi-strategy approach: - Maps task related_apps to window title
+  patterns - Uses WAA /setup/activate_window endpoint (same as WAA postconfig) - Falls back to
+  Alt+Tab - Retries 3x with increasing delays (2s, 3s, 5s) - Verifies foreground window title via
+  pygetwindow on VM - Runs during reset(), does NOT count against agent step budget
+
+Also adds _APP_WINDOW_PATTERNS mapping, _get_expected_window_patterns(),
+  _check_foreground_matches(), and _normalize_app_name() helpers.
+
+* docs: add systematic failure mode analysis and training strategy
+
+Comprehensive analysis of GUI agent failure modes with taxonomy, recording system design, training
+  viability assessment, and prioritized action plan. Key findings:
+
+- 4-category taxonomy: Environment, Agent Planning, Grounding, Verifier - Existing
+  ExecutionTraceCollector needs only minor extensions - SFT on 50-100 corrected trajectories
+  expected 10-30pp improvement - Deterministic infrastructure fixes should come first (Tier 1)
+
+* fix: address PR #97 review comments with clarifying comments and test dep
+
+- Add comment in reset() explaining why _external_step_control is not reset - Add comment on hasattr
+  guard explaining MagicMock behavior is acceptable - Add docstring note in
+  TestFalseNegativeRegressions about VLM response limitation - Add flask to test
+  optional-dependencies for CI coverage
+
+---------
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+### Features
+
+- Add GPU training automation for verl-agent E2E workflow
+  ([#87](https://github.com/OpenAdaptAI/openadapt-evals/pull/87),
+  [`da17355`](https://github.com/OpenAdaptAI/openadapt-evals/commit/da173553c138ba6c818485ce377589e8d6241200))
+
+* feat: add GPU training automation for verl-agent E2E workflow
+
+- Add GPU_VM_SIZE_FALLBACKS to azure_vm.py (NC48ads_A100_v4, NC24ads, NC12s_v3) - Add
+  GPU_INSTANCE_TYPE_FALLBACKS to aws_vm.py (p3.8xlarge, g5.12xlarge, p3.2xlarge) - Update
+  find_available_size_and_region(gpu=True) on both providers + protocol - Add
+  scripts/setup_gpu_training.sh: installs conda, vLLM, flash-attn, verl-agent - Add
+  scripts/train_verl_e2e.py: provisions GPU VM, uploads setup, launches training - Add oa-vm
+  gpu-setup and gpu-train CLI commands
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* fix: correct verl-agent Hydra config paths and document integration gap
+
+Validated all 17 Hydra config paths against verl-agent's actual schema (ppo_trainer.yaml +
+  make_envs()). Key fixes:
+
+- env.env_name: use 'waa_desktop' short name, not Python import path (verl-agent uses hardcoded
+  dispatch, not dynamic imports) - Remove env.env_kwargs (doesn't exist), use env.waa.* sub-keys -
+  Add data.train_files/val_files (required parquet, generated via data_preprocess.prepare --mode
+  visual) - Add missing overrides: algorithm.gamma, gpu_memory_utilization, ppo_mini_batch_size,
+  filter_overlong_prompts, test_freq - Add prepare_training_data() and patch_env_manager() steps -
+  Document the EnvironmentManagerBase integration gap in decision doc
+
+* fix: replace EnvironmentManagerBase with VAGEN registry-based env integration
+
+The previous implementation incorrectly assumed verl-agent uses an EnvironmentManagerBase ABC with a
+  hardcoded make_envs() dispatch. Research reveals VAGEN actually uses: - GymImageEnv protocol
+  (which WAADesktopEnv already implements) - YAML-based env registry
+  (vagen/configs/env_registry.yaml) - GymAgentLoop for training-time rollout orchestration
+
+Changes: - Replace patch_env_manager() with register_waa_env() (YAML registry) - Add
+  register_in_vagen() and generate_env_spec() helpers to verl_env.py - Update launch_training() to
+  generate proper VAGEN training config - Fix Integration Gap section in decision doc (no
+  EnvironmentManagerBase) - Update training config YAML with architecture diagram - Add 5 new tests
+  for registration helpers (40 total, all passing) - Export new helpers from adapters/__init__.py
+
+* fix: correct is_action_valid logic, scroll_direction, stale refs, and DRY violation
+
+Review fixes for the GPU training automation branch:
+
+- Fix is_action_valid: was inverted (DONE()→invalid, garbage→valid), now uses regex match on
+  original action string - Fix scroll_direction: SCROLL parsing now populates
+  BenchmarkAction.scroll_direction - Fix stale repo URLs: mll-lab-nu/VAGEN → RAGEN-AI/VAGEN across
+  vendored files and docs - Fix stale branch ref: setup_gpu_training.sh referenced merged spike
+  branch, now uses main - Fix stale repo URL: langfengQ/verl-agent → RAGEN-AI/VAGEN in setup script
+  - Add --recurse-submodules to git clone (verl is a VAGEN submodule) - Remove dead params from
+  register_waa_env() (waa_server, task_id, max_steps) - Deduplicate training command: vm_cli.py now
+  delegates to launch_training() - Update test count in docs: 21 → 40+ - Add 3 new tests for
+  is_action_valid behavior - Add scroll_direction assertion to existing scroll test
+
+All 43 tests pass.
+
+* fix: resolve lint errors (undefined use_fast, unused imports, f-strings)
+
+- Remove undefined `use_fast` guard — always log tried sizes on failure - Remove unused PoolManager
+  import in vm_cli.py - Remove extraneous f-string prefixes - Remove unused boto3 and SSH_OPTS
+  imports in aws_vm.py
+
+* fix: add evaluate_url support and E2E validation test
+
+WAADesktopEnv now correctly separates: - server_url (port 5000): Windows VM Flask API (/screenshot,
+  /execute_windows) - evaluate_url (port 5001): evaluate_server.py (/setup, /evaluate, /probe)
+
+Previously, the single server_url default pointed at 5001 (evaluate server only), which caused 404s
+  for screenshots and action execution.
+
+Also adds scripts/test_verl_env_e2e.py, validated on AWS g5.xlarge (A10G) with UNIX socket bridge
+  proxy chain to Azure WAA VM.
+
+* fix: use Deep Learning AMI for GPU instances and fix setup issues
+
+- Add _find_latest_dl_ami() for GPU VMs (pre-installed NVIDIA drivers + CUDA) - Add gpu param to
+  create_vm() to select DL AMI vs standard Ubuntu - Reorder GPU_INSTANCE_TYPE_FALLBACKS: prefer g5
+  (Ampere/A10G) over p3 (Volta/V100) since OSS NVIDIA driver requires GSP (Turing+) - Make
+  OPENADAPT_EVALS_BRANCH configurable via env var in setup script - Add conda TOS acceptance step
+  (required since Miniconda 2025)
+
+Validated on AWS g5.xlarge with NVIDIA A10G 24GB GPU.
+
+* docs: add GPU E2E validation report with artifacts
+
+Documents the successful end-to-end validation of the verl-agent/VAGEN training pipeline on AWS
+  g5.xlarge (A10G 24GB) connecting to Azure WAA VM. Includes architecture diagrams, proxy chain
+  details, raw test output, version listings, and issues discovered during validation.
+
+* fix: resolve port inconsistencies and add missing context in validation docs
+
+- Standardize evaluate_url port to 5051 (socat bridge) across all docs - Add Artifact Stage column
+  to validation results table mapping tests to raw output - Add docs commit (c2555ef) to PR #87
+  commit list - Clarify 5050 vs 5051 port mapping in architecture diagrams and data flow - Expand
+  e2e_test_output.txt Stage 7/8 with sub-steps matching README table - Add SSH tunnel tip about
+  socat bridge still being required
+
+* fix: clarify uvicorn version discrepancy and complete commit list
+
+- Add note to gpu_vm_stack_versions.txt explaining that the full pip list is from Stage 5 (vLLM
+  install) and uvicorn was later downgraded by VAGEN - Add b7efb4f to the commit list in README.md
+
+* fix: guard flash-attn install for Ampere+ GPUs and validate training data
+
+- Check GPU compute capability before installing flash-attn; V100s (sm_70) don't support Flash
+  Attention 2 (requires sm_80+) and would fail at build or runtime - Add post-preparation validation
+  to prepare_training_data() ensuring the expected parquet files exist and are non-empty, rather
+  than silently proceeding with missing data
+
+* fix: update test to match server_url default port 5000
+
+The generate_env_spec() default server_url is http://localhost:5000 (WAA Flask API port), not 5001.
+  The test expectation was stale.
+
+* fix: split server_url/evaluate_url in training config and CLI args
+
+The two-port WAA architecture uses separate endpoints: - server_url (port 5000): WAA Flask API for
+  screenshots and actions - evaluate_url (port 5001): evaluate_server for setup and evaluate
+
+Previously --waa-server defaulted to port 5001 and was assigned to server_url, conflating the two
+  endpoints. This fixes: - train_verl_e2e.py: --waa-server default 5000, add --evaluate-server -
+  vm_cli.py gpu-train: same CLI arg fixes, pass evaluate_url through - train_waa_vagen.yaml: correct
+  server_url to 5000, add evaluate_url - Fix nested single quotes in register_waa_env (heredoc
+  instead) - Replace fragile sys.path.insert with importlib.util
+
+* fix: correct stale port in verl_env docstring and SSH tunnel comment
+
+- verl_env.py docstring: server_url example 5001 -> 5000, add evaluate_url - train_waa_vagen.yaml:
+  SSH tunnel dest 5050 -> 5051 (socat bridge, not broken Docker port)
+
+---------
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.29.0 (2026-03-03)
 
 ### Documentation
