@@ -370,6 +370,7 @@ class AWSVMManager:
         admin_username: str = "ubuntu",
         image_id: str | None = None,
         gpu: bool = False,
+        spot: bool = False,
     ) -> dict[str, Any]:
         """Create an EC2 instance.
 
@@ -382,6 +383,10 @@ class AWSVMManager:
             image_id: AMI ID. If None, auto-selected based on gpu flag.
             gpu: If True, use the Deep Learning AMI with pre-installed
                 NVIDIA drivers and CUDA. Required for GPU training.
+            spot: If True, request a spot instance for cost savings.
+                The instance will use one-time spot pricing and terminate
+                on interruption. See docs/spot_instance_analysis.md for
+                pricing details and interruption risk.
 
         Returns:
             Dict with at least "publicIpAddress" key.
@@ -409,8 +414,8 @@ class AWSVMManager:
             else:
                 ami_id = self._find_latest_ubuntu_ami(region)
 
-            # Launch instance
-            instances = ec2_resource.create_instances(
+            # Build create_instances kwargs
+            create_kwargs: dict[str, Any] = dict(
                 ImageId=ami_id,
                 InstanceType=size,
                 KeyName=infra["key_name"],
@@ -445,6 +450,21 @@ class AWSVMManager:
                 ],
             )
 
+            if spot:
+                logger.info(
+                    "Requesting spot instance for %s (%s)", name, size
+                )
+                create_kwargs["InstanceMarketOptions"] = {
+                    "MarketType": "spot",
+                    "SpotOptions": {
+                        "SpotInstanceType": "one-time",
+                        "InstanceInterruptionBehavior": "terminate",
+                    },
+                }
+
+            # Launch instance
+            instances = ec2_resource.create_instances(**create_kwargs)
+
             instance = instances[0]
             logger.info(f"Instance {name} ({instance.id}) launching...")
 
@@ -469,8 +489,9 @@ class AWSVMManager:
                 )
                 public_ip = eip["PublicIp"]
 
-            logger.info(f"Instance {name} running at {public_ip}")
-            return {"publicIpAddress": public_ip, "name": name}
+            spot_label = " (spot)" if spot else ""
+            logger.info(f"Instance {name}{spot_label} running at {public_ip}")
+            return {"publicIpAddress": public_ip, "name": name, "spot": spot}
 
         except Exception as e:
             raise RuntimeError(f"EC2 instance creation failed: {e}") from e
