@@ -25,6 +25,7 @@ Example:
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import re
 import time
@@ -263,6 +264,14 @@ class WAALiveConfig:
         waa_examples_path: Path to WAA evaluation_examples_windows directory
             for loading task configs with evaluator specs. If not set, tasks
             are loaded from server or created as minimal placeholders.
+        clean_desktop: If True, applies deterministic desktop policy before
+            task setup (suppresses OneDrive/toast/taskbar noise).
+        force_tray_icons: If True, enforces network/audio tray icons visible
+            via policy keys before task setup.
+        reapply_clean_desktop_each_reset: Re-apply clean desktop policy on
+            every reset instead of once per adapter lifecycle.
+        waa_image_version: Optional pinned WAA image version identifier to
+            record in environment metadata.
     """
 
     server_url: str = "http://localhost:5000"
@@ -274,6 +283,10 @@ class WAALiveConfig:
     action_delay: float = 0.5
     timeout: float = 90.0
     waa_examples_path: str | None = None
+    clean_desktop: bool = False
+    force_tray_icons: bool = False
+    reapply_clean_desktop_each_reset: bool = False
+    waa_image_version: str | None = None
 
 
 class WAALiveAdapter(BenchmarkAdapter):
@@ -298,6 +311,8 @@ class WAALiveAdapter(BenchmarkAdapter):
         self._current_screenshot: bytes | None = None
         self._actions: list[BenchmarkAction] = []
         self._actual_screen_size: tuple[int, int] | None = None
+        self._clean_desktop_applied = False
+        self._environment_profile: dict[str, Any] = {}
 
     @property
     def name(self) -> str:
@@ -313,6 +328,10 @@ class WAALiveAdapter(BenchmarkAdapter):
     def supports_parallel(self) -> bool:
         """Whether parallel execution is supported."""
         return False  # Single VM for now
+
+    def get_environment_profile(self) -> dict[str, Any]:
+        """Return the last captured environment profile for this adapter."""
+        return dict(self._environment_profile)
 
     def check_connection(self) -> bool:
         """Check if WAA server is reachable.
@@ -524,8 +543,12 @@ class WAALiveAdapter(BenchmarkAdapter):
         except Exception as e:
             logger.warning(f"Failed to close windows: {e}")
 
-        # Dismiss system notifications (OneDrive, etc.) that persist through close_all
-        self._dismiss_notifications(requests)
+        # Optionally apply deterministic desktop policy before task setup.
+        if self.config.clean_desktop or self.config.force_tray_icons:
+            self._apply_clean_desktop_policy(requests)
+        else:
+            # Best-effort cleanup even when full clean policy is disabled.
+            self._dismiss_notifications(requests)
 
         # If task has setup commands in raw_config, execute them
         if task.raw_config:
@@ -1357,30 +1380,189 @@ class WAALiveAdapter(BenchmarkAdapter):
         are not closeable via close_all (they're system toasts, not windows).
         Kill the notification processes and dismiss via keyboard.
         """
-        evaluate_base = self.config.evaluate_url or self.config.server_url
-        # Kill OneDrive and related notification processes
         commands = [
             "taskkill /F /IM OneDrive.exe /T",
             "taskkill /F /IM OneDriveStandaloneUpdater.exe /T",
-            # Dismiss any remaining toast notifications via Action Center
+            "taskkill /F /IM ApplicationFrameHost.exe /T",
+            # Open/close action center to dismiss any currently surfaced toast.
             (
-                "powershell -Command \""
-                "Get-Process -Name 'ShellExperienceHost' -ErrorAction SilentlyContinue | "
-                "ForEach-Object { $_.CloseMainWindow() }\""
+                "python -c \""
+                "import pyautogui; "
+                "pyautogui.hotkey('win','a'); "
+                "pyautogui.press('esc')"
+                "\""
             ),
         ]
-        for cmd in commands:
-            try:
-                requests_module.post(
-                    f"{evaluate_base}/setup",
-                    json={"config": [
-                        {"type": "execute", "parameters": {"command": cmd, "shell": True}},
-                    ]},
-                    timeout=10.0,
+        self._run_setup_execute_commands(
+            requests_module,
+            commands,
+            label="notification cleanup",
+            timeout=15.0,
+        )
+
+    def _run_setup_execute_commands(
+        self,
+        requests_module,
+        commands: list[str],
+        *,
+        label: str,
+        timeout: float = 20.0,
+    ) -> None:
+        """Run a batch of `execute` setup commands on the evaluate server."""
+        if not commands:
+            return
+        evaluate_base = self.config.evaluate_url or self.config.server_url
+        payload = {
+            "config": [
+                {"type": "execute", "parameters": {"command": cmd, "shell": True}}
+                for cmd in commands
+            ]
+        }
+        try:
+            resp = requests_module.post(
+                f"{evaluate_base}/setup",
+                json=payload,
+                timeout=timeout,
+            )
+            if resp.status_code == 200:
+                logger.info("%s applied (%d command(s))", label, len(commands))
+            else:
+                logger.warning(
+                    "%s failed: HTTP %s %s",
+                    label,
+                    resp.status_code,
+                    resp.text[:200],
                 )
-            except Exception:
-                pass  # Best-effort; don't fail reset if notification kill fails
-        logger.debug("Dismissed system notifications")
+        except Exception as e:
+            logger.warning("%s request failed: %s", label, e)
+
+    def _apply_clean_desktop_policy(self, requests_module) -> None:
+        """Apply deterministic desktop policy for train/eval UI parity."""
+        if self._clean_desktop_applied and not self.config.reapply_clean_desktop_each_reset:
+            # Keep notifications suppressed each reset even if policy is one-time.
+            self._dismiss_notifications(requests_module)
+            return
+
+        commands: list[str] = []
+        if self.config.clean_desktop:
+            commands.extend([
+                # Suppress OneDrive first-run backup prompts.
+                (
+                    'reg add "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\OneDrive" '
+                    '/v DisableFileSyncNGSC /t REG_DWORD /d 1 /f'
+                ),
+                # Prevent OneDrive auto-start prompts on login.
+                'reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v OneDrive /f',
+                # Suppress notification toasts/popovers.
+                (
+                    'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\PushNotifications" '
+                    '/v ToastEnabled /t REG_DWORD /d 0 /f'
+                ),
+                # Disable common Windows suggestion surfaces/popups.
+                (
+                    'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager" '
+                    '/v SubscribedContent-338389Enabled /t REG_DWORD /d 0 /f'
+                ),
+                (
+                    'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager" '
+                    '/v SubscribedContent-338388Enabled /t REG_DWORD /d 0 /f'
+                ),
+                (
+                    'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager" '
+                    '/v SubscribedContent-353694Enabled /t REG_DWORD /d 0 /f'
+                ),
+                (
+                    'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced" '
+                    '/v ShowCopilotButton /t REG_DWORD /d 0 /f'
+                ),
+                (
+                    'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced" '
+                    '/v TaskbarDa /t REG_DWORD /d 0 /f'
+                ),
+                (
+                    'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced" '
+                    '/v TaskbarMn /t REG_DWORD /d 0 /f'
+                ),
+            ])
+
+        if self.config.clean_desktop or self.config.force_tray_icons:
+            commands.extend([
+                (
+                    'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer" '
+                    '/v HideSCANetwork /t REG_DWORD /d 0 /f'
+                ),
+                (
+                    'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer" '
+                    '/v HideSCAVolume /t REG_DWORD /d 0 /f'
+                ),
+                (
+                    'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer" '
+                    '/v EnableAutoTray /t REG_DWORD /d 0 /f'
+                ),
+            ])
+
+        if commands:
+            self._run_setup_execute_commands(
+                requests_module,
+                commands,
+                label="clean desktop policy",
+                timeout=25.0,
+            )
+
+        # Keep this as a final pass to clear already displayed popups.
+        self._dismiss_notifications(requests_module)
+        self._environment_profile = self._collect_environment_profile()
+        if self._environment_profile:
+            logger.info("Desktop environment profile: %s", self._environment_profile)
+        self._clean_desktop_applied = True
+
+    def _collect_environment_profile(self) -> dict[str, Any]:
+        """Capture key environment flags for reproducibility metadata."""
+        script = r"""
+$ErrorActionPreference='SilentlyContinue'
+$os = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+$one = (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\OneDrive' -Name DisableFileSyncNGSC).DisableFileSyncNGSC
+$toast = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\PushNotifications' -Name ToastEnabled).ToastEnabled
+$hideNet = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer' -Name HideSCANetwork).HideSCANetwork
+$hideVol = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer' -Name HideSCAVolume).HideSCAVolume
+$autoTray = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer' -Name EnableAutoTray).EnableAutoTray
+$widgets = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name TaskbarDa).TaskbarDa
+$copilot = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name ShowCopilotButton).ShowCopilotButton
+$obj = [ordered]@{
+  image_version = $env:WAA_IMAGE_VERSION
+  os_product = $os.ProductName
+  os_release = $os.DisplayVersion
+  os_build = $os.CurrentBuildNumber
+  one_drive_disable_sync_ngsc = $one
+  toast_enabled = $toast
+  hide_network_icon = $hideNet
+  hide_volume_icon = $hideVol
+  enable_auto_tray = $autoTray
+  taskbar_widgets = $widgets
+  show_copilot_button = $copilot
+}
+$obj | ConvertTo-Json -Compress
+"""
+        try:
+            output = self.run_powershell(script).strip()
+            if not output:
+                return {}
+            profile: dict[str, Any] | None = None
+            for line in reversed(output.splitlines()):
+                line = line.strip()
+                if line.startswith("{") and line.endswith("}"):
+                    profile = json.loads(line)
+                    break
+            if profile is None:
+                return {}
+            profile["clean_desktop_requested"] = self.config.clean_desktop
+            profile["force_tray_icons_requested"] = self.config.force_tray_icons
+            if self.config.waa_image_version:
+                profile["configured_image_version"] = self.config.waa_image_version
+            return profile
+        except Exception as e:
+            logger.debug("Failed to collect environment profile: %s", e)
+            return {}
 
     # --- App-name to window-title mapping for post-setup focus ---
 

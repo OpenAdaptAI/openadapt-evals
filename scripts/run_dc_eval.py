@@ -14,6 +14,10 @@ Usage:
 
     # All 12 tasks
     python scripts/run_dc_eval.py --agent api-claude-cu
+
+    # Deterministic desktop parity + pinned image version metadata
+    python scripts/run_dc_eval.py --agent api-claude-cu --clean-desktop \\
+      --force-tray-icons --waa-image-version win11-24h2-2026-03-04
 """
 
 from __future__ import annotations
@@ -209,6 +213,21 @@ def main() -> int:
     parser.add_argument("--evaluate-url", default="http://localhost:5050")
     parser.add_argument("--max-steps", type=int, default=15)
     parser.add_argument("--output", default="benchmark_results")
+    parser.add_argument(
+        "--clean-desktop",
+        action="store_true",
+        help="Apply deterministic clean-desktop policy (OneDrive/toast suppression + tray parity)",
+    )
+    parser.add_argument(
+        "--force-tray-icons",
+        action="store_true",
+        help="Force network/audio tray icons visible before each run",
+    )
+    parser.add_argument(
+        "--waa-image-version",
+        default=None,
+        help="Pinned WAA image version label to record in run metadata",
+    )
     parser.add_argument("--tasks", help="Comma-separated task IDs or prefixes (default: all 12)")
     parser.add_argument("--start-from", type=int, default=0, help="Task index to start from")
     parser.add_argument("--vm-ip", default=None, help="VM IP (auto-detected if omitted)")
@@ -334,6 +353,12 @@ def main() -> int:
                 "--max-retries", str(args.max_retries),
                 "--max-replans", str(args.max_replans),
             ])
+        if args.clean_desktop:
+            cmd.append("--clean-desktop")
+        if args.force_tray_icons:
+            cmd.append("--force-tray-icons")
+        if args.waa_image_version:
+            cmd.extend(["--waa-image-version", args.waa_image_version])
 
         result = subprocess.run(cmd)
         elapsed = time.time() - task_start

@@ -36,6 +36,7 @@ OpenAdapt Evals is a unified framework for evaluating GUI automation agents agai
 - **Agent interfaces** including `ApiAgent` (Claude / GPT), `ClaudeComputerUseAgent` (with coordinate clamping and fail-safe recovery), `RetrievalAugmentedAgent`, `RandomAgent`, and `PolicyAgent`
 - **Multi-cloud VM infrastructure** with `AzureVMManager`, `AWSVMManager`, `PoolManager`, `SSHTunnelManager`, and `VMMonitor` for running evaluations at scale on Azure or AWS
 - **End-to-end eval pipeline** (`scripts/run_eval_pipeline.py`) -- orchestrates demo generation, VM lifecycle, SSH tunnels, and ZS/DC evaluation in a single command
+- **Deterministic desktop parity mode** -- `--clean-desktop` suppresses OneDrive/toast/popover noise, `--force-tray-icons` keeps network/audio tray controls visible, and run metadata records requested/observed environment flags
 - **RL training environment** -- `RLEnvironment` wrapper provides a Gymnasium-style `reset`/`step`/`evaluate` interface for online RL (GRPO, PPO) with outcome-based rewards from WAA scores
 - **Annotation pipeline** -- VLM-based screenshot annotation (`annotation.py`, `vlm.py`) migrated from openadapt-ml so the full record-annotate-evaluate workflow runs within this repo
 - **4-layer WAA probe** -- `probe --detailed` checks screenshot capture, accessibility tree, action pipeline, and scoring independently; supports `--json` and `--layers` filtering
@@ -155,6 +156,13 @@ python scripts/run_eval_pipeline.py --tasks 04d9aeaf --dry-run
 
 # AWS instead of Azure
 python scripts/run_eval_pipeline.py --cloud aws --vm-name waa-pool-00
+
+# Deterministic desktop parity + pinned image version metadata
+python scripts/run_eval_pipeline.py \
+  --tasks 04d9aeaf \
+  --clean-desktop \
+  --force-tray-icons \
+  --waa-image-version win11-24h2-2026-03-04
 ```
 
 ### Parallel evaluation
