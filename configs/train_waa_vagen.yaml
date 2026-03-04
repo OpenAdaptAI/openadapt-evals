@@ -50,7 +50,7 @@ model:
 # Each env instance connects to the WAA server independently via HTTP.
 envs:
   - name: WAADesktop
-    n_envs: 8                    # Number of parallel environments (= GRPO group size)
+    n_envs: 1                    # Must be 1 (single WAA VM; use rollout.n for GRPO group size)
     data_source: waa
     seed: [1, 100, 1]            # [start, end, step] for deterministic seeding
     max_turns: 15                # Max actions per episode
@@ -72,7 +72,7 @@ algorithm:
 
 trainer:
   total_epochs: 100
-  n_gpus_per_node: 2             # Minimum for VLM training
+  n_gpus_per_node: 1             # 1 for g5.xlarge; use 4 for g5.12xlarge
   micro_batch_size: 4
   gradient_accumulation_steps: 2
   test_freq: 5                   # Evaluate every N epochs
