@@ -28,6 +28,11 @@ from openadapt_evals.adapters import (
     BenchmarkResult,
     BenchmarkTask,
 )
+from openadapt_evals.telemetry import (
+    track_action_executed,
+    track_agent_run,
+    track_agent_run_completed,
+)
 
 if TYPE_CHECKING:
     from openadapt_evals.benchmarks.data_collection import ExecutionTraceCollector
@@ -101,6 +106,15 @@ def evaluate_agent_on_benchmark(
 
     if config.verbose:
         logger.info(f"Evaluating {len(tasks)} tasks on {adapter.name}")
+    track_agent_run(
+        phase="start",
+        adapter=adapter.name,
+        agent_class=type(agent).__name__,
+        num_tasks=len(tasks),
+        max_steps=config.max_steps,
+        parallel=config.parallel,
+        run_name=config.run_name or "unspecified",
+    )
 
     # Initialize execution trace collector if enabled
     trace_collector: ExecutionTraceCollector | None = None
@@ -151,6 +165,18 @@ def evaluate_agent_on_benchmark(
             f"Evaluation complete: {success_count}/{len(results)} "
             f"({success_rate:.1%}) success, {avg_steps:.1f} avg steps"
         )
+    else:
+        success_count = sum(1 for r in results if r.success)
+        avg_steps = sum(r.num_steps for r in results) / len(results) if results else 0
+
+    track_agent_run_completed(
+        adapter=adapter.name,
+        agent_class=type(agent).__name__,
+        num_tasks=len(results),
+        success_count=success_count,
+        avg_steps=round(avg_steps, 2),
+        run_name=config.run_name or "unspecified",
+    )
 
     return results
 
@@ -352,6 +378,13 @@ def _run_single_task(
                 exec_start = time.perf_counter()
                 obs, done, info = adapter.step(action)
                 exec_end = time.perf_counter()
+                track_action_executed(
+                    task_id=task.task_id,
+                    step_index=steps,
+                    action_type=action.type,
+                    adapter=adapter.name,
+                    agent_class=type(agent).__name__,
+                )
                 if agent_logs:
                     agent_logs["env_execute_ms"] = round((exec_end - exec_start) * 1000)
                 if done:

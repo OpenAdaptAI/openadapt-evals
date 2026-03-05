@@ -94,6 +94,9 @@ TASKS = [
 ]
 
 from openadapt_evals.constants import HARDER_TASK_IDS
+from openadapt_evals.telemetry import (
+    track_demo_recorded,
+)
 
 # File names for the docx setup task
 DOCX_FILES = ["report.docx", "meeting_notes.docx", "proposal.docx"]
@@ -2180,6 +2183,13 @@ def cmd_record_waa(
 
         recorded.append(task_id)
         print(f"\n  Saved {len(steps_meta)} step(s) to {task_dir}")
+        track_demo_recorded(
+            task_id=task_id,
+            mode="record-waa",
+            steps=len(steps_meta),
+            output_dir=str(output_dir),
+            phase="recorded",
+        )
 
     # Summary
     print_header("Recording Summary")
@@ -2376,6 +2386,13 @@ def cmd_annotate_waa(
 
         print(f"  -> {json_path}")
         print(f"  -> {txt_path}\n")
+        track_demo_recorded(
+            task_id=task_id,
+            mode="annotate",
+            steps=len(annotated_steps),
+            output_dir=str(output_dir),
+            phase="annotated",
+        )
 
     print_header("Annotation Summary")
     print(f"  Annotated: {len(task_dirs)} recording(s)")
