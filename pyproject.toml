@@ -41,7 +41,7 @@ dependencies = [
     "openai>=1.0.0",
     "anthropic>=0.76.0",
     "openadapt-consilium>=0.3.2",
-    "openadapt-telemetry>=0.2.0",
+    "openadapt-telemetry>=0.1.0",
     "openadapt-ml>=0.11.0",
 ]
 
