@@ -1,6 +1,22 @@
 # CHANGELOG
 
 
+## v0.33.0 (2026-03-05)
+
+### Bug Fixes
+
+- Align evals telemetry dependency with published release
+  ([`ba81718`](https://github.com/OpenAdaptAI/openadapt-evals/commit/ba8171851da36a2b78d64ef830f066ee45b3f42d))
+
+- Avoid duplicate agent_run telemetry events
+  ([`9937a9f`](https://github.com/OpenAdaptAI/openadapt-evals/commit/9937a9f2105ede24f66647f60a99b687df7ebdc6))
+
+### Features
+
+- Instrument evals usage events via openadapt-telemetry
+  ([`f94ab4b`](https://github.com/OpenAdaptAI/openadapt-evals/commit/f94ab4b26ed6cbdbcb280bb4fb903c2aabe048e3))
+
+
 ## v0.32.0 (2026-03-04)
 
 ### Features
