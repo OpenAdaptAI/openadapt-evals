@@ -95,8 +95,6 @@ TASKS = [
 
 from openadapt_evals.constants import HARDER_TASK_IDS
 from openadapt_evals.telemetry import (
-    track_agent_run,
-    track_agent_run_completed,
     track_demo_recorded,
 )
 
@@ -2450,22 +2448,8 @@ def cmd_eval_dc(
 
     print(f"Running eval-suite with demo-conditioned demos from {demo_dir}")
     print(f"Command: {' '.join(cmd)}\n")
-    track_agent_run(
-        phase="start",
-        entrypoint="record_waa_demos.py eval",
-        mode="demo-conditioned",
-        num_tasks=len([t.strip() for t in tasks.split(",") if t.strip()]),
-        max_steps=max_steps,
-        run_name=suite_name,
-    )
 
     result = subprocess.run(cmd)
-    track_agent_run_completed(
-        entrypoint="record_waa_demos.py eval",
-        mode="demo-conditioned",
-        return_code=result.returncode,
-        run_name=suite_name,
-    )
     if result.returncode != 0:
         sys.exit(result.returncode)
 
