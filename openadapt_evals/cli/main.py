@@ -18,6 +18,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
+
+from openadapt_evals.telemetry import track_agent_run, track_agent_run_completed
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -249,13 +252,43 @@ def _cmd_mock(args: argparse.Namespace) -> int:
     """Run mock evaluation."""
     # Delegate to existing CLI implementation
     from openadapt_evals.benchmarks.cli import cmd_mock
-    return cmd_mock(args)
+    start = time.perf_counter()
+    track_agent_run(
+        phase="start",
+        entrypoint="oa evals mock",
+        mode="mock",
+        agent_class=getattr(args, "agent", "mock"),
+    )
+    rc = cmd_mock(args)
+    track_agent_run_completed(
+        entrypoint="oa evals mock",
+        mode="mock",
+        agent_class=getattr(args, "agent", "mock"),
+        return_code=rc,
+        duration_seconds=round(time.perf_counter() - start, 3),
+    )
+    return rc
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
     """Run live evaluation."""
     from openadapt_evals.benchmarks.cli import cmd_live
-    return cmd_live(args)
+    start = time.perf_counter()
+    track_agent_run(
+        phase="start",
+        entrypoint="oa evals run",
+        mode="live",
+        agent_class=getattr(args, "agent", "unknown"),
+    )
+    rc = cmd_live(args)
+    track_agent_run_completed(
+        entrypoint="oa evals run",
+        mode="live",
+        agent_class=getattr(args, "agent", "unknown"),
+        return_code=rc,
+        duration_seconds=round(time.perf_counter() - start, 3),
+    )
+    return rc
 
 
 def _cmd_probe(args: argparse.Namespace) -> int:

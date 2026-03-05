@@ -94,6 +94,11 @@ TASKS = [
 ]
 
 from openadapt_evals.constants import HARDER_TASK_IDS
+from openadapt_evals.telemetry import (
+    track_agent_run,
+    track_agent_run_completed,
+    track_demo_recorded,
+)
 
 # File names for the docx setup task
 DOCX_FILES = ["report.docx", "meeting_notes.docx", "proposal.docx"]
@@ -2180,6 +2185,13 @@ def cmd_record_waa(
 
         recorded.append(task_id)
         print(f"\n  Saved {len(steps_meta)} step(s) to {task_dir}")
+        track_demo_recorded(
+            task_id=task_id,
+            mode="record-waa",
+            steps=len(steps_meta),
+            output_dir=str(output_dir),
+            phase="recorded",
+        )
 
     # Summary
     print_header("Recording Summary")
@@ -2376,6 +2388,13 @@ def cmd_annotate_waa(
 
         print(f"  -> {json_path}")
         print(f"  -> {txt_path}\n")
+        track_demo_recorded(
+            task_id=task_id,
+            mode="annotate",
+            steps=len(annotated_steps),
+            output_dir=str(output_dir),
+            phase="annotated",
+        )
 
     print_header("Annotation Summary")
     print(f"  Annotated: {len(task_dirs)} recording(s)")
@@ -2431,8 +2450,22 @@ def cmd_eval_dc(
 
     print(f"Running eval-suite with demo-conditioned demos from {demo_dir}")
     print(f"Command: {' '.join(cmd)}\n")
+    track_agent_run(
+        phase="start",
+        entrypoint="record_waa_demos.py eval",
+        mode="demo-conditioned",
+        num_tasks=len([t.strip() for t in tasks.split(",") if t.strip()]),
+        max_steps=max_steps,
+        run_name=suite_name,
+    )
 
     result = subprocess.run(cmd)
+    track_agent_run_completed(
+        entrypoint="record_waa_demos.py eval",
+        mode="demo-conditioned",
+        return_code=result.returncode,
+        run_name=suite_name,
+    )
     if result.returncode != 0:
         sys.exit(result.returncode)
 
