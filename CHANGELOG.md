@@ -1,6 +1,46 @@
 # CHANGELOG
 
 
+## v0.34.1 (2026-03-06)
+
+### Bug Fixes
+
+- Remove stale health-gate args and add done-gate passthrough in core4_eval.py
+  ([#111](https://github.com/OpenAdaptAI/openadapt-evals/pull/111),
+  [`38f8e33`](https://github.com/OpenAdaptAI/openadapt-evals/commit/38f8e33962ce6e2b53ace32f0cb91f1464df4abb))
+
+The core4_eval.py was passing --transport-error-threshold, --health-samples, --health-min-success,
+  and --health-sample-delay to run_dc_eval.py, but those args don't exist in run_dc_eval.py (they
+  were from uncommitted Codex changes). Also adds --done-gate passthrough to match PR #110.
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+- Search all LibreOffice profile dirs for recovery cleanup
+  ([#112](https://github.com/OpenAdaptAI/openadapt-evals/pull/112),
+  [`2e65c98`](https://github.com/OpenAdaptAI/openadapt-evals/commit/2e65c98a8ab146e17ade40e61a1a10ccccecf271))
+
+* fix: remove stale health-gate args and add done-gate passthrough in core4_eval.py
+
+The core4_eval.py was passing --transport-error-threshold, --health-samples, --health-min-success,
+  and --health-sample-delay to run_dc_eval.py, but those args don't exist in run_dc_eval.py (they
+  were from uncommitted Codex changes). Also adds --done-gate passthrough to match PR #110.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* fix: search all LibreOffice profile dirs for recovery cleanup
+
+The cleanup script only targeted LibreOffice/4/user/backup, but LibreOffice 26.2 also uses
+  LibreOffice/user/backup. Now scans all subdirectories under AppData/Roaming/LibreOffice for user
+  profiles.
+
+Also clears .~lock.* files that can block file re-opening, and removes lock files from common
+  download locations.
+
+---------
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.34.0 (2026-03-06)
 
 ### Bug Fixes
