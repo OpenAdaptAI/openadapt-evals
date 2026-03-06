@@ -85,14 +85,6 @@ def cmd_run(args: argparse.Namespace) -> int:
             args.agent,
             "--vm-user",
             args.vm_user,
-            "--transport-error-threshold",
-            str(args.transport_error_threshold),
-            "--health-samples",
-            str(args.health_samples),
-            "--health-min-success",
-            str(args.health_min_success),
-            "--health-sample-delay",
-            str(args.health_sample_delay),
         ]
         if args.vm_ip:
             cmd.extend(["--vm-ip", args.vm_ip])
@@ -110,6 +102,16 @@ def cmd_run(args: argparse.Namespace) -> int:
                     str(args.max_retries),
                     "--max-replans",
                     str(args.max_replans),
+                ]
+            )
+        if args.done_gate:
+            cmd.extend(
+                [
+                    "--done-gate",
+                    "--done-gate-max-overrides",
+                    str(args.done_gate_max_overrides),
+                    "--done-gate-threshold",
+                    str(args.done_gate_threshold),
                 ]
             )
 
@@ -184,15 +186,14 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--vm-ip", default=None)
     run.add_argument("--vm-user", default="azureuser")
     run.add_argument("--start-from", type=int, default=0)
-    run.add_argument("--transport-error-threshold", type=int, default=8)
-    run.add_argument("--health-samples", type=int, default=3)
-    run.add_argument("--health-min-success", type=int, default=2)
-    run.add_argument("--health-sample-delay", type=float, default=1.5)
     run.add_argument("--zs-only", action="store_true")
     run.add_argument("--dc-only", action="store_true")
     run.add_argument("--controller", action="store_true")
     run.add_argument("--max-retries", type=int, default=2)
     run.add_argument("--max-replans", type=int, default=2)
+    run.add_argument("--done-gate", action="store_true")
+    run.add_argument("--done-gate-max-overrides", type=int, default=3)
+    run.add_argument("--done-gate-threshold", type=float, default=1.0)
     run.add_argument("--continue-on-fail", action="store_true")
     run.add_argument("--dry-run", action="store_true")
     run.set_defaults(func=cmd_run)
