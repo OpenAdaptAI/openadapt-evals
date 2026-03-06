@@ -107,6 +107,16 @@ class SyntheticTaskError(ValueError):
         )
 
 
+class AdapterInfrastructureError(RuntimeError):
+    """Base exception for deterministic infrastructure/setup failures."""
+
+    error_type = "infrastructure"
+
+
+class SetupReadinessError(AdapterInfrastructureError):
+    """Raised when task setup finished but app readiness could not be verified."""
+
+
 def _parse_xml_a11y_tree(xml_str: str) -> dict | None:
     """Parse a UIA XML accessibility tree string into a dict.
 
@@ -246,6 +256,66 @@ def _build_type_commands(text: str) -> str:
     return "; ".join(commands) if commands else "pass"
 
 
+_LIBREOFFICE_RECOVERY_CLEANUP_SCRIPT = r"""
+import os, re, shutil
+
+home = os.path.expanduser("~")
+lo_user = os.path.join(home, "AppData", "Roaming", "LibreOffice", "4", "user")
+
+backup_dir = os.path.join(lo_user, "backup")
+if os.path.exists(backup_dir):
+    files = os.listdir(backup_dir)
+    if files:
+        shutil.rmtree(backup_dir)
+        os.makedirs(backup_dir)
+        print(f"Cleared {len(files)} backup file(s)")
+    else:
+        print("Backup dir empty")
+else:
+    print("No backup dir")
+
+xcu = os.path.join(lo_user, "registrymodifications.xcu")
+if os.path.exists(xcu):
+    with open(xcu, "r", encoding="utf-8") as f:
+        content = f.read()
+    changed = False
+    if "RecoveryList" in content:
+        content = re.sub(
+            r'<item oor:path="/org.openoffice.Office.Recovery/RecoveryList">.*?</item>',
+            "",
+            content,
+            flags=re.DOTALL,
+        )
+        changed = True
+        print("Removed RecoveryList entries")
+    autosave_line = (
+        '<item oor:path="/org.openoffice.Office.Recovery/AutoSave">'
+        '<prop oor:name="Enabled" oor:op="fuse"><value>false</value></prop></item>'
+    )
+    if "AutoSave" not in content:
+        content = content.replace("</oor:items>", autosave_line + "\n</oor:items>")
+        changed = True
+        print("Added AutoSave=false")
+    elif ">true<" in content.split("AutoSave")[1].split("</item>")[0]:
+        content = re.sub(
+            r'<item oor:path="/org.openoffice.Office.Recovery/AutoSave">.*?</item>',
+            autosave_line,
+            content,
+            flags=re.DOTALL,
+        )
+        changed = True
+        print("Changed AutoSave to false")
+    else:
+        print("AutoSave already disabled")
+    if changed:
+        with open(xcu, "w", encoding="utf-8") as f:
+            f.write(content)
+        print("Updated registrymodifications.xcu")
+else:
+    print(f"No xcu found at {xcu}")
+"""
+
+
 @dataclass
 class WAALiveConfig:
     """Configuration for WAALiveAdapter.
@@ -272,6 +342,9 @@ class WAALiveConfig:
             every reset instead of once per adapter lifecycle.
         waa_image_version: Optional pinned WAA image version identifier to
             record in environment metadata.
+        strict_setup_readiness: If True, fail task before step 0 when setup
+            succeeded but target app cannot be focused/verified.
+        setup_readiness_retries: Number of post-setup focus retries.
     """
 
     server_url: str = "http://localhost:5000"
@@ -287,6 +360,8 @@ class WAALiveConfig:
     force_tray_icons: bool = False
     reapply_clean_desktop_each_reset: bool = False
     waa_image_version: str | None = None
+    strict_setup_readiness: bool = True
+    setup_readiness_retries: int = 3
 
 
 class WAALiveAdapter(BenchmarkAdapter):
@@ -313,6 +388,8 @@ class WAALiveAdapter(BenchmarkAdapter):
         self._actual_screen_size: tuple[int, int] | None = None
         self._clean_desktop_applied = False
         self._environment_profile: dict[str, Any] = {}
+        self._last_setup_results: list[dict[str, Any]] = []
+        self._last_foreground_title: str | None = None
 
     @property
     def name(self) -> str:
@@ -550,6 +627,12 @@ class WAALiveAdapter(BenchmarkAdapter):
             # Best-effort cleanup even when full clean policy is disabled.
             self._dismiss_notifications(requests)
 
+        # LibreOffice can surface a modal "Document Recovery" dialog after
+        # dirty shutdowns. Pre-clean recovery state before setup to avoid
+        # spending task steps dismissing infra popups.
+        if task.raw_config and self._is_libreoffice_task(task.raw_config):
+            self._prepare_libreoffice_clean_state(requests)
+
         # If task has setup commands in raw_config, execute them
         if task.raw_config:
             self._run_task_setup(task.raw_config)
@@ -562,7 +645,13 @@ class WAALiveAdapter(BenchmarkAdapter):
         # opened application may be behind other windows, still loading, or
         # obscured by notifications.  This wastes agent steps recovering.
         if task.raw_config:
-            self._ensure_app_focused(task.raw_config)
+            focused = self._ensure_app_focused(task.raw_config)
+            if not focused and self.config.strict_setup_readiness:
+                raise SetupReadinessError(
+                    "Post-setup app readiness check failed: target application "
+                    "was not foregrounded after deterministic remediation. "
+                    "Marking task as infrastructure failure before step budget."
+                )
 
         return self._get_observation()
 
@@ -1340,6 +1429,7 @@ class WAALiveAdapter(BenchmarkAdapter):
             raw_config: Task configuration with setup commands.
         """
         config = raw_config.get("config", [])
+        self._last_setup_results = []
 
         related_apps = raw_config.get("related_apps", [])
         if related_apps:
@@ -1361,17 +1451,64 @@ class WAALiveAdapter(BenchmarkAdapter):
                 json={"config": config},
                 timeout=120.0,
             )
+            payload = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
+            results = payload.get("results", [])
+            self._last_setup_results = results
+            for r in results:
+                status = r.get("status", "unknown")
+                logger.info(f"Setup {r.get('type')}: {status}")
+
+            if resp.status_code != 200:
+                raise SetupReadinessError(
+                    f"Task setup failed (HTTP {resp.status_code}): "
+                    f"{resp.text[:200]}"
+                )
+            errors = [r for r in results if r.get("status") == "error"]
+            if errors:
+                details = "; ".join(
+                    f"{r.get('type')}: {r.get('error', 'unknown')}" for r in errors
+                )
+                raise SetupReadinessError(f"Task setup contained failing steps: {details}")
+        except Exception as e:
+            if isinstance(e, SetupReadinessError):
+                raise
+            raise SetupReadinessError(f"Task setup request failed: {e}") from e
+
+    def _run_setup_execute_commands(
+        self,
+        requests_module: Any,
+        commands: list[str],
+        *,
+        label: str,
+        timeout: float = 20.0,
+    ) -> None:
+        """Run a batch of setup execute commands."""
+        if not commands:
+            return
+        evaluate_base = self.config.evaluate_url or self.config.server_url
+        payload = {
+            "config": [
+                {"type": "execute", "parameters": {"command": cmd, "shell": True}}
+                for cmd in commands
+            ]
+        }
+        try:
+            resp = requests_module.post(
+                f"{evaluate_base}/setup",
+                json=payload,
+                timeout=timeout,
+            )
             if resp.status_code == 200:
-                results = resp.json().get("results", [])
-                for r in results:
-                    status = r.get("status", "unknown")
-                    logger.info(f"Setup {r.get('type')}: {status}")
+                logger.info("%s applied (%d command(s))", label, len(commands))
             else:
-                logger.error(
-                    f"Setup failed: {resp.status_code} {resp.text[:200]}"
+                logger.warning(
+                    "%s failed: HTTP %s %s",
+                    label,
+                    resp.status_code,
+                    resp.text[:200],
                 )
         except Exception as e:
-            logger.error(f"Setup request failed: {e}")
+            logger.warning("%s request failed: %s", label, e)
 
     def _dismiss_notifications(self, requests_module) -> None:
         """Dismiss system notifications that persist through close_all.
@@ -1399,42 +1536,6 @@ class WAALiveAdapter(BenchmarkAdapter):
             label="notification cleanup",
             timeout=15.0,
         )
-
-    def _run_setup_execute_commands(
-        self,
-        requests_module,
-        commands: list[str],
-        *,
-        label: str,
-        timeout: float = 20.0,
-    ) -> None:
-        """Run a batch of `execute` setup commands on the evaluate server."""
-        if not commands:
-            return
-        evaluate_base = self.config.evaluate_url or self.config.server_url
-        payload = {
-            "config": [
-                {"type": "execute", "parameters": {"command": cmd, "shell": True}}
-                for cmd in commands
-            ]
-        }
-        try:
-            resp = requests_module.post(
-                f"{evaluate_base}/setup",
-                json=payload,
-                timeout=timeout,
-            )
-            if resp.status_code == 200:
-                logger.info("%s applied (%d command(s))", label, len(commands))
-            else:
-                logger.warning(
-                    "%s failed: HTTP %s %s",
-                    label,
-                    resp.status_code,
-                    resp.text[:200],
-                )
-        except Exception as e:
-            logger.warning("%s request failed: %s", label, e)
 
     def _apply_clean_desktop_policy(self, requests_module) -> None:
         """Apply deterministic desktop policy for train/eval UI parity."""
@@ -1564,6 +1665,94 @@ $obj | ConvertTo-Json -Compress
             logger.debug("Failed to collect environment profile: %s", e)
             return {}
 
+    def _is_libreoffice_task(self, raw_config: dict) -> bool:
+        """Return True if task setup implies LibreOffice app usage."""
+        related_apps = raw_config.get("related_apps", [])
+        for app in related_apps:
+            canonical = self._normalize_app_name(app)
+            if canonical.startswith("libreoffice"):
+                return True
+
+        config_steps = raw_config.get("config", [])
+        for step in config_steps:
+            if step.get("type") != "open":
+                continue
+            path = step.get("parameters", {}).get("path", "")
+            ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+            if ext in {
+                "xlsx", "xls", "ods", "csv",
+                "docx", "doc", "odt",
+                "pptx", "ppt", "odp",
+            }:
+                return True
+        return False
+
+    def _build_libreoffice_cleanup_command(self) -> str:
+        """Build single-line command that clears LibreOffice recovery state."""
+        payload = base64.b64encode(_LIBREOFFICE_RECOVERY_CLEANUP_SCRIPT.encode()).decode()
+        return (
+            "python -c \"import base64,tempfile,os,subprocess;"
+            f"d=base64.b64decode('{payload}');"
+            "p=os.path.join(tempfile.gettempdir(),'lo_cleanup.py');"
+            "open(p,'wb').write(d);"
+            "r=subprocess.run(['python',p],capture_output=True,text=True);"
+            "print(r.stdout);print(r.stderr)\""
+        )
+
+    def _prepare_libreoffice_clean_state(self, requests_module: Any) -> None:
+        """Kill stale LibreOffice processes and clear recovery artifacts."""
+        commands = [
+            "taskkill /F /IM soffice.bin /T",
+            "taskkill /F /IM soffice.exe /T",
+            self._build_libreoffice_cleanup_command(),
+        ]
+        self._run_setup_execute_commands(
+            requests_module,
+            commands,
+            label="libreoffice recovery cleanup",
+            timeout=30.0,
+        )
+
+    def _rerun_open_setup_steps(self, raw_config: dict, requests_module: Any) -> bool:
+        """Re-run only open steps from task config as remediation."""
+        open_steps = [s for s in raw_config.get("config", []) if s.get("type") == "open"]
+        if not open_steps:
+            return False
+        evaluate_base = self.config.evaluate_url or self.config.server_url
+        try:
+            resp = requests_module.post(
+                f"{evaluate_base}/setup",
+                json={"config": open_steps},
+                timeout=60.0,
+            )
+            payload = (
+                resp.json()
+                if resp.headers.get("content-type", "").startswith("application/json")
+                else {}
+            )
+            results = payload.get("results", [])
+            if results:
+                # Keep diagnostics tied to the most recent remediation attempt.
+                self._last_setup_results = results
+            elif resp.status_code != 200:
+                self._last_setup_results = [{
+                    "type": "open",
+                    "status": "error",
+                    "error": f"HTTP {resp.status_code}: {resp.text[:200]}",
+                }]
+            if resp.status_code != 200:
+                logger.warning(
+                    "Open-step remediation failed: HTTP %s %s",
+                    resp.status_code,
+                    resp.text[:200],
+                )
+                return False
+            logger.info("Open-step remediation succeeded (%d step(s))", len(open_steps))
+            return True
+        except Exception as e:
+            logger.warning("Open-step remediation request failed: %s", e)
+            return False
+
     # --- App-name to window-title mapping for post-setup focus ---
 
     # Maps canonical app names (from related_apps / _normalize_app_name) to
@@ -1664,31 +1853,20 @@ $obj | ConvertTo-Json -Compress
 
         return patterns
 
-    def _ensure_app_focused(self, raw_config: dict) -> None:
-        """Ensure the target application is focused after task setup.
+    def _ensure_app_focused(self, raw_config: dict) -> bool:
+        """Ensure target app is foregrounded after setup.
 
-        Uses a multi-strategy approach with retries:
+        Runs deterministic focus checks/remediation before step 0:
+        - activate expected windows by title pattern
+        - for LibreOffice tasks, clear recovery state and re-run open steps
 
-        1. Determine what window should be in the foreground from the task
-           config (related_apps, open file extensions).
-        2. Try the WAA server's ``/setup/activate_window`` endpoint for each
-           expected window pattern (this is the same mechanism WAA uses in
-           its own postconfig).
-        3. If ``activate_window`` does not succeed, fall back to a
-           pyautogui ``Alt+Tab`` keystroke which foregrounds whatever was
-           most recently opened (should be the target app after setup).
-        4. Retry with increasing delays to handle apps that are still loading.
-
-        This runs as part of ``reset()`` and does **not** count against
-        the agent's step budget.
-
-        Args:
-            raw_config: Task configuration dict.
+        Returns:
+            True if app focus was verified, False otherwise.
         """
         patterns = self._get_expected_window_patterns(raw_config)
         if not patterns:
             logger.info("No expected window patterns; skipping post-setup focus")
-            return
+            return True
 
         logger.info(
             "Post-setup focus: looking for windows matching %r", patterns
@@ -1696,17 +1874,96 @@ $obj | ConvertTo-Json -Compress
 
         import requests
 
-        evaluate_base = self.config.evaluate_url or self.config.server_url
-        max_retries = 3
-        retry_delays = [2.0, 3.0, 5.0]  # seconds to wait between retries
+        if self._try_activate_patterns(patterns, requests):
+            return True
 
+        # App-specific deterministic remediation path.
+        if self._is_libreoffice_task(raw_config):
+            logger.warning(
+                "Post-setup focus failed for LibreOffice task. Applying recovery cleanup + reopen remediation."
+            )
+            self._prepare_libreoffice_clean_state(requests)
+            self._rerun_open_setup_steps(raw_config, requests)
+            time.sleep(2.0)
+            if self._try_activate_patterns(patterns, requests):
+                return True
+
+        logger.warning(
+            "Post-setup focus: could not confirm target app is in foreground "
+            "after deterministic remediation."
+        )
+        diagnostics = self._capture_focus_diagnostics(patterns)
+        if diagnostics:
+            logger.warning("Post-setup focus diagnostics: %s", diagnostics)
+        return False
+
+    def _capture_focus_diagnostics(self, patterns: list[str]) -> dict[str, Any]:
+        """Capture foreground/window state and last open-step setup result."""
+        diagnostics: dict[str, Any] = {
+            "expected_patterns": patterns,
+            "last_foreground_title": self._last_foreground_title,
+        }
+
+        open_results = [
+            r for r in self._last_setup_results
+            if isinstance(r, dict) and r.get("type") == "open"
+        ]
+        if open_results:
+            diagnostics["last_open_setup_result"] = open_results[-1]
+
+        script = r"""
+$ErrorActionPreference='SilentlyContinue'
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class OAWinApi {
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
+  public static string GetForegroundTitle() {
+    var sb = new StringBuilder(512);
+    var h = GetForegroundWindow();
+    GetWindowText(h, sb, sb.Capacity);
+    return sb.ToString();
+  }
+}
+"@
+$fg = [OAWinApi]::GetForegroundTitle()
+$wins = Get-Process | Where-Object { $_.MainWindowTitle -and $_.MainWindowTitle.Trim() -ne '' } | Select-Object -First 25 ProcessName, MainWindowTitle
+[pscustomobject]@{
+  foreground_title = $fg
+  windows = $wins
+} | ConvertTo-Json -Depth 4 -Compress
+"""
+        try:
+            output = self.run_powershell(script).strip()
+            parsed_snapshot = False
+            for line in reversed(output.splitlines()):
+                line = line.strip()
+                if line.startswith("{") and line.endswith("}"):
+                    diagnostics["window_snapshot"] = json.loads(line)
+                    parsed_snapshot = True
+                    break
+            if not parsed_snapshot and output:
+                diagnostics["window_snapshot_raw"] = output[-1000:]
+        except Exception as e:
+            diagnostics["window_snapshot_error"] = str(e)
+
+        return diagnostics
+
+    def _try_activate_patterns(
+        self,
+        patterns: list[str],
+        requests_module: Any,
+    ) -> bool:
+        """Try to activate expected windows and verify active title."""
+        evaluate_base = self.config.evaluate_url or self.config.server_url
+        max_retries = max(1, self.config.setup_readiness_retries)
+        retry_delays = [1.5, 2.5, 4.0, 6.0]
         for attempt in range(max_retries):
-            # Strategy 1: Use activate_window for each pattern.
-            # The WAA server's /setup/activate_window uses win32gui to find
-            # and foreground windows by (sub)title match.
             for pattern in patterns:
                 try:
-                    resp = requests.post(
+                    resp = requests_module.post(
                         f"{evaluate_base}/setup",
                         json={"config": [
                             {
@@ -1717,17 +1974,14 @@ $obj | ConvertTo-Json -Compress
                         timeout=15.0,
                     )
                     if resp.status_code == 200:
-                        # activate_window succeeded (HTTP 200). Verify by
-                        # checking the foreground window title via a11y.
                         time.sleep(0.5)
-                        if self._check_foreground_matches(patterns, requests):
+                        if self._check_foreground_matches(patterns, requests_module):
                             logger.info(
                                 "Post-setup focus: activated '%s' on attempt %d",
                                 pattern,
                                 attempt + 1,
                             )
-                            time.sleep(0.5)
-                            return
+                            return True
                 except Exception as e:
                     logger.debug(
                         "Post-setup focus: activate_window('%s') failed: %s",
@@ -1735,34 +1989,8 @@ $obj | ConvertTo-Json -Compress
                         e,
                     )
 
-            # Strategy 2: Use pyautogui to click the desktop center, then
-            # Alt+Tab to foreground the most recently used window.
-            # After the setup sequence (close_all -> open file), the target
-            # app should be the only app on the taskbar.
-            try:
-                self._send_command(
-                    "import pyautogui; import time; "
-                    "pyautogui.hotkey('alt', 'tab'); time.sleep(0.5)"
-                )
-                time.sleep(0.5)
-                if self._check_foreground_matches(patterns, requests):
-                    logger.info(
-                        "Post-setup focus: Alt+Tab brought target to front "
-                        "on attempt %d",
-                        attempt + 1,
-                    )
-                    time.sleep(0.5)
-                    return
-            except Exception as e:
-                logger.debug(
-                    "Post-setup focus: Alt+Tab attempt %d failed: %s",
-                    attempt + 1,
-                    e,
-                )
-
-            # Wait before retry (app may still be loading)
             if attempt < max_retries - 1:
-                delay = retry_delays[attempt]
+                delay = retry_delays[min(attempt, len(retry_delays) - 1)]
                 logger.info(
                     "Post-setup focus: window not found on attempt %d; "
                     "waiting %.1fs before retry...",
@@ -1770,13 +1998,7 @@ $obj | ConvertTo-Json -Compress
                     delay,
                 )
                 time.sleep(delay)
-
-        # All retries exhausted.
-        logger.warning(
-            "Post-setup focus: could not confirm target app is in foreground "
-            "after %d attempts. The agent may need to navigate to the app.",
-            max_retries,
-        )
+        return False
 
     def _check_foreground_matches(
         self,
@@ -1785,9 +2007,8 @@ $obj | ConvertTo-Json -Compress
     ) -> bool:
         """Check whether the current foreground window matches any pattern.
 
-        Uses pyautogui's ``getActiveWindowTitle()`` (via the /execute_windows
-        endpoint on the WAA server) to get the foreground window title.  This
-        avoids the escaping issues of multi-layer PowerShell commands.
+        Uses the accessibility endpoint to infer the current top-level window
+        title without injecting additional foreground commands into the VM.
 
         Args:
             patterns: Window title substrings to match (case-insensitive).
@@ -1796,60 +2017,36 @@ $obj | ConvertTo-Json -Compress
         Returns:
             True if the foreground window title contains any of the patterns.
         """
-        # Try two approaches to get the foreground window title:
-        # 1. pygetwindow (dependency of pyautogui on Windows)
-        # 2. ctypes + win32 API (always available on Windows)
-        commands = [
-            (
-                "import pygetwindow; "
-                "w = pygetwindow.getActiveWindow(); "
-                "t = w.title if w else ''; "
-                "print('ACTIVE_TITLE:' + t)"
-            ),
-            (
-                "import ctypes; import ctypes.wintypes; "
-                "h = ctypes.windll.user32.GetForegroundWindow(); "
-                "b = ctypes.create_unicode_buffer(256); "
-                "ctypes.windll.user32.GetWindowTextW(h, b, 256); "
-                "print('ACTIVE_TITLE:' + b.value)"
-            ),
-        ]
-        for cmd in commands:
-            try:
-                resp = requests_module.post(
-                    f"{self.config.server_url}/execute_windows",
-                    json={"command": cmd},
-                    timeout=10.0,
-                )
-                if resp.status_code == 200:
-                    result = resp.json()
-                    stdout = (result.get("stdout", "") or "").lower()
-                    stderr = (result.get("stderr", "") or "").lower()
-                    combined = stdout + stderr
-
-                    # If the command errored (import failure), try next
-                    if "error" in stderr or "traceback" in stderr:
-                        continue
-
-                    # Extract the title from our marker
-                    if "active_title:" in combined:
-                        title_line = combined.split("active_title:")[-1].strip()
-                        for pattern in patterns:
-                            if pattern.lower() in title_line:
-                                logger.debug(
-                                    "Foreground check: matched '%s' in '%s'",
-                                    pattern,
-                                    title_line[:100],
-                                )
-                                return True
-                        logger.debug(
-                            "Foreground check: no pattern matched in '%s'",
-                            title_line[:100],
-                        )
-                        return False  # Got a title, just didn't match
-            except Exception as e:
-                logger.debug("Foreground check command failed: %s", e)
-
+        try:
+            resp = requests_module.get(
+                f"{self.config.server_url}/accessibility",
+                params={"backend": self.config.a11y_backend},
+                timeout=10.0,
+            )
+            if resp.status_code != 200:
+                return False
+            result = resp.json()
+            a11y_tree = result.get("AT", result) if isinstance(result, dict) else result
+            if isinstance(a11y_tree, str):
+                parsed = _parse_xml_a11y_tree(a11y_tree)
+                if parsed:
+                    a11y_tree = parsed
+            title = (self._extract_window_title(a11y_tree) or "").strip()
+            if not title:
+                return False
+            self._last_foreground_title = title
+            title_lower = title.lower()
+            for pattern in patterns:
+                if pattern.lower() in title_lower:
+                    logger.debug(
+                        "Foreground check: matched '%s' in '%s'",
+                        pattern,
+                        title[:100],
+                    )
+                    return True
+            logger.debug("Foreground check: no pattern matched in '%s'", title[:100])
+        except Exception as e:
+            logger.debug("Foreground check via accessibility failed: %s", e)
         return False
 
     def _clamp_pixel_coords(self, x: int, y: int) -> tuple[int, int]:

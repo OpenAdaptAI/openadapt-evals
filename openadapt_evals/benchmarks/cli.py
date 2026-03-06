@@ -297,6 +297,9 @@ def cmd_mock(args: argparse.Namespace) -> int:
     print(f"Success rate: {metrics['success_rate']:.1%}")
     print(f"Avg score:    {metrics['avg_score']:.3f}")
     print(f"Avg steps:    {metrics['avg_steps']:.1f}")
+    if metrics.get("num_infrastructure_failures", 0):
+        print(f"Infra fails:  {metrics['num_infrastructure_failures']}")
+        print(f"Adj success:  {metrics.get('success_rate_excluding_infra', 0.0):.1%}")
 
     if config:
         print(f"\nResults saved to: {config.output_dir}/{config.run_name}")
@@ -483,6 +486,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     print(f"Success rate: {metrics['success_rate']:.1%}")
     print(f"Avg score:    {metrics['avg_score']:.3f}")
     print(f"Avg steps:    {metrics['avg_steps']:.1f}")
+    if metrics.get("num_infrastructure_failures", 0):
+        print(f"Infra fails:  {metrics['num_infrastructure_failures']}")
+        print(f"Adj success:  {metrics.get('success_rate_excluding_infra', 0.0):.1%}")
     benchmark_dir = Path(eval_config.output_dir) / eval_config.run_name
     _write_run_environment_metadata(
         benchmark_dir,
@@ -688,6 +694,9 @@ def cmd_live(args: argparse.Namespace) -> int:
     print(f"Success rate: {metrics['success_rate']:.1%}")
     print(f"Avg score:    {metrics['avg_score']:.3f}")
     print(f"Avg steps:    {metrics['avg_steps']:.1f}")
+    if metrics.get("num_infrastructure_failures", 0):
+        print(f"Infra fails:  {metrics['num_infrastructure_failures']}")
+        print(f"Adj success:  {metrics.get('success_rate_excluding_infra', 0.0):.1%}")
 
     if eval_config:
         benchmark_dir = Path(eval_config.output_dir) / eval_config.run_name
@@ -973,6 +982,9 @@ docker ps -f name=winarena --format "Container: {{.Names}}, Status: {{.Status}}"
             evaluate_url=None,
         )
         print(f"\nResults saved to: {benchmark_dir}")
+        if metrics.get("num_infrastructure_failures", 0):
+            print(f"Infra fails:  {metrics['num_infrastructure_failures']}")
+            print(f"Adj success:  {metrics.get('success_rate_excluding_infra', 0.0):.1%}")
 
         return 0
 

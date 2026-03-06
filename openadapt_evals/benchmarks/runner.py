@@ -432,6 +432,7 @@ def _run_single_task(
 
     except Exception as e:
         logger.error(f"Error running task {task.task_id}: {e}")
+        error_type = getattr(e, "error_type", None)
         result = BenchmarkResult(
             task_id=task.task_id,
             success=False,
@@ -439,6 +440,8 @@ def _run_single_task(
             steps=history if config.save_trajectories else [],
             num_steps=len(history),
             error=str(e),
+            reason=str(e),
+            error_type=error_type,
             total_time_seconds=time.perf_counter() - start_time,
         )
 
@@ -465,6 +468,9 @@ def compute_metrics(results: list[BenchmarkResult]) -> dict:
             "avg_score": 0.0,
             "avg_steps": 0.0,
             "avg_time_seconds": 0.0,
+            "num_infrastructure_failures": 0,
+            "num_tasks_excluding_infra": 0,
+            "success_rate_excluding_infra": 0.0,
         }
 
     num_tasks = len(results)
@@ -472,6 +478,9 @@ def compute_metrics(results: list[BenchmarkResult]) -> dict:
     total_score = sum(r.score for r in results)
     total_steps = sum(r.num_steps for r in results)
     total_time = sum(r.total_time_seconds for r in results)
+    infra_failures = [r for r in results if r.error_type == "infrastructure"]
+    non_infra = [r for r in results if r.error_type != "infrastructure"]
+    non_infra_success = sum(1 for r in non_infra if r.success)
 
     return {
         "num_tasks": num_tasks,
@@ -481,6 +490,11 @@ def compute_metrics(results: list[BenchmarkResult]) -> dict:
         "avg_time_seconds": total_time / num_tasks,
         "success_count": success_count,
         "fail_count": num_tasks - success_count,
+        "num_infrastructure_failures": len(infra_failures),
+        "num_tasks_excluding_infra": len(non_infra),
+        "success_rate_excluding_infra": (
+            non_infra_success / len(non_infra) if non_infra else 0.0
+        ),
     }
 
 

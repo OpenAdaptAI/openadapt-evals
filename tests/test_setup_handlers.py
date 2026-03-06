@@ -596,66 +596,70 @@ class TestEnsureAppFocused:
         """Calls activate_window setup step for each pattern."""
         adapter = self._make_adapter()
 
-        # Simulate activate_window success (activate sends to /setup)
-        # and foreground check success (sends to /execute_windows)
-        call_count = 0
+        # Simulate activate_window success (/setup) and foreground check success
+        # via accessibility endpoint (/accessibility).
+        setup_calls = []
+        a11y_calls = []
 
         def _fake_post(url, **kwargs):
-            nonlocal call_count
-            call_count += 1
+            setup_calls.append(url)
             resp = MagicMock()
             resp.status_code = 200
-            if "/execute_windows" in url:
-                resp.json.return_value = {
-                    "stdout": "ACTIVE_TITLE:LibreOffice Calc - data.xlsx",
-                    "stderr": "",
-                }
-            else:
-                resp.json.return_value = {"results": [{"type": "activate_window", "status": "ok"}]}
-                resp.text = '{"results": [{"type": "activate_window", "status": "ok"}]}'
+            resp.json.return_value = {"results": [{"type": "activate_window", "status": "ok"}]}
+            resp.text = '{"results": [{"type": "activate_window", "status": "ok"}]}'
+            return resp
+
+        def _fake_get(url, **kwargs):
+            a11y_calls.append(url)
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.json.return_value = {"AT": {"name": "LibreOffice Calc - data.xlsx"}}
             return resp
 
         with patch("requests.post", side_effect=_fake_post), \
+             patch("requests.get", side_effect=_fake_get), \
              patch("time.sleep"):
             adapter._ensure_app_focused({
                 "related_apps": ["libreoffice_calc"],
             })
 
         # Should have called activate_window at least once and check at least once
-        assert call_count >= 2
+        assert len(setup_calls) >= 1
+        assert len(a11y_calls) >= 1
 
     def test_retries_on_foreground_mismatch(self):
         """Retries when foreground check does not match expected pattern."""
         adapter = self._make_adapter()
 
-        call_history = []
+        setup_calls = []
+        a11y_calls = []
 
         def _fake_post(url, **kwargs):
-            call_history.append(url)
+            setup_calls.append(url)
             resp = MagicMock()
             resp.status_code = 200
-            if "/execute_windows" in url:
-                # Always report desktop as foreground (mismatch)
-                resp.json.return_value = {
-                    "stdout": "ACTIVE_TITLE:Desktop",
-                    "stderr": "",
-                }
-            else:
-                resp.json.return_value = {"results": [{"type": "activate_window", "status": "ok"}]}
-                resp.text = '{"results": [{"type": "activate_window", "status": "ok"}]}'
+            resp.json.return_value = {"results": [{"type": "activate_window", "status": "ok"}]}
+            resp.text = '{"results": [{"type": "activate_window", "status": "ok"}]}'
+            return resp
+
+        def _fake_get(url, **kwargs):
+            a11y_calls.append(url)
+            resp = MagicMock()
+            resp.status_code = 200
+            # Always report desktop as foreground (mismatch).
+            resp.json.return_value = {"AT": {"name": "Desktop"}}
             return resp
 
         with patch("requests.post", side_effect=_fake_post), \
+             patch("requests.get", side_effect=_fake_get), \
              patch("time.sleep"):
             adapter._ensure_app_focused({
                 "related_apps": ["notepad"],
             })
 
-        # Should have tried multiple times (3 retries * patterns + checks + alt-tab)
-        setup_calls = [u for u in call_history if "/setup" in u]
-        execute_calls = [u for u in call_history if "/execute_windows" in u]
+        # Should have tried multiple setup activations and foreground checks.
         assert len(setup_calls) >= 3  # At least 3 retry attempts
-        assert len(execute_calls) >= 3  # At least 3 foreground checks
+        assert len(a11y_calls) >= 3  # At least 3 foreground checks
 
     def test_succeeds_on_second_attempt(self):
         """If first attempt fails but second succeeds, returns after second."""
@@ -666,26 +670,24 @@ class TestEnsureAppFocused:
         def _fake_post(url, **kwargs):
             resp = MagicMock()
             resp.status_code = 200
-            if "/execute_windows" in url:
-                attempt_count[0] += 1
-                if attempt_count[0] <= 2:
-                    # First attempt: wrong window
-                    resp.json.return_value = {
-                        "stdout": "ACTIVE_TITLE:Desktop",
-                        "stderr": "",
-                    }
-                else:
-                    # Second attempt: correct window
-                    resp.json.return_value = {
-                        "stdout": "ACTIVE_TITLE:LibreOffice Calc",
-                        "stderr": "",
-                    }
+            resp.json.return_value = {"results": []}
+            resp.text = '{"results": []}'
+            return resp
+
+        def _fake_get(url, **kwargs):
+            attempt_count[0] += 1
+            resp = MagicMock()
+            resp.status_code = 200
+            if attempt_count[0] <= 2:
+                # First attempt: wrong window
+                resp.json.return_value = {"AT": {"name": "Desktop"}}
             else:
-                resp.json.return_value = {"results": []}
-                resp.text = '{"results": []}'
+                # Second attempt: correct window
+                resp.json.return_value = {"AT": {"name": "LibreOffice Calc"}}
             return resp
 
         with patch("requests.post", side_effect=_fake_post), \
+             patch("requests.get", side_effect=_fake_get), \
              patch("time.sleep"):
             adapter._ensure_app_focused({
                 "related_apps": ["libreoffice_calc"],
