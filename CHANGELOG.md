@@ -1,6 +1,36 @@
 # CHANGELOG
 
 
+## v0.35.0 (2026-03-06)
+
+### Features
+
+- Add Win32 API foreground check as alternative to a11y-based detection
+  ([#114](https://github.com/OpenAdaptAI/openadapt-evals/pull/114),
+  [`81f89b0`](https://github.com/OpenAdaptAI/openadapt-evals/commit/81f89b0d98dcc0bd22f03464fe7193d3f1f76f28))
+
+* feat: add Win32 API foreground check as alternative to a11y-based detection
+
+Add _check_foreground_win32() method that uses GetForegroundWindow() + GetWindowText() via
+  PowerShell P/Invoke for fast, reliable foreground window title checking. This replaces the slow
+  a11y-based check as the default, while keeping a11y available via the focus_check_method config.
+
+- New config field: focus_check_method (win32, a11y, or both) - New CLI flag: --focus-check-method
+  for run and live subcommands - Detection of known-bad foreground states (Document Recovery, Start
+  Center) - Dispatch method routes to win32, a11y, or both (win32 first, a11y fallback)
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* test: update setup handler tests to mock win32 foreground check
+
+The focus check default changed from a11y to win32, so tests need to mock run_powershell instead of
+  requests.get for the /accessibility endpoint.
+
+---------
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.34.2 (2026-03-06)
 
 ### Bug Fixes
