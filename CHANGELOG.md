@@ -1,6 +1,53 @@
 # CHANGELOG
 
 
+## v0.34.0 (2026-03-06)
+
+### Bug Fixes
+
+- **waa-live**: Gate app readiness and classify infra setup failures
+  ([#107](https://github.com/OpenAdaptAI/openadapt-evals/pull/107),
+  [`3c06897`](https://github.com/OpenAdaptAI/openadapt-evals/commit/3c0689743802dc0e2b16038cdddfeee2a9d72b28))
+
+* fix(waa-live): gate app readiness and classify infra setup failures
+
+* chore(waa-live): add focus diagnostics on setup-readiness failure
+
+* fix(waa-live): refresh remediation diagnostics and remove dead log
+
+* test(waa-live): update focus tests for accessibility foreground checks
+
+### Features
+
+- Add done-gate to prevent premature task completion
+  ([#110](https://github.com/OpenAdaptAI/openadapt-evals/pull/110),
+  [`65714ad`](https://github.com/OpenAdaptAI/openadapt-evals/commit/65714ad1ed088a031dd9ce52167a2057c077a689))
+
+* feat: add done-gate to prevent agents from prematurely declaring task complete
+
+When enabled via --done-gate, the evaluation runner calls adapter.evaluate() when the agent signals
+  "done" to verify the task is actually complete. If the score is below the threshold (default 1.0),
+  the runner overrides the "done" signal, appends a continuation message to the task instruction,
+  and lets the agent continue. Limited to a configurable max overrides (default 3) to prevent
+  infinite loops.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* feat: add core4 trial wrapper, north-star updater, and parity plan doc
+
+- core4_eval.py: deterministic wrapper for running repeated Core4 trials -
+  update_weekly_north_star.py: compute hard-task success rates for STATUS.md -
+  waa_execution_parity_plan.md: phased plan for WAA execution reliability
+
+---------
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+- **scripts**: Add deterministic core4 lane CLI wrapper
+  ([#109](https://github.com/OpenAdaptAI/openadapt-evals/pull/109),
+  [`9de5f39`](https://github.com/OpenAdaptAI/openadapt-evals/commit/9de5f398f50d5e24c3316e69e167bba625f0c43f))
+
+
 ## v0.33.0 (2026-03-05)
 
 ### Bug Fixes
