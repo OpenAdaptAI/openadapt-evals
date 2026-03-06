@@ -597,9 +597,9 @@ class TestEnsureAppFocused:
         adapter = self._make_adapter()
 
         # Simulate activate_window success (/setup) and foreground check success
-        # via accessibility endpoint (/accessibility).
+        # via win32 API (default focus_check_method).
         setup_calls = []
-        a11y_calls = []
+        ps_calls = []
 
         def _fake_post(url, **kwargs):
             setup_calls.append(url)
@@ -609,30 +609,27 @@ class TestEnsureAppFocused:
             resp.text = '{"results": [{"type": "activate_window", "status": "ok"}]}'
             return resp
 
-        def _fake_get(url, **kwargs):
-            a11y_calls.append(url)
-            resp = MagicMock()
-            resp.status_code = 200
-            resp.json.return_value = {"AT": {"name": "LibreOffice Calc - data.xlsx"}}
-            return resp
+        def _fake_powershell(script, **kwargs):
+            ps_calls.append(script)
+            return "LibreOffice Calc - data.xlsx"
 
         with patch("requests.post", side_effect=_fake_post), \
-             patch("requests.get", side_effect=_fake_get), \
+             patch.object(adapter, "run_powershell", side_effect=_fake_powershell), \
              patch("time.sleep"):
             adapter._ensure_app_focused({
                 "related_apps": ["libreoffice_calc"],
             })
 
-        # Should have called activate_window at least once and check at least once
+        # Should have called activate_window at least once and win32 check at least once
         assert len(setup_calls) >= 1
-        assert len(a11y_calls) >= 1
+        assert len(ps_calls) >= 1
 
     def test_retries_on_foreground_mismatch(self):
         """Retries when foreground check does not match expected pattern."""
         adapter = self._make_adapter()
 
         setup_calls = []
-        a11y_calls = []
+        ps_calls = []
 
         def _fake_post(url, **kwargs):
             setup_calls.append(url)
@@ -642,24 +639,21 @@ class TestEnsureAppFocused:
             resp.text = '{"results": [{"type": "activate_window", "status": "ok"}]}'
             return resp
 
-        def _fake_get(url, **kwargs):
-            a11y_calls.append(url)
-            resp = MagicMock()
-            resp.status_code = 200
+        def _fake_powershell(script, **kwargs):
+            ps_calls.append(script)
             # Always report desktop as foreground (mismatch).
-            resp.json.return_value = {"AT": {"name": "Desktop"}}
-            return resp
+            return "Desktop"
 
         with patch("requests.post", side_effect=_fake_post), \
-             patch("requests.get", side_effect=_fake_get), \
+             patch.object(adapter, "run_powershell", side_effect=_fake_powershell), \
              patch("time.sleep"):
             adapter._ensure_app_focused({
                 "related_apps": ["notepad"],
             })
 
-        # Should have tried multiple setup activations and foreground checks.
+        # Should have tried multiple setup activations and win32 foreground checks.
         assert len(setup_calls) >= 3  # At least 3 retry attempts
-        assert len(a11y_calls) >= 3  # At least 3 foreground checks
+        assert len(ps_calls) >= 3  # At least 3 foreground checks
 
     def test_succeeds_on_second_attempt(self):
         """If first attempt fails but second succeeds, returns after second."""
@@ -674,20 +668,17 @@ class TestEnsureAppFocused:
             resp.text = '{"results": []}'
             return resp
 
-        def _fake_get(url, **kwargs):
+        def _fake_powershell(script, **kwargs):
             attempt_count[0] += 1
-            resp = MagicMock()
-            resp.status_code = 200
             if attempt_count[0] <= 2:
-                # First attempt: wrong window
-                resp.json.return_value = {"AT": {"name": "Desktop"}}
+                # First attempts: wrong window
+                return "Desktop"
             else:
-                # Second attempt: correct window
-                resp.json.return_value = {"AT": {"name": "LibreOffice Calc"}}
-            return resp
+                # Later attempt: correct window
+                return "LibreOffice Calc"
 
         with patch("requests.post", side_effect=_fake_post), \
-             patch("requests.get", side_effect=_fake_get), \
+             patch.object(adapter, "run_powershell", side_effect=_fake_powershell), \
              patch("time.sleep"):
             adapter._ensure_app_focused({
                 "related_apps": ["libreoffice_calc"],
