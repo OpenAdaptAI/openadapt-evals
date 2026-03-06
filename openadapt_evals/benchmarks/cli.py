@@ -345,6 +345,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         clean_desktop=getattr(args, "clean_desktop", False),
         force_tray_icons=getattr(args, "force_tray_icons", False),
         waa_image_version=getattr(args, "waa_image_version", None),
+        focus_check_method=getattr(args, "focus_check_method", "win32"),
     )
     adapter = WAALiveAdapter(config)
 
@@ -551,6 +552,7 @@ def cmd_live(args: argparse.Namespace) -> int:
         clean_desktop=getattr(args, "clean_desktop", False),
         force_tray_icons=getattr(args, "force_tray_icons", False),
         waa_image_version=getattr(args, "waa_image_version", None),
+        focus_check_method=getattr(args, "focus_check_method", "win32"),
     )
     adapter = WAALiveAdapter(config)
 
@@ -961,6 +963,7 @@ docker ps -f name=winarena --format "Container: {{.Names}}, Status: {{.Status}}"
                 clean_desktop=getattr(args, "clean_desktop", False),
                 force_tray_icons=getattr(args, "force_tray_icons", False),
                 waa_image_version=getattr(args, "waa_image_version", None),
+                focus_check_method=getattr(args, "focus_check_method", "win32"),
             )
         )
 
@@ -2426,6 +2429,9 @@ def main() -> int:
                            help="Max times to override premature 'done' (default: 3)")
     run_parser.add_argument("--done-gate-threshold", type=float, default=1.0,
                            help="Minimum score to accept 'done' (default: 1.0)")
+    run_parser.add_argument("--focus-check-method", type=str, default="win32",
+                           choices=["win32", "a11y", "both"],
+                           help="Method for foreground window check: win32 (fast, default), a11y, or both")
 
     # Live evaluation (full control)
     live_parser = subparsers.add_parser("live", help="Run live evaluation against WAA server (full control)")
@@ -2460,6 +2466,9 @@ def main() -> int:
                             help="Max times to override premature 'done' (default: 3)")
     live_parser.add_argument("--done-gate-threshold", type=float, default=1.0,
                             help="Minimum score to accept 'done' (default: 1.0)")
+    live_parser.add_argument("--focus-check-method", type=str, default="win32",
+                            choices=["win32", "a11y", "both"],
+                            help="Method for foreground window check: win32 (fast, default), a11y, or both")
 
     # Probe server
     probe_parser = subparsers.add_parser("probe", help="Check if WAA server is reachable")

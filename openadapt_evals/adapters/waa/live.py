@@ -384,6 +384,7 @@ class WAALiveConfig:
     waa_image_version: str | None = None
     strict_setup_readiness: bool = False
     setup_readiness_retries: int = 3
+    focus_check_method: str = "win32"  # "win32", "a11y", or "both"
 
 
 class WAALiveAdapter(BenchmarkAdapter):
@@ -1997,7 +1998,7 @@ $wins = Get-Process | Where-Object { $_.MainWindowTitle -and $_.MainWindowTitle.
                     )
                     if resp.status_code == 200:
                         time.sleep(0.5)
-                        if self._check_foreground_matches(patterns, requests_module):
+                        if self._check_foreground_dispatch(patterns, requests_module):
                             logger.info(
                                 "Post-setup focus: activated '%s' on attempt %d",
                                 pattern,
@@ -2021,6 +2022,123 @@ $wins = Get-Process | Where-Object { $_.MainWindowTitle -and $_.MainWindowTitle.
                 )
                 time.sleep(delay)
         return False
+
+    # Known-bad foreground window titles that indicate the app is not ready.
+    _BAD_FOREGROUND_TITLES = [
+        "document recovery",
+        "libreoffice start center",
+    ]
+
+    def _check_foreground_win32(self, patterns: list[str]) -> bool:
+        """Check foreground window title using Win32 API (fast, reliable).
+
+        Runs a minimal PowerShell script that calls ``GetForegroundWindow()``
+        and ``GetWindowText()`` via P/Invoke to retrieve the current foreground
+        window title, then checks whether it contains any of the expected
+        patterns (case-insensitive).
+
+        Args:
+            patterns: Window title substrings to match (case-insensitive).
+
+        Returns:
+            True if the foreground window title contains any of the patterns.
+        """
+        script = r"""
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class FgWin {
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)]
+  public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
+  public static string GetTitle() {
+    var sb = new StringBuilder(512);
+    GetWindowText(GetForegroundWindow(), sb, sb.Capacity);
+    return sb.ToString();
+  }
+}
+"@
+[FgWin]::GetTitle()
+"""
+        try:
+            output = self.run_powershell(script).strip()
+            # Take the last non-empty line (PowerShell may emit warnings before).
+            title = ""
+            for line in reversed(output.splitlines()):
+                line = line.strip()
+                if line:
+                    title = line
+                    break
+
+            self._last_foreground_title = title
+
+            # Detect known-bad foreground states.
+            title_lower = title.lower()
+            if not title:
+                logger.warning(
+                    "Win32 foreground check: window title is empty/blank"
+                )
+                return False
+            for bad in self._BAD_FOREGROUND_TITLES:
+                if bad in title_lower:
+                    logger.warning(
+                        "Win32 foreground check: detected known-bad title '%s'",
+                        title[:120],
+                    )
+                    return False
+
+            for pattern in patterns:
+                if pattern.lower() in title_lower:
+                    logger.debug(
+                        "Win32 foreground check: matched '%s' in '%s'",
+                        pattern,
+                        title[:100],
+                    )
+                    return True
+            logger.debug(
+                "Win32 foreground check: no pattern matched in '%s'",
+                title[:100],
+            )
+        except Exception as e:
+            logger.debug("Win32 foreground check failed: %s", e)
+        return False
+
+    def _check_foreground_dispatch(
+        self,
+        patterns: list[str],
+        requests_module: Any,
+    ) -> bool:
+        """Dispatch foreground check based on configured method.
+
+        Args:
+            patterns: Window title substrings to match (case-insensitive).
+            requests_module: The ``requests`` module (needed for a11y fallback).
+
+        Returns:
+            True if the foreground window matches any pattern.
+        """
+        method = self.config.focus_check_method
+
+        if method == "win32":
+            return self._check_foreground_win32(patterns)
+        elif method == "a11y":
+            return self._check_foreground_matches(patterns, requests_module)
+        elif method == "both":
+            # Try fast Win32 first; fall back to a11y if it fails.
+            result = self._check_foreground_win32(patterns)
+            if result:
+                return True
+            logger.debug(
+                "Win32 foreground check negative; falling back to a11y"
+            )
+            return self._check_foreground_matches(patterns, requests_module)
+        else:
+            logger.warning(
+                "Unknown focus_check_method '%s'; defaulting to win32",
+                method,
+            )
+            return self._check_foreground_win32(patterns)
 
     def _check_foreground_matches(
         self,
