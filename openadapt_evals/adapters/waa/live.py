@@ -257,62 +257,84 @@ def _build_type_commands(text: str) -> str:
 
 
 _LIBREOFFICE_RECOVERY_CLEANUP_SCRIPT = r"""
-import os, re, shutil
+import os, re, shutil, glob
 
 home = os.path.expanduser("~")
-lo_user = os.path.join(home, "AppData", "Roaming", "LibreOffice", "4", "user")
+lo_base = os.path.join(home, "AppData", "Roaming", "LibreOffice")
 
-backup_dir = os.path.join(lo_user, "backup")
-if os.path.exists(backup_dir):
-    files = os.listdir(backup_dir)
-    if files:
-        shutil.rmtree(backup_dir)
-        os.makedirs(backup_dir)
-        print(f"Cleared {len(files)} backup file(s)")
-    else:
-        print("Backup dir empty")
-else:
-    print("No backup dir")
+# Search ALL profile paths: LibreOffice/4/user, LibreOffice/user, etc.
+user_dirs = []
+if os.path.isdir(lo_base):
+    for entry in os.listdir(lo_base):
+        candidate = os.path.join(lo_base, entry, "user")
+        if os.path.isdir(candidate):
+            user_dirs.append(candidate)
+    # Also check LibreOffice/user directly
+    direct = os.path.join(lo_base, "user")
+    if os.path.isdir(direct) and direct not in user_dirs:
+        user_dirs.append(direct)
 
-xcu = os.path.join(lo_user, "registrymodifications.xcu")
-if os.path.exists(xcu):
-    with open(xcu, "r", encoding="utf-8") as f:
-        content = f.read()
-    changed = False
-    if "RecoveryList" in content:
-        content = re.sub(
-            r'<item oor:path="/org.openoffice.Office.Recovery/RecoveryList">.*?</item>',
-            "",
-            content,
-            flags=re.DOTALL,
+if not user_dirs:
+    print(f"No LibreOffice user dirs found under {lo_base}")
+
+for lo_user in user_dirs:
+    print(f"Cleaning {lo_user}")
+
+    # Clear backup directory
+    backup_dir = os.path.join(lo_user, "backup")
+    if os.path.exists(backup_dir):
+        files = os.listdir(backup_dir)
+        if files:
+            shutil.rmtree(backup_dir)
+            os.makedirs(backup_dir)
+            print(f"  Cleared {len(files)} backup file(s)")
+
+    # Clear .~lock.* files that block re-opening
+    for lockfile in glob.glob(os.path.join(lo_user, ".~lock.*")):
+        os.remove(lockfile)
+        print(f"  Removed lock file: {os.path.basename(lockfile)}")
+
+    # Edit registrymodifications.xcu to remove recovery entries and disable autosave
+    xcu = os.path.join(lo_user, "registrymodifications.xcu")
+    if os.path.exists(xcu):
+        with open(xcu, "r", encoding="utf-8") as f:
+            content = f.read()
+        changed = False
+        if "RecoveryList" in content:
+            content = re.sub(
+                r'<item oor:path="/org.openoffice.Office.Recovery/RecoveryList">.*?</item>',
+                "",
+                content,
+                flags=re.DOTALL,
+            )
+            changed = True
+            print("  Removed RecoveryList entries")
+        autosave_line = (
+            '<item oor:path="/org.openoffice.Office.Recovery/AutoSave">'
+            '<prop oor:name="Enabled" oor:op="fuse"><value>false</value></prop></item>'
         )
-        changed = True
-        print("Removed RecoveryList entries")
-    autosave_line = (
-        '<item oor:path="/org.openoffice.Office.Recovery/AutoSave">'
-        '<prop oor:name="Enabled" oor:op="fuse"><value>false</value></prop></item>'
-    )
-    if "AutoSave" not in content:
-        content = content.replace("</oor:items>", autosave_line + "\n</oor:items>")
-        changed = True
-        print("Added AutoSave=false")
-    elif ">true<" in content.split("AutoSave")[1].split("</item>")[0]:
-        content = re.sub(
-            r'<item oor:path="/org.openoffice.Office.Recovery/AutoSave">.*?</item>',
-            autosave_line,
-            content,
-            flags=re.DOTALL,
-        )
-        changed = True
-        print("Changed AutoSave to false")
-    else:
-        print("AutoSave already disabled")
-    if changed:
-        with open(xcu, "w", encoding="utf-8") as f:
-            f.write(content)
-        print("Updated registrymodifications.xcu")
-else:
-    print(f"No xcu found at {xcu}")
+        if "AutoSave" not in content:
+            content = content.replace("</oor:items>", autosave_line + "\n</oor:items>")
+            changed = True
+            print("  Added AutoSave=false")
+        elif ">true<" in content.split("AutoSave")[1].split("</item>")[0]:
+            content = re.sub(
+                r'<item oor:path="/org.openoffice.Office.Recovery/AutoSave">.*?</item>',
+                autosave_line,
+                content,
+                flags=re.DOTALL,
+            )
+            changed = True
+            print("  Changed AutoSave to false")
+        if changed:
+            with open(xcu, "w", encoding="utf-8") as f:
+                f.write(content)
+
+# Also clear lock files from common download locations
+for d in [os.path.join(home, "Downloads"), os.path.join(home, "Documents")]:
+    for lockfile in glob.glob(os.path.join(d, ".~lock.*")):
+        os.remove(lockfile)
+        print(f"Removed download lock: {lockfile}")
 """
 
 
