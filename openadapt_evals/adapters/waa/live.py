@@ -382,7 +382,7 @@ class WAALiveConfig:
     force_tray_icons: bool = False
     reapply_clean_desktop_each_reset: bool = False
     waa_image_version: str | None = None
-    strict_setup_readiness: bool = True
+    strict_setup_readiness: bool = False
     setup_readiness_retries: int = 3
 
 
