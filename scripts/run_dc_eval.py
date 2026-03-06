@@ -256,6 +256,23 @@ def main() -> int:
         default=2,
         help="Max replans when using --controller (default: 2)",
     )
+    parser.add_argument(
+        "--done-gate",
+        action="store_true",
+        help="Verify task completion before accepting agent's 'done' signal",
+    )
+    parser.add_argument(
+        "--done-gate-max-overrides",
+        type=int,
+        default=3,
+        help="Max times to override premature 'done' (default: 3)",
+    )
+    parser.add_argument(
+        "--done-gate-threshold",
+        type=float,
+        default=1.0,
+        help="Minimum score to accept 'done' (default: 1.0)",
+    )
     args = parser.parse_args()
 
     demo_dir = Path(args.demo_dir)
@@ -359,6 +376,12 @@ def main() -> int:
             cmd.append("--force-tray-icons")
         if args.waa_image_version:
             cmd.extend(["--waa-image-version", args.waa_image_version])
+        if args.done_gate:
+            cmd.extend([
+                "--done-gate",
+                "--done-gate-max-overrides", str(args.done_gate_max_overrides),
+                "--done-gate-threshold", str(args.done_gate_threshold),
+            ])
 
         result = subprocess.run(cmd)
         elapsed = time.time() - task_start
