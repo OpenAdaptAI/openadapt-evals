@@ -1,6 +1,28 @@
 # CHANGELOG
 
 
+## v0.34.2 (2026-03-06)
+
+### Bug Fixes
+
+- Default strict_setup_readiness to False to avoid false infra failures
+  ([#113](https://github.com/OpenAdaptAI/openadapt-evals/pull/113),
+  [`73111d3`](https://github.com/OpenAdaptAI/openadapt-evals/commit/73111d3a059c50b54293c2e9fecd043aad0861b7))
+
+The post-setup focus check (PR #107) defaults to strict mode, which marks tasks as infrastructure
+  failures when the a11y window enumeration can't find the expected app title. In practice,
+  LibreOffice windows take longer to render titles than the check allows, causing ALL LibreOffice
+  tasks to fail as infra — even though the app IS open.
+
+Changing default to False: focus check still runs and logs warnings, but doesn't abort the task. The
+  agent can recover from focus issues on its own (it did in all prior trials without this check).
+
+Use --strict-setup-readiness to opt into the fatal behavior when the a11y detection is more
+  reliable.
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.34.1 (2026-03-06)
 
 ### Bug Fixes
