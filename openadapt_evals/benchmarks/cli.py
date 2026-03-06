@@ -271,12 +271,18 @@ def cmd_mock(args: argparse.Namespace) -> int:
         return 1
 
     # Create config for trace collection
+    done_gate = getattr(args, "done_gate", False)
+    done_gate_max_overrides = getattr(args, "done_gate_max_overrides", 3)
+    done_gate_threshold = getattr(args, "done_gate_threshold", 1.0)
     config = None
-    if args.output:
+    if args.output or done_gate:
         config = EvaluationConfig(
-            save_execution_traces=True,
-            output_dir=args.output,
+            save_execution_traces=bool(args.output),
+            output_dir=args.output or "benchmark_results",
             run_name=args.run_name or "mock_eval",
+            done_gate=done_gate,
+            done_gate_max_overrides=done_gate_max_overrides,
+            done_gate_threshold=done_gate_threshold,
         )
 
     # Run evaluation
@@ -438,6 +444,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         save_execution_traces=True,
         output_dir=args.output,
         run_name=args.run_name,
+        done_gate=getattr(args, "done_gate", False),
+        done_gate_max_overrides=getattr(args, "done_gate_max_overrides", 3),
+        done_gate_threshold=getattr(args, "done_gate_threshold", 1.0),
     )
 
     print(f"Running {len(task_ids)} task(s): {', '.join(task_ids)}")
@@ -652,12 +661,18 @@ def cmd_live(args: argparse.Namespace) -> int:
         return 1
 
     # Create config for trace collection
+    done_gate = getattr(args, "done_gate", False)
+    done_gate_max_overrides = getattr(args, "done_gate_max_overrides", 3)
+    done_gate_threshold = getattr(args, "done_gate_threshold", 1.0)
     eval_config = None
-    if args.output:
+    if args.output or done_gate:
         eval_config = EvaluationConfig(
-            save_execution_traces=True,
-            output_dir=args.output,
+            save_execution_traces=bool(args.output),
+            output_dir=args.output or "benchmark_results",
             run_name=args.run_name or "live_eval",
+            done_gate=done_gate,
+            done_gate_max_overrides=done_gate_max_overrides,
+            done_gate_threshold=done_gate_threshold,
         )
 
     # Load tasks
@@ -2345,6 +2360,12 @@ def main() -> int:
     mock_parser.add_argument("--use-a11y-tree", action="store_true", help="Enable accessibility tree grounding for Qwen3VL")
     mock_parser.add_argument("--output", type=str, help="Output directory for traces")
     mock_parser.add_argument("--run-name", type=str, help="Name for this evaluation run")
+    mock_parser.add_argument("--done-gate", action="store_true",
+                            help="Verify task completion before accepting agent's 'done' signal")
+    mock_parser.add_argument("--done-gate-max-overrides", type=int, default=3,
+                            help="Max times to override premature 'done' (default: 3)")
+    mock_parser.add_argument("--done-gate-threshold", type=float, default=1.0,
+                            help="Minimum score to accept 'done' (default: 1.0)")
 
     # Simplified run command (recommended for live evaluation)
     run_parser = subparsers.add_parser(
@@ -2387,6 +2408,12 @@ def main() -> int:
                            help="Force network/audio tray icons visible for stable click-coordinate tasks")
     run_parser.add_argument("--waa-image-version", type=str, default=None,
                            help="Pinned WAA image version label to record in run metadata")
+    run_parser.add_argument("--done-gate", action="store_true",
+                           help="Verify task completion before accepting agent's 'done' signal")
+    run_parser.add_argument("--done-gate-max-overrides", type=int, default=3,
+                           help="Max times to override premature 'done' (default: 3)")
+    run_parser.add_argument("--done-gate-threshold", type=float, default=1.0,
+                           help="Minimum score to accept 'done' (default: 1.0)")
 
     # Live evaluation (full control)
     live_parser = subparsers.add_parser("live", help="Run live evaluation against WAA server (full control)")
@@ -2415,6 +2442,12 @@ def main() -> int:
                             help="Force network/audio tray icons visible for stable click-coordinate tasks")
     live_parser.add_argument("--waa-image-version", type=str, default=None,
                             help="Pinned WAA image version label to record in run metadata")
+    live_parser.add_argument("--done-gate", action="store_true",
+                            help="Verify task completion before accepting agent's 'done' signal")
+    live_parser.add_argument("--done-gate-max-overrides", type=int, default=3,
+                            help="Max times to override premature 'done' (default: 3)")
+    live_parser.add_argument("--done-gate-threshold", type=float, default=1.0,
+                            help="Minimum score to accept 'done' (default: 1.0)")
 
     # Probe server
     probe_parser = subparsers.add_parser("probe", help="Check if WAA server is reachable")

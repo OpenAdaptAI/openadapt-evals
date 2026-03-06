@@ -14,6 +14,7 @@ Example:
 
 from __future__ import annotations
 
+import copy
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -58,6 +59,9 @@ class EvaluationConfig:
         run_name: Name for this evaluation run.
         enable_live_tracking: Whether to enable live evaluation progress tracking.
         live_tracking_file: Path to live tracking JSON file.
+        done_gate: Whether to verify task completion before accepting agent's "done".
+        done_gate_max_overrides: Max times to override a premature "done" (default 3).
+        done_gate_threshold: Minimum score to accept "done" (default 1.0).
     """
 
     max_steps: int = 50
@@ -72,6 +76,9 @@ class EvaluationConfig:
     run_name: str | None = None
     enable_live_tracking: bool = True
     live_tracking_file: str = "benchmark_live.json"
+    done_gate: bool = False
+    done_gate_max_overrides: int = 3
+    done_gate_threshold: float = 1.0
 
 
 def evaluate_agent_on_benchmark(
@@ -319,6 +326,7 @@ def _run_single_task(
         done = False
         steps = 0
         action = None
+        done_gate_overrides = 0
         max_steps = task.time_limit_steps or config.max_steps
 
         while not done and steps < max_steps:
@@ -367,10 +375,98 @@ def _run_single_task(
             if action.type in ("done", "error"):
                 if action.type == "error":
                     logger.error(f"Step {steps}: Agent error: {action.raw_action}")
+                    done = True
+                    break
+
+                # Agent says "done" — apply done-gate if enabled
+                logger.info(f"Step {steps}: Agent signaled task completion")
+
+                if (
+                    config.done_gate
+                    and done_gate_overrides < config.done_gate_max_overrides
+                ):
+                    logger.info(
+                        f"Step {steps}: Done-gate active — evaluating task "
+                        f"(override {done_gate_overrides + 1}/{config.done_gate_max_overrides})"
+                    )
+                    try:
+                        gate_result = adapter.evaluate(task)
+                        gate_score = gate_result.score
+                    except Exception as e:
+                        logger.warning(
+                            f"Step {steps}: Done-gate evaluation failed: {e}. "
+                            "Accepting 'done' to avoid infinite loop."
+                        )
+                        done = True
+                        break
+
+                    if gate_score >= config.done_gate_threshold:
+                        logger.info(
+                            f"Step {steps}: Done-gate PASSED "
+                            f"(score={gate_score:.2f} >= {config.done_gate_threshold:.2f})"
+                        )
+                        done = True
+                        break
+
+                    # Override the premature "done"
+                    done_gate_overrides += 1
+                    logger.warning(
+                        f"Step {steps}: Done-gate REJECTED premature 'done' "
+                        f"(score={gate_score:.2f} < {config.done_gate_threshold:.2f}, "
+                        f"override {done_gate_overrides}/{config.done_gate_max_overrides})"
+                    )
+
+                    # Modify the task instruction to tell the agent to continue.
+                    # Strip any previous done-gate message before appending the new one.
+                    _DONE_GATE_MARKER = "\n\n[SYSTEM: The task is NOT yet complete"
+                    continuation_msg = (
+                        "\n\n[SYSTEM: The task is NOT yet complete based on automated "
+                        "evaluation (score: {score:.0%}). Your previous 'done' signal "
+                        "was overridden ({n}/{max}). Please examine the current screen "
+                        "carefully and continue working on the task. Do NOT declare "
+                        "'done' unless the task is truly finished.]"
+                    ).format(
+                        score=gate_score,
+                        n=done_gate_overrides,
+                        max=config.done_gate_max_overrides,
+                    )
+
+                    # Create a modified task with continuation message
+                    task = copy.copy(task)
+                    # Remove previous done-gate message if present
+                    marker_idx = task.instruction.find(_DONE_GATE_MARKER)
+                    if marker_idx >= 0:
+                        task.instruction = task.instruction[:marker_idx]
+                    task.instruction = task.instruction + continuation_msg
+
+                    # Get a fresh observation for the agent's next step
+                    # Use a no-op key press to trigger a new screenshot
+                    try:
+                        noop_action = BenchmarkAction(type="key", key="")
+                        obs, env_done, _info = adapter.step(noop_action)
+                        if env_done:
+                            logger.info(
+                                f"Step {steps}: Environment signaled done during "
+                                "done-gate screenshot refresh"
+                            )
+                            done = True
+                            break
+                    except Exception as e:
+                        logger.warning(
+                            f"Step {steps}: Failed to get fresh observation "
+                            f"after done-gate override: {e}. Using previous obs."
+                        )
+
+                    steps += 1
+                    continue
                 else:
-                    logger.info(f"Step {steps}: Agent signaled task completion")
-                done = True
-                break
+                    if config.done_gate and done_gate_overrides >= config.done_gate_max_overrides:
+                        logger.warning(
+                            f"Step {steps}: Done-gate max overrides reached "
+                            f"({config.done_gate_max_overrides}). Accepting 'done'."
+                        )
+                    done = True
+                    break
 
             # Execute action
             try:
