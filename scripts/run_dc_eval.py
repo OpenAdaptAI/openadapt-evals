@@ -53,7 +53,6 @@ def _start_tunnel(vm_user: str, vm_ip: str) -> bool:
         "-o", "TCPKeepAlive=yes",
         "-o", "ExitOnForwardFailure=yes",
         "-L", "5001:localhost:5000",
-        "-L", "5050:localhost:5051",
         "-L", "8006:localhost:8006",
         f"{vm_user}@{vm_ip}",
     ]
@@ -67,43 +66,6 @@ def _probe(server: str, timeout: int = 10) -> bool:
         return resp.ok
     except Exception:
         return False
-
-
-def _setup_eval_proxy(vm_user: str, vm_ip: str) -> bool:
-    """(Re-)establish socat proxy for the evaluate server on the VM.
-
-    Docker port forwarding for port 5050 is broken due to QEMU's custom
-    bridge networking (--cap-add NET_ADMIN).  Work around it by restarting
-    the socat-waa-evaluate systemd service on the VM host.  The service is
-    installed during pool creation (see DOCKER_SETUP_SCRIPT in pool.py).
-    The SSH tunnel maps local 5050 -> VM 5051.
-
-    Falls back to the legacy nohup socat approach if the systemd service
-    is not installed (e.g. on older VMs provisioned before this change).
-    """
-    # Try systemd service first (preferred: auto-restarts on failure)
-    script = (
-        "if systemctl list-unit-files socat-waa-evaluate.service "
-        "| grep -q socat-waa-evaluate; then "
-        "  sudo systemctl restart socat-waa-evaluate.service; "
-        "else "
-        "  killall socat 2>/dev/null || true; sleep 1; "
-        "  which socat >/dev/null 2>&1 "
-        "  || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq socat; "
-        "  nohup socat TCP-LISTEN:5051,fork,reuseaddr "
-        "  'EXEC:docker exec -i winarena socat - TCP\\:127.0.0.1\\:5050' "
-        "  </dev/null >/dev/null 2>&1 & "
-        "fi"
-    )
-    result = subprocess.run(
-        ["ssh", "-o", "StrictHostKeyChecking=no", f"{vm_user}@{vm_ip}", script],
-        capture_output=True, timeout=30,
-    )
-    if result.returncode != 0:
-        print(f"  socat proxy setup failed: {result.stderr.decode()}")
-        return False
-    print("  socat proxy for evaluate server established (VM:5051 -> container:5050)")
-    return True
 
 
 def _restart_container(vm_user: str, vm_ip: str) -> bool:
@@ -122,8 +84,7 @@ def _restart_container(vm_user: str, vm_ip: str) -> bool:
     if mgr.is_qemu_monitor_reachable():
         print("  Resetting Windows via QEMU monitor (system_reset)...")
         if mgr.reset_windows():
-            print("  QEMU reset sent, re-establishing evaluate proxy...")
-            _setup_eval_proxy(vm_user, vm_ip)
+            print("  QEMU reset sent.")
             return True
         print("  QEMU reset command failed, falling back to docker restart...")
     else:
@@ -139,8 +100,7 @@ def _restart_container(vm_user: str, vm_ip: str) -> bool:
     if result.returncode != 0:
         print(f"  Container restart failed: {result.stderr.decode()}")
         return False
-    print("  Container restarted, re-establishing evaluate proxy...")
-    _setup_eval_proxy(vm_user, vm_ip)
+    print("  Container restarted.")
     return True
 
 
@@ -164,11 +124,10 @@ def ensure_waa_ready(
     if _probe(server) and (evaluate_url is None or _probe(evaluate_url)):
         return True
 
-    # Step 2: Reconnect tunnel + ensure socat proxy
+    # Step 2: Reconnect tunnel
     print("  WAA unreachable, reconnecting tunnel...")
     _kill_tunnels()
     time.sleep(1)
-    _setup_eval_proxy(vm_user, vm_ip)
     if _start_tunnel(vm_user, vm_ip):
         time.sleep(3)
         if _probe(server) and (evaluate_url is None or _probe(evaluate_url)):
@@ -210,7 +169,8 @@ def main() -> int:
     parser.add_argument("--agent", default="api-claude-cu", help="Agent type")
     parser.add_argument("--demo-dir", default="annotated_demos", help="Demo directory")
     parser.add_argument("--server", default="http://localhost:5001")
-    parser.add_argument("--evaluate-url", default="http://localhost:5050")
+    parser.add_argument("--evaluate-url", default=None,
+                        help="Evaluate server URL (default: same as --server)")
     parser.add_argument("--max-steps", type=int, default=15)
     parser.add_argument("--output", default="benchmark_results")
     parser.add_argument(
@@ -357,11 +317,12 @@ def main() -> int:
             "--agent", args.agent,
             "--tasks", tid,
             "--server", args.server,
-            "--evaluate-url", args.evaluate_url,
             "--max-steps", str(args.max_steps),
             "--output", str(output_dir),
             "--run-name", run_name,
         ]
+        if args.evaluate_url:
+            cmd.extend(["--evaluate-url", args.evaluate_url])
         if demo_path:
             cmd.extend(["--demo", str(demo_path.resolve())])
         if args.controller and demo_path:

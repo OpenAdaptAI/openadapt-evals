@@ -79,13 +79,13 @@ def cmd_run(args: argparse.Namespace) -> int:
             str(out),
             "--server",
             args.server,
-            "--evaluate-url",
-            args.evaluate_url,
             "--agent",
             args.agent,
             "--vm-user",
             args.vm_user,
         ]
+        if args.evaluate_url:
+            cmd.extend(["--evaluate-url", args.evaluate_url])
         if args.vm_ip:
             cmd.extend(["--vm-ip", args.vm_ip])
         if args.start_from > 0:
@@ -181,7 +181,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--max-steps", type=int, default=15)
     run.add_argument("--output-root", default="benchmark_results")
     run.add_argument("--server", default="http://localhost:5001")
-    run.add_argument("--evaluate-url", default="http://localhost:5050")
+    run.add_argument("--evaluate-url", default=None,
+                     help="Evaluate server URL (default: same as --server)")
     run.add_argument("--agent", default="api-claude-cu")
     run.add_argument("--vm-ip", default=None)
     run.add_argument("--vm-user", default="azureuser")

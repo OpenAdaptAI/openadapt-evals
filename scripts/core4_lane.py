@@ -55,13 +55,13 @@ def _build_eval_cmd(args: argparse.Namespace, trial: TrialConfig) -> list[str]:
         trial.output_arg(),
         "--server",
         args.server,
-        "--evaluate-url",
-        args.evaluate_url,
         "--vm-user",
         args.vm_user,
         "--transport-error-threshold",
         str(args.transport_error_threshold),
     ]
+    if args.evaluate_url:
+        cmd.extend(["--evaluate-url", args.evaluate_url])
     if args.vm_ip:
         cmd.extend(["--vm-ip", args.vm_ip])
     if args.controller:
@@ -181,7 +181,7 @@ def _common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--agent", default="api-openai", help="Agent passed to run_dc_eval")
     parser.add_argument("--max-steps", type=int, default=15, help="Max steps per task")
     parser.add_argument("--server", default="http://localhost:5001", help="WAA server URL")
-    parser.add_argument("--evaluate-url", default="http://localhost:5050", help="Evaluate server URL")
+    parser.add_argument("--evaluate-url", default=None, help="Evaluate server URL (default: same as --server)")
     parser.add_argument("--vm-ip", default=None, help="VM IP (optional)")
     parser.add_argument("--vm-user", default="azureuser", help="VM SSH user")
     parser.add_argument(
