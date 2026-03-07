@@ -400,6 +400,17 @@ def _run_single_task(
                         done = True
                         break
 
+                    # If evaluate endpoint is unreachable, accept "done"
+                    # rather than forcing the agent to continue pointlessly
+                    if gate_result.error_type == "infrastructure":
+                        logger.warning(
+                            f"Step {steps}: Done-gate skipped — evaluate "
+                            f"returned infrastructure error: {gate_result.reason}. "
+                            "Accepting 'done'."
+                        )
+                        done = True
+                        break
+
                     if gate_score >= config.done_gate_threshold:
                         logger.info(
                             f"Step {steps}: Done-gate PASSED "

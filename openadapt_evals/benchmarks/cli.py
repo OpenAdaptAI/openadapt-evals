@@ -2252,7 +2252,7 @@ def cmd_eval_suite(args: argparse.Namespace) -> int:
         tunnel_mgr = SSHTunnelManager()
         tunnel_mgr.start_tunnels_for_vm(vm_ip=worker_ip)
         server_url = "http://localhost:5001"
-        evaluate_url = "http://localhost:5050"
+        evaluate_url = None  # use server_url for /evaluate
         # Give tunnels a moment to establish
         import time
         time.sleep(3)
@@ -2389,8 +2389,8 @@ def main() -> int:
     )
     run_parser.add_argument("--server", type=str, default="http://localhost:5001",
                            help="WAA server URL (default: localhost:5001 for SSH tunnel)")
-    run_parser.add_argument("--evaluate-url", type=str, default="http://localhost:5050",
-                           help="Evaluate server URL (default: localhost:5050)")
+    run_parser.add_argument("--evaluate-url", type=str, default=None,
+                           help="Evaluate server URL (default: same as --server)")
     run_parser.add_argument("--agent", type=str, default="api-openai",
                            help="Agent type: noop, mock, api-claude, api-openai, api-claude-cu, qwen3vl, smol")
     run_parser.add_argument("--task", type=str,
@@ -2437,8 +2437,8 @@ def main() -> int:
     live_parser = subparsers.add_parser("live", help="Run live evaluation against WAA server (full control)")
     live_parser.add_argument("--server", type=str, default="http://localhost:5001",
                             help="WAA server URL (default: localhost:5001 for SSH tunnel)")
-    live_parser.add_argument("--evaluate-url", type=str, default="http://localhost:5050",
-                            help="Evaluate server URL (default: localhost:5050)")
+    live_parser.add_argument("--evaluate-url", type=str, default=None,
+                            help="Evaluate server URL (default: same as --server)")
     live_parser.add_argument("--agent", type=str, default="mock",
                             help="Agent type: mock, noop, api-claude, api-openai, api-claude-cu, qwen3vl, smol, retrieval-claude, retrieval-openai")
     live_parser.add_argument("--demo", type=str, help="Demo trajectory file for ApiAgent")
@@ -2791,8 +2791,8 @@ def main() -> int:
         help="WAA server URL (used with --no-pool-create)",
     )
     suite_parser.add_argument(
-        "--evaluate-url", type=str, default="http://localhost:5050",
-        help="Evaluate server URL (used with --no-pool-create)",
+        "--evaluate-url", type=str, default=None,
+        help="Evaluate server URL (default: same as --server)",
     )
 
     args = parser.parse_args()

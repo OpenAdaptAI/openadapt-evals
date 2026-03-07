@@ -359,7 +359,7 @@ def _setup_connectivity(
 
 def _wait_waa_ready(
     server: str = "http://localhost:5001",
-    evaluate_url: str = "http://localhost:5050",
+    evaluate_url: str | None = None,
     timeout: int = 1200,
 ) -> bool:
     """Wait for WAA server and evaluate server to respond."""
@@ -381,13 +381,15 @@ def _wait_waa_ready(
         except Exception:
             waa_ok = False
 
-        try:
-            eval_ok = requests.get(f"{evaluate_url}/probe", timeout=10).ok
-        except Exception:
-            eval_ok = False
+        eval_ok = True  # default to True when no separate evaluate URL
+        if evaluate_url:
+            try:
+                eval_ok = requests.get(f"{evaluate_url}/probe", timeout=10).ok
+            except Exception:
+                eval_ok = False
 
         if waa_ok and eval_ok:
-            print(f"[waa] WAA + evaluate server ready after {elapsed}s")
+            print(f"[waa] WAA server ready after {elapsed}s")
             return True
         if waa_ok and not eval_ok:
             # WAA is up but evaluate isn't — acceptable for ZS-only runs
@@ -434,7 +436,7 @@ def _run_eval(
     conditions: list[tuple[str, str, Path | None]],
     agent: str,
     server: str,
-    evaluate_url: str,
+    evaluate_url: str | None,
     max_steps: int,
     output_dir: Path,
     vm_ip: str,
@@ -481,11 +483,12 @@ def _run_eval(
             "--agent", agent,
             "--tasks", tid,
             "--server", server,
-            "--evaluate-url", evaluate_url,
             "--max-steps", str(max_steps),
             "--output", str(output_dir),
             "--run-name", run_name,
         ]
+        if evaluate_url:
+            cmd.extend(["--evaluate-url", evaluate_url])
         if clean_desktop:
             cmd.append("--clean-desktop")
         if force_tray_icons:
@@ -606,7 +609,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Pinned WAA image version label to record in run metadata",
     )
     parser.add_argument("--server", default="http://localhost:5001")
-    parser.add_argument("--evaluate-url", default="http://localhost:5050")
+    parser.add_argument("--evaluate-url", default=None,
+                        help="Evaluate server URL (default: same as --server)")
     parser.add_argument(
         "--vm-name", default=DEFAULT_VM_NAME, help="VM name",
     )
