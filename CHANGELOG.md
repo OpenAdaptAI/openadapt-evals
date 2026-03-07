@@ -1,6 +1,27 @@
 # CHANGELOG
 
 
+## v0.35.1 (2026-03-07)
+
+### Bug Fixes
+
+- Use WAA server for /evaluate instead of fragile socat proxy
+  ([#115](https://github.com/OpenAdaptAI/openadapt-evals/pull/115),
+  [`8bd1b43`](https://github.com/OpenAdaptAI/openadapt-evals/commit/8bd1b439de23d49072e68f457eda6c95f37e4153))
+
+The evaluate endpoint (/evaluate) is already available on the WAA Flask server (port 5000), which is
+  accessed via a single reliable SSH tunnel (local:5001 → VM:5000). The separate evaluate chain
+  (local:5050 → VM:5051 → socat → docker exec → container:5050) was fragile and caused
+  infrastructure failures when socat died mid-trial.
+
+Changes: - Default --evaluate-url to None (falls back to --server URL) - Remove socat proxy setup
+  (_setup_eval_proxy) from run_dc_eval.py - Remove port 5050 from SSH tunnel forwarding - Make
+  done-gate non-fatal when evaluate returns infrastructure error - All scripts pass --evaluate-url
+  only when explicitly set
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.35.0 (2026-03-06)
 
 ### Features
