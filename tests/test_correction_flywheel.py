@@ -396,8 +396,9 @@ class TestCorrectionCapture:
         assert len(result.screenshots) == 2
         assert result.duration_seconds == 5.0
 
+    @patch("openadapt_evals.correction_capture._has_recorder", return_value=False)
     @patch("openadapt_evals.correction_capture._take_screenshot")
-    def test_capture_with_immediate_enter(self, mock_screenshot, tmp_path):
+    def test_capture_with_immediate_enter(self, mock_screenshot, mock_has_rec, tmp_path):
         """Test capture completes when stdin signals immediately."""
         import io
 
