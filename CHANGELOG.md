@@ -1,6 +1,55 @@
 # CHANGELOG
 
 
+## v0.35.2 (2026-03-08)
+
+### Bug Fixes
+
+- Detect and dismiss Windows lock screen before each task
+  ([#117](https://github.com/OpenAdaptAI/openadapt-evals/pull/117),
+  [`4a28653`](https://github.com/OpenAdaptAI/openadapt-evals/commit/4a2865367ce0f9bd65a61ca8168cf1676b226197))
+
+* feat: add correction flywheel (store, capture, parser, controller hooks)
+
+Implements the correction flywheel MVP:
+
+- correction_store.py: JSON-file-based correction library with save/find (fuzzy string matching via
+  SequenceMatcher)/load_all - correction_capture.py: Human correction capture using
+  openadapt-capture Recorder (primary) with PIL screenshot fallback - correction_parser.py: VLM call
+  to parse before/after screenshots into PlanStep dict (think/action/expect) - demo_controller.py:
+  Added correction_store and enable_correction_capture params. On retry exhaustion: check correction
+  store -> inject match, or capture human correction -> parse -> store -> advance - cli.py: Added
+  --correction-library and --enable-correction-capture flags
+
+The loop: agent fails at step N -> correction store checked -> if match, inject corrected step -> if
+  no match and capture enabled, human completes step -> Recorder captures -> VLM parses ->
+  correction stored -> next run retrieves it.
+
+17 tests added, all passing. 54 existing demo_controller tests unaffected.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+* fix: mock _has_recorder in correction capture test
+
+The test was calling the real Recorder which may not have wait_for_ready in the installed version.
+  Mock it to use the simple fallback path since this is a unit test.
+
+* fix: detect and dismiss Windows lock screen before each task
+
+Add _dismiss_lock_screen() to run_dc_eval.py that checks for LogonUI.exe process and types the
+  password to unlock if the screen is locked. Called from ensure_waa_ready() after each successful
+  probe.
+
+This prevents eval failures when the Windows VM has been idle and the lock screen has engaged
+  between tasks or between sessions.
+
+* chore: sync beads state
+
+---------
+
+Co-authored-by: Claude Opus 4.6 <noreply@anthropic.com>
+
+
 ## v0.35.1 (2026-03-07)
 
 ### Bug Fixes
