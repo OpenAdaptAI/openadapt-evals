@@ -460,6 +460,18 @@ def cmd_run(args: argparse.Namespace) -> int:
     if use_controller:
         print(f"Using DemoController (max_retries={args.max_retries}, max_replans={args.max_replans})")
 
+    # Set up correction store if requested
+    correction_store = None
+    enable_correction_capture = getattr(args, "enable_correction_capture", False)
+    correction_library_path = getattr(args, "correction_library", None)
+    if correction_library_path:
+        from openadapt_evals.correction_store import CorrectionStore
+
+        correction_store = CorrectionStore(correction_library_path)
+        print(f"Correction library: {correction_library_path}")
+        if enable_correction_capture:
+            print("Correction capture: ENABLED (will prompt for human corrections on failure)")
+
     # Run evaluation
     if use_controller:
         from openadapt_evals.demo_controller import run_with_controller
@@ -475,6 +487,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                 max_steps=args.max_steps,
                 max_retries=args.max_retries,
                 max_replans=args.max_replans,
+                correction_store=correction_store,
+                enable_correction_capture=enable_correction_capture,
             )
             results.append(result)
     else:
@@ -2432,6 +2446,10 @@ def main() -> int:
     run_parser.add_argument("--focus-check-method", type=str, default="win32",
                            choices=["win32", "a11y", "both"],
                            help="Method for foreground window check: win32 (fast, default), a11y, or both")
+    run_parser.add_argument("--correction-library", type=str, default=None,
+                           help="Path to correction library directory for the correction flywheel")
+    run_parser.add_argument("--enable-correction-capture", action="store_true",
+                           help="Enable HITL correction capture when agent fails (requires --correction-library)")
 
     # Live evaluation (full control)
     live_parser = subparsers.add_parser("live", help="Run live evaluation against WAA server (full control)")

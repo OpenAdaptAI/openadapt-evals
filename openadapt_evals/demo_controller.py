@@ -51,6 +51,7 @@ from openadapt_evals.adapters.base import (
     BenchmarkTask,
 )
 from openadapt_evals.agents.base import BenchmarkAgent
+from openadapt_evals.correction_store import CorrectionEntry, CorrectionStore
 from openadapt_evals.agents.claude_computer_use_agent import _parse_multilevel_demo
 from openadapt_evals.plan_verify import (
     VerificationResult,
@@ -143,6 +144,8 @@ class DemoController:
         max_replans: int = 2,
         verify_model: str = "gpt-4.1-mini",
         verify_provider: str = "openai",
+        correction_store: CorrectionStore | None = None,
+        enable_correction_capture: bool = False,
     ) -> None:
         self.agent = agent
         self.adapter = adapter
@@ -151,6 +154,8 @@ class DemoController:
         self.max_replans = max_replans
         self.verify_model = verify_model
         self.verify_provider = verify_provider
+        self.correction_store = correction_store
+        self.enable_correction_capture = enable_correction_capture
 
         # Parse the demo into a structured plan
         self.plan_state = self._parse_demo(demo_text)
@@ -386,6 +391,16 @@ class DemoController:
                     current.status = "done"
                     self._advance()
                 elif current.attempts >= self.max_retries:
+                    # Check correction library for a stored fix
+                    if self._try_stored_correction(task, current):
+                        continue  # re-execute with injected correction
+
+                    # Capture human correction if enabled
+                    if self._try_capture_correction(
+                        task, current, obs, screenshot_bytes
+                    ):
+                        continue  # correction captured, step marked done
+
                     logger.warning(
                         "Step %d failed after %d attempts (last: %s); %s",
                         current.step_num,
@@ -820,6 +835,132 @@ class DemoController:
         return "\n".join(lines)
 
     # ------------------------------------------------------------------
+    # Correction flywheel
+    # ------------------------------------------------------------------
+
+    def _try_stored_correction(
+        self, task: BenchmarkTask, current: PlanStep
+    ) -> bool:
+        """Check correction library for a stored fix. Returns True if injected."""
+        if not self.correction_store:
+            return False
+
+        corrections = self.correction_store.find(
+            task_id=task.task_id,
+            step_description=current.action,
+        )
+        if not corrections:
+            return False
+
+        correction = corrections[0]
+        logger.info(
+            "Found stored correction for step %d (match: %s)",
+            current.step_num,
+            correction.entry_id,
+        )
+
+        # Inject correction as replacement step
+        corrected = PlanStep(
+            step_num=current.step_num,
+            think=correction.correction_step.get("think", current.think),
+            action=correction.correction_step.get("action", current.action),
+            expect=correction.correction_step.get("expect", current.expect),
+            status="in_progress",
+            attempts=0,
+        )
+        self.plan_state.steps[self.plan_state.current_step_idx] = corrected
+        return True
+
+    def _try_capture_correction(
+        self,
+        task: BenchmarkTask,
+        current: PlanStep,
+        obs: BenchmarkObservation,
+        screenshot_bytes: bytes | None,
+    ) -> bool:
+        """Capture human correction if enabled. Returns True if captured."""
+        if not self.enable_correction_capture or not self.correction_store:
+            return False
+
+        entry = self._capture_human_correction(task, current, obs, screenshot_bytes)
+        if entry is None:
+            return False
+
+        self.correction_store.save(entry)
+
+        # Mark step as done and advance
+        current.status = "done"
+        self._advance()
+        return True
+
+    def _capture_human_correction(
+        self,
+        task: BenchmarkTask,
+        failed_step: PlanStep,
+        observation: BenchmarkObservation,
+        screenshot_bytes: bytes | None,
+    ) -> CorrectionEntry | None:
+        """Activate correction capture, wait for human, parse result."""
+        import os
+        import tempfile
+        import uuid
+
+        from openadapt_evals.correction_capture import CorrectionCapture
+        from openadapt_evals.correction_parser import parse_correction
+
+        run_id = uuid.uuid4().hex[:8]
+        capture_dir = os.path.join(
+            tempfile.gettempdir(),
+            f"correction_{task.task_id}_{failed_step.step_num}_{run_id}",
+        )
+
+        failure_explanation = ""
+        if failed_step.verification_result:
+            failure_explanation = failed_step.verification_result.explanation
+
+        capture = CorrectionCapture(output_dir=capture_dir)
+        result = capture.capture_correction(
+            failure_context={
+                "screenshot_bytes": screenshot_bytes,
+                "step_action": failed_step.action,
+                "explanation": failure_explanation,
+            },
+        )
+
+        if len(result.screenshots) < 2:
+            logger.warning("Correction capture got fewer than 2 screenshots; skipping")
+            return None
+
+        # Read before and after screenshots
+        try:
+            with open(result.screenshots[0], "rb") as f:
+                before_bytes = f.read()
+            with open(result.screenshots[-1], "rb") as f:
+                after_bytes = f.read()
+        except (FileNotFoundError, OSError) as exc:
+            logger.error("Failed to read correction screenshots: %s", exc)
+            return None
+
+        # Parse correction via VLM
+        correction_step = parse_correction(
+            step_action=failed_step.action,
+            failure_explanation=failure_explanation,
+            before_screenshot=before_bytes,
+            after_screenshot=after_bytes,
+            model=self.verify_model,
+            provider=self.verify_provider,
+        )
+
+        return CorrectionEntry(
+            task_id=task.task_id,
+            step_description=failed_step.action,
+            failure_screenshot_path=result.screenshots[0],
+            failure_explanation=failure_explanation,
+            correction_step=correction_step,
+            run_id=run_id,
+        )
+
+    # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
@@ -868,6 +1009,8 @@ def run_with_controller(
     max_replans: int = 2,
     verify_model: str = "gpt-4.1-mini",
     verify_provider: str = "openai",
+    correction_store: CorrectionStore | None = None,
+    enable_correction_capture: bool = False,
 ) -> BenchmarkResult:
     """Run a task using the demo-conditioned controller.
 
@@ -884,6 +1027,8 @@ def run_with_controller(
         max_replans: Maximum replans of the remaining plan.
         verify_model: VLM model for verification.
         verify_provider: VLM provider for verification.
+        correction_store: Optional CorrectionStore for retrieval/storage.
+        enable_correction_capture: Whether to capture human corrections.
 
     Returns:
         A BenchmarkResult with the execution outcome.
@@ -896,5 +1041,7 @@ def run_with_controller(
         max_replans=max_replans,
         verify_model=verify_model,
         verify_provider=verify_provider,
+        correction_store=correction_store,
+        enable_correction_capture=enable_correction_capture,
     )
     return controller.execute(task, max_steps=max_steps)
