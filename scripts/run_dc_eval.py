@@ -60,6 +60,49 @@ def _start_tunnel(vm_user: str, vm_ip: str) -> bool:
     return result.returncode == 0
 
 
+def _dismiss_lock_screen(server: str) -> bool:
+    """Detect and dismiss Windows lock screen if present.
+
+    Checks for LogonUI.exe process (Windows lock screen). If found,
+    types the password ("admin") and presses Enter to unlock.
+
+    Returns True if lock screen was dismissed or wasn't present.
+    """
+    try:
+        # Check for LogonUI.exe process
+        resp = requests.post(
+            f"{server}/execute",
+            json={"command": 'powershell -Command "(Get-Process LogonUI -ErrorAction SilentlyContinue) -ne $null"'},
+            timeout=10,
+        )
+        if not resp.ok:
+            return True  # Can't check, assume OK
+
+        output = resp.json().get("output", "").strip()
+        if output != "True":
+            return True  # Not locked
+
+        print("  Lock screen detected (LogonUI.exe running), dismissing...")
+
+        # Type password and press Enter via pyautogui
+        resp = requests.post(
+            f"{server}/execute",
+            json={"command": 'python -c "import pyautogui, time; pyautogui.press(\'enter\'); time.sleep(1); pyautogui.typewrite(\'admin\', interval=0.05); time.sleep(0.5); pyautogui.press(\'enter\')"'},
+            timeout=15,
+        )
+        if resp.ok:
+            print("  Lock screen dismissed, waiting for desktop...")
+            time.sleep(5)  # Wait for desktop to load
+            return True
+        else:
+            print(f"  Failed to dismiss lock screen: {resp.text}")
+            return False
+
+    except Exception as e:
+        print(f"  Lock screen check error: {e}")
+        return True  # Don't block on check failures
+
+
 def _probe(server: str, timeout: int = 10) -> bool:
     try:
         resp = requests.get(f"{server}/probe", timeout=timeout)
@@ -122,6 +165,7 @@ def ensure_waa_ready(
     """
     # Step 1: Quick probe
     if _probe(server) and (evaluate_url is None or _probe(evaluate_url)):
+        _dismiss_lock_screen(server)
         return True
 
     # Step 2: Reconnect tunnel
@@ -132,6 +176,7 @@ def ensure_waa_ready(
         time.sleep(3)
         if _probe(server) and (evaluate_url is None or _probe(evaluate_url)):
             print("  Tunnel reconnected, WAA ready!")
+            _dismiss_lock_screen(server)
             return True
 
     # Step 3: Tunnel up but WAA not responding → container restart
@@ -157,6 +202,7 @@ def ensure_waa_ready(
             last_print = elapsed
         if _probe(server, timeout=10) and (evaluate_url is None or _probe(evaluate_url, timeout=10)):
             print(f"  WAA ready after {elapsed}s!")
+            _dismiss_lock_screen(server)
             return True
         time.sleep(10)
 
