@@ -1,17 +1,22 @@
 """Export WAA benchmark traces as training data.
 
 This module provides functionality to filter and export successful WAA benchmark
-traces in a format suitable for VLM fine-tuning. It converts benchmark execution
-traces to the openadapt-ml Episode format.
+traces in a format suitable for VLM fine-tuning.
+
+Two exporters are available:
+
+- ``TraceExporter``: Converts traces to the openadapt-ml Episode format.
+  Requires openadapt-ml as a dependency.
+- ``LightweightTraceExporter``: Exports plain JSON + screenshots with no
+  external ML dependencies. Useful for teams with their own training pipelines.
 
 Usage:
     # Via CLI
     uv run python -m openadapt_evals.benchmarks.vm_cli export-traces --status passed --output training_data/
 
-    # Via Python
+    # Via Python (openadapt-ml format)
     from openadapt_evals.benchmarks.trace_export import export_traces, TraceExporter
 
-    # Export all passing traces
     exporter = TraceExporter(
         benchmark_dir=Path("benchmark_results/waa_eval_20241214"),
         output_dir=Path("training_data"),
@@ -19,26 +24,24 @@ Usage:
     )
     episodes = exporter.export()
 
-    # Or use convenience function
-    episodes = export_traces(
+    # Via Python (lightweight JSON, no openadapt-ml dependency)
+    from openadapt_evals.benchmarks.trace_export import export_traces_lightweight
+
+    results = export_traces_lightweight(
         benchmark_dir="benchmark_results/waa_eval_20241214",
-        output_dir="training_data",
+        output_dir="training_data_json",
         status_filter="passed",
     )
 
-Directory structure created:
-    training_data/
+Directory structure created (lightweight):
+    training_data_json/
     |-- episodes/
-    |   |-- episode_001.json       # Episode schema format
-    |   |-- episode_002.json
-    |   |-- ...
+    |   |-- waa_task_001.json      # Plain JSON (no ML schema dependency)
     |-- screenshots/
-    |   |-- episode_001/
+    |   |-- waa_task_001/
     |   |   |-- step_000.png
-    |   |   |-- step_001.png
-    |   |-- episode_002/
-    |-- manifest.json              # Index of all exported episodes
-    |-- training_samples.jsonl     # JSONL format for training
+    |-- manifest.json
+    |-- training_samples.jsonl
 """
 
 from __future__ import annotations
@@ -47,7 +50,7 @@ import json
 import logging
 import shutil
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
@@ -619,3 +622,267 @@ def list_available_runs(
         runs.append(run_info)
 
     return runs
+
+
+# ---------------------------------------------------------------------------
+# Lightweight exporter (no openadapt-ml dependency)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class LightweightTraceExporter:
+    """Export benchmark traces as plain JSON with no ML framework dependencies.
+
+    Produces simple JSON files with screenshots, actions, and metadata that
+    any training pipeline can consume. Does not import from openadapt-ml.
+
+    Args:
+        benchmark_dir: Path to benchmark results directory.
+        output_dir: Output directory for exported data.
+        status_filter: Filter by task status ("passed", "failed", "all").
+        copy_screenshots: Whether to copy screenshots to output directory.
+        viewport_size: Default viewport size for coordinate normalization.
+    """
+
+    benchmark_dir: Path
+    output_dir: Path
+    status_filter: StatusFilter = "passed"
+    copy_screenshots: bool = True
+    viewport_size: tuple[int, int] = (1920, 1200)
+
+    def __post_init__(self):
+        self.benchmark_dir = Path(self.benchmark_dir)
+        self.output_dir = Path(self.output_dir)
+
+    def export(self) -> list[dict[str, Any]]:
+        """Export traces as plain JSON dicts.
+
+        Returns:
+            List of episode dicts (same structure as the JSON files written).
+        """
+        metadata = load_benchmark_metadata(self.benchmark_dir)
+        load_benchmark_summary(self.benchmark_dir)
+        tasks = load_task_results(self.benchmark_dir)
+
+        logger.info(
+            "LightweightTraceExporter: %d tasks from %s",
+            len(tasks),
+            self.benchmark_dir.name,
+        )
+
+        filtered = self._filter_tasks(tasks)
+        logger.info("Filtered to %d tasks (status=%s)", len(filtered), self.status_filter)
+
+        if not filtered:
+            logger.warning("No tasks match the filter criteria")
+            return []
+
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        (self.output_dir / "episodes").mkdir(exist_ok=True)
+        if self.copy_screenshots:
+            (self.output_dir / "screenshots").mkdir(exist_ok=True)
+
+        episodes: list[dict[str, Any]] = []
+        stats = ExportStats(total_tasks=len(tasks))
+
+        for i, task in enumerate(filtered):
+            try:
+                episode = self._convert_task(task, i, metadata)
+                episodes.append(episode)
+
+                episode_path = self.output_dir / "episodes" / f"{episode['episode_id']}.json"
+                with open(episode_path, "w") as f:
+                    json.dump(episode, f, indent=2)
+
+                if self.copy_screenshots:
+                    self._copy_screenshots(task, episode["episode_id"])
+
+                stats.exported_tasks += 1
+                stats.total_steps += len(episode.get("steps", []))
+            except Exception as e:
+                error_msg = f"Failed to export task {task.get('task_id', 'unknown')}: {e}"
+                logger.error(error_msg)
+                stats.errors.append(error_msg)
+                stats.skipped_tasks += 1
+
+        self._write_manifest(episodes, metadata, stats)
+        self._write_jsonl(episodes)
+
+        logger.info(
+            "Lightweight export complete: %d/%d tasks, %d steps",
+            stats.exported_tasks,
+            stats.total_tasks,
+            stats.total_steps,
+        )
+        return episodes
+
+    def _filter_tasks(self, tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if self.status_filter == "all":
+            return tasks
+        filtered = []
+        for task in tasks:
+            success = task.get("execution", {}).get("success", False)
+            if self.status_filter == "passed" and success:
+                filtered.append(task)
+            elif self.status_filter == "failed" and not success:
+                filtered.append(task)
+        return filtered
+
+    def _convert_task(
+        self,
+        task: dict[str, Any],
+        index: int,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        definition = task.get("definition", {})
+        execution = task.get("execution", {})
+        screenshots = task.get("screenshots", [])
+        execution_steps = execution.get("steps", [])
+
+        task_id = task.get("task_id", f"task_{index:03d}")
+        episode_id = f"waa_{task_id}"
+
+        steps = []
+        for step_idx, step_data in enumerate(execution_steps):
+            action_data = step_data.get("action", {})
+
+            screenshot_rel = None
+            if step_idx < len(screenshots):
+                screenshot_rel = f"screenshots/{episode_id}/step_{step_idx:03d}.png"
+            elif step_data.get("screenshot_path"):
+                screenshot_rel = step_data["screenshot_path"]
+
+            # Normalize coordinates to [0,1] if they look like pixel values
+            x = action_data.get("x")
+            y = action_data.get("y")
+            if x is not None and y is not None:
+                if not (0 <= x <= 1 and 0 <= y <= 1):
+                    x = x / self.viewport_size[0]
+                    y = y / self.viewport_size[1]
+
+            steps.append({
+                "step_index": step_idx,
+                "screenshot": screenshot_rel,
+                "action": {
+                    "type": action_data.get("type", "click"),
+                    "x": x,
+                    "y": y,
+                    "text": action_data.get("text"),
+                    "key": action_data.get("key"),
+                    "modifiers": action_data.get("modifiers"),
+                    "scroll_direction": action_data.get("scroll_direction"),
+                    "target_node_id": action_data.get("target_node_id"),
+                },
+                "reasoning": step_data.get("reasoning"),
+                "timestamp": step_data.get("timestamp"),
+            })
+
+        return {
+            "episode_id": episode_id,
+            "task_id": task_id,
+            "instruction": definition.get("instruction", ""),
+            "success": execution.get("success", False),
+            "score": execution.get("score", 0.0),
+            "domain": definition.get("domain"),
+            "agent_model": metadata.get("model_id"),
+            "num_steps": len(steps),
+            "steps": steps,
+            "metadata": {
+                "benchmark_name": metadata.get("benchmark_name", "waa"),
+                "run_name": metadata.get("run_name"),
+                "total_time_seconds": execution.get("total_time_seconds"),
+            },
+        }
+
+    def _copy_screenshots(self, task: dict[str, Any], episode_id: str) -> None:
+        screenshots = task.get("screenshots", [])
+        if not screenshots:
+            return
+        dest_dir = self.output_dir / "screenshots" / episode_id
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        for i, rel_path in enumerate(screenshots):
+            src = self.benchmark_dir / rel_path
+            if src.exists():
+                shutil.copy2(src, dest_dir / f"step_{i:03d}.png")
+
+    def _write_manifest(
+        self,
+        episodes: list[dict[str, Any]],
+        metadata: dict[str, Any],
+        stats: ExportStats,
+    ) -> None:
+        manifest = {
+            "export_timestamp": datetime.now(timezone.utc).isoformat(),
+            "format": "lightweight-v1",
+            "source_benchmark": metadata.get("benchmark_name", "waa"),
+            "source_run": metadata.get("run_name"),
+            "source_model": metadata.get("model_id"),
+            "status_filter": self.status_filter,
+            "statistics": {
+                "total_tasks": stats.total_tasks,
+                "exported_tasks": stats.exported_tasks,
+                "skipped_tasks": stats.skipped_tasks,
+                "total_steps": stats.total_steps,
+                "errors": len(stats.errors),
+            },
+            "episodes": [
+                {
+                    "episode_id": ep["episode_id"],
+                    "task_id": ep["task_id"],
+                    "instruction": ep["instruction"],
+                    "num_steps": ep["num_steps"],
+                    "success": ep["success"],
+                    "domain": ep.get("domain"),
+                }
+                for ep in episodes
+            ],
+        }
+        with open(self.output_dir / "manifest.json", "w") as f:
+            json.dump(manifest, f, indent=2)
+
+    def _write_jsonl(self, episodes: list[dict[str, Any]]) -> None:
+        jsonl_path = self.output_dir / "training_samples.jsonl"
+        with open(jsonl_path, "w") as f:
+            for ep in episodes:
+                for step in ep.get("steps", []):
+                    sample = {
+                        "episode_id": ep["episode_id"],
+                        "task_id": ep["task_id"],
+                        "instruction": ep["instruction"],
+                        "step_index": step["step_index"],
+                        "screenshot": step["screenshot"],
+                        "action": step["action"],
+                        "reasoning": step.get("reasoning"),
+                        "success": ep["success"],
+                        "domain": ep.get("domain"),
+                    }
+                    f.write(json.dumps(sample) + "\n")
+
+
+def export_traces_lightweight(
+    benchmark_dir: str | Path,
+    output_dir: str | Path,
+    status_filter: StatusFilter = "passed",
+    copy_screenshots: bool = True,
+    viewport_size: tuple[int, int] = (1920, 1200),
+) -> list[dict[str, Any]]:
+    """Export benchmark traces as plain JSON (no openadapt-ml dependency).
+
+    Args:
+        benchmark_dir: Path to benchmark results directory.
+        output_dir: Output directory for exported data.
+        status_filter: Filter by task status ("passed", "failed", "all").
+        copy_screenshots: Whether to copy screenshots to output directory.
+        viewport_size: Default viewport size for coordinate normalization.
+
+    Returns:
+        List of episode dicts.
+    """
+    exporter = LightweightTraceExporter(
+        benchmark_dir=Path(benchmark_dir),
+        output_dir=Path(output_dir),
+        status_filter=status_filter,
+        copy_screenshots=copy_screenshots,
+        viewport_size=viewport_size,
+    )
+    return exporter.export()

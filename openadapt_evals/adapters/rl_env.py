@@ -10,6 +10,11 @@ Reward design:
     at the final step. This matches GRPO where reward comes from an outcome
     verifier, not per-step shaping.
 
+    When ``evaluate_every_step=True``, the evaluator is called after each
+    step and the score is included in ``info["evaluation_score"]``. The
+    reward signal is NOT changed — training code decides how to use the
+    per-step evaluation data.
+
 Example:
     from openadapt_evals.adapters.waa.live import WAALiveAdapter, WAALiveConfig
     from openadapt_evals.adapters.rl_env import RLEnvironment
@@ -23,6 +28,12 @@ Example:
         if obs_step.done:
             break
     score = env.evaluate()
+
+    # With per-step evaluation (for RL training loops):
+    env = RLEnvironment(adapter, default_task_id="<WAA_UUID>", evaluate_every_step=True)
+    obs = env.reset()
+    step = env.step(BenchmarkAction(type="click", x=0.5, y=0.3))
+    print(step.info["evaluation_score"])  # 0.0 or 1.0
 """
 
 from __future__ import annotations
@@ -100,9 +111,11 @@ class RLEnvironment:
         self,
         adapter: BenchmarkAdapter,
         default_task_id: str | None = None,
+        evaluate_every_step: bool = False,
     ):
         self._adapter = adapter
         self._default_task_id = default_task_id
+        self._evaluate_every_step = evaluate_every_step
         self._current_task: BenchmarkTask | None = None
         self._step_count = 0
         self._done = False
@@ -223,6 +236,16 @@ class RLEnvironment:
 
         self._done = done
         info["step"] = self._step_count
+
+        # Optional per-step evaluation for RL training loops
+        if self._evaluate_every_step and self._current_task is not None:
+            try:
+                result = self._adapter.evaluate(self._current_task)
+                info["evaluation_score"] = result.score
+                info["evaluation_success"] = result.success
+            except Exception as e:
+                logger.warning("Per-step evaluation failed at step %d: %s", self._step_count, e)
+                info["evaluation_error"] = str(e)
 
         rollout_step = RolloutStep(
             observation=obs,

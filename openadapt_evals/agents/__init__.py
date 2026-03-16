@@ -10,6 +10,7 @@ Available agents:
     - SmartMockAgent: Designed to pass mock adapter tests
     - ApiAgent: Uses Claude/GPT APIs directly (for WAA)
     - ClaudeComputerUseAgent: Uses Claude's native computer_use tool
+    - HttpAgent: Delegates to a remote HTTP agent endpoint
     - Qwen3VLAgent: Uses Qwen3-VL for local inference
     - SmolOperatorAgent: Uses SmolVLM2-2.2B for local inference
     - PolicyAgent: Uses local trained policy model
@@ -18,16 +19,13 @@ Available agents:
 
 Example:
     ```python
-    from openadapt_evals.agents import ApiAgent, ScriptedAgent, RetrievalAugmentedAgent
+    from openadapt_evals.agents import ApiAgent, ScriptedAgent, HttpAgent
 
     # Use API agent with Claude
     agent = ApiAgent(provider="anthropic")
 
-    # Use retrieval-augmented agent with automatic demo selection
-    agent = RetrievalAugmentedAgent(
-        demo_library_path="/path/to/demo_library",
-        provider="anthropic",
-    )
+    # Use remote agent-as-a-service
+    agent = HttpAgent(endpoint_url="http://gpu-box:8080")
 
     # Use scripted agent for replay
     agent = ScriptedAgent([
@@ -58,6 +56,7 @@ from openadapt_evals.agents.scripted_agent import (
 )
 from openadapt_evals.agents.api_agent import ApiAgent
 from openadapt_evals.agents.claude_computer_use_agent import ClaudeComputerUseAgent
+from openadapt_evals.agents.http_agent import HttpAgent
 from openadapt_evals.agents.retrieval_agent import RetrievalAugmentedAgent
 
 # Lazy imports for agents requiring additional dependencies
@@ -86,6 +85,7 @@ __all__ = [
     "SmartMockAgent",
     "ApiAgent",
     "ClaudeComputerUseAgent",
+    "HttpAgent",
     "Qwen3VLAgent",
     "SmolOperatorAgent",
     "PolicyAgent",
