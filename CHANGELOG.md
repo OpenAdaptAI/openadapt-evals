@@ -1,6 +1,23 @@
 # CHANGELOG
 
 
+## v0.37.0 (2026-03-16)
+
+### Features
+
+- Register HttpAgent in CLI with --agent http --agent-endpoint
+  ([#119](https://github.com/OpenAdaptAI/openadapt-evals/pull/119),
+  [`2a64639`](https://github.com/OpenAdaptAI/openadapt-evals/commit/2a64639d375c43db1d5a67c744b4fca91a31f4d7))
+
+Adds `http` as a valid agent type across all three CLI subcommands (mock, run, live). Requires
+  `--agent-endpoint <URL>` when used.
+
+Usage: openadapt-evals run --agent http --agent-endpoint http://gpu-box:8080 openadapt-evals live
+  --agent http --agent-endpoint http://gpu-box:8080
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.36.0 (2026-03-16)
 
 ### Features
