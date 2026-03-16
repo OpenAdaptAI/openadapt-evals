@@ -1,6 +1,32 @@
 # CHANGELOG
 
 
+## v0.36.0 (2026-03-16)
+
+### Features
+
+- Add HttpAgent, per-step evaluation, and lightweight trace export
+  ([#118](https://github.com/OpenAdaptAI/openadapt-evals/pull/118),
+  [`e820c0a`](https://github.com/OpenAdaptAI/openadapt-evals/commit/e820c0a52a5adc81bf474f878e8009e7592733ee))
+
+Three platform infrastructure features:
+
+1. HttpAgent (agents/http_agent.py): Generic agent-as-HTTP-service that forwards observations to any
+  remote endpoint and parses BenchmarkAction responses. Enables teams to deploy custom agent stacks
+  (model + prompt + parsing) as black-box HTTP servers, cleanly solving GPU/CPU separation.
+
+2. Per-step evaluation in RLEnvironment: New evaluate_every_step parameter calls the WAA evaluator
+  after each step and populates info["evaluation_score"]. Does NOT change the reward signal —
+  training code decides how to use it. Useful for online RL training loops.
+
+3. LightweightTraceExporter: Plain JSON + screenshots trace export with no openadapt-ml dependency.
+  Produces episode JSON, manifest, and JSONL training samples in a universal format.
+
+All 34 new tests pass. 984 existing tests unaffected.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.35.2 (2026-03-08)
 
 ### Bug Fixes
