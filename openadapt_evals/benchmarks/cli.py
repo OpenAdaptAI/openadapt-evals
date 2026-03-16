@@ -265,9 +265,17 @@ def cmd_mock(args: argparse.Namespace) -> int:
         except RuntimeError as e:
             print(f"ERROR: {e}")
             return 1
+    elif agent_type == "http":
+        agent_endpoint = getattr(args, "agent_endpoint", None)
+        if not agent_endpoint:
+            print("ERROR: --agent-endpoint required for http agent")
+            return 1
+        from openadapt_evals.agents import HttpAgent
+        agent = HttpAgent(endpoint_url=agent_endpoint)
+        print(f"Using HttpAgent (endpoint={agent_endpoint})")
     else:
         print(f"ERROR: Unknown agent type: {agent_type}")
-        print("Available for mock: mock, api-claude, api-openai, api-claude-cu, qwen3vl, smol")
+        print("Available for mock: mock, api-claude, api-openai, api-claude-cu, qwen3vl, smol, http")
         return 1
 
     # Create config for trace collection
@@ -438,9 +446,17 @@ def cmd_run(args: argparse.Namespace) -> int:
         except RuntimeError as e:
             print(f"ERROR: {e}")
             return 1
+    elif agent_type == "http":
+        agent_endpoint = getattr(args, "agent_endpoint", None)
+        if not agent_endpoint:
+            print("ERROR: --agent-endpoint required for http agent")
+            return 1
+        from openadapt_evals.agents import HttpAgent
+        agent = HttpAgent(endpoint_url=agent_endpoint)
+        print(f"Using HttpAgent (endpoint={agent_endpoint})")
     else:
         print(f"ERROR: Unknown agent type: {agent_type}")
-        print("Available: noop, mock, api-claude, api-openai, api-claude-cu, qwen3vl, smol")
+        print("Available: noop, mock, api-claude, api-openai, api-claude-cu, qwen3vl, smol, http")
         return 1
 
     # Create config for trace collection
@@ -675,10 +691,18 @@ def cmd_live(args: argparse.Namespace) -> int:
         except RuntimeError as e:
             print(f"ERROR: {e}")
             return 1
+    elif agent_type == "http":
+        agent_endpoint = getattr(args, "agent_endpoint", None)
+        if not agent_endpoint:
+            print("ERROR: --agent-endpoint required for http agent")
+            return 1
+        from openadapt_evals.agents import HttpAgent
+        agent = HttpAgent(endpoint_url=agent_endpoint)
+        print(f"Using HttpAgent (endpoint={agent_endpoint})")
     else:
         print(f"ERROR: Unknown agent type: {agent_type}")
         print(
-            "Available: mock, noop, api-claude, api-openai, api-claude-cu, qwen3vl, smol, retrieval-claude, retrieval-openai"
+            "Available: mock, noop, api-claude, api-openai, api-claude-cu, qwen3vl, smol, http, retrieval-claude, retrieval-openai"
         )
         return 1
 
@@ -2381,7 +2405,9 @@ def main() -> int:
     mock_parser.add_argument("--tasks", type=int, default=10, help="Number of tasks")
     mock_parser.add_argument("--max-steps", type=int, default=15, help="Max steps per task")
     mock_parser.add_argument("--agent", type=str, default="mock",
-                            help="Agent type: mock, api-claude, api-openai, api-claude-cu, qwen3vl, smol")
+                            help="Agent type: mock, api-claude, api-openai, api-claude-cu, qwen3vl, smol, http")
+    mock_parser.add_argument("--agent-endpoint", type=str,
+                            help="HTTP endpoint URL for http agent (e.g., http://localhost:8080)")
     mock_parser.add_argument("--demo", type=str, help="Demo trajectory file for ApiAgent")
     mock_parser.add_argument("--model-path", type=str, help="Model path for Qwen3VL agent")
     mock_parser.add_argument("--model-endpoint", type=str, help="Remote endpoint for Qwen3VL ('modal' or HTTP URL)")
@@ -2406,7 +2432,9 @@ def main() -> int:
     run_parser.add_argument("--evaluate-url", type=str, default=None,
                            help="Evaluate server URL (default: same as --server)")
     run_parser.add_argument("--agent", type=str, default="api-openai",
-                           help="Agent type: noop, mock, api-claude, api-openai, api-claude-cu, qwen3vl, smol")
+                           help="Agent type: noop, mock, api-claude, api-openai, api-claude-cu, qwen3vl, smol, http")
+    run_parser.add_argument("--agent-endpoint", type=str,
+                           help="HTTP endpoint URL for http agent (e.g., http://localhost:8080)")
     run_parser.add_argument("--task", type=str,
                            help="Single task ID (e.g., notepad_1)")
     run_parser.add_argument("--tasks", type=str,
@@ -2458,7 +2486,9 @@ def main() -> int:
     live_parser.add_argument("--evaluate-url", type=str, default=None,
                             help="Evaluate server URL (default: same as --server)")
     live_parser.add_argument("--agent", type=str, default="mock",
-                            help="Agent type: mock, noop, api-claude, api-openai, api-claude-cu, qwen3vl, smol, retrieval-claude, retrieval-openai")
+                            help="Agent type: mock, noop, api-claude, api-openai, api-claude-cu, qwen3vl, smol, http, retrieval-claude, retrieval-openai")
+    live_parser.add_argument("--agent-endpoint", type=str,
+                            help="HTTP endpoint URL for http agent (e.g., http://localhost:8080)")
     live_parser.add_argument("--demo", type=str, help="Demo trajectory file for ApiAgent")
     live_parser.add_argument("--model-path", type=str, help="Model path for Qwen3VL agent")
     live_parser.add_argument("--model-endpoint", type=str, help="Remote endpoint for Qwen3VL ('modal' or HTTP URL)")
