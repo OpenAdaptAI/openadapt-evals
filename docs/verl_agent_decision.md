@@ -358,6 +358,112 @@ To validate the verl-agent integration provides real value over standalone:
 
 ---
 
+## Addendum: VAGEN vs verl-agent Clarification (2026-03-16)
+
+**Status**: Corrects earlier conflation of VAGEN and verl-agent as a single project.
+
+### Finding: VAGEN and verl-agent Are Separate Projects
+
+Earlier sections of this document (and our training scripts) treated "verl-agent/VAGEN"
+as a single system. Research in March 2026 revealed they are **separate projects**
+with different interfaces, capabilities, and trajectories:
+
+| Aspect | VAGEN (mll-lab-nu/VAGEN) | verl-agent (langfengQ/verl-agent) |
+|--------|--------------------------|-----------------------------------|
+| **Focus** | Environment framework | Training framework |
+| **Key abstraction** | `GymImageEnv` protocol | `env_base.py` (own env interface) |
+| **Algorithms** | GRPO, PPO only (on main/Lite) | GiGPO, GRPO, PPO, RLOO, DAPO, GSPO, REINFORCE++ |
+| **Credit assignment** | Bi-Level GAE (legacy branch only) | GiGPO (active, on main) |
+| **Entry point** | `vagen.main_ppo` | Own entry point + Hydra config system |
+| **Current state** | Migrated to "VAGEN-Lite" (Feb 2026) | Actively maintained with GiGPO |
+
+**VAGEN-Lite** (the current main branch) dropped Bi-Level GAE and only supports
+standard GRPO/PPO. The original features survive only on a legacy branch. This means
+VAGEN-Lite provides no advantage over our standalone trainer for per-step credit
+assignment.
+
+**verl-agent** is the project that actually implements GiGPO. It uses its **own**
+`env_base.py` environment interface, NOT `GymImageEnv`. Our `train_verl_e2e.py`
+script targets `vagen.main_ppo`, which is the wrong entry point for GiGPO training.
+
+### Impact on Our Integration
+
+1. **`train_verl_e2e.py` targets the wrong entry point** — It calls `vagen.main_ppo`
+   but GiGPO lives in verl-agent, which has a different entry point and Hydra config
+   system. This script will need retargeting.
+
+2. **`configs/train_waa_vagen.yaml` needs updating** — The YAML is structured for
+   VAGEN's config system, not verl-agent's.
+
+3. **VAGEN-Lite is not useful for us** — It only provides vanilla GRPO/PPO, which
+   our standalone trainer (`openadapt_ml/training/grpo/trainer.py`) already does.
+   There is no advantage to adding the VAGEN dependency for equivalent functionality.
+
+4. **GymImageEnv vendoring remains correct** — Our vendored `GymImageEnv` in
+   `openadapt_evals/adapters/_vendored/` is a clean, stable environment interface
+   regardless of which training framework consumes it. It stays.
+
+### Corrected Path Forward
+
+- **Phase 1 (now)**: Use the standalone GRPO trainer in openadapt-ml for initial
+  validation. It works today, is well-tested (56 unit + 5 E2E tests), and has no
+  external framework dependencies.
+
+- **Phase 2 (if GiGPO per-step credit is needed)**: Integrate with **verl-agent
+  directly** (not VAGEN-Lite). This requires writing a thin adapter from
+  `WAADesktopEnv` to verl-agent's `env_base.py` interface. The `compute_anchor_state()`
+  function (screenshot hashing for state grouping) is directly applicable to GiGPO's
+  state-matching requirement.
+
+- **Keep vendored GymImageEnv** as our stable environment interface. It decouples
+  environment definition from training framework choice.
+
+### What Remains Valid From the Original Decision
+
+The core reasoning in this document still holds:
+
+- **GiGPO is still the right algorithm** for per-step credit assignment in 15+ step
+  desktop automation tasks. The algorithm itself is sound; only the project that
+  implements it was misidentified.
+
+- **WAADesktopEnv adapter is solid and reusable** — ~250 lines of well-tested glue
+  code that translates between our `RLEnvironment` and any Gym-like training interface.
+
+- **`compute_anchor_state()` is directly applicable** to GiGPO's state grouping
+  mechanism. Screenshots at identical UI states hash to the same anchor, enabling
+  cross-rollout step-level advantage computation.
+
+- **TRL still cannot do multi-turn VLM RL** — Issues
+  [#5119](https://github.com/huggingface/trl/issues/5119) and
+  [#5120](https://github.com/huggingface/trl/issues/5120) remain OPEN as of
+  March 2026.
+
+- **"The environment is the moat, not the training math"** — This principle is
+  reinforced by this correction. Training frameworks come and go (VAGEN already
+  pivoted to Lite); our WAA RL environment is the durable asset.
+
+### Updated Architecture Diagram
+
+```
+Phase 1 (Current)                    Phase 2 (If GiGPO needed)
+┌─────────────────────┐              ┌─────────────────────┐
+│ Standalone GRPO     │              │ verl-agent           │
+│ (openadapt-ml)      │              │  GiGPO trainer       │
+│  ↓                  │              │  ↓                   │
+│ trainer.py          │              │ env_base.py adapter  │
+│  ↓                  │              │  (NEW, ~100 lines)   │
+│ WAADesktopEnv       │              │  ↓                   │
+│  (GymImageEnv)      │              │ WAADesktopEnv        │
+│  ↓                  │              │  (GymImageEnv)       │
+│ RLEnvironment       │              │  ↓                   │
+│  ↓                  │              │ RLEnvironment        │
+│ WAA Flask Server    │              │  ↓                   │
+└─────────────────────┘              │ WAA Flask Server     │
+                                     └─────────────────────┘
+```
+
+---
+
 ## References
 
 - [VAGEN](https://github.com/RAGEN-AI/VAGEN) — Multi-turn VLM agent training (GiGPO)
