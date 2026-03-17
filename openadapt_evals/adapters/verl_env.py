@@ -50,6 +50,7 @@ Usage standalone (without VAGEN):
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
 import logging
 import re
@@ -166,6 +167,45 @@ def _build_obs_dict(
         a11y_text = str(obs.accessibility_tree) if obs.accessibility_tree else "No observation available."
         result["obs_str"] = f"{prefix}\n{a11y_text}"
     return result
+
+
+# --- Anchor state computation for GiGPO ---
+
+
+def compute_anchor_state(obs: BenchmarkObservation) -> str:
+    """Compute a state key for GiGPO anchor grouping.
+
+    GiGPO groups identical intermediate states across rollouts to assign
+    per-action advantages. This function produces a hash that identifies
+    "the same state" so the training framework can efficiently find groups.
+
+    Strategy:
+        1. Accessibility tree hash (primary): Structural identity of UI state.
+           Two screenshots showing the same dialog with the same elements
+           will hash identically even if pixel rendering differs slightly.
+        2. Screenshot MD5 (fallback): Exact pixel match when a11y tree is
+           unavailable.
+
+    The returned key is included in the ``info`` dict from ``WAADesktopEnv.step()``
+    as ``state_key``. VAGEN/verl can use this for O(1) grouping instead of
+    recomputing perceptual hashes across all rollout steps.
+
+    Args:
+        obs: A BenchmarkObservation with screenshot and/or accessibility_tree.
+
+    Returns:
+        Hex digest string suitable as a dict key.
+    """
+    # Primary: hash the a11y tree (structural state identity)
+    if obs.accessibility_tree:
+        tree_str = str(obs.accessibility_tree)
+        return hashlib.sha256(tree_str.encode()).hexdigest()[:16]
+
+    # Fallback: hash raw screenshot bytes (exact pixel match)
+    if obs.screenshot:
+        return hashlib.md5(obs.screenshot).hexdigest()[:16]
+
+    return "empty"
 
 
 # --- System prompt (matches openadapt-ml trainer) ---
@@ -306,6 +346,7 @@ class WAADesktopEnv(_GymImageEnvBase):
         info: dict[str, Any] = {
             "task_id": self._task_id,
             "screen_size": env.screen_size,
+            "state_key": compute_anchor_state(obs),
         }
         return obs_dict, info
 
@@ -370,6 +411,9 @@ class WAADesktopEnv(_GymImageEnvBase):
             rollout_step.observation,
             prefix=f"After action (step {self._step_count}):",
         )
+
+        # GiGPO anchor: include state key for efficient cross-rollout grouping
+        info["state_key"] = compute_anchor_state(rollout_step.observation)
 
         return obs_dict, reward, done, info
 
