@@ -1,6 +1,71 @@
 # CHANGELOG
 
 
+## v0.38.0 (2026-03-17)
+
+### Documentation
+
+- Add example Flask server for HttpAgent protocol
+  ([#120](https://github.com/OpenAdaptAI/openadapt-evals/pull/120),
+  [`0d6fa24`](https://github.com/OpenAdaptAI/openadapt-evals/commit/0d6fa2494005287d0694e722f742fa9725770b71))
+
+Minimal reference implementation showing the POST /act request/response contract. Copy-and-replace
+  the predict() function with your model.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Add experiment framework design document
+  ([#121](https://github.com/OpenAdaptAI/openadapt-evals/pull/121),
+  [`f71c81f`](https://github.com/OpenAdaptAI/openadapt-evals/commit/f71c81f49a4a94583ff51d64df34ed858407e12b))
+
+Frames OpenAdapt as a general-purpose computer use framework with multiple experiment tracks
+  (demo-conditioning, LoRA-per-task, GRPO, SFT, API baselines, UI-Venus base model). Covers
+  autoresearch pattern adaptation, wright+autoresearch composition, tiered oracle architecture,
+  multi-objective scoring, mutation surface ordering, and reproducibility requirements.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Features
+
+- Add GiGPO anchor state computation to WAADesktopEnv
+  ([#122](https://github.com/OpenAdaptAI/openadapt-evals/pull/122),
+  [`72aa537`](https://github.com/OpenAdaptAI/openadapt-evals/commit/72aa5370de78eeb8821a39a9a27e6bdc76073978))
+
+* feat: add GiGPO anchor state computation to WAADesktopEnv
+
+Add compute_anchor_state() function that produces a state key for GiGPO cross-rollout grouping. Uses
+  a11y tree SHA256 hash (primary) with screenshot MD5 fallback. The state_key is included in the
+  info dict from both reset() and step() so VAGEN/verl can use it for O(1) anchor grouping instead
+  of recomputing perceptual hashes.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* docs: clarify VAGEN vs verl-agent distinction in decision doc
+
+Add dated addendum (2026-03-16) correcting the earlier conflation of VAGEN and verl-agent as a
+  single project. Key findings: VAGEN-Lite dropped Bi-Level GAE (only vanilla GRPO/PPO), GiGPO lives
+  exclusively in verl-agent which uses its own env_base.py interface (not GymImageEnv), and our
+  train_verl_e2e.py targets the wrong entry point. Outlines a corrected two-phase path: standalone
+  GRPO first, then direct verl-agent integration if per-step credit is needed.
+
+* docs: add comprehensive GRPO training research report
+
+Covers desktop RL landscape (30+ projects), per-step credit assignment alternatives (HCAPO
+  recommended over GiGPO), scaling architectures (ComputerRL, DART-GUI), and synthetic environment
+  feasibility (GUI-Genesis). Includes revised architecture recommendation: standalone GRPO + HCAPO
+  first, then dense rewards + API-GUI hybrid, then async scaling.
+
+* docs: correct prioritization — validate GRPO before optimizing training math
+
+HCAPO and per-step credit are Phase 3 optimizations, not Phase 1. The bottleneck is rollout success
+  rate (getting non-zero rewards), not loss computation. Dense partial-credit rewards and API-GUI
+  hybrid actions directly increase gradient signal and should come first.
+
+---------
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.37.0 (2026-03-16)
 
 ### Features
