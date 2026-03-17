@@ -129,16 +129,17 @@ The anchor state matching problem is fundamental for desktop GUI. Screenshots va
 
 ### 4.3 Integration Roadmap
 
-| Priority | Idea | Source | Effort | Impact |
-|----------|------|--------|--------|--------|
-| **P0** | HCAPO per-step credit | Paper | 1-2 weeks | Per-step signal without verl-agent |
-| **P0** | Entropy-based step filtering | DART-GUI | 1-2 weeks | Focus compute on decision points |
-| **P0** | Entropulse (RL/SFT alternation) | ComputerRL | 1 week | Prevent entropy collapse |
-| **P1** | API-GUI hybrid actions | ComputerRL | 2-3 weeks | 134% improvement potential on Office tasks |
-| **P1** | Experience pool for hard tasks | DART-GUI | 1 week | Supplement sparse success signal |
-| **P1** | Dense partial-credit rewards | GUI-Genesis concept | 1-2 weeks | Replace binary with continuous rewards |
-| **P2** | Async rollout architecture | DART-GUI | 4-6 weeks | Critical for 10+ VM scaling |
-| **P2** | Auto-API construction | ComputerRL | 2 weeks/app | Generalize API-GUI to new apps |
+| Priority | Idea | Source | Effort | Impact | Prerequisite |
+|----------|------|--------|--------|--------|--------------|
+| **P0** | Validate GRPO end-to-end on WAA | PR #55 | 1-2 weeks | Proves the pipeline works at all | None |
+| **P0** | Dense partial-credit rewards | GUI-Genesis concept | 1-2 weeks | Turns binary 0/1 into continuous 0-1 | GRPO working |
+| **P1** | API-GUI hybrid actions | ComputerRL | 2-3 weeks | 134% improvement, more rollouts succeed | GRPO working |
+| **P1** | Experience pool for hard tasks | DART-GUI | 1 week | Supplement sparse success signal | GRPO working |
+| **P2** | HCAPO per-step credit | Paper | 1-2 weeks | 7-14% over GRPO (untested on VLMs) | >20% rollout success rate |
+| **P2** | Entropy-based step filtering | DART-GUI | 1-2 weeks | Focus compute on decision points | Multiple training steps |
+| **P2** | Entropulse (RL/SFT alternation) | ComputerRL | 1 week | Prevent entropy collapse | Extended training runs |
+| **P3** | Async rollout architecture | DART-GUI | 4-6 weeks | Critical for 10+ VM scaling | Multi-VM pool |
+| **P3** | Auto-API construction | ComputerRL | 2 weeks/app | Generalize API-GUI to new apps | API-GUI validated |
 
 ---
 
@@ -196,30 +197,67 @@ The anchor state matching problem is fundamental for desktop GUI. Screenshots va
 
 ## 7. Revised Architecture Recommendation
 
-### Phase 1: Standalone GRPO + HCAPO (Current → 2 weeks)
-- Standalone GRPO trainer validates RL training works with WAA at all (PR #55 shipped)
-- Add HCAPO per-step credit (~80-120 lines, no dependencies)
-- Add entropy-based step filtering (~50 lines)
-- Add Entropulse wrapper (~100 lines)
-- **Goal**: First successful RL training run on Core4 tasks
+> **Principle**: Don't optimize the training math before validating that training works at all.
+> The bottleneck is rollout collection (2-10 min/episode on real VMs), not loss computation
+> (seconds). Per-step credit only matters when there are successful rollouts to learn from.
 
-### Phase 2: Dense Rewards + API-GUI (2-4 weeks)
-- Enhance WAA `/evaluate` for dense partial-credit rewards
-- Prototype API-GUI hybrid actions for LibreOffice via `win32com`
-- Test PC Agent-E trajectory augmentation on our 7 WAA tasks
-- **Goal**: Improve sample efficiency enough for practical training
+### Phase 1: Get GRPO Working End-to-End (Current → 1-2 weeks)
+- Run `validate_grpo_waa.py` phases 1-5 against real WAA VM (PR #55)
+- Get non-zero rewards: use easiest tasks, pre-trained model, short episodes (max_steps=5)
+- Fix whatever breaks (infra failures, OOM, reward always 0)
+- **Goal**: At least one training step with non-zero loss on a real WAA task
+- **Success criteria**: Checkpoint saved, loss non-zero, at least one rollout with reward > 0
 
-### Phase 3: Scaling (4-8 weeks, when needed)
+### Phase 2: Make Rewards Less Sparse (1-3 weeks)
+- **Dense partial-credit rewards** — enhance WAA `/evaluate` to return continuous [0,1] scores
+  via programmatic state checks (cell values, font properties, settings.json). This directly
+  helps GRPO by giving more gradient signal — turns "all 0 vs all 0" groups into meaningful
+  advantage estimates. **This is the single highest-impact change.**
+- **API-GUI hybrid actions** — let the agent issue programmatic `win32com`/PowerShell commands
+  alongside GUI clicks (ComputerRL's 134% improvement). Reduces task difficulty, meaning more
+  rollouts succeed, meaning GRPO has actual gradient signal to work with.
+- **Goal**: >20% of rollouts achieving non-zero reward on Core4 tasks
+
+### Phase 3: Improve Training Efficiency (2-4 weeks, after Phase 2)
+- **HCAPO per-step credit** (~80-120 lines) — only valuable once we have a mix of successful
+  and failed rollouts. HCAPO's 7.7-13.8% improvement over GRPO is meaningful only when GRPO
+  itself is working. Note: untested with VLMs/screenshots — we'd be the first.
+- **Entropy-based step filtering** (DART-GUI) — train on top 80% of steps by token entropy,
+  focusing compute on decision points. Cheap to add (~50 lines).
+- **Entropulse** (ComputerRL) — alternate RL/SFT phases to prevent entropy collapse during
+  extended training. Only relevant after multiple RL phases (~100 lines).
+- **Experience pool** (DART-GUI) — pre-collect successful trajectories for hard tasks to
+  supplement sparse online success signal.
+- **Goal**: Measurable improvement in sample efficiency over Phase 2 baseline
+
+### Phase 4: Scaling (4-8 weeks, when needed)
 - Adopt DART-GUI async architecture pattern (reimplemented against our pool infra)
 - Scale to 10+ parallel WAA VMs
-- Only consider verl-agent if HCAPO proves insufficient
+- Only consider verl-agent if HCAPO proves insufficient and GiGPO anchors can be made reliable
 - **Goal**: Production-grade training at scale
 
 ### What to Drop
 - **VAGEN-Lite as training backend** — vanilla GRPO only, no advantage over standalone
 - **GiGPO anchor state approach** — unreliable for pixel-based desktop screenshots
+  (mouse position, animation frames, anti-aliasing differ across rollouts even for
+  semantically identical states; a11y tree hashing is unreliable during UI transitions)
 - **GUI-Genesis integration** — mobile web only, no code, proprietary LLM dependency
 - **HiPER** — requires verl-agent anyway, adds hierarchical complexity
+
+### Prioritization Rationale
+
+The research identified HCAPO as the best per-step credit method, but **per-step credit
+is a Phase 3 optimization, not a Phase 1 prerequisite**. Here's why:
+
+1. If all 8 rollouts score 0, GRPO has zero gradient signal. HCAPO can't fix that —
+   it redistributes credit *within* a trajectory, but the episode-level advantage is
+   still zero when all rewards are equal.
+2. The published 7.7% WebShop improvement is relative to a working GRPO baseline on
+   text environments with 5-10 step episodes. Transfer to 15-30 step visual desktop
+   tasks is unproven.
+3. Our bottleneck is rollout success rate, not training math. Dense rewards and
+   API-GUI actions directly increase the fraction of rollouts with non-zero reward,
+   which is the prerequisite for any training algorithm to learn.
 
 ---
 
