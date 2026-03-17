@@ -36,14 +36,17 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 # Instance types with nested virtualization (KVM) support.
-# WAA requires QEMU/KVM, which only bare-metal instances expose on AWS.
-# m5.metal: 96 vCPU, 384GB — supports /dev/kvm for nested virtualization.
-INSTANCE_TYPE = "m5.metal"
+# WAA requires QEMU/KVM. As of late 2025, Intel Xeon 6 families (C8i, M8i, R8i)
+# support nested virtualization on standard (non-metal) instances, dramatically
+# reducing cost vs legacy metal instances.
+INSTANCE_TYPE = "m8i.2xlarge"  # 8 vCPU, 32GB, ~$0.46/hr — nested virt supported
 INSTANCE_TYPE_FALLBACKS = [
-    ("m5.metal", 4.608),
-    ("m5n.metal", 5.712),
-    ("c5.metal", 4.080),
-    ("m5a.xlarge", 0.172),  # Non-KVM fallback (won't run QEMU, for testing only)
+    ("m8i.2xlarge", 0.461),    # 8 vCPU, 32GB — best value with nested virt
+    ("c8i.2xlarge", 0.408),    # 8 vCPU, 16GB — compute-optimized, cheaper
+    ("r8i.2xlarge", 0.604),    # 8 vCPU, 64GB — memory-optimized
+    ("m8i.4xlarge", 0.922),    # 16 vCPU, 64GB — bigger option
+    ("m5.metal", 4.608),       # Legacy: 96 vCPU, 384GB — expensive but proven
+    ("m5a.xlarge", 0.172),     # Non-KVM fallback (testing only, won't run QEMU)
 ]
 
 # GPU instance types for verl-agent RL training.

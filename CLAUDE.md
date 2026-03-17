@@ -154,14 +154,14 @@ oa-vm pool-wait --cloud aws --timeout 45
 oa-vm pool-cleanup --cloud aws -y
 ```
 
-AWS requires `m5.metal` ($4.61/hr) for KVM/QEMU nested virtualization. First boot takes ~35 min (Windows download + install). Costs per full WAA stack test:
+AWS uses `m8i.2xlarge` (~$0.46/hr) for KVM/QEMU nested virtualization (Intel Xeon 6 families C8i/M8i/R8i support nested virt on standard instances since late 2025). First boot takes ~35 min (Windows download + install). Costs per full WAA stack test:
 
 | Phase | Time | Cost |
 |-------|------|------|
-| VM + Docker setup | ~14 min | $1.08 |
-| Docker image build | ~7 min | $0.54 |
-| Windows install + boot | ~20 min | $1.54 |
-| Benchmark runtime | varies | $4.61/hr |
+| VM + Docker setup | ~14 min | $0.11 |
+| Docker image build | ~7 min | $0.05 |
+| Windows install + boot | ~20 min | $0.15 |
+| Benchmark runtime | varies | $0.46/hr |
 
 ![Windows 11 on AWS EC2](docs/aws-waa-windows-desktop.png)
 

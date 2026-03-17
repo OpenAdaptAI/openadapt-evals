@@ -20,7 +20,7 @@ This guide walks through deploying WAA on AWS EC2 for GUI agent evaluation. WAA 
 ## Architecture overview
 
 ```
-LOCAL MACHINE (macOS/Linux)              AWS EC2 (Ubuntu 22.04, m5.metal)
+LOCAL MACHINE (macOS/Linux)              AWS EC2 (Ubuntu 22.04, m8i.2xlarge)
 +---------------------------+            +------------------------------------+
 |  oa-vm CLI                | SSH Tunnel |  Docker (waa-auto:latest)          |
 |  (pool management)        | --------→ |  +- evaluate_server (:5050)        |
@@ -33,7 +33,7 @@ LOCAL MACHINE (macOS/Linux)              AWS EC2 (Ubuntu 22.04, m5.metal)
 ```
 
 Key points:
-- **Instance type**: `m5.metal` is required (bare-metal for KVM/QEMU nested virtualization). Standard instances like `g4dn.xlarge` or `t3.xlarge` do NOT expose `/dev/kvm` and cannot run QEMU.
+- **Instance type**: `m8i.2xlarge` is recommended (~$0.46/hr). Intel Xeon 6 families (C8i, M8i, R8i) support nested virtualization on standard (non-metal) instances since late 2025. Legacy metal instances (`m5.metal` at ~$4.61/hr) also work but at ~10x the cost. Older standard instances like `t3.xlarge` do NOT expose `/dev/kvm` and cannot run QEMU.
 - **OS**: Ubuntu 22.04 LTS (Canonical official AMI, auto-discovered by the CLI)
 - **Ports**: Only SSH (22) is opened in the security group. All other access goes through SSH tunnels.
 - **First boot**: ~35 minutes (Windows 11 download + install). Subsequent resumes: ~1-5 minutes.
@@ -110,7 +110,7 @@ This performs 5 read-only checks:
 1. AWS credentials (via `sts.get_caller_identity()`)
 2. SSH public key exists at `~/.ssh/id_rsa.pub`
 3. Latest Ubuntu 22.04 AMI lookup (Canonical official)
-4. `m5.metal` instance type availability across regions
+4. `m8i.2xlarge` (or fallback) instance type availability across regions
 5. VPC infrastructure (creates VPC, subnet, security group, internet gateway if needed)
 
 For a full lifecycle test (creates and deletes a real EC2 instance, costs ~$0.01):
@@ -121,11 +121,11 @@ oa-vm smoke-test-aws --full
 
 ### 5. EC2 service quota
 
-`m5.metal` requires sufficient vCPU quota. By default, new AWS accounts have a limit of 0 for metal instances. To request an increase:
+`m8i.2xlarge` requires sufficient vCPU quota. By default, new AWS accounts may have limited quotas. To check or request an increase:
 
 1. Go to **AWS Console > Service Quotas > Amazon EC2**
 2. Search for "Running On-Demand Standard (A, C, D, H, I, M, R, T, Z) instances"
-3. Request a quota increase to at least 96 vCPUs (the `m5.metal` instance has 96 vCPUs)
+3. Request a quota increase to at least 8 vCPUs (the `m8i.2xlarge` instance has 8 vCPUs). If using `m5.metal` as a fallback, 96 vCPUs are required.
 
 ## Path 1: Automated setup with oa-vm CLI (recommended)
 
@@ -142,7 +142,7 @@ oa-vm pool-create --cloud aws --workers 3
 ```
 
 What happens behind the scenes:
-1. Finds an available `m5.metal` instance and region (tries us-east-1, us-west-2, us-east-2, eu-west-1)
+1. Finds an available instance type with nested virt support (tries m8i.2xlarge, c8i.2xlarge, r8i.2xlarge, m8i.4xlarge, m5.metal in order) and region (us-east-1, us-west-2, us-east-2, eu-west-1)
 2. Creates VPC infrastructure if needed (VPC, subnet, internet gateway, security group, key pair)
 3. Launches Ubuntu 22.04 EC2 instance with 128GB gp3 EBS root volume
 4. Waits for SSH to become available
@@ -255,10 +255,10 @@ aws ec2 authorize-security-group-ingress \
   --protocol tcp --port 22 \
   --cidr 0.0.0.0/0
 
-# Launch m5.metal instance with 128GB disk
+# Launch m8i.2xlarge instance with 128GB disk (nested virt supported)
 INSTANCE_ID=$(aws ec2 run-instances \
   --image-id $AMI_ID \
-  --instance-type m5.metal \
+  --instance-type m8i.2xlarge \
   --key-name waa-pool-key \
   --security-group-ids $SG_ID \
   --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":128,"VolumeType":"gp3"}}]' \
@@ -617,20 +617,22 @@ Tasks can include a `config` array with setup steps that run before the task beg
 
 | Instance type | vCPU | RAM | Cost/hr | KVM support | Notes |
 |---------------|------|-----|---------|-------------|-------|
-| `m5.metal` | 96 | 384 GB | $4.61 | Yes | Primary choice |
-| `m5n.metal` | 96 | 384 GB | $5.71 | Yes | Network-optimized fallback |
-| `c5.metal` | 96 | 192 GB | $4.08 | Yes | Compute-optimized fallback |
+| `m8i.2xlarge` | 8 | 32 GB | $0.46 | Yes | Primary choice (Intel Xeon 6, nested virt) |
+| `c8i.2xlarge` | 8 | 16 GB | $0.41 | Yes | Compute-optimized, cheapest with nested virt |
+| `r8i.2xlarge` | 8 | 64 GB | $0.60 | Yes | Memory-optimized |
+| `m8i.4xlarge` | 16 | 64 GB | $0.92 | Yes | Bigger option |
+| `m5.metal` | 96 | 384 GB | $4.61 | Yes | Legacy fallback (expensive) |
 
 ### Time and cost per phase
 
-| Phase | Time | Cost (m5.metal) |
-|-------|------|-----------------|
-| EC2 launch + SSH ready | ~2 min | $0.15 |
-| Docker + image build | ~12 min | $0.92 |
-| Windows 11 download + install (first boot) | ~20 min | $1.54 |
-| Windows boot (subsequent) | ~1-5 min | $0.08-0.38 |
-| **Total first boot** | **~35 min** | **~$2.61** |
-| Benchmark runtime | varies | $4.61/hr |
+| Phase | Time | Cost (m8i.2xlarge) |
+|-------|------|--------------------|
+| EC2 launch + SSH ready | ~2 min | $0.02 |
+| Docker + image build | ~12 min | $0.09 |
+| Windows 11 download + install (first boot) | ~20 min | $0.15 |
+| Windows boot (subsequent) | ~1-5 min | $0.01-0.04 |
+| **Total first boot** | **~35 min** | **~$0.27** |
+| Benchmark runtime | varies | $0.46/hr |
 
 ### Storage costs (when paused)
 
@@ -642,9 +644,9 @@ Paused VMs (stopped instances) do not incur compute charges, but EBS storage con
 
 ### "No available EC2 instance type/region found"
 
-`m5.metal` may not be available in all regions. The CLI tries us-east-1, us-west-2, us-east-2, eu-west-1 in order. If all fail:
+The preferred instance type (`m8i.2xlarge`) may not be available in all regions. The CLI tries multiple instance types (m8i, c8i, r8i, then m5.metal) across regions (us-east-1, us-west-2, us-east-2, eu-west-1) in order. If all fail:
 1. Check your vCPU quota: AWS Console > Service Quotas > EC2 > "Running On-Demand Standard instances"
-2. Request a quota increase to at least 96 vCPUs
+2. Request a quota increase to at least 8 vCPUs (or 96 vCPUs if falling back to m5.metal)
 3. Try a different region: `oa-vm smoke-test-aws --region eu-west-1`
 
 ### SSH connection timeout
