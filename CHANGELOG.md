@@ -1,6 +1,41 @@
 # CHANGELOG
 
 
+## v0.40.0 (2026-03-18)
+
+### Bug Fixes
+
+- Remove python -c wrapping from VM command execution
+  ([#126](https://github.com/OpenAdaptAI/openadapt-evals/pull/126),
+  [`9249a96`](https://github.com/OpenAdaptAI/openadapt-evals/commit/9249a96fb0431327be9bac6b52c1705cd39e874c))
+
+_run_vm_command() was wrapping all commands in python -c "...", which broke PowerShell milestone
+  commands. Commands are now sent directly to the WAA server's /execute_windows endpoint.
+
+Also: remove unused `field` import, fix dict mutation during milestone
+
+parsing.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Features
+
+- Add OpenEnv-compatible WAA desktop environment
+  ([#128](https://github.com/OpenAdaptAI/openadapt-evals/pull/128),
+  [`d30b3b5`](https://github.com/OpenAdaptAI/openadapt-evals/commit/d30b3b54a2e8213b5a275f961741fffadd66c8fa))
+
+WAAOpenEnvEnvironment wraps RLEnvironment into Meta's OpenEnv standard (reset/step/state protocol).
+  Can be served as HTTP+WebSocket via openenv-core's create_app(), or used standalone.
+
+- WAAAction/WAAObservation/WAAState Pydantic models - Base64-encoded PNG screenshots in observations
+  - Dense rewards via milestones when TaskConfig loaded - Server entry point: python -m
+  openadapt_evals.openenv.server - 21 tests (models, environment, protocol compliance)
+
+openenv-core is an optional dependency — the environment works standalone without it installed.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.39.0 (2026-03-18)
 
 ### Features
