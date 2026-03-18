@@ -73,26 +73,33 @@ Rules:
 - Use "COMMAND" when there is a concrete next step to take.
 - Use "DONE" when the task appears to be completed.
 - Use "FAIL" when the task cannot be completed (e.g. required element missing).
-- The instruction must describe WHAT to interact with, not pixel coordinates.
+- The instruction must describe ONE ATOMIC action — either a click OR a type OR a keypress.
+  Do NOT combine multiple actions (e.g., "click X and type Y"). Split them into separate steps.
+- For click actions: describe WHAT to click (e.g., "Click the Start button in the taskbar").
+- For type actions: use the format: type 'text here' (e.g., type 'Hello World').
+- For key actions: use the format: press Enter, press Ctrl+S, press Tab.
+- Do NOT include pixel coordinates — a grounding model handles that.
 """
 
 _GROUNDER_SYSTEM = (
     "You are a GUI grounding model. Given a screenshot and a natural-language "
-    "instruction, output the precise action with coordinates to execute."
+    "instruction, output the precise coordinates of the element to interact with."
 )
 
-_GROUNDER_PROMPT = """\
+# UI-Venus native grounding format — outputs [x1,y1,x2,y2] bounding box
+_GROUNDER_PROMPT_BBOX = """\
+Outline the position corresponding to the instruction: {instruction}.
+The output should be only [x1,y1,x2,y2].
+"""
+
+# Generic JSON format for non-UI-Venus grounders
+_GROUNDER_PROMPT_JSON = """\
 Instruction: {instruction}
 
 Look at the screenshot and output a JSON object describing the action:
-{{"type": "click" | "type" | "key" | "scroll" | "drag", "x": <0.0-1.0>, "y": <0.0-1.0>, "text": "...", "key": "...", "scroll_direction": "up"|"down", "end_x": <0.0-1.0>, "end_y": <0.0-1.0>}}
+{{"type": "click" | "type" | "key" | "scroll" | "drag", "x": <0.0-1.0>, "y": <0.0-1.0>, "text": "...", "key": "..."}}
 
-Include only the fields relevant to the action type:
-- click: type, x, y
-- type: type, text
-- key: type, key
-- scroll: type, scroll_direction
-- drag: type, x, y, end_x, end_y
+Include only the fields relevant to the action type.
 """
 
 
@@ -223,8 +230,15 @@ class PlannerGrounderAgent(BenchmarkAgent):
                 },
             )
 
-        # -- Step 2: Call grounder -----------------------------------------
-        action = self._call_grounder(observation, instruction)
+        # -- Step 2: Detect non-click actions from planner instruction ------
+        # The grounder only returns coordinates. Type/key/scroll actions
+        # should be handled directly from the planner's instruction.
+        non_click_action = self._parse_non_click_action(instruction)
+        if non_click_action is not None:
+            action = non_click_action
+        else:
+            # Call grounder for click-type actions
+            action = self._call_grounder(observation, instruction)
 
         # Record for history.
         action_str = action_to_string(action)
@@ -236,6 +250,53 @@ class PlannerGrounderAgent(BenchmarkAgent):
         action.raw_action["planner_output"] = planner_output
 
         return action
+
+    @staticmethod
+    def _parse_non_click_action(instruction: str) -> BenchmarkAction | None:
+        """Detect type/key/scroll actions from planner instruction.
+
+        The grounder only returns click coordinates. For type/key/scroll
+        actions, we parse the action directly from the planner's
+        instruction text.
+
+        Returns None if the instruction is a click action (needs grounder).
+        """
+        import re
+
+        lower = instruction.lower()
+
+        # Detect "type 'text'" or "type "text"" patterns
+        type_match = re.search(
+            r"(?:type|enter|input|write)\s+['\"]([^'\"]+)['\"]",
+            instruction, re.IGNORECASE,
+        )
+        if type_match:
+            text = type_match.group(1)
+            logger.info("Planner instruction parsed as TYPE action: %r", text)
+            return BenchmarkAction(type="type", text=text)
+
+        # Detect keyboard shortcuts
+        key_patterns = [
+            (r"press\s+(enter|return|tab|escape|esc|backspace|delete)", None),
+            (r"press\s+(ctrl|alt|shift)\s*\+\s*(\w+)", None),
+            (r"hotkey\s*\(?\s*['\"]?(\w+)['\"]?\s*,\s*['\"]?(\w+)['\"]?", None),
+        ]
+        for pattern, _ in key_patterns:
+            key_match = re.search(pattern, instruction, re.IGNORECASE)
+            if key_match:
+                groups = [g for g in key_match.groups() if g]
+                key = "+".join(groups)
+                logger.info("Planner instruction parsed as KEY action: %s", key)
+                return BenchmarkAction(type="key", key=key)
+
+        # Detect scroll
+        if "scroll down" in lower:
+            return BenchmarkAction(type="scroll", scroll_direction="down")
+        if "scroll up" in lower:
+            return BenchmarkAction(type="scroll", scroll_direction="up")
+
+        # Default: needs grounder (it's a click action)
+        return None
 
     def reset(self) -> None:
         """Reset agent state between episodes."""
@@ -336,7 +397,7 @@ class PlannerGrounderAgent(BenchmarkAgent):
             return self._call_grounder_http(observation, instruction)
 
         # String model name — use vlm_call.
-        prompt = _GROUNDER_PROMPT.format(instruction=instruction)
+        prompt = _GROUNDER_PROMPT_JSON.format(instruction=instruction)
         images = [observation.screenshot] if observation.screenshot else None
 
         from openadapt_evals.vlm import vlm_call
@@ -387,19 +448,22 @@ class PlannerGrounderAgent(BenchmarkAgent):
     ) -> BenchmarkAction:
         """Call the grounder via OpenAI-compatible HTTP endpoint.
 
-        Sends the screenshot as a base64-encoded image using the standard
-        OpenAI chat completions format, compatible with vLLM, Ollama,
-        and any OpenAI-compatible server.
+        Uses the UI-Venus native grounding prompt format which outputs
+        [x1,y1,x2,y2] bounding boxes. The center point of the bbox is
+        used as the click coordinate.
+
+        Compatible with vLLM, Ollama, or any OpenAI-compatible server.
 
         Args:
             observation: Current observation with screenshot.
             instruction: High-level instruction from the planner.
 
         Returns:
-            Grounded BenchmarkAction.
+            Grounded BenchmarkAction with pixel or fractional coordinates.
         """
         import base64
         import json
+        import re
 
         import requests
 
@@ -408,8 +472,11 @@ class PlannerGrounderAgent(BenchmarkAgent):
             endpoint = endpoint.rstrip("/") + "/v1"
         url = f"{endpoint}/chat/completions"
 
+        # Use UI-Venus native grounding format
+        prompt = _GROUNDER_PROMPT_BBOX.format(instruction=instruction)
+
         content = [
-            {"type": "text", "text": _GROUNDER_PROMPT.format(instruction=instruction)},
+            {"type": "text", "text": prompt},
         ]
         if observation.screenshot:
             b64 = base64.b64encode(observation.screenshot).decode()
@@ -421,10 +488,9 @@ class PlannerGrounderAgent(BenchmarkAgent):
         payload = {
             "model": "UI-Venus-1.5-8B",
             "messages": [
-                {"role": "system", "content": _GROUNDER_SYSTEM},
                 {"role": "user", "content": content},
             ],
-            "max_tokens": 256,
+            "max_tokens": 128,
             "temperature": 0.0,
         }
 
@@ -436,11 +502,69 @@ class PlannerGrounderAgent(BenchmarkAgent):
             logger.error("HTTP grounder call failed: %s", exc)
             return BenchmarkAction(type="done")
 
-        logger.debug("HTTP grounder raw output: %s", raw[:500])
+        logger.info("HTTP grounder raw output: %s", raw[:200])
 
-        from openadapt_evals.training.trl_rollout import parse_action_json
+        # Parse [x1, y1, x2, y2] bounding box → center click
+        return self._parse_bbox_to_action(raw)
 
-        return parse_action_json(raw)
+    @staticmethod
+    def _parse_bbox_to_action(raw: str) -> BenchmarkAction:
+        """Parse grounder output to a click action.
+
+        Supports multiple formats:
+        - UI-Venus bbox: [x1, y1, x2, y2] → center click
+        - JSON action: {"type": "click", "x": 0.5, "y": 0.3}
+        - Coordinate pair: [x, y]
+
+        Returns BenchmarkAction with the center of the bbox.
+        """
+        import re
+
+        # Try JSON parse first (for non-bbox grounders)
+        try:
+            import json
+            data = json.loads(raw.strip())
+            if isinstance(data, dict) and "x" in data and "y" in data:
+                return BenchmarkAction(
+                    type=data.get("type", "click"),
+                    x=float(data["x"]),
+                    y=float(data["y"]),
+                    text=data.get("text"),
+                    key=data.get("key"),
+                )
+        except (json.JSONDecodeError, ValueError, KeyError):
+            pass
+
+        # Find list of numbers (bbox format)
+        match = re.search(r"\[?\s*(\d+\.?\d*)\s*,\s*(\d+\.?\d*)\s*(?:,\s*(\d+\.?\d*)\s*,\s*(\d+\.?\d*))?\s*\]?", raw)
+        if not match:
+            # Last resort: try parse_action_json
+            from openadapt_evals.training.trl_rollout import parse_action_json
+            return parse_action_json(raw)
+
+        nums = [float(x) for x in match.groups() if x is not None]
+
+        if len(nums) == 4:
+            # [x1, y1, x2, y2] → center
+            x = (nums[0] + nums[2]) / 2
+            y = (nums[1] + nums[3]) / 2
+        elif len(nums) == 2:
+            x, y = nums[0], nums[1]
+        else:
+            logger.warning("Unexpected number count in bbox: %s", nums)
+            return BenchmarkAction(type="done")
+
+        # Normalize coordinates
+        if x > 1 and y > 1:
+            if x <= 1000 and y <= 1000:
+                # Canvas [0-1000]
+                x, y = x / 1000, y / 1000
+            else:
+                # Pixel coords — leave as-is, run script handles conversion
+                pass
+
+        logger.info("Grounder: bbox=%s → click=(%.3f, %.3f)", nums, x, y)
+        return BenchmarkAction(type="click", x=x, y=y)
 
 
 def _action_to_planner_output(action: BenchmarkAction) -> dict[str, Any]:

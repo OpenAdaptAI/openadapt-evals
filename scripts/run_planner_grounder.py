@@ -142,14 +142,16 @@ def main():
 
         # Execute action
         if action.x is not None and action.y is not None:
-            if 0 <= (action.x or 0) <= 1 and 0 <= (action.y or 0) <= 1:
+            x = float(action.x)
+            y = float(action.y)
+            if 0 <= x <= 1 and 0 <= y <= 1:
                 step_result = env.pixel_action(
-                    x_frac=action.x, y_frac=action.y,
+                    x_frac=x, y_frac=y,
                     action_type=action.type, text=action.text, key=action.key,
                 )
             else:
                 step_result = env.pixel_action(
-                    x=int(action.x), y=int(action.y),
+                    x=int(x), y=int(y),
                     action_type=action.type, text=action.text, key=action.key,
                 )
         else:
