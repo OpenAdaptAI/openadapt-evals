@@ -6,6 +6,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+try:
+    from pynput.keyboard import Key  # type: ignore[import-untyped]
+
+    HAS_PYNPUT = True
+except (ImportError, ValueError):
+    HAS_PYNPUT = False
+
 from openadapt_evals.adapters.base import (
     BenchmarkAction,
     BenchmarkObservation,
@@ -267,10 +274,9 @@ class TestLocalAdapterScaling:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(not HAS_PYNPUT, reason="pynput requires display")
 class TestKeyResolution:
     def test_known_key(self):
-        from pynput.keyboard import Key  # type: ignore[import-untyped]
-
         resolved = LocalAdapter._resolve_key("enter")
         assert resolved == Key.enter
 
@@ -279,7 +285,5 @@ class TestKeyResolution:
         assert resolved == "a"
 
     def test_case_insensitive(self):
-        from pynput.keyboard import Key  # type: ignore[import-untyped]
-
         assert LocalAdapter._resolve_key("ENTER") == Key.enter
         assert LocalAdapter._resolve_key("Tab") == Key.tab
