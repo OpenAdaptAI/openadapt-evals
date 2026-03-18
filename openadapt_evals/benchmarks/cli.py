@@ -730,14 +730,50 @@ def cmd_live(args: argparse.Namespace) -> int:
         print("Example: --task-ids notepad_1,notepad_2,browser_1")
         return 1
 
+    # Check if controller mode is requested
+    use_controller = getattr(args, "controller", False) and demo_text is not None
+    if use_controller:
+        print(f"Using DemoController (max_retries={args.max_retries}, max_replans={args.max_replans})")
+
+    # Set up correction store if requested
+    correction_store = None
+    enable_correction_capture = getattr(args, "enable_correction_capture", False)
+    correction_library_path = getattr(args, "correction_library", None)
+    if correction_library_path:
+        from openadapt_evals.correction_store import CorrectionStore
+
+        correction_store = CorrectionStore(correction_library_path)
+        print(f"Correction library: {correction_library_path}")
+        if enable_correction_capture:
+            print("Correction capture: ENABLED (will prompt for human corrections on failure)")
+
     # Run evaluation
-    results = evaluate_agent_on_benchmark(
-        agent=agent,
-        adapter=adapter,
-        max_steps=args.max_steps,
-        task_ids=task_ids,
-        config=eval_config,
-    )
+    if use_controller:
+        from openadapt_evals.demo_controller import run_with_controller
+
+        results = []
+        for tid in task_ids:
+            task = adapter.load_task(tid)
+            result = run_with_controller(
+                agent=agent,
+                adapter=adapter,
+                task=task,
+                demo_text=demo_text,
+                max_steps=args.max_steps,
+                max_retries=args.max_retries,
+                max_replans=args.max_replans,
+                correction_store=correction_store,
+                enable_correction_capture=enable_correction_capture,
+            )
+            results.append(result)
+    else:
+        results = evaluate_agent_on_benchmark(
+            agent=agent,
+            adapter=adapter,
+            max_steps=args.max_steps,
+            task_ids=task_ids,
+            config=eval_config,
+        )
 
     # Compute and display metrics
     metrics = compute_metrics(results)
@@ -2517,6 +2553,16 @@ def main() -> int:
     live_parser.add_argument("--focus-check-method", type=str, default="win32",
                             choices=["win32", "a11y", "both"],
                             help="Method for foreground window check: win32 (fast, default), a11y, or both")
+    live_parser.add_argument("--controller", action="store_true",
+                            help="Use DemoController state machine for step-by-step plan execution with VLM verification")
+    live_parser.add_argument("--max-retries", type=int, default=2,
+                            help="Max retries per step when using --controller (default: 2)")
+    live_parser.add_argument("--max-replans", type=int, default=2,
+                            help="Max replans when using --controller (default: 2)")
+    live_parser.add_argument("--correction-library", type=str, default=None,
+                            help="Path to correction library directory for the correction flywheel")
+    live_parser.add_argument("--enable-correction-capture", action="store_true",
+                            help="Enable HITL correction capture when agent fails (requires --correction-library)")
 
     # Probe server
     probe_parser = subparsers.add_parser("probe", help="Check if WAA server is reachable")
