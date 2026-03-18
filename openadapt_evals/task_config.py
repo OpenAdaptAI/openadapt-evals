@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 import os
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -100,8 +100,9 @@ class TaskConfig:
         # Parse milestones
         milestones = []
         for item in data.get("milestones", []):
-            ms_name = item.pop("name", "milestone")
-            milestones.append(Milestone(name=ms_name, check=TaskCheck(**item)))
+            ms_name = item.get("name", "milestone")
+            check_fields = {k: v for k, v in item.items() if k != "name"}
+            milestones.append(Milestone(name=ms_name, check=TaskCheck(**check_fields)))
 
         return cls(
             name=name,
@@ -311,12 +312,17 @@ class TaskConfig:
 
     @staticmethod
     def _run_vm_command(command: str, server_url: str) -> str:
-        """Execute a command on the VM and return stdout."""
+        """Execute a command on the VM and return stdout.
+
+        The command is sent directly to the WAA server's /execute_windows
+        endpoint. It can be any command the VM can run (PowerShell, Python,
+        cmd, etc.) — no wrapping is applied.
+        """
         import requests
 
         resp = requests.post(
             f"{server_url}/execute_windows",
-            json={"command": f'python -c "{command}"'},
+            json={"command": command},
             timeout=30,
         )
         if resp.status_code == 200:
