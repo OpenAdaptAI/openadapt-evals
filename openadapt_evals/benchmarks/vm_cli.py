@@ -1722,8 +1722,8 @@ def cmd_start(args):
     getattr(args, "som_origin", "oss")
     getattr(args, "a11y_backend", "uia")
 
-    # The vanilla windowsarena/winarena:latest image uses --entrypoint /bin/bash
-    # and requires entry.sh as the command argument
+    # Our waa-auto:latest image uses a custom ENTRYPOINT (start_with_evaluate.sh)
+    # that starts evaluate_server.py on port 5050 before running entry.sh
     docker_cmd = f"""docker run -d \\
   --name winarena \\
   --device=/dev/kvm \\
@@ -1737,9 +1737,9 @@ def cmd_start(args):
   -e RAM_SIZE={ram_size} \\
   -e CPU_CORES={cpu_cores} \\
   -e DISK_SIZE=64G \\
-  --entrypoint /bin/bash \\
+  -p 5050:5050 \\
   {DOCKER_IMAGE} \\
-  -c './entry.sh --prepare-image false --start-client false'"""
+  ./entry.sh --prepare-image false --start-client false"""
     # Note: --start-client false means just boot Windows + Flask server
     # The benchmark client is started separately by the 'run' command
 
@@ -1861,9 +1861,9 @@ def cmd_test_golden_image(args):
   -e RAM_SIZE={ram_size} \\
   -e CPU_CORES={cpu_cores} \\
   -e DISK_SIZE=64G \\
-  --entrypoint /bin/bash \\
+  -p 5050:5050 \\
   {DOCKER_IMAGE} \\
-  -c './entry.sh --prepare-image false --start-client false'"""
+  ./entry.sh --prepare-image false --start-client false"""
 
     result = ssh_run(ip, docker_cmd)
     if result.returncode != 0:
@@ -4943,9 +4943,9 @@ def cmd_run_azure_ml_auto(args):
   -e RAM_SIZE={ram_size} \\
   -e CPU_CORES={cpu_cores} \\
   -e DISK_SIZE=64G \\
-  --entrypoint /bin/bash \\
+  -p 5050:5050 \\
   waa-auto:latest \\
-  -c './entry.sh --prepare-image false --start-client false'"""
+  ./entry.sh --prepare-image false --start-client false"""
         # Note: --start-client false for setup - just boot Windows + Flask server
         # Azure ML compute instances run the benchmark separately via run_entry.py
 
