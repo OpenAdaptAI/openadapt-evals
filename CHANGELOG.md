@@ -1,6 +1,23 @@
 # CHANGELOG
 
 
+## v0.42.1 (2026-03-18)
+
+### Bug Fixes
+
+- Pass action directly to env.step (preserves modifiers)
+  ([`f828946`](https://github.com/OpenAdaptAI/openadapt-evals/commit/f828946b306362e420fb374859fe0da1c8365276))
+
+The run script was reconstructing BenchmarkAction without modifiers, dropping Ctrl/Alt/Shift from
+  hotkey actions. Now passes the original action object directly.
+
+Also adds: - docs/design/roi_and_cost_analysis.md — full cost analysis -
+  docs/research/planner_distillation.md — $5-35 to eliminate API costs -
+  docs/research/ui_venus_rl_review.md — RL training code not public
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.42.0 (2026-03-18)
 
 ### Bug Fixes
