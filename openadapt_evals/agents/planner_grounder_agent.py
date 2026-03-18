@@ -1,8 +1,6 @@
 """Planner-Grounder agent for GUI automation.
 
-Separates "what to do" (planner) from "where to click" (grounder),
-following the pattern established by SeeAct (ICML 2024), UFO2
-(Microsoft 2025), and CODA (2025).
+Separates "what to do" (planner) from "where to click" (grounder).
 
 The planner sees the screenshot + accessibility tree and outputs a
 high-level instruction. The grounder sees the screenshot + instruction
@@ -387,24 +385,62 @@ class PlannerGrounderAgent(BenchmarkAgent):
         observation: BenchmarkObservation,
         instruction: str,
     ) -> BenchmarkAction:
-        """Call the grounder via HTTP endpoint.
+        """Call the grounder via OpenAI-compatible HTTP endpoint.
+
+        Sends the screenshot as a base64-encoded image using the standard
+        OpenAI chat completions format, compatible with vLLM, Ollama,
+        and any OpenAI-compatible server.
 
         Args:
-            observation: Current observation.
+            observation: Current observation with screenshot.
             instruction: High-level instruction from the planner.
 
         Returns:
             Grounded BenchmarkAction.
         """
-        from openadapt_evals.agents.http_agent import HttpAgent
+        import base64
+        import json
 
-        http_agent = HttpAgent(endpoint_url=self._grounder_endpoint)
-        synth_task = BenchmarkTask(
-            task_id="grounder",
-            instruction=instruction,
-            domain="desktop",
-        )
-        return http_agent.act(observation, synth_task)
+        import requests
+
+        endpoint = self._grounder_endpoint.rstrip("/")
+        if not endpoint.endswith("/v1"):
+            endpoint = endpoint.rstrip("/") + "/v1"
+        url = f"{endpoint}/chat/completions"
+
+        content = [
+            {"type": "text", "text": _GROUNDER_PROMPT.format(instruction=instruction)},
+        ]
+        if observation.screenshot:
+            b64 = base64.b64encode(observation.screenshot).decode()
+            content.insert(0, {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{b64}"},
+            })
+
+        payload = {
+            "model": "UI-Venus-1.5-8B",
+            "messages": [
+                {"role": "system", "content": _GROUNDER_SYSTEM},
+                {"role": "user", "content": content},
+            ],
+            "max_tokens": 256,
+            "temperature": 0.0,
+        }
+
+        try:
+            resp = requests.post(url, json=payload, timeout=60)
+            resp.raise_for_status()
+            raw = resp.json()["choices"][0]["message"]["content"]
+        except Exception as exc:
+            logger.error("HTTP grounder call failed: %s", exc)
+            return BenchmarkAction(type="done")
+
+        logger.debug("HTTP grounder raw output: %s", raw[:500])
+
+        from openadapt_evals.training.trl_rollout import parse_action_json
+
+        return parse_action_json(raw)
 
 
 def _action_to_planner_output(action: BenchmarkAction) -> dict[str, Any]:

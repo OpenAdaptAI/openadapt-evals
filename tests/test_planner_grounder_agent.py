@@ -326,12 +326,15 @@ class TestHTTPGrounder:
                 grounder_provider="http",
             )
 
-    @patch("openadapt_evals.agents.http_agent.requests.post")
+    @patch("requests.post")
     def test_http_grounder_calls_endpoint(self, mock_post, observation, task):
-        """HTTP grounder delegates to HttpAgent."""
+        """HTTP grounder calls OpenAI-compatible endpoint."""
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.json.return_value = {"type": "click", "x": 0.7, "y": 0.2}
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {
+            "choices": [{"message": {"content": '{"type": "click", "x": 0.7, "y": 0.2}'}}]
+        }
         mock_post.return_value = mock_resp
 
         agent = PlannerGrounderAgent(
@@ -345,6 +348,9 @@ class TestHTTPGrounder:
         assert action.type == "click"
         assert action.x == 0.7
         assert action.y == 0.2
+        # Verify it called the OpenAI-compatible endpoint
+        call_url = mock_post.call_args[0][0]
+        assert "/v1/chat/completions" in call_url
 
 
 # -- Tests: _action_to_planner_output helper ----------------------------------
