@@ -2258,7 +2258,23 @@ public static class FgWin {
             return f"import pyautogui; {type_body}"
 
         if action.type == "key":
-            return self._translate_key_action(action)
+            key = action.key or ""
+            modifiers = action.modifiers or []
+
+            # Handle modifier+key combos (Ctrl+A, Alt+F4, etc.)
+            if modifiers:
+                all_keys = [m.lower() for m in modifiers] + [key.lower()]
+                args = ", ".join(f"'{k}'" for k in all_keys)
+                return f"import pyautogui; pyautogui.hotkey({args})"
+
+            # Handle "ctrl+a" style strings (legacy format)
+            if "+" in key:
+                parts = [p.strip().lower() for p in key.split("+")]
+                args = ", ".join(f"'{p}'" for p in parts)
+                return f"import pyautogui; pyautogui.hotkey({args})"
+
+            # Single key press
+            return f"import pyautogui; pyautogui.press('{key.lower()}')"
 
         if action.type == "scroll":
             direction = action.scroll_direction or "down"

@@ -105,7 +105,10 @@ def action_to_string(action: BenchmarkAction) -> str:
         if action.target_name:
             return f"CLICK({action.target_name})"
         if action.x is not None and action.y is not None:
-            return f"CLICK({action.x:.3f}, {action.y:.3f})"
+            try:
+                return f"CLICK({float(action.x):.3f}, {float(action.y):.3f})"
+            except (ValueError, TypeError):
+                return f"CLICK({action.x}, {action.y})"
         return "CLICK()"
     elif action.type == "type":
         return f"TYPE({action.text!r})"

@@ -4,6 +4,8 @@ id: custom-notepad-hello
 
 setup:
   - execute: "powershell -c 'Stop-Process -Name notepad -Force -ErrorAction SilentlyContinue'"
+  - execute: "powershell -c 'Stop-Process -Name msedge -Force -ErrorAction SilentlyContinue'"
+  - execute: "powershell -c 'Remove-Item $env:USERPROFILE\\Desktop\\*.txt -Force -ErrorAction SilentlyContinue'"
   - sleep: 1
 
 evaluate:
