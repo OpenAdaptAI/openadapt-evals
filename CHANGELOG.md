@@ -1,6 +1,66 @@
 # CHANGELOG
 
 
+## v0.39.0 (2026-03-18)
+
+### Features
+
+- Add YAML-based custom task evaluation without forking WAA
+  ([#125](https://github.com/OpenAdaptAI/openadapt-evals/pull/125),
+  [`e62377b`](https://github.com/OpenAdaptAI/openadapt-evals/commit/e62377b69eafdc9adb3b261a4affc29b441e0513))
+
+* feat: add YAML-based custom task evaluation without forking WAA
+
+Users can define tasks with setup commands and evaluation checks in simple YAML files. The WAA
+  server already accepts evaluator configs in POST /evaluate — this module translates YAML into that
+  format.
+
+Four check types: - command: run PowerShell/Python on VM, check output - file: check file exists or
+  contains expected content - screenshot: VLM judges screenshot (one-sentence description) - python:
+  run arbitrary Python on VM
+
+Includes milestone support for dense partial rewards, VLM-based screenshot evaluation, 5 example
+  tasks (notepad, folder, calc, clear-browsing-data for Chrome and Edge), and 22 tests.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* feat: add dense partial rewards via milestones in RLEnvironment
+
+RLEnvironment.evaluate_dense() uses TaskConfig milestones to compute partial credit
+  (milestones_passed / total). This gives GRPO gradient signal even when no task fully completes —
+  an agent passing 3/5 milestones gets reward 0.6 vs 0.0 for binary evaluation.
+
+- evaluate_dense(): milestone-based evaluation, falls back to binary - load_task_config():
+  convenience method to set TaskConfig - collect_rollout() uses dense rewards when milestones are
+  defined - reset() uses TaskConfig for task loading (bypasses server lookup) - Trajectory info
+  includes milestone_score, binary_score, counts
+
+9 new tests, all passing. No changes to existing evaluate() behavior.
+
+* fix: simplify execute command translation in TaskConfig
+
+Execute setup commands were being double-wrapped in python -c. Now passed through as-is to WAA's
+  execute handler.
+
+Validated against live WAA VM: milestones correctly evaluate (VLM screenshot check + command check
+  both work).
+
+* test: add synthetic E2E pipeline tests for RL training
+
+Validates full chain: TaskConfig YAML → RLEnvironment → collect_rollout → dense rewards → TRL
+  rollout_func output shape.
+
+Key test: multiple_rollouts_produce_reward_variance proves that milestone-based rewards produce
+  [1.0, 0.67, 0.33, 0.0] across 4 rollouts — GRPO can compute meaningful advantages from this, even
+  when binary task completion is 0%.
+
+5 tests, no VM or GPU required (uses mock adapter).
+
+---------
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.38.1 (2026-03-18)
 
 ### Bug Fixes
