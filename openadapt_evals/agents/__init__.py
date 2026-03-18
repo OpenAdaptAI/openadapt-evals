@@ -15,6 +15,7 @@ Available agents:
     - SmolOperatorAgent: Uses SmolVLM2-2.2B for local inference
     - PolicyAgent: Uses local trained policy model
     - RetrievalAugmentedAgent: Automatically retrieves demos from a library
+    - PlannerGrounderAgent: Planner-grounder architecture (SeeAct/UFO2/CODA)
     - BaselineAgent: Unified baselines using openadapt-ml (Claude/GPT/Gemini)
 
 Example:
@@ -37,6 +38,15 @@ Example:
     from openadapt_evals.agents import Qwen3VLAgent
     agent = Qwen3VLAgent(model_path="Qwen/Qwen3-VL-8B-Instruct")
 
+    # Use planner-grounder architecture
+    from openadapt_evals.agents import PlannerGrounderAgent
+    agent = PlannerGrounderAgent(
+        planner="claude-sonnet-4-20250514",
+        grounder="gpt-4.1-mini",
+        planner_provider="anthropic",
+        grounder_provider="openai",
+    )
+
     # Use unified baseline agent (requires openadapt-ml)
     from openadapt_evals.agents import BaselineAgent
     agent = BaselineAgent.from_alias("gemini-3-pro")
@@ -58,6 +68,7 @@ from openadapt_evals.agents.api_agent import ApiAgent
 from openadapt_evals.agents.claude_computer_use_agent import ClaudeComputerUseAgent
 from openadapt_evals.agents.http_agent import HttpAgent
 from openadapt_evals.agents.retrieval_agent import RetrievalAugmentedAgent
+from openadapt_evals.agents.planner_grounder_agent import PlannerGrounderAgent
 
 # Lazy imports for agents requiring additional dependencies
 def __getattr__(name: str):
@@ -90,6 +101,7 @@ __all__ = [
     "SmolOperatorAgent",
     "PolicyAgent",
     "RetrievalAugmentedAgent",
+    "PlannerGrounderAgent",
     "BaselineAgent",
     # Utilities
     "action_to_string",
