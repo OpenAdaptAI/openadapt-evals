@@ -167,14 +167,12 @@ class TaskConfig:
                     "parameters": {"path": item["open"]},
                 })
             elif "execute" in item:
-                cmd = item["execute"]
-                if not cmd.startswith("python"):
-                    cmd = f'python -c "{cmd}"'
+                cmd = item["execute"].strip()
+                # WAA execute handler runs the command via subprocess.
+                # Pass as a single string for shell execution.
                 result.append({
                     "type": "execute",
-                    "parameters": {"command": ["python", "-c", cmd]
-                                   if "python -c" in cmd
-                                   else cmd.split()},
+                    "parameters": {"command": cmd},
                 })
             elif "sleep" in item:
                 result.append({
