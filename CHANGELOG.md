@@ -1,6 +1,145 @@
 # CHANGELOG
 
 
+## v0.42.0 (2026-03-18)
+
+### Bug Fixes
+
+- Remove --entrypoint override so evaluate_server.py starts automatically
+  ([#133](https://github.com/OpenAdaptAI/openadapt-evals/pull/133),
+  [`ebae5a6`](https://github.com/OpenAdaptAI/openadapt-evals/commit/ebae5a651eac8ad7a7afe252b758e6985313fbf0))
+
+The docker run commands used --entrypoint /bin/bash which overrode the Dockerfile ENTRYPOINT
+  (start_with_evaluate.sh). This prevented evaluate_server.py from starting on port 5050, making
+  /evaluate and /task/<id> endpoints unavailable.
+
+Fix: remove --entrypoint, pass entry.sh as a command argument instead.
+
+Also publish port 5050 in all three docker run locations.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Wrap shell commands for /execute_windows and fix file_exists metric
+  ([#131](https://github.com/OpenAdaptAI/openadapt-evals/pull/131),
+  [`e45c2b5`](https://github.com/OpenAdaptAI/openadapt-evals/commit/e45c2b525c0862e6be000b7e26c5ebd84c807a23))
+
+Two critical bugs that would cause failures on live VMs:
+
+1. _run_vm_command() sent shell commands (PowerShell, cmd) directly to /execute_windows, which runs
+  Python exec(). Shell commands caused SyntaxError. Now wraps in subprocess.run() so shell commands
+  work.
+
+2. file_exists metric doesn't exist in WAA metrics module — evaluator silently returns 0.0. Changed
+  to exact_match which works with the "True"/"False" string output from the existence check.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Features
+
+- Add --correction-library and --enable-correction-capture CLI flags
+  ([#130](https://github.com/OpenAdaptAI/openadapt-evals/pull/130),
+  [`2c15ca1`](https://github.com/OpenAdaptAI/openadapt-evals/commit/2c15ca161a36e158fe124610d5a9938621b23c3b))
+
+Wires the correction flywheel into the `live` subcommand: - --correction-library PATH: load/store
+  corrections for the flywheel - --enable-correction-capture: prompt for human corrections on
+  failure - --controller, --max-retries, --max-replans: DemoController flags
+
+When --controller is active with --correction-library, the controller checks stored corrections
+  before replanning and captures new corrections when enabled.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Add end-to-end GRPO training script with TRL + Unsloth
+  ([#129](https://github.com/OpenAdaptAI/openadapt-evals/pull/129),
+  [`abcafe8`](https://github.com/OpenAdaptAI/openadapt-evals/commit/abcafe8d90a310a1242b12b7eddb8c8f0b675ed1))
+
+One command to train: task YAMLs → dense rewards → GRPO.
+
+Features: - --mock mode for pipeline validation (no VM/GPU) - --use-unsloth for VRAM efficiency
+  (4bit + LoRA) - --task-dir loads YAML task configs with milestones - Dense rewards via milestones
+  (reward = passed/total) - Configurable: model, group size, loss type, vLLM, learning rate - LoRA
+  checkpoint loading (--lora-checkpoint)
+
+Usage: python scripts/train_trl_grpo.py --task-dir ./example_tasks --mock python
+  scripts/train_trl_grpo.py --task-dir ./tasks --server-url http://vm:5001
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Add PlannerGrounderAgent for dual-model GUI automation
+  ([#134](https://github.com/OpenAdaptAI/openadapt-evals/pull/134),
+  [`a6eac6e`](https://github.com/OpenAdaptAI/openadapt-evals/commit/a6eac6eec7957ce331cf52dd04f39b7fc719e2fd))
+
+* feat: add PlannerGrounderAgent for dual-model GUI automation
+
+Implements the planner-grounder architecture from the GUI agent literature (SeeAct ICML 2024, UFO2
+  2025, CODA 2025):
+
+- Planner sees screenshot + a11y tree, outputs high-level instruction - Grounder sees screenshot +
+  instruction, outputs pixel coordinates - Supports agent instances, VLM API calls, or HTTP
+  endpoints - Action history tracking, DONE/FAIL handling, grounder retry - Registered in agent
+  registry
+
+23 tests passing.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* feat: OpenAI-compatible HTTP grounder + serving/run scripts
+
+- HTTP grounder now uses OpenAI chat completions API format (compatible with vLLM, Ollama, any
+  OpenAI-compatible server) - Sends screenshots as base64-encoded images - serve_grounder.sh: start
+  UI-Venus-1.5-8B via vLLM - run_planner_grounder.py: full experiment script (Claude planner +
+  UI-Venus grounder against WAA VM)
+
+* fix: handle non-click actions and UI-Venus bbox format in PlannerGrounderAgent
+
+Fixes from first live experiment (Claude planner + UI-Venus grounder on WAA VM):
+
+1. Parse planner instructions for type/key/scroll actions — these bypass the grounder (which only
+  returns click coordinates) 2. Planner prompt now requires ONE ATOMIC action per step (no compound
+  "click X and type Y") 3. Grounder bbox parser handles UI-Venus [x1,y1,x2,y2] format, JSON format,
+  and coordinate pairs 4. Float conversion for coordinates in run script and base.py 5. Added
+  UI-Venus RL training review doc
+
+Experiment result: planner correctly navigated Start → Notepad → text area. Grounder returned
+  accurate bounding boxes. Typing failed because compound instructions weren't decomposed — now
+  fixed.
+
+* fix: hotkey handling, anti-loop, logging, screenshot saving
+
+Four fixes from live experiment:
+
+1. Key actions with modifiers (Ctrl+A) now use pyautogui.hotkey() instead of press(). Parser stores
+  modifiers separately on BenchmarkAction. Adapter handles both modifier+key combos and legacy
+  "ctrl+a" string format.
+
+2. Planner prompt now includes anti-loop rule: "If your last 3 actions were the same, try a
+  completely different approach."
+
+3. Logging shows planner instruction correctly (was showing "?").
+
+4. --save-screenshots flag saves PNGs at each step for debugging.
+
+---------
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Add WAA native JSON import to TaskConfig
+  ([#132](https://github.com/OpenAdaptAI/openadapt-evals/pull/132),
+  [`279a5b3`](https://github.com/OpenAdaptAI/openadapt-evals/commit/279a5b328e2d1013068a5556fe66e34edb33686c))
+
+Add from_waa_json() and from_waa_dir() classmethods so users who already have tasks in WAA's native
+  JSON format can import them directly without rewriting in YAML.
+
+- Simple evaluators (exact_match, contains, fuzzy_match, regex_match with
+  vm_command_line/vm_file/literal) are reverse-translated to TaskCheck objects for full round-trip
+  fidelity. - Specialised evaluators (compare_table, compare_font_names, etc.) are preserved
+  verbatim via _raw_evaluator for lossless round-trip. - from_dir() now auto-detects .yaml/.yml and
+  .json files. - 20 new tests covering import, round-trip, directory loading, domain inference, and
+  mixed-format directories.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.41.0 (2026-03-18)
 
 ### Features
