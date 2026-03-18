@@ -1,6 +1,30 @@
 # CHANGELOG
 
 
+## v0.38.1 (2026-03-18)
+
+### Bug Fixes
+
+- Use C8i/M8i instances for AWS nested virt (10x cheaper than metal)
+  ([#124](https://github.com/OpenAdaptAI/openadapt-evals/pull/124),
+  [`828733f`](https://github.com/OpenAdaptAI/openadapt-evals/commit/828733f555202e19105c8c2b1ab3d08323901673))
+
+AWS Intel Xeon 6 families (C8i, M8i, R8i) support nested virtualization on standard (non-metal)
+  instances since late 2025. Update default from m5.metal ($4.61/hr) to m8i.2xlarge ($0.46/hr) with
+  fallbacks through c8i.2xlarge, r8i.2xlarge, m8i.4xlarge, and m5.metal as legacy option.
+
+Updated files: - aws_vm.py: new INSTANCE_TYPE and INSTANCE_TYPE_FALLBACKS - CLAUDE.md: updated cost
+  table - docs/rl_quick_start.md: updated cost estimates - docs/ec2_setup_guide.md: updated instance
+  types, costs, and instructions
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Chores
+
+- Require openadapt-telemetry 0.2.0
+  ([`42d723c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/42d723c86ea750d85a70451704b836b50698e197))
+
+
 ## v0.38.0 (2026-03-17)
 
 ### Documentation
