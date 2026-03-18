@@ -1,4 +1,4 @@
-"""Tests for custom YAML task configuration."""
+"""Tests for custom task configuration (YAML and WAA JSON)."""
 
 from __future__ import annotations
 
@@ -385,3 +385,386 @@ class TestExampleTasks:
             assert task.id
             bt = task.to_benchmark_task()
             assert bt.task_id == task.id
+
+
+# ---------------------------------------------------------------------------
+# WAA JSON import tests
+# ---------------------------------------------------------------------------
+
+# Sample WAA JSON fixtures used across multiple tests.
+
+WAA_SIMPLE_COMMAND = {
+    "id": "notepad-hello-001",
+    "instruction": "Type hello in Notepad",
+    "related_apps": ["notepad"],
+    "snapshot": "notepad",
+    "config": [
+        {"type": "launch", "parameters": {"command": "notepad.exe"}},
+        {"type": "sleep", "parameters": {"seconds": 2}},
+    ],
+    "evaluator": {
+        "func": "exact_match",
+        "result": {"type": "vm_command_line", "command": "echo hello"},
+        "expected": {"type": "literal", "value": "hello"},
+    },
+}
+
+WAA_FILE_CONTAINS = {
+    "id": "file-check-001",
+    "instruction": "Create a file with content",
+    "config": [],
+    "evaluator": {
+        "func": "contains",
+        "result": {"type": "vm_file", "path": "C:\\Users\\Docker\\test.txt"},
+        "expected": {"type": "literal", "value": "expected text"},
+    },
+}
+
+WAA_MULTI_METRIC = {
+    "id": "multi-check-001",
+    "instruction": "Perform two operations",
+    "config": [
+        {"type": "execute", "parameters": {"command": "echo setup"}},
+    ],
+    "evaluator": {
+        "func": ["exact_match", "contains"],
+        "result": [
+            {"type": "vm_command_line", "command": "echo a"},
+            {"type": "vm_command_line", "command": "echo a b c"},
+        ],
+        "expected": [
+            {"type": "literal", "value": "a"},
+            {"type": "literal", "value": "b"},
+        ],
+        "conj": "and",
+    },
+}
+
+WAA_SPECIALISED_EVALUATOR = {
+    "id": "font-change-001",
+    "instruction": "Change font to Times New Roman",
+    "related_apps": ["libreoffice_writer"],
+    "snapshot": "libreoffice_writer",
+    "config": [
+        {
+            "type": "download",
+            "parameters": {
+                "files": [
+                    {
+                        "path": "C:\\Users\\Docker\\Downloads\\Doc.docx",
+                        "url": "https://example.com/Doc.docx",
+                    }
+                ]
+            },
+        },
+        {"type": "open", "parameters": {"path": "C:\\Users\\Docker\\Downloads\\Doc.docx"}},
+    ],
+    "evaluator": {
+        "func": "compare_font_names",
+        "result": {
+            "type": "vm_file",
+            "path": "C:\\Users\\Docker\\Downloads\\Doc.docx",
+            "dest": "Doc.docx",
+        },
+        "expected": {
+            "type": "rule",
+            "rules": {"font_name": "Times New Roman"},
+        },
+        "postconfig": [
+            {"type": "activate_window", "parameters": {"window_name": "Doc.docx", "strict": True}},
+            {"type": "sleep", "parameters": {"seconds": 0.5}},
+        ],
+    },
+}
+
+WAA_DOWNLOAD_SINGLE = {
+    "id": "dl-single-001",
+    "instruction": "Download and check a file",
+    "config": [
+        {
+            "type": "download",
+            "parameters": {"url": "https://example.com/f.txt", "path": "C:\\f.txt"},
+        },
+    ],
+    "evaluator": {
+        "func": "exact_match",
+        "result": {"type": "vm_command_line", "command": "type C:\\f.txt"},
+        "expected": {"type": "literal", "value": "contents"},
+    },
+}
+
+WAA_LAUNCH_LIST_CMD = {
+    "id": "vscode-001",
+    "instruction": "Open VS Code",
+    "related_apps": ["vscode"],
+    "config": [
+        {"type": "launch", "parameters": {"command": ["code", "--new-window"]}},
+    ],
+}
+
+
+class TestWaaJsonImport:
+    """Tests for loading WAA native JSON task configs."""
+
+    def test_simple_command_check(self, tmp_path):
+        """Simple evaluator: exact_match + vm_command_line + literal."""
+        f = tmp_path / "task.json"
+        f.write_text(json.dumps(WAA_SIMPLE_COMMAND))
+
+        task = TaskConfig.from_waa_json(str(f))
+        assert task.id == "notepad-hello-001"
+        assert task.name == "Type hello in Notepad"
+        assert task.domain == "notepad"
+        assert len(task.setup) == 2
+        assert task.setup[0] == {"launch": "notepad.exe"}
+        assert task.setup[1] == {"sleep": 2}
+        assert len(task.checks) == 1
+        assert task.checks[0].check == "command"
+        assert task.checks[0].run == "echo hello"
+        assert task.checks[0].expect == "hello"
+        assert task.checks[0].match == "exact"
+        # No raw evaluator for simple patterns
+        assert task._raw_evaluator is None
+
+    def test_file_contains_check(self, tmp_path):
+        """contains + vm_file + literal -> file check."""
+        f = tmp_path / "task.json"
+        f.write_text(json.dumps(WAA_FILE_CONTAINS))
+
+        task = TaskConfig.from_waa_json(str(f))
+        assert len(task.checks) == 1
+        assert task.checks[0].check == "file"
+        assert task.checks[0].path == "C:\\Users\\Docker\\test.txt"
+        assert task.checks[0].contains == "expected text"
+
+    def test_multi_metric(self, tmp_path):
+        """Multiple metrics with conjunction."""
+        f = tmp_path / "task.json"
+        f.write_text(json.dumps(WAA_MULTI_METRIC))
+
+        task = TaskConfig.from_waa_json(str(f))
+        assert len(task.checks) == 2
+        assert task.combine == "and"
+        assert task.checks[0].match == "exact"
+        assert task.checks[1].match == "contains"
+
+    def test_specialised_evaluator_preserved(self, tmp_path):
+        """Specialised WAA evaluators are preserved as raw_evaluator."""
+        f = tmp_path / "task.json"
+        f.write_text(json.dumps(WAA_SPECIALISED_EVALUATOR))
+
+        task = TaskConfig.from_waa_json(str(f))
+        assert task.id == "font-change-001"
+        assert task.domain == "libreoffice_writer"
+        assert len(task.checks) == 0  # not reverse-translated
+        assert task._raw_evaluator is not None
+        assert task._raw_evaluator["func"] == "compare_font_names"
+        assert "postconfig" in task._raw_evaluator
+
+    def test_setup_download_with_files_array(self, tmp_path):
+        """Download config with 'files' array parameter."""
+        f = tmp_path / "task.json"
+        f.write_text(json.dumps(WAA_SPECIALISED_EVALUATOR))
+
+        task = TaskConfig.from_waa_json(str(f))
+        assert len(task.setup) == 2
+        assert "download" in task.setup[0]
+        assert task.setup[0]["download"]["url"] == "https://example.com/Doc.docx"
+        assert task.setup[0]["download"]["dest"] == "C:\\Users\\Docker\\Downloads\\Doc.docx"
+        assert "open" in task.setup[1]
+
+    def test_setup_download_single_file(self, tmp_path):
+        """Download config with direct url/path parameters."""
+        f = tmp_path / "task.json"
+        f.write_text(json.dumps(WAA_DOWNLOAD_SINGLE))
+
+        task = TaskConfig.from_waa_json(str(f))
+        assert "download" in task.setup[0]
+        assert task.setup[0]["download"]["url"] == "https://example.com/f.txt"
+        assert task.setup[0]["download"]["dest"] == "C:\\f.txt"
+
+    def test_launch_with_list_command(self, tmp_path):
+        """Launch command given as list is joined."""
+        f = tmp_path / "task.json"
+        f.write_text(json.dumps(WAA_LAUNCH_LIST_CMD))
+
+        task = TaskConfig.from_waa_json(str(f))
+        assert task.setup[0] == {"launch": "code --new-window"}
+
+    def test_no_evaluator(self, tmp_path):
+        """JSON with no evaluator -> empty checks, no raw_evaluator."""
+        data = {"id": "no-eval", "instruction": "Do nothing", "config": []}
+        f = tmp_path / "task.json"
+        f.write_text(json.dumps(data))
+
+        task = TaskConfig.from_waa_json(str(f))
+        assert task.checks == []
+        assert task._raw_evaluator is None
+
+    def test_domain_from_parent_dir(self, tmp_path):
+        """Domain inferred from parent directory when no related_apps."""
+        writer_dir = tmp_path / "writer"
+        writer_dir.mkdir()
+        f = writer_dir / "task.json"
+        f.write_text(json.dumps({"id": "w-001", "instruction": "Write", "config": []}))
+
+        task = TaskConfig.from_waa_json(str(f))
+        assert task.domain == "writer"
+
+    def test_domain_from_related_apps_calc(self, tmp_path):
+        """Domain inferred from related_apps containing 'calc'."""
+        f = tmp_path / "task.json"
+        f.write_text(json.dumps({
+            "id": "c-001",
+            "instruction": "Calculate",
+            "related_apps": ["libreoffice-calc"],
+            "config": [],
+        }))
+
+        task = TaskConfig.from_waa_json(str(f))
+        assert task.domain == "libreoffice_calc"
+
+
+class TestWaaJsonRoundTrip:
+    """Test that WAA JSON -> TaskConfig -> to_waa_config() round-trips."""
+
+    def test_simple_round_trip(self, tmp_path):
+        """Simple evaluator round-trips through checks."""
+        f = tmp_path / "task.json"
+        f.write_text(json.dumps(WAA_SIMPLE_COMMAND))
+
+        task = TaskConfig.from_waa_json(str(f))
+        waa = task.to_waa_config()
+
+        assert waa["task_id"] == "notepad-hello-001"
+        assert waa["instruction"] == "Type hello in Notepad"
+        evaluator = waa["evaluator"]
+        assert evaluator["func"] == "exact_match"
+        assert evaluator["result"]["type"] == "vm_command_line"
+        assert evaluator["result"]["command"] == "echo hello"
+        assert evaluator["expected"]["type"] == "literal"
+        assert evaluator["expected"]["value"] == "hello"
+
+    def test_specialised_round_trip(self, tmp_path):
+        """Specialised evaluators round-trip via raw_evaluator."""
+        f = tmp_path / "task.json"
+        f.write_text(json.dumps(WAA_SPECIALISED_EVALUATOR))
+
+        task = TaskConfig.from_waa_json(str(f))
+        waa = task.to_waa_config()
+
+        # Evaluator should be preserved exactly
+        assert waa["evaluator"] == WAA_SPECIALISED_EVALUATOR["evaluator"]
+
+    def test_multi_metric_round_trip(self, tmp_path):
+        """Multi-metric evaluator round-trips via checks."""
+        f = tmp_path / "task.json"
+        f.write_text(json.dumps(WAA_MULTI_METRIC))
+
+        task = TaskConfig.from_waa_json(str(f))
+        waa = task.to_waa_config()
+
+        evaluator = waa["evaluator"]
+        assert isinstance(evaluator["func"], list)
+        assert evaluator["func"] == ["exact_match", "contains"]
+        assert evaluator["conj"] == "and"
+
+    def test_setup_round_trip(self, tmp_path):
+        """Setup config round-trips: YAML-style -> WAA format."""
+        f = tmp_path / "task.json"
+        f.write_text(json.dumps(WAA_SIMPLE_COMMAND))
+
+        task = TaskConfig.from_waa_json(str(f))
+        waa = task.to_waa_config()
+
+        config = waa["config"]
+        assert len(config) == 2
+        assert config[0]["type"] == "launch"
+        assert config[0]["parameters"]["command"] == "notepad.exe"
+        assert config[1]["type"] == "sleep"
+        assert config[1]["parameters"]["seconds"] == 2.0
+
+    def test_benchmark_task_from_waa_json(self, tmp_path):
+        """WAA JSON -> TaskConfig -> BenchmarkTask works."""
+        f = tmp_path / "task.json"
+        f.write_text(json.dumps(WAA_SPECIALISED_EVALUATOR))
+
+        task = TaskConfig.from_waa_json(str(f))
+        bt = task.to_benchmark_task()
+        assert bt.task_id == "font-change-001"
+        assert bt.instruction == "Change font to Times New Roman"
+        assert bt.evaluation_spec is not None
+        assert bt.evaluation_spec["func"] == "compare_font_names"
+
+
+class TestWaaDir:
+    """Tests for loading WAA examples directory tree."""
+
+    def test_from_waa_dir(self, tmp_path):
+        """Load all JSONs from nested domain directories."""
+        calc_dir = tmp_path / "calc"
+        calc_dir.mkdir()
+        writer_dir = tmp_path / "writer"
+        writer_dir.mkdir()
+
+        (calc_dir / "task1.json").write_text(json.dumps({
+            "id": "calc-001", "instruction": "Sum cells", "config": [],
+        }))
+        (writer_dir / "task2.json").write_text(json.dumps({
+            "id": "writer-001", "instruction": "Change font", "config": [],
+        }))
+        # Non-JSON file should be ignored
+        (tmp_path / "README.md").write_text("ignore me")
+
+        tasks = TaskConfig.from_waa_dir(str(tmp_path))
+        assert len(tasks) == 2
+        ids = {t.id for t in tasks}
+        assert "calc-001" in ids
+        assert "writer-001" in ids
+
+    def test_from_waa_dir_nonexistent(self, tmp_path):
+        """Non-existent directory returns empty list."""
+        tasks = TaskConfig.from_waa_dir(str(tmp_path / "no_such_dir"))
+        assert tasks == []
+
+    def test_from_waa_dir_skips_invalid(self, tmp_path):
+        """Invalid JSON files are skipped with a warning."""
+        (tmp_path / "good.json").write_text(json.dumps({
+            "id": "good", "instruction": "Good task", "config": [],
+        }))
+        (tmp_path / "bad.json").write_text("{invalid json")
+
+        tasks = TaskConfig.from_waa_dir(str(tmp_path))
+        assert len(tasks) == 1
+        assert tasks[0].id == "good"
+
+
+class TestFromDirMixed:
+    """Tests for from_dir loading both YAML and JSON."""
+
+    def test_mixed_yaml_and_json(self, tmp_path):
+        """from_dir loads both .yaml and .json files."""
+        (tmp_path / "task1.yaml").write_text(
+            "name: YAML Task\nevaluate:\n  - check: screenshot\n    description: ok"
+        )
+        (tmp_path / "task2.json").write_text(json.dumps({
+            "id": "json-001", "instruction": "JSON Task", "config": [],
+        }))
+        (tmp_path / "readme.txt").write_text("not a task")
+
+        tasks = TaskConfig.from_dir(str(tmp_path))
+        assert len(tasks) == 2
+        names = {t.name for t in tasks}
+        assert "YAML Task" in names
+        assert "JSON Task" in names
+
+    def test_json_skipped_on_error(self, tmp_path):
+        """Invalid JSON is skipped, valid YAML still loads."""
+        (tmp_path / "good.yaml").write_text(
+            "name: Good\nevaluate:\n  - check: screenshot\n    description: ok"
+        )
+        (tmp_path / "bad.json").write_text("{broken")
+
+        tasks = TaskConfig.from_dir(str(tmp_path))
+        assert len(tasks) == 1
+        assert tasks[0].name == "Good"
