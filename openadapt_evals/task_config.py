@@ -244,7 +244,7 @@ class TaskConfig:
                     },
                 }
             return {
-                "func": "file_exists",
+                "func": "exact_match",
                 "result": {
                     "type": "vm_command_line",
                     "command": f'python -c "import os; print(os.path.exists(r\'{check.path}\'))"',
@@ -312,17 +312,24 @@ class TaskConfig:
 
     @staticmethod
     def _run_vm_command(command: str, server_url: str) -> str:
-        """Execute a command on the VM and return stdout.
+        """Execute a shell command on the VM and return stdout.
 
-        The command is sent directly to the WAA server's /execute_windows
-        endpoint. It can be any command the VM can run (PowerShell, Python,
-        cmd, etc.) — no wrapping is applied.
+        WAA's /execute_windows endpoint runs Python code via exec().
+        Shell commands (PowerShell, cmd) must be wrapped in subprocess.
         """
         import requests
 
+        # Wrap shell command in Python subprocess so /execute_windows can exec() it
+        escaped = command.replace("\\", "\\\\").replace("'", "\\'")
+        python_code = (
+            "import subprocess; "
+            f"r = subprocess.run('{escaped}', shell=True, capture_output=True, text=True); "
+            "print(r.stdout.strip())"
+        )
+
         resp = requests.post(
             f"{server_url}/execute_windows",
-            json={"command": command},
+            json={"command": python_code},
             timeout=30,
         )
         if resp.status_code == 200:

@@ -152,7 +152,7 @@ class TestWaaTranslation:
             ]
         )
         evaluator = task.to_waa_config()["evaluator"]
-        assert evaluator["func"] == "file_exists"
+        assert evaluator["func"] == "exact_match"
         assert "vm_command_line" in evaluator["result"]["type"]
 
     def test_file_contains_check(self):
