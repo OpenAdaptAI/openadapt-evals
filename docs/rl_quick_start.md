@@ -184,8 +184,14 @@ Running WAA requires a VM with nested virtualisation support:
 
 | Resource | Spec | Approximate cost |
 |----------|------|-----------------|
-| Cloud VM (general purpose, 8 vCPU, 32 GB) | D8ds_v5 equivalent | ~$0.38/hr |
-| Cloud VM (bare metal, 96 vCPU) | m5.metal equivalent | ~$4.61/hr |
+| Azure VM (general purpose, 8 vCPU, 32 GB) | D8ds_v5 | ~$0.38/hr |
+| AWS VM (general purpose, 8 vCPU, 32 GB) | m8i.2xlarge | ~$0.46/hr |
+| AWS VM (compute-optimized, 8 vCPU, 16 GB) | c8i.2xlarge | ~$0.41/hr |
+| AWS VM (legacy bare metal, 96 vCPU) | m5.metal | ~$4.61/hr |
+
+Intel Xeon 6 families (C8i, M8i, R8i) support nested virtualisation on
+standard (non-metal) AWS instances since late 2025, reducing AWS costs
+by ~10x compared to legacy metal instances.
 
 A single rollout (15 steps) typically completes in 1--3 minutes depending
 on action delay and evaluator latency.  At the lower rate that is roughly
