@@ -50,6 +50,11 @@ from openadapt_evals.adapters.base import (
     BenchmarkTask,
 )
 
+# Avoid circular import — TaskConfig imported lazily
+TYPE_CHECKING = False
+if TYPE_CHECKING:
+    from openadapt_evals.task_config import TaskConfig
+
 logger = logging.getLogger(__name__)
 
 
@@ -112,10 +117,12 @@ class RLEnvironment:
         adapter: BenchmarkAdapter,
         default_task_id: str | None = None,
         evaluate_every_step: bool = False,
+        task_config: TaskConfig | None = None,
     ):
         self._adapter = adapter
         self._default_task_id = default_task_id
         self._evaluate_every_step = evaluate_every_step
+        self._task_config = task_config
         self._current_task: BenchmarkTask | None = None
         self._step_count = 0
         self._done = False
@@ -160,6 +167,23 @@ class RLEnvironment:
             return (width, height)
         return (1920, 1200)
 
+    def load_task_config(self, task_config: TaskConfig) -> None:
+        """Set a TaskConfig for dense reward evaluation.
+
+        When set, collect_rollout() and evaluate_dense() use milestone-based
+        partial credit instead of binary evaluation.
+
+        Args:
+            task_config: A TaskConfig loaded from YAML.
+        """
+        self._task_config = task_config
+        self._default_task_id = task_config.id
+        logger.info(
+            "Loaded TaskConfig: %s (%d milestones)",
+            task_config.name,
+            len(task_config.milestones),
+        )
+
     def reset(self, config: ResetConfig | None = None) -> BenchmarkObservation:
         """Reset environment to a task's initial state.
 
@@ -186,8 +210,15 @@ class RLEnvironment:
                 "Pass task_id in ResetConfig or set default_task_id in constructor."
             )
 
-        # Load and reset the task
-        self._current_task = self._adapter.load_task(task_id)
+        # Load the task — prefer TaskConfig if available (avoids server lookup)
+        if self._task_config and self._task_config.id == task_id:
+            self._current_task = self._task_config.to_benchmark_task()
+        elif hasattr(self._adapter, "load_task_from_json") and self._task_config:
+            self._current_task = self._adapter.load_task_from_json(
+                task_id, self._task_config.to_waa_config()
+            )
+        else:
+            self._current_task = self._adapter.load_task(task_id)
         obs = self._adapter.reset(self._current_task)
 
         # Reset episode state
@@ -429,6 +460,66 @@ class RLEnvironment:
         )
         return result.score
 
+    def evaluate_dense(self) -> float:
+        """Evaluate using dense partial rewards via milestones.
+
+        If a TaskConfig with milestones is set, returns the fraction of
+        milestones passed (0.0 to 1.0). Falls back to binary evaluate()
+        if no TaskConfig or no milestones are defined.
+
+        This gives GRPO gradient signal even when no task fully completes:
+        an agent that passes 3/5 milestones gets reward 0.6 vs 0.0 for
+        one that passes 0/5.
+
+        Returns:
+            Dense reward score between 0.0 and 1.0.
+        """
+        if self._current_task is None:
+            raise RuntimeError("Call reset() before evaluate_dense().")
+
+        # Try milestone evaluation first
+        if self._task_config and self._task_config.milestones:
+            screenshot = b""
+            if self._last_obs and self._last_obs.screenshot:
+                screenshot = self._last_obs.screenshot
+
+            server_url = getattr(
+                getattr(self._adapter, "config", None), "server_url", ""
+            ) or ""
+
+            passed, total = self._task_config.evaluate_milestones(
+                screenshot, server_url
+            )
+            if total > 0:
+                milestone_score = passed / total
+
+                # Also try binary evaluation if available
+                try:
+                    binary_score = self.evaluate()
+                except Exception:
+                    binary_score = 0.0
+
+                # Use the higher of milestone score and binary score
+                # This way, full task completion (1.0) always beats partial (0.6)
+                score = max(milestone_score, binary_score)
+
+                # Backfill reward on last trajectory step
+                if self._trajectory:
+                    self._trajectory[-1].reward = score
+                    self._trajectory[-1].info["milestone_score"] = milestone_score
+                    self._trajectory[-1].info["binary_score"] = binary_score
+                    self._trajectory[-1].info["milestones_passed"] = passed
+                    self._trajectory[-1].info["milestones_total"] = total
+
+                logger.info(
+                    "Dense evaluation: milestones=%d/%d (%.2f), binary=%.2f, final=%.2f",
+                    passed, total, milestone_score, binary_score, score,
+                )
+                return score
+
+        # Fallback to binary evaluation
+        return self.evaluate()
+
     def collect_rollout(
         self,
         agent_fn: Callable[[BenchmarkObservation], BenchmarkAction],
@@ -493,8 +584,11 @@ class RLEnvironment:
             if rollout_step.done:
                 break
 
-        # Evaluate and backfill reward
-        score = self.evaluate()
+        # Evaluate and backfill reward — use dense rewards if milestones exist
+        if self._task_config and self._task_config.milestones:
+            score = self.evaluate_dense()
+        else:
+            score = self.evaluate()
 
         logger.info(
             "Rollout complete: %d steps, score=%.2f",
