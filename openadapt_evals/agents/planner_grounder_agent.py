@@ -79,6 +79,7 @@ Rules:
 - For type actions: use the format: type 'text here' (e.g., type 'Hello World').
 - For key actions: use the format: press Enter, press Ctrl+S, press Tab.
 - Do NOT include pixel coordinates — a grounding model handles that.
+- If your last 3 actions were the same or very similar, you are stuck. Try a COMPLETELY different approach (different element, different method, or use keyboard shortcuts instead of clicks).
 """
 
 _GROUNDER_SYSTEM = (
@@ -275,19 +276,25 @@ class PlannerGrounderAgent(BenchmarkAgent):
             logger.info("Planner instruction parsed as TYPE action: %r", text)
             return BenchmarkAction(type="type", text=text)
 
-        # Detect keyboard shortcuts
-        key_patterns = [
-            (r"press\s+(enter|return|tab|escape|esc|backspace|delete)", None),
-            (r"press\s+(ctrl|alt|shift)\s*\+\s*(\w+)", None),
-            (r"hotkey\s*\(?\s*['\"]?(\w+)['\"]?\s*,\s*['\"]?(\w+)['\"]?", None),
-        ]
-        for pattern, _ in key_patterns:
-            key_match = re.search(pattern, instruction, re.IGNORECASE)
-            if key_match:
-                groups = [g for g in key_match.groups() if g]
-                key = "+".join(groups)
-                logger.info("Planner instruction parsed as KEY action: %s", key)
-                return BenchmarkAction(type="key", key=key)
+        # Detect keyboard shortcuts with modifier+key combos
+        mod_key_match = re.search(
+            r"press\s+(ctrl|alt|shift)\s*\+\s*(\w+)", instruction, re.IGNORECASE
+        )
+        if mod_key_match:
+            modifier = mod_key_match.group(1).lower()
+            key = mod_key_match.group(2).lower()
+            logger.info("Planner instruction parsed as KEY action: %s+%s", modifier, key)
+            return BenchmarkAction(type="key", key=key, modifiers=[modifier])
+
+        # Detect single key presses
+        single_key_match = re.search(
+            r"press\s+(enter|return|tab|escape|esc|backspace|delete|space)",
+            instruction, re.IGNORECASE,
+        )
+        if single_key_match:
+            key = single_key_match.group(1).lower()
+            logger.info("Planner instruction parsed as KEY action: %s", key)
+            return BenchmarkAction(type="key", key=key)
 
         # Detect scroll
         if "scroll down" in lower:

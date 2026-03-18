@@ -48,6 +48,8 @@ def main():
     parser.add_argument("--task-config", default=None,
                         help="Path to task YAML config (for milestones/eval)")
     parser.add_argument("--max-steps", type=int, default=15)
+    parser.add_argument("--save-screenshots", default=None,
+                        help="Directory to save screenshots at each step")
 
     # Planner config
     parser.add_argument("--planner-model", default="claude-sonnet-4-6")
@@ -122,13 +124,22 @@ def main():
         domain="desktop",
     )
 
+    # Screenshot saving
+    screenshot_dir = None
+    if args.save_screenshots:
+        screenshot_dir = Path(args.save_screenshots)
+        screenshot_dir.mkdir(parents=True, exist_ok=True)
+        if obs.screenshot:
+            (screenshot_dir / "step_00_reset.png").write_bytes(obs.screenshot)
+
     for step in range(args.max_steps):
         logger.info("--- Step %d ---", step + 1)
 
         action = agent.act(obs, task)
+        planner_out = (action.raw_action or {}).get("planner_output", {})
         logger.info("Planner instruction: %s",
-                     action.raw_action.get("planner_instruction", "?")[:100]
-                     if action.raw_action else "?")
+                     planner_out.get("instruction", "?")[:100]
+                     if isinstance(planner_out, dict) else "?")
         logger.info("Action: type=%s x=%s y=%s text=%s",
                      action.type, action.x, action.y, action.text)
 
@@ -161,6 +172,8 @@ def main():
             ))
 
         obs = step_result.observation
+        if screenshot_dir and obs.screenshot:
+            (screenshot_dir / f"step_{step+1:02d}.png").write_bytes(obs.screenshot)
         if step_result.done:
             logger.info("Environment signaled done at step %d", step + 1)
             break
