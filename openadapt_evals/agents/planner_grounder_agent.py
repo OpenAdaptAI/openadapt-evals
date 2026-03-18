@@ -43,6 +43,7 @@ from openadapt_evals.agents.base import (
 )
 
 if TYPE_CHECKING:
+    from openadapt_evals.training.planner_cache import PlannerCache
     from openadapt_evals.training.trajectory_logger import PlannerTrajectoryLogger
 
 logger = logging.getLogger(__name__)
@@ -128,6 +129,10 @@ class PlannerGrounderAgent(BenchmarkAgent):
         grounder_endpoint: HTTP endpoint URL when grounder_provider is
             ``"http"``.
         max_history: Maximum number of recent actions to show the planner.
+        planner_cache: Optional :class:`PlannerCache` instance. When provided,
+            planner API responses are cached and reused for visually similar
+            screenshots with the same task and action history, reducing API
+            costs during GRPO training.
         trajectory_logger: Optional PlannerTrajectoryLogger instance. When
             provided, each planner call's inputs and outputs are logged for
             later use as SFT training data.
@@ -141,6 +146,7 @@ class PlannerGrounderAgent(BenchmarkAgent):
         grounder_provider: str = "anthropic",
         grounder_endpoint: str | None = None,
         max_history: int = _MAX_HISTORY_ACTIONS,
+        planner_cache: PlannerCache | None = None,
         trajectory_logger: PlannerTrajectoryLogger | None = None,
     ):
         self._planner = planner
@@ -149,6 +155,7 @@ class PlannerGrounderAgent(BenchmarkAgent):
         self._grounder_provider = grounder_provider
         self._grounder_endpoint = grounder_endpoint
         self._max_history = max_history
+        self._planner_cache = planner_cache
         self._trajectory_logger = trajectory_logger
 
         # Internal action history for planner context.
@@ -354,6 +361,9 @@ class PlannerGrounderAgent(BenchmarkAgent):
     ) -> dict[str, Any]:
         """Call the planner to get a high-level instruction.
 
+        When a :class:`PlannerCache` is configured, checks the cache before
+        making an API call and stores the result on a miss.
+
         Returns:
             Dict with keys ``decision``, ``instruction``, ``reasoning``.
         """
@@ -361,6 +371,15 @@ class PlannerGrounderAgent(BenchmarkAgent):
             # Delegate to the agent's act() — interpret the returned action.
             action = self._planner.act(observation, task)
             return _action_to_planner_output(action)
+
+        # -- Check planner cache (before API call) ----------------------------
+        screenshot_bytes = observation.screenshot
+        if self._planner_cache is not None and screenshot_bytes:
+            cached = self._planner_cache.get(
+                screenshot_bytes, task.instruction, self._action_history,
+            )
+            if cached is not None:
+                return cached
 
         # String model name — use vlm_call directly.
         a11y_text = "(not available)"
@@ -396,11 +415,16 @@ class PlannerGrounderAgent(BenchmarkAgent):
         parsed = extract_json(raw)
         if parsed is None:
             logger.warning("Failed to parse planner JSON, raw=%s", raw[:200])
-            return {"decision": "COMMAND", "instruction": raw.strip(), "reasoning": ""}
-
-        if not isinstance(parsed, dict):
+            parsed = {"decision": "COMMAND", "instruction": raw.strip(), "reasoning": ""}
+        elif not isinstance(parsed, dict):
             logger.warning("Planner JSON is not a dict: %s", type(parsed))
-            return {"decision": "COMMAND", "instruction": str(parsed), "reasoning": ""}
+            parsed = {"decision": "COMMAND", "instruction": str(parsed), "reasoning": ""}
+
+        # -- Store in planner cache (after API call) --------------------------
+        if self._planner_cache is not None and screenshot_bytes:
+            self._planner_cache.put(
+                screenshot_bytes, task.instruction, self._action_history, parsed,
+            )
 
         return parsed
 

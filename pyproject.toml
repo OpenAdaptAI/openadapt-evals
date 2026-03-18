@@ -83,6 +83,10 @@ wandb = [
     # Weights & Biases for experiment tracking
     "wandb>=0.16.0",
 ]
+training = [
+    # Perceptual hashing for planner cache (falls back to MD5 if not installed)
+    "imagehash>=4.3.0",
+]
 verl = [
     # veRL: Volcano Engine Reinforcement Learning for LLMs
     # https://github.com/volcengine/verl
