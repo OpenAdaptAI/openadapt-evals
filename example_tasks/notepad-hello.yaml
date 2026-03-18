@@ -1,0 +1,30 @@
+# Simple 2-step task: open Notepad and type "Hello World"
+name: "Open Notepad and type Hello World"
+id: custom-notepad-hello
+
+setup:
+  - execute: "powershell -c 'Stop-Process -Name notepad -Force -ErrorAction SilentlyContinue'"
+  - sleep: 1
+
+evaluate:
+  - check: command
+    run: "powershell -c \"Get-Process notepad -ErrorAction SilentlyContinue | Measure | Select -ExpandProperty Count\""
+    expect: "1"
+    match: exact
+
+  - check: screenshot
+    description: "Notepad window is open with 'Hello World' typed in the text area"
+
+combine: and
+max_steps: 10
+
+milestones:
+  - name: "Notepad is open"
+    check: command
+    run: "powershell -c \"Get-Process notepad -ErrorAction SilentlyContinue | Measure | Select -ExpandProperty Count\""
+    expect: "1"
+    match: exact
+
+  - name: "Text is typed"
+    check: screenshot
+    description: "Notepad shows 'Hello World' in the text area"

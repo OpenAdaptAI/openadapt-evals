@@ -1,0 +1,63 @@
+# Clear browsing data in Google Chrome
+# This is a WAA benchmark staple — tests navigation through Settings UI
+name: "Clear browsing data in Google Chrome"
+id: custom-clear-chrome-data
+
+setup:
+  # Populate Chrome with browsing history so there's data to clear
+  - execute: "powershell -c \"Start-Process chrome 'https://example.com' -WindowStyle Normal\""
+  - sleep: 3
+  - execute: "powershell -c \"Start-Process chrome 'https://wikipedia.org'\""
+  - sleep: 2
+  # Close Chrome so the agent starts fresh
+  - execute: "powershell -c 'Stop-Process -Name chrome -Force -ErrorAction SilentlyContinue'"
+  - sleep: 2
+
+evaluate:
+  # Check 1: Chrome history is empty after clearing
+  - check: command
+    run: |
+      powershell -c "
+        $histPath = \"$env:LOCALAPPDATA\\Google\\Chrome\\User Data\\Default\\History\"
+        if (Test-Path $histPath) {
+          $size = (Get-Item $histPath).Length
+          if ($size -lt 50000) { Write-Output 'cleared' } else { Write-Output 'not_cleared' }
+        } else { Write-Output 'no_history_file' }
+      "
+    expect: "cleared"
+    match: contains
+
+  # Check 2: VLM confirms the "Clear browsing data" dialog was used
+  - check: screenshot
+    description: "Chrome shows a confirmation that browsing data has been cleared, or the Settings page for clearing data is visible with completed state"
+
+combine: or
+max_steps: 20
+
+milestones:
+  - name: "Chrome is open"
+    check: command
+    run: "powershell -c \"Get-Process chrome -ErrorAction SilentlyContinue | Measure | Select -ExpandProperty Count\""
+    expect: "1"
+    match: contains
+
+  - name: "Settings page is open"
+    check: screenshot
+    description: "Chrome Settings page is visible, or chrome://settings is in the address bar"
+
+  - name: "Clear browsing data dialog is open"
+    check: screenshot
+    description: "The 'Clear browsing data' dialog or panel is visible in Chrome"
+
+  - name: "Data is cleared"
+    check: command
+    run: |
+      powershell -c "
+        $histPath = \"$env:LOCALAPPDATA\\Google\\Chrome\\User Data\\Default\\History\"
+        if (Test-Path $histPath) {
+          $size = (Get-Item $histPath).Length
+          if ($size -lt 50000) { Write-Output 'cleared' } else { Write-Output 'not_cleared' }
+        } else { Write-Output 'no_history_file' }
+      "
+    expect: "cleared"
+    match: contains
