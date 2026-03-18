@@ -1,6 +1,56 @@
 # CHANGELOG
 
 
+## v0.44.0 (2026-03-18)
+
+### Features
+
+- Add LocalAdapter and ScrubMiddleware for governed desktop agent
+  ([#137](https://github.com/OpenAdaptAI/openadapt-evals/pull/137),
+  [`523243b`](https://github.com/OpenAdaptAI/openadapt-evals/commit/523243be248f7973d3985f939037d68916002a0e))
+
+* feat: add LocalAdapter and ScrubMiddleware for governed desktop agent
+
+LocalAdapter: BenchmarkAdapter for local desktop automation using mss
+
+(screenshots) and pynput (mouse/keyboard). Handles HiDPI/Retina coordinate scaling, supports all
+  action types (click, type, key, scroll, drag), and includes macOS accessibility permission
+  handling.
+
+ScrubMiddleware: Wraps any BenchmarkAdapter with mandatory PII
+
+scrubbing via openadapt-privacy (Presidio). Every screenshot is scrubbed before reaching the agent.
+  Original screenshots are retained for audit. Gracefully degrades when openadapt-privacy is not
+  installed.
+
+Includes 42 tests covering both components.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* fix: skip pynput tests on headless Linux CI
+
+TestKeyResolution imports pynput.keyboard.Key which requires an X display. Guard the import with
+  try/except and skip the class when pynput is unavailable (headless CI runners).
+
+---------
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Add PlannerCache for caching planner API responses during training
+  ([#136](https://github.com/OpenAdaptAI/openadapt-evals/pull/136),
+  [`2244c41`](https://github.com/OpenAdaptAI/openadapt-evals/commit/2244c412632f72664cfff04db895c13cb1280bb4))
+
+Reduces API costs during GRPO training by caching planner responses keyed by perceptual screenshot
+  hash (pHash) + task + action history. Visually similar screenshots produce cache hits even with
+  minor pixel differences. Falls back to MD5 when imagehash is not installed.
+
+- Add openadapt_evals/training/planner_cache.py (~100 lines) - Integrate optional planner_cache
+  param into PlannerGrounderAgent - Add imagehash as optional [training] dependency - Add 9 tests
+  covering miss/hit, key differentiation, and MD5 fallback
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.43.0 (2026-03-18)
 
 ### Features
