@@ -29,6 +29,7 @@ import json
 import logging
 import sys
 import time
+from pathlib import Path
 
 logging.basicConfig(
     level=logging.INFO,
@@ -166,10 +167,7 @@ def main():
                     action_type=action.type, text=action.text, key=action.key,
                 )
         else:
-            from openadapt_evals.adapters.base import BenchmarkAction
-            step_result = env.step(BenchmarkAction(
-                type=action.type, text=action.text, key=action.key,
-            ))
+            step_result = env.step(action)
 
         obs = step_result.observation
         if screenshot_dir and obs.screenshot:
