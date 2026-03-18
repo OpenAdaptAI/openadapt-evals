@@ -1,27 +1,35 @@
-"""YAML-based custom task configuration.
+"""Custom task configuration supporting YAML and WAA JSON formats.
 
 Lets users define tasks with setup commands and evaluation checks in
-simple YAML files, without forking WAA or modifying the Docker image.
-The WAA server already accepts evaluator configs in POST /evaluate —
-this module translates YAML into that format.
+simple YAML files or native WAA JSON format, without forking WAA or
+modifying the Docker image.  The WAA server already accepts evaluator
+configs in POST /evaluate -- this module translates both formats into
+that structure.
 
 Usage:
     from openadapt_evals.task_config import TaskConfig
 
-    # Load a single task
+    # Load a single task from YAML
     task = TaskConfig.from_yaml("tasks/change-font.yaml")
     benchmark_task = task.to_benchmark_task()
 
-    # Load all tasks from a directory
+    # Load a single task from WAA JSON
+    task = TaskConfig.from_waa_json("examples/writer/abc123.json")
+
+    # Load all tasks from a directory (YAML + JSON auto-detected)
     tasks = TaskConfig.from_dir("tasks/")
+
+    # Load from a WAA examples directory tree (examples/{domain}/{id}.json)
+    tasks = TaskConfig.from_waa_dir("evaluation_examples_windows/examples/")
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -61,7 +69,7 @@ class Milestone:
 
 @dataclass
 class TaskConfig:
-    """A custom task definition loaded from YAML."""
+    """A custom task definition loaded from YAML or WAA JSON."""
 
     name: str
     id: str
@@ -71,6 +79,12 @@ class TaskConfig:
     combine: str  # "and" | "or"
     max_steps: int
     milestones: list[Milestone]
+
+    # Raw WAA evaluator preserved for lossless round-trip.  When present,
+    # to_waa_config() emits this directly instead of re-translating checks.
+    _raw_evaluator: dict[str, Any] | None = field(
+        default=None, repr=False, compare=False
+    )
 
     @classmethod
     def from_yaml(cls, path: str) -> TaskConfig:
@@ -116,28 +130,117 @@ class TaskConfig:
         )
 
     @classmethod
+    def from_waa_json(cls, path: str) -> TaskConfig:
+        """Load a task config from a WAA native JSON file.
+
+        WAA JSON files live in ``evaluation_examples_windows/examples/
+        {domain}/{task_id}.json`` and contain fields like ``id``,
+        ``instruction``, ``config`` (setup array), and ``evaluator``.
+
+        Common evaluator patterns (exact_match, contains, fuzzy_match with
+        vm_command_line / vm_file / literal) are reverse-translated into
+        :class:`TaskCheck` objects.  Evaluators that use specialised WAA
+        metric functions (compare_table, compare_font_names, etc.) are
+        preserved as-is for lossless round-trip via :meth:`to_waa_config`.
+
+        Args:
+            path: Path to a ``.json`` file in WAA native format.
+
+        Returns:
+            A :class:`TaskConfig` instance.
+        """
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+
+        task_id = data.get("id", Path(path).stem)
+        name = data.get("instruction", data.get("task", Path(path).stem))
+        domain = _infer_domain(data, path)
+        max_steps = data.get("max_steps", 15)
+
+        # --- setup -------------------------------------------------------
+        setup = _parse_waa_setup(data.get("config", []))
+
+        # --- evaluator ---------------------------------------------------
+        evaluator = data.get("evaluator", {})
+        checks, combine, raw_evaluator = _parse_waa_evaluator(evaluator)
+
+        return cls(
+            name=name,
+            id=task_id,
+            domain=domain,
+            setup=setup,
+            checks=checks,
+            combine=combine,
+            max_steps=max_steps,
+            milestones=[],
+            _raw_evaluator=raw_evaluator,
+        )
+
+    @classmethod
+    def from_waa_dir(cls, dir_path: str) -> list[TaskConfig]:
+        """Load all WAA JSON task configs from a directory tree.
+
+        Expects the WAA layout ``{dir_path}/{domain}/{task_id}.json`` (i.e.
+        the ``examples/`` directory inside ``evaluation_examples_windows``).
+
+        Args:
+            dir_path: Root of the WAA examples tree.
+
+        Returns:
+            List of :class:`TaskConfig` instances, sorted by file path.
+        """
+        tasks: list[TaskConfig] = []
+        base = Path(dir_path)
+        if not base.is_dir():
+            logger.warning("WAA examples dir not found: %s", dir_path)
+            return tasks
+
+        for json_file in sorted(base.rglob("*.json")):
+            try:
+                tasks.append(cls.from_waa_json(str(json_file)))
+            except Exception as exc:
+                logger.warning("Skipping %s: %s", json_file, exc)
+        return tasks
+
+    @classmethod
     def from_dir(cls, dir_path: str) -> list[TaskConfig]:
-        """Load all YAML task configs from a directory."""
-        tasks = []
+        """Load all task configs from a directory (YAML and JSON).
+
+        Files are auto-detected by extension:
+        - ``.yaml`` / ``.yml`` -- loaded as YAML task configs
+        - ``.json`` -- loaded as WAA native JSON task configs
+        """
+        tasks: list[TaskConfig] = []
         for fname in sorted(os.listdir(dir_path)):
-            if fname.endswith((".yaml", ".yml")):
-                try:
-                    tasks.append(cls.from_yaml(os.path.join(dir_path, fname)))
-                except Exception as exc:
-                    logger.warning("Skipping %s: %s", fname, exc)
+            full = os.path.join(dir_path, fname)
+            try:
+                if fname.endswith((".yaml", ".yml")):
+                    tasks.append(cls.from_yaml(full))
+                elif fname.endswith(".json"):
+                    tasks.append(cls.from_waa_json(full))
+            except Exception as exc:
+                logger.warning("Skipping %s: %s", fname, exc)
         return tasks
 
     def to_waa_config(self) -> dict[str, Any]:
-        """Translate to WAA's native JSON format for /evaluate."""
-        config = {
+        """Translate to WAA's native JSON format for /evaluate.
+
+        If this TaskConfig was loaded from WAA JSON and carries a raw
+        evaluator (one that uses specialised metric functions), it is
+        emitted as-is for lossless round-trip.
+        """
+        config: dict[str, Any] = {
             "task_id": self.id,
             "instruction": self.name,
             "config": self._translate_setup(),
         }
 
-        evaluator = self._translate_evaluator()
-        if evaluator:
-            config["evaluator"] = evaluator
+        if self._raw_evaluator is not None:
+            config["evaluator"] = self._raw_evaluator
+        else:
+            evaluator = self._translate_evaluator()
+            if evaluator:
+                config["evaluator"] = evaluator
 
         return config
 
@@ -350,3 +453,193 @@ class TaskConfig:
             import difflib
             return difflib.SequenceMatcher(None, actual, expected).ratio() >= 0.8
         return False
+
+
+# ---------------------------------------------------------------------------
+# WAA JSON parsing helpers (module-level to keep TaskConfig class concise)
+# ---------------------------------------------------------------------------
+
+# Metric functions that we can reverse-translate to TaskCheck.  Everything
+# else is treated as a specialised WAA evaluator and preserved verbatim.
+_KNOWN_SIMPLE_FUNCS = frozenset({
+    "exact_match",
+    "contains",
+    "fuzzy_match",
+    "regex_match",
+})
+
+
+def _infer_domain(data: dict[str, Any], path: str) -> str:
+    """Best-effort domain inference from WAA JSON data or file path."""
+    # Explicit field
+    if data.get("domain"):
+        return data["domain"]
+    # related_apps hint
+    apps = data.get("related_apps", [])
+    if apps:
+        app = apps[0].lower().replace("-", "_")
+        if "calc" in app:
+            return "libreoffice_calc"
+        if "writer" in app:
+            return "libreoffice_writer"
+        return app
+    # Fall back to parent directory name
+    parent = Path(path).parent.name
+    if parent and parent != ".":
+        return parent
+    return "desktop"
+
+
+def _parse_waa_setup(config_array: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Reverse-translate WAA ``config`` array to YAML-style setup dicts.
+
+    WAA format: ``[{"type": "launch", "parameters": {"command": "..."}}]``
+    YAML format: ``[{"launch": "..."}]``
+    """
+    setup: list[dict[str, Any]] = []
+    for item in config_array:
+        cfg_type = item.get("type", "")
+        params = item.get("parameters", {})
+
+        if cfg_type == "launch":
+            cmd = params.get("command", "")
+            # command can be a list (["code"]) or a string
+            if isinstance(cmd, list):
+                cmd = " ".join(cmd)
+            setup.append({"launch": cmd})
+        elif cfg_type == "open":
+            setup.append({"open": params.get("path", "")})
+        elif cfg_type in ("execute", "command"):
+            cmd = params.get("command", "")
+            if isinstance(cmd, list):
+                cmd = " ".join(cmd)
+            setup.append({"execute": cmd})
+        elif cfg_type == "sleep":
+            setup.append({"sleep": params.get("seconds", 1)})
+        elif cfg_type == "download":
+            files = params.get("files", [])
+            if files:
+                for f in files:
+                    setup.append({
+                        "download": {"url": f["url"], "dest": f["path"]},
+                    })
+            else:
+                # Single-file shorthand
+                setup.append({
+                    "download": {
+                        "url": params.get("url", ""),
+                        "dest": params.get("path", ""),
+                    },
+                })
+        else:
+            # Pass through verbatim (activate_window, verify_apps, etc.)
+            setup.append(item)
+
+    return setup
+
+
+def _parse_waa_evaluator(
+    evaluator: dict[str, Any],
+) -> tuple[list[TaskCheck], str, dict[str, Any] | None]:
+    """Reverse-translate a WAA evaluator dict to TaskCheck list.
+
+    Returns:
+        (checks, combine, raw_evaluator)
+        ``raw_evaluator`` is non-None when the evaluator uses specialised
+        WAA metric functions that cannot be represented as TaskCheck objects.
+    """
+    if not evaluator:
+        return [], "and", None
+
+    func_spec = evaluator.get("func", "exact_match")
+    result_spec = evaluator.get("result", {})
+    expected_spec = evaluator.get("expected", {})
+    conj = evaluator.get("conj", "and")
+
+    # Multi-metric evaluator (list of funcs)
+    if isinstance(func_spec, list):
+        results = result_spec if isinstance(result_spec, list) else [result_spec]
+        expecteds = expected_spec if isinstance(expected_spec, list) else [expected_spec]
+
+        # Check if ALL funcs are simple/known
+        all_simple = all(fn in _KNOWN_SIMPLE_FUNCS for fn in func_spec)
+        if not all_simple:
+            return [], conj, evaluator
+
+        checks = []
+        for i, fn in enumerate(func_spec):
+            r = results[i] if i < len(results) else {}
+            e = expecteds[i] if i < len(expecteds) else {}
+            check = _reverse_translate_single(fn, r, e)
+            if check is None:
+                # Fall back to raw evaluator
+                return [], conj, evaluator
+            checks.append(check)
+        return checks, conj, None
+
+    # Single-metric evaluator
+    if func_spec not in _KNOWN_SIMPLE_FUNCS:
+        return [], conj, evaluator
+
+    check = _reverse_translate_single(func_spec, result_spec, expected_spec)
+    if check is None:
+        return [], conj, evaluator
+    return [check], conj, None
+
+
+def _reverse_translate_single(
+    func: str,
+    result_spec: dict[str, Any],
+    expected_spec: dict[str, Any],
+) -> TaskCheck | None:
+    """Reverse-translate a single WAA metric to a TaskCheck.
+
+    Returns None if the pattern is not recognised.
+    """
+    result_type = result_spec.get("type", "")
+    expected_type = expected_spec.get("type", "")
+
+    # WAA func name -> our match name
+    match_name = {
+        "exact_match": "exact",
+        "contains": "contains",
+        "fuzzy_match": "fuzzy",
+        "regex_match": "regex",
+    }.get(func, "exact")
+
+    # Pattern: vm_command_line + literal -> "command" check
+    if result_type == "vm_command_line" and expected_type == "literal":
+        return TaskCheck(
+            check="command",
+            run=result_spec.get("command", ""),
+            expect=expected_spec.get("value", ""),
+            match=match_name,
+        )
+
+    # Pattern: vm_file + literal -> "file" check (contains or content match)
+    if result_type == "vm_file" and expected_type == "literal":
+        file_path = result_spec.get("path", "")
+        expected_value = expected_spec.get("value", "")
+        if func == "contains":
+            return TaskCheck(
+                check="file",
+                path=file_path,
+                contains=expected_value,
+            )
+        return TaskCheck(
+            check="command",
+            run=f'type "{file_path}"',
+            expect=expected_value,
+            match=match_name,
+        )
+
+    # Pattern: vm_command_line + no expected type -> command check
+    if result_type == "vm_command_line" and not expected_type:
+        return TaskCheck(
+            check="command",
+            run=result_spec.get("command", ""),
+            expect=expected_spec.get("value", expected_spec.get("expected", "")),
+            match=match_name,
+        )
+
+    return None
