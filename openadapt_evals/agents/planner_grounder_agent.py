@@ -44,6 +44,7 @@ from openadapt_evals.agents.base import (
 
 if TYPE_CHECKING:
     from openadapt_evals.training.planner_cache import PlannerCache
+    from openadapt_evals.training.trajectory_logger import PlannerTrajectoryLogger
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +133,9 @@ class PlannerGrounderAgent(BenchmarkAgent):
             planner API responses are cached and reused for visually similar
             screenshots with the same task and action history, reducing API
             costs during GRPO training.
+        trajectory_logger: Optional PlannerTrajectoryLogger instance. When
+            provided, each planner call's inputs and outputs are logged for
+            later use as SFT training data.
     """
 
     def __init__(
@@ -143,6 +147,7 @@ class PlannerGrounderAgent(BenchmarkAgent):
         grounder_endpoint: str | None = None,
         max_history: int = _MAX_HISTORY_ACTIONS,
         planner_cache: PlannerCache | None = None,
+        trajectory_logger: PlannerTrajectoryLogger | None = None,
     ):
         self._planner = planner
         self._grounder = grounder
@@ -151,9 +156,13 @@ class PlannerGrounderAgent(BenchmarkAgent):
         self._grounder_endpoint = grounder_endpoint
         self._max_history = max_history
         self._planner_cache = planner_cache
+        self._trajectory_logger = trajectory_logger
 
         # Internal action history for planner context.
         self._action_history: list[str] = []
+
+        # Step counter for trajectory logging (reset per episode).
+        self._step_index: int = 0
 
         # Validate grounder_endpoint when using HTTP provider.
         if grounder_provider == "http" and isinstance(grounder, str):
@@ -207,6 +216,25 @@ class PlannerGrounderAgent(BenchmarkAgent):
             instruction,
             reasoning,
         )
+
+        # -- Log trajectory if logger is attached ---------------------------
+        if self._trajectory_logger is not None:
+            try:
+                self._trajectory_logger.log_step(
+                    episode_id=task.task_id,
+                    step_index=self._step_index,
+                    screenshot_bytes=observation.screenshot,
+                    a11y_tree=observation.accessibility_tree,
+                    task_instruction=task.instruction,
+                    action_history=list(self._action_history),
+                    planner_output=planner_output,
+                )
+            except Exception:
+                logger.warning(
+                    "Trajectory logging failed at step %d", self._step_index,
+                    exc_info=True,
+                )
+            self._step_index += 1
 
         if decision == "DONE":
             self._action_history.append("DONE()")
@@ -317,6 +345,7 @@ class PlannerGrounderAgent(BenchmarkAgent):
     def reset(self) -> None:
         """Reset agent state between episodes."""
         self._action_history.clear()
+        self._step_index = 0
 
         if hasattr(self._planner, "reset"):
             self._planner.reset()

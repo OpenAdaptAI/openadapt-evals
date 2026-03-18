@@ -1,6 +1,38 @@
 # CHANGELOG
 
 
+## v0.43.0 (2026-03-18)
+
+### Features
+
+- Add PlannerTrajectoryLogger for SFT training data collection
+  ([#135](https://github.com/OpenAdaptAI/openadapt-evals/pull/135),
+  [`b08e0ef`](https://github.com/OpenAdaptAI/openadapt-evals/commit/b08e0ef2d75b9dfd292ac8f3edadab31f67f1822))
+
+Add a trajectory logger that hooks into PlannerGrounderAgent to save each planner call's inputs and
+  outputs during evaluation episodes. Successful episodes (reward > 0) are kept as supervised
+  fine-tuning data for planner distillation; failed episodes are cleaned up.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
+## v0.42.1 (2026-03-18)
+
+### Bug Fixes
+
+- Pass action directly to env.step (preserves modifiers)
+  ([`f828946`](https://github.com/OpenAdaptAI/openadapt-evals/commit/f828946b306362e420fb374859fe0da1c8365276))
+
+The run script was reconstructing BenchmarkAction without modifiers, dropping Ctrl/Alt/Shift from
+  hotkey actions. Now passes the original action object directly.
+
+Also adds: - docs/design/roi_and_cost_analysis.md — full cost analysis -
+  docs/research/planner_distillation.md — $5-35 to eliminate API costs -
+  docs/research/ui_venus_rl_review.md — RL training code not public
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.42.0 (2026-03-18)
 
 ### Bug Fixes
