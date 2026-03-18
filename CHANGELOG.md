@@ -1,6 +1,26 @@
 # CHANGELOG
 
 
+## v0.41.0 (2026-03-18)
+
+### Features
+
+- Add TRL GRPOTrainer rollout_func for WAA environments
+  ([#127](https://github.com/OpenAdaptAI/openadapt-evals/pull/127),
+  [`578985a`](https://github.com/OpenAdaptAI/openadapt-evals/commit/578985a1b599ecdc230701b4512b950669a7f8dc))
+
+make_waa_rollout_func() wraps WAADesktopEnv into TRL's experimental rollout_func API. Handles VLM
+  multimodal generation (screenshot → action tokens), dense rewards via milestones, and action JSON
+  parsing with thinking-token tolerance.
+
+Includes parse_action_json() that handles common VLM quirks (markdown fences, thinking prefixes,
+  unknown action types).
+
+15 tests passing (10 parser + 5 integration with mock adapter).
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.40.0 (2026-03-18)
 
 ### Bug Fixes
