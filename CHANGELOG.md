@@ -1,6 +1,22 @@
 # CHANGELOG
 
 
+## v0.45.1 (2026-03-19)
+
+### Bug Fixes
+
+- Update VLM judge prompt to recognize Windows 11 modern app UIs
+  ([#139](https://github.com/OpenAdaptAI/openadapt-evals/pull/139),
+  [`116ec99`](https://github.com/OpenAdaptAI/openadapt-evals/commit/116ec9936c8ec2eb58eaa9c2e0bb0e91092e5631))
+
+The VLM judge incorrectly scored successful experiments as 0.0 because Windows 11 Notepad has a
+  modern UI (tabs, rounded corners, no classic menu bar) that the VLM did not recognize as Notepad.
+  Added context to the judge prompt about Win11 app redesigns and updated the notepad-hello example
+  task to use wildcard process matching for compatibility.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.45.0 (2026-03-19)
 
 ### Documentation
