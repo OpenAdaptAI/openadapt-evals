@@ -72,21 +72,34 @@ Look at the screenshot and decide the next action.
 
 Output a JSON object with exactly these fields:
 {{"decision": "COMMAND" | "DONE" | "FAIL",
-  "action_type": "click" | "type" | "key" | "scroll",
-  "action_value": "<text to type, key to press, or empty for click>",
+  "action_type": "click" | "double_click" | "type" | "key" | "scroll",
+  "action_value": "<text to type, key to press, or empty for click/double_click>",
   "target_description": "<what element to interact with>",
   "reasoning": "<brief explanation>"}}
 
 Rules:
-- action_type must be exactly ONE of: click, type, key, scroll
-- For click: target_description describes WHAT to click. action_value is empty.
+- action_type must be exactly ONE of: click, double_click, type, key, scroll
+- For click: target_description describes WHAT to click. action_value is empty. Use for buttons, menus, links, and UI controls.
+- For double_click: use to open/launch applications, files, or desktop icons. action_value is empty.
 - For type: action_value is the text to type. Append \\n to submit/press Enter after typing.
 - For key: action_value is the key (e.g., "Enter", "Tab", "Ctrl+A").
 - For scroll: action_value is "up" or "down".
 - Output ONE action per response. Never combine multiple actions.
 - Do NOT include pixel coordinates — a grounding model handles that.
-- If your last 3 actions were the same, try a completely different approach.
-"""
+- If there are dialog boxes, notifications, or popups blocking your target, dismiss them first (click X, press Escape, or click 'Not now'/'Later'/'Skip').
+- If your last 3 actions were the same and failed, you MUST try a completely different approach: dismiss any dialogs, try keyboard shortcuts, or interact with different UI elements.
+{anti_loop_warning}"""
+
+# Warning injected when repeated identical actions are detected.
+_ANTI_LOOP_WARNING = (
+    "\nWARNING: Your last {n} actions were identical and failed. "
+    "You MUST try a completely different approach: dismiss any dialogs, "
+    "try keyboard shortcuts, or interact with different UI elements. "
+    "Do NOT repeat the same action again.\n"
+)
+
+# Number of consecutive identical actions that triggers the anti-loop warning.
+_ANTI_LOOP_THRESHOLD = 3
 
 _GROUNDER_SYSTEM = (
     "You are a GUI grounding model. Given a screenshot and a natural-language "
@@ -310,6 +323,18 @@ class PlannerGrounderAgent(BenchmarkAgent):
                 # Call grounder for click-type actions
                 action = self._call_grounder(observation, instruction)
 
+                # If the planner requested double_click, override the
+                # grounder's returned "click" type to "double_click".
+                if action_type == "double_click" and action.type == "click":
+                    action = BenchmarkAction(
+                        type="double_click",
+                        x=action.x,
+                        y=action.y,
+                        target_node_id=action.target_node_id,
+                        target_bbox=action.target_bbox,
+                        raw_action=action.raw_action,
+                    )
+
         # Record for history.
         action_str = action_to_string(action)
         self._action_history.append(f"{action_str} (instruction: {instruction})")
@@ -323,17 +348,31 @@ class PlannerGrounderAgent(BenchmarkAgent):
 
     @staticmethod
     def _parse_non_click_action(instruction: str) -> BenchmarkAction | None:
-        """Detect type/key/scroll actions from planner instruction.
+        """Detect type/key/scroll/double-click actions from planner instruction.
 
         The grounder only returns click coordinates. For type/key/scroll
         actions, we parse the action directly from the planner's
         instruction text.
 
-        Returns None if the instruction is a click action (needs grounder).
+        Returns None if the instruction is a plain click action (needs grounder).
+        Returns a ``double_click`` action if the instruction mentions
+        "double-click" or "open" (launching an application/file).
         """
         import re
 
         lower = instruction.lower()
+
+        # Detect explicit "double-click" or "double click" instructions.
+        # These need the grounder for coordinates, so we return a marker
+        # action with type="double_click" but x/y=None — the caller
+        # will route through the grounder and override the type.
+        if re.search(r"double[\s-]?click", lower):
+            logger.info(
+                "Planner instruction parsed as DOUBLE_CLICK: %r", instruction,
+            )
+            # Return None so the grounder is called, but signal double_click
+            # via a special return. The caller checks instruction text too.
+            return None
 
         # Detect "type 'text'" or "type "text"" patterns
         type_match = re.search(
@@ -425,6 +464,12 @@ class PlannerGrounderAgent(BenchmarkAgent):
             # using target_description as the instruction.
             return None
 
+        if action_type == "double_click":
+            # Double-click also needs grounding for coordinates — return None
+            # so the caller invokes the grounder, but store the action type
+            # so we can set it on the returned action.
+            return None
+
         logger.warning("Unknown structured action_type: %r", action_type)
         return None
 
@@ -462,6 +507,51 @@ class PlannerGrounderAgent(BenchmarkAgent):
             self._grounder.reset()
 
     # -- Private helpers ---------------------------------------------------
+
+    def _check_action_loop(self) -> str:
+        """Detect repeated identical planner instructions and return a warning.
+
+        Compares the last ``_ANTI_LOOP_THRESHOLD`` entries in the action
+        history. If they all share the same instruction text (extracted
+        from the ``(instruction: ...)`` suffix appended by ``act()``),
+        returns an anti-loop warning string to inject into the planner
+        prompt. Otherwise returns an empty string.
+
+        The comparison uses exact string matching on the instruction
+        portion of the history entry (the text after ``(instruction: ``
+        and before the closing ``)``).
+        """
+        threshold = _ANTI_LOOP_THRESHOLD
+        if len(self._action_history) < threshold:
+            return ""
+
+        recent = self._action_history[-threshold:]
+
+        # Extract instruction text from history entries.
+        import re
+
+        instructions: list[str] = []
+        for entry in recent:
+            m = re.search(r"\(instruction:\s*(.+)\)\s*$", entry)
+            if m:
+                instructions.append(m.group(1).strip())
+            else:
+                # Entry without instruction suffix (e.g. DONE, queued).
+                return ""
+
+        if len(instructions) < threshold:
+            return ""
+
+        # Check if all instructions are identical.
+        if len(set(instructions)) == 1:
+            logger.warning(
+                "Anti-loop: last %d instructions are identical: %r",
+                threshold,
+                instructions[0],
+            )
+            return _ANTI_LOOP_WARNING.format(n=threshold)
+
+        return ""
 
     def _call_planner(
         self,
@@ -502,10 +592,14 @@ class PlannerGrounderAgent(BenchmarkAgent):
             for i, a in enumerate(self._action_history[-self._max_history :])
         )
 
+        # Check for repeated identical actions and inject anti-loop warning.
+        anti_loop_warning = self._check_action_loop()
+
         prompt = _PLANNER_PROMPT.format(
             task_instruction=task.instruction,
             action_history=history_text,
             a11y_tree=a11y_text,
+            anti_loop_warning=anti_loop_warning,
         )
 
         images = [observation.screenshot] if observation.screenshot else None
