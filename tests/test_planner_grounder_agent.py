@@ -521,3 +521,387 @@ class TestMixedTypes:
         assert action.type == "click"
         assert action.x == 0.9
         assert action.y == 0.1
+
+
+# -- Tests: Structured planner output ----------------------------------------
+
+
+class TestStructuredPlannerOutput:
+    """Tests for structured action fields (action_type, action_value, target_description)."""
+
+    @patch("openadapt_evals.vlm.vlm_call")
+    @patch("openadapt_evals.vlm.extract_json")
+    def test_structured_type_action(self, mock_extract, mock_vlm, observation, task):
+        """Structured output with action_type='type' produces a type action."""
+        mock_vlm.return_value = "{}"
+        mock_extract.return_value = {
+            "decision": "COMMAND",
+            "action_type": "type",
+            "action_value": "Hello World",
+            "target_description": "the search box",
+            "reasoning": "Need to type in search",
+        }
+
+        agent = PlannerGrounderAgent(
+            planner="claude-sonnet-4-20250514",
+            grounder=MockGrounderAgent(),
+            planner_provider="anthropic",
+        )
+        action = agent.act(observation, task)
+
+        assert action.type == "type"
+        assert action.text == "Hello World"
+        # Grounder should NOT have been called for a type action.
+        assert mock_vlm.call_count == 1  # planner only
+
+    @patch("openadapt_evals.vlm.vlm_call")
+    @patch("openadapt_evals.vlm.extract_json")
+    def test_structured_key_action(self, mock_extract, mock_vlm, observation, task):
+        """Structured output with action_type='key' produces a key action."""
+        mock_vlm.return_value = "{}"
+        mock_extract.return_value = {
+            "decision": "COMMAND",
+            "action_type": "key",
+            "action_value": "Enter",
+            "target_description": "",
+            "reasoning": "Submit the form",
+        }
+
+        agent = PlannerGrounderAgent(
+            planner="claude-sonnet-4-20250514",
+            grounder=MockGrounderAgent(),
+            planner_provider="anthropic",
+        )
+        action = agent.act(observation, task)
+
+        assert action.type == "key"
+        assert action.key == "enter"
+
+    @patch("openadapt_evals.vlm.vlm_call")
+    @patch("openadapt_evals.vlm.extract_json")
+    def test_structured_key_with_modifier(
+        self, mock_extract, mock_vlm, observation, task
+    ):
+        """Structured output with modifier+key combo like 'Ctrl+A'."""
+        mock_vlm.return_value = "{}"
+        mock_extract.return_value = {
+            "decision": "COMMAND",
+            "action_type": "key",
+            "action_value": "Ctrl+A",
+            "target_description": "",
+            "reasoning": "Select all",
+        }
+
+        agent = PlannerGrounderAgent(
+            planner="claude-sonnet-4-20250514",
+            grounder=MockGrounderAgent(),
+            planner_provider="anthropic",
+        )
+        action = agent.act(observation, task)
+
+        assert action.type == "key"
+        assert action.key == "a"
+        assert action.modifiers == ["ctrl"]
+
+    @patch("openadapt_evals.vlm.vlm_call")
+    @patch("openadapt_evals.vlm.extract_json")
+    def test_structured_scroll_action(
+        self, mock_extract, mock_vlm, observation, task
+    ):
+        """Structured output with action_type='scroll' produces a scroll action."""
+        mock_vlm.return_value = "{}"
+        mock_extract.return_value = {
+            "decision": "COMMAND",
+            "action_type": "scroll",
+            "action_value": "down",
+            "target_description": "",
+            "reasoning": "Scroll to see more",
+        }
+
+        agent = PlannerGrounderAgent(
+            planner="claude-sonnet-4-20250514",
+            grounder=MockGrounderAgent(),
+            planner_provider="anthropic",
+        )
+        action = agent.act(observation, task)
+
+        assert action.type == "scroll"
+        assert action.scroll_direction == "down"
+
+    @patch("openadapt_evals.vlm.vlm_call")
+    @patch("openadapt_evals.vlm.extract_json")
+    def test_structured_click_calls_grounder(
+        self, mock_extract, mock_vlm, observation, task
+    ):
+        """Structured output with action_type='click' calls the grounder."""
+        mock_vlm.return_value = "{}"
+        mock_extract.return_value = {
+            "decision": "COMMAND",
+            "action_type": "click",
+            "action_value": "",
+            "target_description": "the OK button",
+            "reasoning": "Confirm dialog",
+        }
+
+        grounder = MockGrounderAgent(x=0.6, y=0.4)
+        agent = PlannerGrounderAgent(
+            planner="claude-sonnet-4-20250514",
+            grounder=grounder,
+            planner_provider="anthropic",
+        )
+        action = agent.act(observation, task)
+
+        assert action.type == "click"
+        assert action.x == 0.6
+        assert action.y == 0.4
+
+    @patch("openadapt_evals.vlm.vlm_call")
+    @patch("openadapt_evals.vlm.extract_json")
+    def test_backward_compat_instruction_field(
+        self, mock_extract, mock_vlm, observation, task
+    ):
+        """Legacy 'instruction' field still works without action_type."""
+        mock_vlm.return_value = "{}"
+        mock_extract.return_value = {
+            "decision": "COMMAND",
+            "instruction": "Click the Settings button",
+            "reasoning": "",
+        }
+
+        grounder = MockGrounderAgent(x=0.5, y=0.5)
+        agent = PlannerGrounderAgent(
+            planner="claude-sonnet-4-20250514",
+            grounder=grounder,
+            planner_provider="anthropic",
+        )
+        action = agent.act(observation, task)
+
+        # Should fall through to grounder via backward compat path
+        assert action.type == "click"
+        assert action.x == 0.5
+
+
+# -- Tests: Type-then-Enter queuing ------------------------------------------
+
+
+class TestTypeWithNewlineSuffix:
+    """Tests for the \\n suffix that queues an Enter keypress after typing."""
+
+    @patch("openadapt_evals.vlm.vlm_call")
+    @patch("openadapt_evals.vlm.extract_json")
+    def test_type_with_newline_queues_enter(
+        self, mock_extract, mock_vlm, observation, task
+    ):
+        """action_value ending with \\n queues an Enter keypress."""
+        mock_vlm.return_value = "{}"
+        mock_extract.return_value = {
+            "decision": "COMMAND",
+            "action_type": "type",
+            "action_value": "Hello\\n",
+            "target_description": "the input field",
+            "reasoning": "Type and submit",
+        }
+
+        agent = PlannerGrounderAgent(
+            planner="claude-sonnet-4-20250514",
+            grounder=MockGrounderAgent(),
+            planner_provider="anthropic",
+        )
+
+        # First call: should return the type action
+        action = agent.act(observation, task)
+        assert action.type == "type"
+        assert action.text == "Hello"
+        assert len(agent._pending_actions) == 1
+
+        # Second call: should drain the queued Enter
+        action2 = agent.act(observation, task)
+        assert action2.type == "key"
+        assert action2.key == "enter"
+        assert len(agent._pending_actions) == 0
+
+    @patch("openadapt_evals.vlm.vlm_call")
+    @patch("openadapt_evals.vlm.extract_json")
+    def test_type_without_newline_no_queue(
+        self, mock_extract, mock_vlm, observation, task
+    ):
+        """action_value without \\n does not queue anything."""
+        mock_vlm.return_value = "{}"
+        mock_extract.return_value = {
+            "decision": "COMMAND",
+            "action_type": "type",
+            "action_value": "Hello",
+            "target_description": "the input field",
+            "reasoning": "Just type",
+        }
+
+        agent = PlannerGrounderAgent(
+            planner="claude-sonnet-4-20250514",
+            grounder=MockGrounderAgent(),
+            planner_provider="anthropic",
+        )
+        action = agent.act(observation, task)
+
+        assert action.type == "type"
+        assert action.text == "Hello"
+        assert len(agent._pending_actions) == 0
+
+
+# -- Tests: Pending action queue ---------------------------------------------
+
+
+class TestPendingActionQueue:
+    """Tests for the _pending_actions queue behavior."""
+
+    def test_pending_actions_execute_before_planner(self, observation, task):
+        """Queued actions are returned before calling the planner."""
+        planner = MockPlannerAgent()
+        grounder = MockGrounderAgent()
+        agent = PlannerGrounderAgent(planner=planner, grounder=grounder)
+
+        # Manually enqueue an action
+        agent._pending_actions.append(
+            BenchmarkAction(type="key", key="enter")
+        )
+
+        action = agent.act(observation, task)
+        assert action.type == "key"
+        assert action.key == "enter"
+        # The planner should NOT have been consulted
+        assert len(agent._pending_actions) == 0
+
+    def test_pending_action_recorded_in_history(self, observation, task):
+        """Queued actions are recorded in action history with (queued) suffix."""
+        planner = MockPlannerAgent()
+        grounder = MockGrounderAgent()
+        agent = PlannerGrounderAgent(planner=planner, grounder=grounder)
+
+        agent._pending_actions.append(
+            BenchmarkAction(type="key", key="tab")
+        )
+        agent.act(observation, task)
+
+        assert len(agent._action_history) == 1
+        assert "(queued)" in agent._action_history[0]
+        assert "KEY" in agent._action_history[0]
+
+    def test_reset_clears_pending_actions(self):
+        """reset() clears the pending action queue."""
+        planner = MockPlannerAgent()
+        grounder = MockGrounderAgent()
+        agent = PlannerGrounderAgent(planner=planner, grounder=grounder)
+
+        agent._pending_actions.append(
+            BenchmarkAction(type="key", key="enter")
+        )
+        agent._pending_actions.append(
+            BenchmarkAction(type="key", key="tab")
+        )
+        assert len(agent._pending_actions) == 2
+
+        agent.reset()
+        assert len(agent._pending_actions) == 0
+
+    def test_multiple_pending_actions_drain_in_order(self, observation, task):
+        """Multiple queued actions are drained FIFO across successive act() calls."""
+        planner = MockPlannerAgent()
+        grounder = MockGrounderAgent()
+        agent = PlannerGrounderAgent(planner=planner, grounder=grounder)
+
+        agent._pending_actions.append(
+            BenchmarkAction(type="key", key="enter")
+        )
+        agent._pending_actions.append(
+            BenchmarkAction(type="key", key="tab")
+        )
+
+        action1 = agent.act(observation, task)
+        assert action1.type == "key"
+        assert action1.key == "enter"
+
+        action2 = agent.act(observation, task)
+        assert action2.type == "key"
+        assert action2.key == "tab"
+
+        # Third call should go to the planner (queue is empty)
+        action3 = agent.act(observation, task)
+        assert action3.type == "click"  # From MockGrounderAgent
+
+
+# -- Tests: Continuation extraction ------------------------------------------
+
+
+class TestContinuationExtraction:
+    """Tests for _extract_continuation safety net on compound instructions."""
+
+    def test_then_press_enter(self):
+        """'type X then press Enter' extracts 'press Enter'."""
+        result = PlannerGrounderAgent._extract_continuation(
+            "type 'Hello' then press Enter"
+        )
+        assert result is not None
+        assert "press Enter" in result
+
+    def test_and_then_press_tab(self):
+        """'type X and then press Tab' extracts 'press Tab'."""
+        result = PlannerGrounderAgent._extract_continuation(
+            "type 'username' and then press Tab"
+        )
+        assert result is not None
+        assert "press Tab" in result
+
+    def test_followed_by_press(self):
+        """'type X followed by press Enter' extracts 'press Enter'."""
+        result = PlannerGrounderAgent._extract_continuation(
+            "type 'data' followed by press Enter"
+        )
+        assert result is not None
+        assert "press Enter" in result
+
+    def test_no_continuation(self):
+        """Simple instruction without continuation returns None."""
+        result = PlannerGrounderAgent._extract_continuation(
+            "type 'Hello World'"
+        )
+        assert result is None
+
+    def test_click_no_continuation(self):
+        """Click instruction returns None."""
+        result = PlannerGrounderAgent._extract_continuation(
+            "Click the Submit button"
+        )
+        assert result is None
+
+    @patch("openadapt_evals.vlm.vlm_call")
+    @patch("openadapt_evals.vlm.extract_json")
+    def test_continuation_queues_followup(
+        self, mock_extract, mock_vlm, observation, task
+    ):
+        """Compound instruction via legacy format queues the follow-up action."""
+        mock_vlm.return_value = "{}"
+        mock_extract.return_value = {
+            "decision": "COMMAND",
+            "instruction": "type 'Hello' then press Enter",
+            "reasoning": "Type and submit",
+        }
+
+        agent = PlannerGrounderAgent(
+            planner="claude-sonnet-4-20250514",
+            grounder=MockGrounderAgent(),
+            planner_provider="anthropic",
+        )
+
+        # First call: type action parsed from instruction
+        action = agent.act(observation, task)
+        assert action.type == "type"
+        assert action.text == "Hello"
+
+        # Follow-up Enter should be queued
+        assert len(agent._pending_actions) == 1
+        assert agent._pending_actions[0].type == "key"
+        assert agent._pending_actions[0].key == "enter"
+
+        # Second call: drains the queued Enter
+        action2 = agent.act(observation, task)
+        assert action2.type == "key"
+        assert action2.key == "enter"
