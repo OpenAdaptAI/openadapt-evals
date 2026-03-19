@@ -13,6 +13,8 @@ from openadapt_evals.adapters.base import (
 )
 from openadapt_evals.agents.planner_grounder_agent import (
     PlannerGrounderAgent,
+    _ANTI_LOOP_THRESHOLD,
+    _PLANNER_PROMPT,
     _action_to_planner_output,
 )
 
@@ -905,3 +907,187 @@ class TestContinuationExtraction:
         action2 = agent.act(observation, task)
         assert action2.type == "key"
         assert action2.key == "enter"
+
+
+# -- Tests: double_click action type ------------------------------------------
+
+
+class TestDoubleClick:
+    """Tests for double_click action type parsing and handling."""
+
+    @patch("openadapt_evals.vlm.vlm_call")
+    @patch("openadapt_evals.vlm.extract_json")
+    def test_structured_double_click_calls_grounder_and_overrides_type(
+        self, mock_extract, mock_vlm, observation, task
+    ):
+        """Structured double_click calls grounder and sets action type to double_click."""
+        mock_vlm.return_value = "{}"
+        mock_extract.return_value = {
+            "decision": "COMMAND",
+            "action_type": "double_click",
+            "action_value": "",
+            "target_description": "the Notepad icon on desktop",
+            "reasoning": "Need to open Notepad",
+        }
+
+        grounder = MockGrounderAgent(x=0.3, y=0.7)
+        agent = PlannerGrounderAgent(
+            planner="claude-sonnet-4-20250514",
+            grounder=grounder,
+            planner_provider="anthropic",
+        )
+        action = agent.act(observation, task)
+
+        assert action.type == "double_click"
+        assert action.x == 0.3
+        assert action.y == 0.7
+
+    @patch("openadapt_evals.vlm.vlm_call")
+    @patch("openadapt_evals.vlm.extract_json")
+    def test_double_click_in_planner_prompt(
+        self, mock_extract, mock_vlm, observation, task
+    ):
+        """Planner prompt includes double_click as a valid action type."""
+        mock_extract.return_value = {
+            "decision": "DONE",
+            "instruction": "",
+            "reasoning": "",
+        }
+        mock_vlm.return_value = "{}"
+
+        agent = PlannerGrounderAgent(
+            planner="claude-sonnet-4-20250514",
+            grounder=MockGrounderAgent(),
+            planner_provider="anthropic",
+        )
+        agent.act(observation, task)
+
+        # Check that the prompt sent to vlm_call mentions double_click.
+        call_args = mock_vlm.call_args_list[0]
+        prompt = call_args.args[0] if call_args.args else call_args.kwargs.get("prompt", "")
+        assert "double_click" in prompt
+
+    def test_double_click_in_prompt_template(self):
+        """The planner prompt template includes double_click as a valid action type."""
+        assert "double_click" in _PLANNER_PROMPT
+        assert "open/launch applications" in _PLANNER_PROMPT
+
+    def test_parse_non_click_returns_none_for_double_click_instruction(self):
+        """_parse_non_click_action returns None for 'double-click' text (needs grounder)."""
+        result = PlannerGrounderAgent._parse_non_click_action(
+            "Double-click the Notepad icon"
+        )
+        # Should return None so the grounder is called for coordinates.
+        assert result is None
+
+
+# -- Tests: Anti-loop detection ------------------------------------------------
+
+
+class TestAntiLoopDetection:
+    """Tests for the anti-loop detection that triggers after repeated identical actions."""
+
+    def test_no_warning_with_few_actions(self, observation, task):
+        """No anti-loop warning when fewer than threshold actions recorded."""
+        planner = MockPlannerAgent()
+        grounder = MockGrounderAgent()
+        agent = PlannerGrounderAgent(planner=planner, grounder=grounder)
+
+        # Only 2 actions — below the threshold of 3.
+        agent._action_history = [
+            "CLICK(0.5, 0.5) (instruction: Click Settings)",
+            "CLICK(0.5, 0.5) (instruction: Click Settings)",
+        ]
+        warning = agent._check_action_loop()
+        assert warning == ""
+
+    def test_warning_after_threshold_identical_actions(self, observation, task):
+        """Anti-loop warning triggers after 3 identical instructions."""
+        planner = MockPlannerAgent()
+        grounder = MockGrounderAgent()
+        agent = PlannerGrounderAgent(planner=planner, grounder=grounder)
+
+        # Simulate 3 identical instruction entries.
+        agent._action_history = [
+            "CLICK(0.5, 0.5) (instruction: Click Settings)",
+            "CLICK(0.5, 0.5) (instruction: Click Settings)",
+            "CLICK(0.5, 0.5) (instruction: Click Settings)",
+        ]
+        warning = agent._check_action_loop()
+        assert "WARNING" in warning
+        assert "completely different approach" in warning
+
+    def test_no_warning_with_varied_actions(self, observation, task):
+        """No anti-loop warning when actions differ."""
+        planner = MockPlannerAgent()
+        grounder = MockGrounderAgent()
+        agent = PlannerGrounderAgent(planner=planner, grounder=grounder)
+
+        agent._action_history = [
+            "CLICK(0.5, 0.5) (instruction: Click Settings)",
+            "TYPE('hello') (instruction: Type hello)",
+            "CLICK(0.5, 0.5) (instruction: Click Settings)",
+        ]
+        warning = agent._check_action_loop()
+        assert warning == ""
+
+    def test_no_warning_with_queued_entries(self, observation, task):
+        """No anti-loop warning when entries include queued actions (no instruction suffix)."""
+        planner = MockPlannerAgent()
+        grounder = MockGrounderAgent()
+        agent = PlannerGrounderAgent(planner=planner, grounder=grounder)
+
+        agent._action_history = [
+            "CLICK(0.5, 0.5) (instruction: Click Settings)",
+            "KEY(enter) (queued)",
+            "CLICK(0.5, 0.5) (instruction: Click Settings)",
+        ]
+        warning = agent._check_action_loop()
+        assert warning == ""
+
+    @patch("openadapt_evals.vlm.vlm_call")
+    @patch("openadapt_evals.vlm.extract_json")
+    def test_anti_loop_warning_injected_in_planner_prompt(
+        self, mock_extract, mock_vlm, observation, task
+    ):
+        """When anti-loop triggers, the warning is injected into the planner prompt."""
+        mock_extract.return_value = {
+            "decision": "DONE",
+            "instruction": "",
+            "reasoning": "",
+        }
+        mock_vlm.return_value = "{}"
+
+        agent = PlannerGrounderAgent(
+            planner="claude-sonnet-4-20250514",
+            grounder=MockGrounderAgent(),
+            planner_provider="anthropic",
+        )
+
+        # Seed history with 3 identical instructions.
+        agent._action_history = [
+            "CLICK(0.5, 0.5) (instruction: Click Settings)",
+            "CLICK(0.5, 0.5) (instruction: Click Settings)",
+            "CLICK(0.5, 0.5) (instruction: Click Settings)",
+        ]
+
+        agent.act(observation, task)
+
+        # Check the prompt sent to vlm_call includes the warning.
+        call_args = mock_vlm.call_args_list[0]
+        prompt = call_args.args[0] if call_args.args else call_args.kwargs.get("prompt", "")
+        assert "WARNING" in prompt
+        assert "completely different approach" in prompt
+
+
+# -- Tests: Dialog dismissal in planner prompt ----------------------------------
+
+
+class TestDialogDismissalPrompt:
+    """Tests for dialog dismissal guidance in the planner prompt."""
+
+    def test_dialog_dismissal_in_prompt_template(self):
+        """Planner prompt includes guidance to dismiss blocking dialogs."""
+        assert "dialog boxes" in _PLANNER_PROMPT
+        assert "dismiss them first" in _PLANNER_PROMPT
+        assert "Escape" in _PLANNER_PROMPT
