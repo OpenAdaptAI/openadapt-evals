@@ -28,6 +28,14 @@ Does this screenshot show that the following condition is met?
 
 Condition: {description}
 
+Important context: Windows 11 applications may look different from their classic \
+versions. For example, Notepad in Windows 11 has a modern UI with tabs, a \
+dark/light theme, and rounded corners — it no longer has the classic menu bar \
+or title-bar icon. It is still Notepad. Similarly, other built-in Windows apps \
+(Calculator, Paint, Settings, etc.) have been redesigned with modern styling. \
+Judge based on functionality and content, not on visual appearance matching \
+a specific OS version.
+
 Respond in this exact JSON format:
 {{"verdict": "YES" or "NO", "confidence": 0.0 to 1.0, "explanation": "brief reason"}}
 
