@@ -44,67 +44,6 @@ dependencies = [
     "openadapt-ml>=0.11.0",
 ]
 
-[project.optional-dependencies]
-dev = [
-    "pytest>=8.0.0",
-    "ruff>=0.1.0",
-    "flask>=3.0.0",
-    "requests-toolbelt>=1.0.0",
-    "fire>=0.5.0",
-]
-waa = [
-    # Windows Agent Arena dependencies
-    "requests>=2.28.0",
-]
-azure = [
-    # Azure ML dependencies for distributed WAA evaluation
-    "azure-ai-ml>=1.12.0",
-    "azure-identity>=1.15.0",
-    # Azure VM management (SDK path)
-    "azure-mgmt-compute>=33.0.0",
-    "azure-mgmt-network>=27.0.0",
-    "azure-mgmt-resource>=23.2.0",
-]
-aws = [
-    # AWS EC2 management for VM pool operations
-    "boto3>=1.34.0",
-]
-retrieval = [
-    # For RetrievalAugmentedAgent with automatic demo selection
-    "openadapt-retrieval>=0.1.0",
-]
-viewer = [
-    # For live benchmark viewer API server
-    "flask>=3.0.0",
-    "flask-cors>=4.0.0",
-]
-wandb = [
-    # Weights & Biases for experiment tracking
-    "wandb>=0.16.0",
-]
-training = [
-    # Perceptual hashing for planner cache (falls back to MD5 if not installed)
-    "imagehash>=4.3.0",
-    # CLIP embeddings for visual similarity
-    "open-clip-torch>=2.20.0",
-    # Heavy ML deps for openadapt-ml training
-    "openadapt-ml[training]>=0.11.0",
-]
-verl = [
-    # veRL: Volcano Engine Reinforcement Learning for LLMs
-    # https://github.com/volcengine/verl
-    "verl>=0.3.0",
-    # NOTE: VAGEN (Visual Agent with Environment Grounding) is not published
-    # on PyPI. Install from source: https://github.com/RAGEN-AI/VAGEN
-]
-all = [
-    "openadapt-evals[dev,waa,azure,aws,retrieval,viewer,wandb]",
-]
-test = [
-    "anthropic>=0.76.0",
-    "flask>=3.0.0",
-]
-
 [project.scripts]
 oa = "openadapt_evals.cli.main:main"
 # Legacy entry point (kept for backward compatibility)
@@ -120,7 +59,6 @@ Documentation = "https://github.com/OpenAdaptAI/openadapt-evals#readme"
 
 [tool.uv.sources]
 openadapt-consilium = { git = "https://github.com/OpenAdaptAI/openadapt-consilium.git" }
-openadapt-ml = { path = "../openadapt-ml", editable = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["openadapt_evals"]
