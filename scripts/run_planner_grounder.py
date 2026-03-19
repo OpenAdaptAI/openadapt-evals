@@ -28,7 +28,9 @@ import argparse
 import json
 import logging
 import sys
+import tempfile
 import time
+from datetime import datetime
 from pathlib import Path
 
 logging.basicConfig(
@@ -51,6 +53,9 @@ def main():
     parser.add_argument("--max-steps", type=int, default=15)
     parser.add_argument("--save-screenshots", default=None,
                         help="Directory to save screenshots at each step")
+    parser.add_argument("--generate-trace", action="store_true",
+                        help="Auto-generate a markdown trace report after the run "
+                             "(implies --save-screenshots to a temp dir if not set)")
 
     # Planner config
     parser.add_argument("--planner-model", default="claude-sonnet-4-6")
@@ -70,6 +75,11 @@ def main():
     if not args.grounder_endpoint and not args.grounder_model:
         parser.error("Specify either --grounder-endpoint (HTTP/vLLM) or --grounder-model (API)")
 
+    # --generate-trace implies --save-screenshots
+    if args.generate_trace and not args.save_screenshots:
+        args.save_screenshots = tempfile.mkdtemp(prefix="trace_screenshots_")
+        logger.info("--generate-trace: screenshots will be saved to %s", args.save_screenshots)
+
     # Load task config if provided
     task_config = None
     if args.task_config:
@@ -85,6 +95,12 @@ def main():
     # Create agent
     from openadapt_evals.agents.planner_grounder_agent import PlannerGrounderAgent
 
+    # Set up trajectory logger for trace generation
+    trajectory_logger = None
+    if args.generate_trace:
+        from openadapt_evals.training.trajectory_logger import PlannerTrajectoryLogger
+        trajectory_logger = PlannerTrajectoryLogger(output_dir=args.save_screenshots)
+
     if args.grounder_endpoint:
         agent = PlannerGrounderAgent(
             planner=args.planner_model,
@@ -92,6 +108,7 @@ def main():
             planner_provider=args.planner_provider,
             grounder_provider="http",
             grounder_endpoint=args.grounder_endpoint,
+            trajectory_logger=trajectory_logger,
         )
         logger.info("Grounder: HTTP endpoint at %s", args.grounder_endpoint)
     else:
@@ -100,6 +117,7 @@ def main():
             grounder=args.grounder_model,
             planner_provider=args.planner_provider,
             grounder_provider=args.grounder_provider,
+            trajectory_logger=trajectory_logger,
         )
         logger.info("Grounder: %s via %s", args.grounder_model, args.grounder_provider)
 
@@ -202,6 +220,30 @@ def main():
     print(f"Planner: {args.planner_model}")
     print(f"Grounder: {args.grounder_endpoint or args.grounder_model}")
     print("=" * 60)
+
+    # Generate trace report
+    if args.generate_trace and screenshot_dir:
+        from scripts.generate_trace_report import generate_report
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        task_name = task_config.name if task_config else args.task_id
+        traces_dir = Path("docs/traces")
+        traces_dir.mkdir(parents=True, exist_ok=True)
+        output_path = traces_dir / f"{args.task_id}_{timestamp}.md"
+
+        trajectory_path = None
+        if trajectory_logger:
+            trajectory_path = trajectory_logger.jsonl_path
+
+        report = generate_report(
+            screenshots_dir=screenshot_dir,
+            trajectory_path=trajectory_path,
+            output_path=output_path,
+            task_name=task_name,
+            score=score,
+            run_date=datetime.now().strftime("%Y-%m-%d"),
+        )
+        print(f"Trace report: {report}")
 
     return 0 if score > 0 else 1
 
