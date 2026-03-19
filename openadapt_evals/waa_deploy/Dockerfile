@@ -74,11 +74,9 @@ RUN LO_VER=$(curl -fsSL https://download.documentfoundation.org/libreoffice/stab
 
 # Patch setup.ps1 to install LibreOffice from the pre-downloaded MSI on the
 # Samba share if it exists, falling through to the original mirror download
-# otherwise.  Uses a standalone Python patch script for reliable multi-line
-# editing (sed is too fragile — the second sed matched the wrong occurrence
-# of Add-ToEnvPath after the first sed inserted text containing the same string).
-COPY patch_setup_ps1.py /tmp/patch_setup_ps1.py
-RUN python3 /tmp/patch_setup_ps1.py /oem/setup.ps1 && rm -f /tmp/patch_setup_ps1.py
+# otherwise.  Uses a shell script (no python3 in the base image).
+COPY patch_setup_ps1.sh /tmp/patch_setup_ps1.sh
+RUN sh /tmp/patch_setup_ps1.sh /oem/setup.ps1 && rm -f /tmp/patch_setup_ps1.sh
 
 # Copy OEM files AFTER dockurr/samba starts (which wipes /tmp/smb)
 # Copy IMMEDIATELY (no delay) and SYNCHRONOUSLY (not backgrounded) to ensure

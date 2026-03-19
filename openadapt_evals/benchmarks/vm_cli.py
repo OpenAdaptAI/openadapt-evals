@@ -1320,7 +1320,7 @@ def _build_remote(args, start_time: float, push_to_acr: bool, acr_name: str) -> 
         "api_agent.py",
         "evaluate_server.py",
         "start_with_evaluate.sh",
-        "patch_setup_ps1.py",
+        "patch_setup_ps1.sh",
     ]
     for filename in files_to_copy:
         src = waa_deploy_dir / filename
