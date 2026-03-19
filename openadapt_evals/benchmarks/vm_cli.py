@@ -1320,7 +1320,7 @@ def _build_remote(args, start_time: float, push_to_acr: bool, acr_name: str) -> 
         "api_agent.py",
         "evaluate_server.py",
         "start_with_evaluate.sh",
-        "patch_setup_ps1.py",
+        "patch_setup_ps1.sh",
     ]
     for filename in files_to_copy:
         src = waa_deploy_dir / filename
@@ -1758,7 +1758,7 @@ def cmd_start(args):
   -e DISK_SIZE=64G \\
   -p 5050:5050 \\
   {DOCKER_IMAGE} \\
-  ./entry.sh --prepare-image false --start-client false"""
+  /run/entry.sh --prepare-image false --start-client false"""
     # Note: --start-client false means just boot Windows + Flask server
     # The benchmark client is started separately by the 'run' command
 
@@ -1882,7 +1882,7 @@ def cmd_test_golden_image(args):
   -e DISK_SIZE=64G \\
   -p 5050:5050 \\
   {DOCKER_IMAGE} \\
-  ./entry.sh --prepare-image false --start-client false"""
+  /run/entry.sh --prepare-image false --start-client false"""
 
     result = ssh_run(ip, docker_cmd)
     if result.returncode != 0:
@@ -4964,7 +4964,7 @@ def cmd_run_azure_ml_auto(args):
   -e DISK_SIZE=64G \\
   -p 5050:5050 \\
   waa-auto:latest \\
-  ./entry.sh --prepare-image false --start-client false"""
+  /run/entry.sh --prepare-image false --start-client false"""
         # Note: --start-client false for setup - just boot Windows + Flask server
         # Azure ML compute instances run the benchmark separately via run_entry.py
 
