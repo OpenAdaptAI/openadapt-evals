@@ -64,6 +64,16 @@ VM_SIZE_FALLBACKS = [
 VM_REGIONS = ["centralus", "eastus", "westus2", "eastus2"]
 VM_NAME = "waa-eval-vm"
 
+# OS disk size: 128GB required for Docker images (~66GB used).
+# Default 30GB is too small and causes disk full errors during image build.
+OS_DISK_SIZE_GB = 128
+
+# WAA storage directory on the VM. MUST be on the persistent OS disk, NOT /mnt
+# which is ephemeral Azure temp storage wiped on every VM deallocate/restart.
+# Using /home/azureuser/waa-storage ensures the Windows disk image (data.img)
+# survives deallocate/start cycles, avoiding 15-20 min cold reinstalls.
+WAA_STORAGE_DIR = "/home/azureuser/waa-storage"
+
 
 def _get_resource_group() -> str:
     """Get resource group from config (supports AZURE_RESOURCE_GROUP env var)."""
@@ -331,6 +341,8 @@ def cmd_create(args):
                     "--generate-ssh-keys",
                     "--public-ip-sku",
                     "Standard",
+                    "--os-disk-size-gb",
+                    str(OS_DISK_SIZE_GB),
                 ],
                 capture_output=True,
                 text=True,
@@ -1698,12 +1710,12 @@ def cmd_start(args):
     # Clean storage if --fresh
     if args.fresh:
         log("START", "Cleaning storage for fresh Windows install...")
-        ssh_run(ip, "sudo rm -rf /mnt/waa-storage/*")
+        ssh_run(ip, f"sudo rm -rf {WAA_STORAGE_DIR}/*")
 
-    # Create storage directory
+    # Create storage directory (on persistent OS disk, not ephemeral /mnt)
     ssh_run(
         ip,
-        "sudo mkdir -p /mnt/waa-storage && sudo chown azureuser:azureuser /mnt/waa-storage",
+        f"sudo mkdir -p {WAA_STORAGE_DIR} && sudo chown azureuser:azureuser {WAA_STORAGE_DIR}",
     )
 
     # Start container
@@ -1732,7 +1744,7 @@ def cmd_start(args):
   -p 8006:8006 \\
   -p 5000:5000 \\
   -p 7200:7200 \\
-  -v /mnt/waa-storage:/storage \\
+  -v {WAA_STORAGE_DIR}:/storage \\
   -e VERSION=11e \\
   -e RAM_SIZE={ram_size} \\
   -e CPU_CORES={cpu_cores} \\
@@ -1795,7 +1807,7 @@ def cmd_stop(args):
     # Optionally clean storage
     if hasattr(args, "clean") and args.clean:
         print("  Cleaning Windows storage...")
-        ssh_run(ip, "sudo rm -rf /mnt/waa-storage/*")
+        ssh_run(ip, f"sudo rm -rf {WAA_STORAGE_DIR}/*")
         print("  Storage cleaned")
 
     print("Done")
@@ -1822,9 +1834,9 @@ def cmd_test_golden_image(args):
 
     # Check if golden image exists
     log("TEST", "Checking for golden image...")
-    result = ssh_run(ip, "ls -la /mnt/waa-storage/data.img 2>/dev/null || echo 'NOT_FOUND'")
+    result = ssh_run(ip, f"ls -la {WAA_STORAGE_DIR}/data.img 2>/dev/null || echo 'NOT_FOUND'")
     if "NOT_FOUND" in result.stdout:
-        log("TEST", "ERROR: Golden image not found at /mnt/waa-storage/data.img")
+        log("TEST", f"ERROR: Golden image not found at {WAA_STORAGE_DIR}/data.img")
         log(
             "TEST",
             "  Run 'start' first to create a golden image, then wait for Windows to install",
@@ -1832,7 +1844,7 @@ def cmd_test_golden_image(args):
         return 1
 
     # Get image size
-    size_result = ssh_run(ip, "du -h /mnt/waa-storage/data.img 2>/dev/null | cut -f1")
+    size_result = ssh_run(ip, f"du -h {WAA_STORAGE_DIR}/data.img 2>/dev/null | cut -f1")
     image_size = size_result.stdout.strip() or "unknown"
     log("TEST", f"Found golden image: {image_size}")
 
@@ -1856,7 +1868,7 @@ def cmd_test_golden_image(args):
   -p 8006:8006 \\
   -p 5000:5000 \\
   -p 7200:7200 \\
-  -v /mnt/waa-storage:/storage \\
+  -v {WAA_STORAGE_DIR}:/storage \\
   -e VERSION=11e \\
   -e RAM_SIZE={ram_size} \\
   -e CPU_CORES={cpu_cores} \\
@@ -4009,7 +4021,7 @@ def upload_golden_image_from_vm() -> bool:
     Uses the existing Azure VM to extract storage files and upload to blob.
 
     Process:
-    1. Check if golden image exists on VM at /mnt/waa-storage/
+    1. Check if golden image exists on VM at WAA_STORAGE_DIR
     2. Get Azure storage credentials
     3. Run az storage blob upload-batch on VM
 
@@ -4026,19 +4038,19 @@ def upload_golden_image_from_vm() -> bool:
 
     # Check if golden image exists on VM
     log("AZURE-ML", "Checking for golden image on VM...")
-    result = ssh_run(ip, "ls -la /mnt/waa-storage/data.img 2>/dev/null || echo 'NOT_FOUND'")
+    result = ssh_run(ip, f"ls -la {WAA_STORAGE_DIR}/data.img 2>/dev/null || echo 'NOT_FOUND'")
     if "NOT_FOUND" in result.stdout or result.returncode != 0:
-        log("AZURE-ML", "ERROR: Golden image not found on VM at /mnt/waa-storage/")
+        log("AZURE-ML", f"ERROR: Golden image not found on VM at {WAA_STORAGE_DIR}/")
         log("AZURE-ML", "")
         log("AZURE-ML", "To create the golden image:")
         log("AZURE-ML", "  1. Start Windows container with VERSION=11e")
         log("AZURE-ML", "  2. Wait for Windows to fully install (~15-20 min)")
         log("AZURE-ML", "  3. Stop the container gracefully")
-        log("AZURE-ML", "  4. The storage files will be at /mnt/waa-storage/")
+        log("AZURE-ML", f"  4. The storage files will be at {WAA_STORAGE_DIR}/")
         return False
 
     # Get file sizes
-    result = ssh_run(ip, "du -sh /mnt/waa-storage/")
+    result = ssh_run(ip, f"du -sh {WAA_STORAGE_DIR}/")
     if result.returncode == 0:
         log("AZURE-ML", f"Golden image size: {result.stdout.strip().split()[0]}")
 
@@ -4058,7 +4070,7 @@ az storage blob upload-batch \\
     --account-name {storage_account} \\
     --account-key '{storage_key}' \\
     --destination {blob_container} \\
-    --source /mnt/waa-storage \\
+    --source {WAA_STORAGE_DIR} \\
     --destination-path storage \\
     --overwrite
 """
@@ -4917,10 +4929,10 @@ def cmd_run_azure_ml_auto(args):
                 log("AUTO", "  ERROR: Failed to pull Docker image")
                 return 1
 
-        # Create storage directory
+        # Create storage directory (on persistent OS disk, not ephemeral /mnt)
         ssh_run(
             ip,
-            "sudo mkdir -p /mnt/waa-storage && sudo chown azureuser:azureuser /mnt/waa-storage",
+            f"sudo mkdir -p {WAA_STORAGE_DIR} && sudo chown azureuser:azureuser {WAA_STORAGE_DIR}",
         )
 
         # Stop any existing container
@@ -4938,7 +4950,7 @@ def cmd_run_azure_ml_auto(args):
   -p 8006:8006 \\
   -p 5000:5000 \\
   -p 7200:7200 \\
-  -v /mnt/waa-storage:/storage \\
+  -v {WAA_STORAGE_DIR}:/storage \\
   -e VERSION=11e \\
   -e RAM_SIZE={ram_size} \\
   -e CPU_CORES={cpu_cores} \\
@@ -5036,12 +5048,12 @@ def cmd_run_azure_ml_auto(args):
                 # Check if golden image exists on VM
                 result = ssh_run(
                     ip,
-                    "ls -la /mnt/waa-storage/data.img 2>/dev/null || echo 'NOT_FOUND'",
+                    f"ls -la {WAA_STORAGE_DIR}/data.img 2>/dev/null || echo 'NOT_FOUND'",
                 )
                 if "NOT_FOUND" in result.stdout:
                     log(
                         "AUTO",
-                        "  ERROR: Golden image not found on VM at /mnt/waa-storage/",
+                        f"  ERROR: Golden image not found on VM at {WAA_STORAGE_DIR}/",
                     )
                     log("AUTO", "  The Windows installation may not have completed.")
                     log("AUTO", "  Wait for WAA server to be ready first, or check VNC.")
