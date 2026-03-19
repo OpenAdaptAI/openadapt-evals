@@ -1,6 +1,40 @@
 # CHANGELOG
 
 
+## v0.47.1 (2026-03-19)
+
+### Bug Fixes
+
+- Replace Python patch script with shell script in Dockerfile
+  ([#147](https://github.com/OpenAdaptAI/openadapt-evals/pull/147),
+  [`dfef844`](https://github.com/OpenAdaptAI/openadapt-evals/commit/dfef84412d456121452597ae70d713445ac70708))
+
+* fix: replace Python patch script with shell script in Dockerfile
+
+The base Docker image (dockurr/windows) doesn't have python3 installed. PR #145 introduced a Python
+  patch script that fails with "python3: not found" during Docker build.
+
+Fix: rewrite patch_setup_ps1.py as patch_setup_ps1.sh using awk/grep
+
+(tools available in any minimal Linux). No dependencies required.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* fix: Docker entry.sh path + shell patch script + Chrome experiment trace
+
+Three fixes: 1. ./entry.sh → /run/entry.sh in docker run commands (relative path doesn't resolve in
+  container, causing "No such file" on boot) 2. patch_setup_ps1.py → patch_setup_ps1.sh (base image
+  has no python3) 3. Chrome task YAMLs dismiss sign-in dialog via --no-first-run flag
+
+Includes successful Chrome experiment trace (score 1.0, 5/5 milestones, 8 steps): Claude planner +
+  UI-Venus grounder completed "Set Chrome to auto-delete on-device site data when closing" on WAA
+  VM.
+
+---------
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.47.0 (2026-03-19)
 
 ### Bug Fixes
