@@ -31,7 +31,6 @@ classifiers = [
 keywords = ["gui", "automation", "evaluation", "benchmark", "agent", "ai"]
 
 dependencies = [
-    "open-clip-torch>=2.20.0",
     "pillow>=10.0.0",
     "pydantic-settings>=2.0.0",
     "python-dotenv>=1.2.1",
@@ -86,6 +85,10 @@ wandb = [
 training = [
     # Perceptual hashing for planner cache (falls back to MD5 if not installed)
     "imagehash>=4.3.0",
+    # CLIP embeddings for visual similarity
+    "open-clip-torch>=2.20.0",
+    # Heavy ML deps for openadapt-ml training
+    "openadapt-ml[training]>=0.11.0",
 ]
 verl = [
     # veRL: Volcano Engine Reinforcement Learning for LLMs
