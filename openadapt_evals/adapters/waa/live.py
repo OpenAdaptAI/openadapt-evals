@@ -656,6 +656,12 @@ class WAALiveAdapter(BenchmarkAdapter):
         if task.raw_config and self._is_libreoffice_task(task.raw_config):
             self._prepare_libreoffice_clean_state(requests)
 
+        # Chrome shows a "Sign in to Chrome" modal dialog on first launch
+        # that blocks automation.  Suppress first-run UX before task setup
+        # opens Chrome.
+        if task.raw_config and self._is_chrome_task(task.raw_config):
+            self._prepare_chrome_clean_state(requests)
+
         # If task has setup commands in raw_config, execute them
         if task.raw_config:
             self._run_task_setup(task.raw_config)
@@ -1607,6 +1613,29 @@ class WAALiveAdapter(BenchmarkAdapter):
                     'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced" '
                     '/v TaskbarMn /t REG_DWORD /d 0 /f'
                 ),
+                # Suppress Chrome first-run dialogs (sign-in, sync, what's new).
+                # Applied globally so any task that opens Chrome gets a clean UX.
+                (
+                    'reg add "HKLM\\SOFTWARE\\Policies\\Google\\Chrome" '
+                    '/v BrowserSignin /t REG_DWORD /d 0 /f'
+                ),
+                (
+                    'reg add "HKLM\\SOFTWARE\\Policies\\Google\\Chrome" '
+                    '/v SyncDisabled /t REG_DWORD /d 1 /f'
+                ),
+                (
+                    'reg add "HKLM\\SOFTWARE\\Policies\\Google\\Chrome" '
+                    '/v PromotionalTabsEnabled /t REG_DWORD /d 0 /f'
+                ),
+                # Create "First Run" sentinel file
+                (
+                    'python -c "'
+                    "import os, pathlib; "
+                    "p = pathlib.Path(os.path.expandvars(r'%LOCALAPPDATA%\\\\Google\\\\Chrome\\\\User Data')); "
+                    "p.mkdir(parents=True, exist_ok=True); "
+                    "(p / 'First Run').touch()"
+                    '"'
+                ),
             ])
 
         if self.config.clean_desktop or self.config.force_tray_icons:
@@ -1709,6 +1738,90 @@ $obj | ConvertTo-Json -Compress
             }:
                 return True
         return False
+
+    def _is_chrome_task(self, raw_config: dict) -> bool:
+        """Return True if task setup implies Chrome browser usage."""
+        related_apps = raw_config.get("related_apps", [])
+        for app in related_apps:
+            canonical = self._normalize_app_name(app)
+            if canonical == "chrome":
+                return True
+
+        config_steps = raw_config.get("config", [])
+        for step in config_steps:
+            if step.get("type") != "open":
+                continue
+            path = step.get("parameters", {}).get("path", "")
+            ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+            if ext in {"html", "htm", "pdf"}:
+                return True
+            # URLs opened via Chrome
+            if path.startswith(("http://", "https://")):
+                return True
+        return False
+
+    def _prepare_chrome_clean_state(self, requests_module: Any) -> None:
+        """Dismiss Chrome first-run dialogs that block automation.
+
+        On a fresh Windows VM, Chrome shows a "Sign in to Chrome" modal dialog
+        on first launch.  The planner VLM can see it but UI-Venus cannot
+        reliably dismiss it, wasting agent steps.  This method:
+
+        1. Sets Chrome registry/preference flags to suppress first-run UX
+        2. Sends Escape keypresses to dismiss any currently visible dialog
+        3. Kills and restarts Chrome so it picks up the new preferences
+        """
+        commands = [
+            # Disable Chrome first-run experience via registry policy
+            (
+                'reg add "HKLM\\SOFTWARE\\Policies\\Google\\Chrome" '
+                '/v SuppressFirstRunBubble /t REG_DWORD /d 1 /f'
+            ),
+            # Mark first run as complete via registry
+            (
+                'reg add "HKLM\\SOFTWARE\\Policies\\Google\\Chrome" '
+                '/v MetricsReportingEnabled /t REG_DWORD /d 0 /f'
+            ),
+            # Disable Chrome sign-in prompt
+            (
+                'reg add "HKLM\\SOFTWARE\\Policies\\Google\\Chrome" '
+                '/v BrowserSignin /t REG_DWORD /d 0 /f'
+            ),
+            # Disable "What's New" page
+            (
+                'reg add "HKLM\\SOFTWARE\\Policies\\Google\\Chrome" '
+                '/v PromotionalTabsEnabled /t REG_DWORD /d 0 /f'
+            ),
+            # Suppress sync consent screen
+            (
+                'reg add "HKLM\\SOFTWARE\\Policies\\Google\\Chrome" '
+                '/v SyncDisabled /t REG_DWORD /d 1 /f'
+            ),
+            # Create "First Run" sentinel file to skip first-run flow
+            (
+                'python -c "'
+                "import os, pathlib; "
+                "p = pathlib.Path(os.path.expandvars(r'%LOCALAPPDATA%\\\\Google\\\\Chrome\\\\User Data')); "
+                "p.mkdir(parents=True, exist_ok=True); "
+                "(p / 'First Run').touch()"
+                '"'
+            ),
+            # Press Escape to dismiss any currently visible Chrome dialog
+            (
+                'python -c "'
+                "import pyautogui; "
+                "pyautogui.press('escape'); "
+                "import time; time.sleep(0.3); "
+                "pyautogui.press('escape')"
+                '"'
+            ),
+        ]
+        self._run_setup_execute_commands(
+            requests_module,
+            commands,
+            label="chrome first-run cleanup",
+            timeout=20.0,
+        )
 
     def _build_libreoffice_cleanup_command(self) -> str:
         """Build single-line command that clears LibreOffice recovery state."""
@@ -1906,6 +2019,16 @@ $obj | ConvertTo-Json -Compress
                 "Post-setup focus failed for LibreOffice task. Applying recovery cleanup + reopen remediation."
             )
             self._prepare_libreoffice_clean_state(requests)
+            self._rerun_open_setup_steps(raw_config, requests)
+            time.sleep(2.0)
+            if self._try_activate_patterns(patterns, requests):
+                return True
+
+        if self._is_chrome_task(raw_config):
+            logger.warning(
+                "Post-setup focus failed for Chrome task. Dismissing first-run dialogs + reopen remediation."
+            )
+            self._prepare_chrome_clean_state(requests)
             self._rerun_open_setup_steps(raw_config, requests)
             time.sleep(2.0)
             if self._try_activate_patterns(patterns, requests):

@@ -74,23 +74,11 @@ RUN LO_VER=$(curl -fsSL https://download.documentfoundation.org/libreoffice/stab
 
 # Patch setup.ps1 to install LibreOffice from the pre-downloaded MSI on the
 # Samba share if it exists, falling through to the original mirror download
-# otherwise.  Uses a glob to find the MSI regardless of exact version.
-RUN if grep -q "libreOffice_installer" /oem/setup.ps1; then \
-      sed -i '/\$libreOfficeInstallerFilePath = "\$env:TEMP\\libreOffice_installer.exe"/a\
-    # Try pre-downloaded MSI from Samba share first (baked into Docker image)\
-    $predownloadedMsi = Get-ChildItem "\\\\host.lan\\Data\\LibreOffice_*_Win_x86-64.msi" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName\
-    if ($predownloadedMsi) {\
-        Write-Host "Installing LibreOffice from pre-downloaded MSI: $predownloadedMsi"\
-        Start-Process "msiexec.exe" -ArgumentList "/i `\"$predownloadedMsi`\" /quiet" -Wait -NoNewWindow\
-        Write-Host "LibreOffice installed from pre-downloaded MSI."\
-        Add-ToEnvPath -NewPath "C:\\Program Files\\LibreOffice\\program"\
-    } else {' /oem/setup.ps1 && \
-      sed -i '/Add-ToEnvPath -NewPath "C:\\Program Files\\LibreOffice\\program"/,/^}/{/^}/a\
-    }' /oem/setup.ps1 && \
-      echo "Patched setup.ps1 with pre-downloaded MSI fallback"; \
-    else \
-      echo "WARNING: Could not patch setup.ps1 (pattern not found)"; \
-    fi
+# otherwise.  Uses a standalone Python patch script for reliable multi-line
+# editing (sed is too fragile — the second sed matched the wrong occurrence
+# of Add-ToEnvPath after the first sed inserted text containing the same string).
+COPY patch_setup_ps1.py /tmp/patch_setup_ps1.py
+RUN python3 /tmp/patch_setup_ps1.py /oem/setup.ps1 && rm -f /tmp/patch_setup_ps1.py
 
 # Copy OEM files AFTER dockurr/samba starts (which wipes /tmp/smb)
 # Copy IMMEDIATELY (no delay) and SYNCHRONOUSLY (not backgrounded) to ensure
@@ -242,6 +230,21 @@ RUN if grep -q "</FirstLogonCommands>" /run/assets/win11x64.xml; then \
           <CommandLine>bcdedit /set {default} recoveryenabled No</CommandLine>\n\
           <Description>Disable Windows Automatic Repair to prevent recovery loops after dirty shutdown</Description>\n\
         </SynchronousCommand>\n\
+        <SynchronousCommand wcm:action=\"add\">\n\
+          <Order>$((N6 + 4))</Order>\n\
+          <CommandLine>reg add \"HKLM\\\\SOFTWARE\\\\Policies\\\\Google\\\\Chrome\" /v BrowserSignin /t REG_DWORD /d 0 /f</CommandLine>\n\
+          <Description>Disable Chrome sign-in prompt on first run</Description>\n\
+        </SynchronousCommand>\n\
+        <SynchronousCommand wcm:action=\"add\">\n\
+          <Order>$((N6 + 5))</Order>\n\
+          <CommandLine>reg add \"HKLM\\\\SOFTWARE\\\\Policies\\\\Google\\\\Chrome\" /v SyncDisabled /t REG_DWORD /d 1 /f</CommandLine>\n\
+          <Description>Disable Chrome sync to prevent first-run sync dialog</Description>\n\
+        </SynchronousCommand>\n\
+        <SynchronousCommand wcm:action=\"add\">\n\
+          <Order>$((N6 + 6))</Order>\n\
+          <CommandLine>reg add \"HKLM\\\\SOFTWARE\\\\Policies\\\\Google\\\\Chrome\" /v PromotionalTabsEnabled /t REG_DWORD /d 0 /f</CommandLine>\n\
+          <Description>Disable Chrome promotional tabs (What is New page)</Description>\n\
+        </SynchronousCommand>\n\
       </FirstLogonCommands>|" /run/assets/win11x64.xml; \
     fi
 
@@ -310,3 +313,4 @@ COPY start_with_evaluate.sh /run/start_with_evaluate.sh
 RUN chmod +x /run/start_with_evaluate.sh
 
 ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/run/start_with_evaluate.sh"]
+CMD ["./entry.sh", "--prepare-image", "false", "--start-client", "false"]

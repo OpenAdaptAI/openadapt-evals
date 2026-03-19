@@ -27,4 +27,11 @@ else
 fi
 
 # Execute the command passed as arguments (e.g., /entry.sh --prepare-image false)
-exec "$@"
+# If no CMD is provided (empty $@), fall through to /run/entry.sh which is the
+# dockurr/windows entrypoint that boots the Windows VM.
+if [ $# -eq 0 ]; then
+    echo "No CMD specified, using default: /run/entry.sh"
+    exec /run/entry.sh
+else
+    exec "$@"
+fi

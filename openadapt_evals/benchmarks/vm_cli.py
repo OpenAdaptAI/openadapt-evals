@@ -1314,7 +1314,14 @@ def _build_remote(args, start_time: float, push_to_acr: bool, acr_name: str) -> 
     ssh_run(ip, "mkdir -p ~/build")
 
     waa_deploy_dir = DOCKERFILE_PATH.parent
-    files_to_copy = ["Dockerfile", "start_waa_server.bat", "api_agent.py"]
+    files_to_copy = [
+        "Dockerfile",
+        "start_waa_server.bat",
+        "api_agent.py",
+        "evaluate_server.py",
+        "start_with_evaluate.sh",
+        "patch_setup_ps1.py",
+    ]
     for filename in files_to_copy:
         src = waa_deploy_dir / filename
         if src.exists():
