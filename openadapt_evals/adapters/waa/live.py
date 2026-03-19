@@ -370,14 +370,14 @@ class WAALiveConfig:
     """
 
     server_url: str = "http://localhost:5000"
-    evaluate_url: str | None = None
+    evaluate_url: str | None = None  # Auto-detects port 5050 if /evaluate 404s on server_url
     a11y_backend: str = "uia"
-    screen_width: int = 1920
-    screen_height: int = 1200
+    screen_width: int = 1280   # Default matches typical WAA QEMU resolution
+    screen_height: int = 720
     max_steps: int = 15
     action_delay: float = 0.5
     timeout: float = 90.0
-    waa_examples_path: str | None = None
+    waa_examples_path: str | None = None  # Auto-detected from common paths + WAA_EXAMPLES_PATH env
     clean_desktop: bool = False
     force_tray_icons: bool = False
     reapply_clean_desktop_each_reset: bool = False
@@ -402,6 +402,7 @@ class WAALiveAdapter(BenchmarkAdapter):
 
     def __init__(self, config: WAALiveConfig | None = None):
         self.config = config or WAALiveConfig()
+        self._auto_detect_waa_examples_path()
         self._current_task: BenchmarkTask | None = None
         self._step_count = 0
         self._current_a11y: dict | None = None
@@ -413,6 +414,36 @@ class WAALiveAdapter(BenchmarkAdapter):
         self._environment_profile: dict[str, Any] = {}
         self._last_setup_results: list[dict[str, Any]] = []
         self._last_foreground_title: str | None = None
+
+    def _auto_detect_waa_examples_path(self) -> None:
+        """Auto-detect waa_examples_path from env var or common locations."""
+        if self.config.waa_examples_path:
+            return
+
+        import os
+        from pathlib import Path
+
+        # Check env var first
+        env_path = os.environ.get("WAA_EXAMPLES_PATH")
+        if env_path and Path(env_path).is_dir():
+            self.config.waa_examples_path = env_path
+            logger.info("Auto-detected waa_examples_path from WAA_EXAMPLES_PATH: %s", env_path)
+            return
+
+        # Check common paths relative to CWD
+        common_paths = [
+            "evaluation_examples_windows",
+            "src/win-arena-container/evaluation_examples_windows",
+            "../WindowsAgentArena/src/win-arena-container/evaluation_examples_windows",
+            "../waa/src/win-arena-container/evaluation_examples_windows",
+            "../waa/evaluation_examples_windows",
+        ]
+        for p in common_paths:
+            path = Path(p)
+            if path.is_dir():
+                self.config.waa_examples_path = str(path)
+                logger.info("Auto-detected waa_examples_path: %s", path)
+                return
 
     @property
     def name(self) -> str:
@@ -954,6 +985,35 @@ class WAALiveAdapter(BenchmarkAdapter):
             elif resp.status_code == 404 or (
                 resp.status_code == 500 and "404 Not Found" in resp.text
             ):
+                # Auto-detect: try port 5050 (evaluate_server.py) if not already tried
+                if self.config.evaluate_url is None:
+                    from urllib.parse import urlparse
+                    parsed = urlparse(self.config.server_url)
+                    fallback_url = f"{parsed.scheme}://{parsed.hostname}:5050"
+                    logger.info(
+                        "/evaluate not found at %s, trying fallback: %s",
+                        evaluate_endpoint, fallback_url,
+                    )
+                    try:
+                        resp2 = requests.post(
+                            f"{fallback_url}/evaluate",
+                            json=eval_request,
+                            timeout=self.config.timeout,
+                        )
+                        if resp2.status_code == 200:
+                            # Cache the working URL for future calls
+                            self.config.evaluate_url = fallback_url
+                            result = resp2.json()
+                            return BenchmarkResult(
+                                task_id=task.task_id,
+                                success=result.get("success", False),
+                                score=result.get("score", 0.0),
+                                num_steps=self._step_count,
+                                reason=result.get("reason"),
+                            )
+                    except Exception as exc:
+                        logger.warning("Fallback evaluate at %s failed: %s", fallback_url, exc)
+
                 logger.warning(
                     f"/evaluate endpoint not found at {evaluate_endpoint}. "
                     "Ensure the evaluate server is running on port 5050."
