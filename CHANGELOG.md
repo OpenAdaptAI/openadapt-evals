@@ -1,6 +1,20 @@
 # CHANGELOG
 
 
+## v0.47.4 (2026-03-19)
+
+### Bug Fixes
+
+- Move open-clip-torch to optional training dependencies
+  ([#150](https://github.com/OpenAdaptAI/openadapt-evals/pull/150),
+  [`ed942b9`](https://github.com/OpenAdaptAI/openadapt-evals/commit/ed942b9dfa0ea07a01b236f65f47c2755ba59731))
+
+Move open-clip-torch from required to optional [training] dependencies to reduce install footprint
+  for lightweight consumers like Wright worker.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.47.3 (2026-03-19)
 
 ### Bug Fixes
