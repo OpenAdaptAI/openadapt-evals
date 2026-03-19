@@ -71,19 +71,21 @@ Accessibility tree:
 Look at the screenshot and decide the next action.
 
 Output a JSON object with exactly these fields:
-{{"decision": "COMMAND" | "DONE" | "FAIL", "instruction": "<what to do next>", "reasoning": "<brief explanation>"}}
+{{"decision": "COMMAND" | "DONE" | "FAIL",
+  "action_type": "click" | "type" | "key" | "scroll",
+  "action_value": "<text to type, key to press, or empty for click>",
+  "target_description": "<what element to interact with>",
+  "reasoning": "<brief explanation>"}}
 
 Rules:
-- Use "COMMAND" when there is a concrete next step to take.
-- Use "DONE" when the task appears to be completed.
-- Use "FAIL" when the task cannot be completed (e.g. required element missing).
-- The instruction must describe ONE ATOMIC action — either a click OR a type OR a keypress.
-  Do NOT combine multiple actions (e.g., "click X and type Y"). Split them into separate steps.
-- For click actions: describe WHAT to click (e.g., "Click the Start button in the taskbar").
-- For type actions: use the format: type 'text here' (e.g., type 'Hello World').
-- For key actions: use the format: press Enter, press Ctrl+S, press Tab.
+- action_type must be exactly ONE of: click, type, key, scroll
+- For click: target_description describes WHAT to click. action_value is empty.
+- For type: action_value is the text to type. Append \\n to submit/press Enter after typing.
+- For key: action_value is the key (e.g., "Enter", "Tab", "Ctrl+A").
+- For scroll: action_value is "up" or "down".
+- Output ONE action per response. Never combine multiple actions.
 - Do NOT include pixel coordinates — a grounding model handles that.
-- If your last 3 actions were the same or very similar, you are stuck. Try a COMPLETELY different approach (different element, different method, or use keyboard shortcuts instead of clicks).
+- If your last 3 actions were the same, try a completely different approach.
 """
 
 _GROUNDER_SYSTEM = (
@@ -161,6 +163,9 @@ class PlannerGrounderAgent(BenchmarkAgent):
         # Internal action history for planner context.
         self._action_history: list[str] = []
 
+        # Pending action queue for compound actions (e.g., type then Enter).
+        self._pending_actions: list[BenchmarkAction] = []
+
         # Step counter for trajectory logging (reset per episode).
         self._step_index: int = 0
 
@@ -203,12 +208,26 @@ class PlannerGrounderAgent(BenchmarkAgent):
         Returns:
             Action to execute.
         """
+        # -- Step 0: Drain pending action queue -----------------------------
+        if self._pending_actions:
+            action = self._pending_actions.pop(0)
+            self._action_history.append(
+                f"{action_to_string(action)} (queued)"
+            )
+            return action
+
         # -- Step 1: Call planner ------------------------------------------
         planner_output = self._call_planner(observation, task)
 
         decision = planner_output.get("decision", "COMMAND").upper()
-        instruction = planner_output.get("instruction", "")
         reasoning = planner_output.get("reasoning", "")
+
+        # Extract structured fields (new format) with backward-compat
+        # fallback to the old "instruction" field.
+        action_type = planner_output.get("action_type", "").lower()
+        action_value = planner_output.get("action_value", "")
+        target_description = planner_output.get("target_description", "")
+        instruction = planner_output.get("instruction", target_description)
 
         logger.info(
             "Planner decision=%s, instruction=%r, reasoning=%r",
@@ -257,7 +276,7 @@ class PlannerGrounderAgent(BenchmarkAgent):
                 },
             )
 
-        if not instruction:
+        if not instruction and not action_type:
             logger.warning("Planner returned empty instruction, treating as DONE")
             self._action_history.append("DONE() [empty instruction]")
             return BenchmarkAction(
@@ -268,15 +287,28 @@ class PlannerGrounderAgent(BenchmarkAgent):
                 },
             )
 
-        # -- Step 2: Detect non-click actions from planner instruction ------
-        # The grounder only returns coordinates. Type/key/scroll actions
-        # should be handled directly from the planner's instruction.
-        non_click_action = self._parse_non_click_action(instruction)
-        if non_click_action is not None:
-            action = non_click_action
+        # -- Step 2: Build action from structured fields or instruction ------
+        action = self._build_action_from_structured(
+            action_type, action_value, target_description,
+        )
+        if action is not None:
+            # Structured path succeeded — nothing more to do.
+            pass
         else:
-            # Call grounder for click-type actions
-            action = self._call_grounder(observation, instruction)
+            # Fallback: parse free-form instruction (backward compat).
+            non_click_action = self._parse_non_click_action(instruction)
+            if non_click_action is not None:
+                action = non_click_action
+                # Safety net: check for continuation phrases like
+                # "then press Enter" that indicate a compound instruction.
+                remaining = self._extract_continuation(instruction)
+                if remaining:
+                    followup = self._parse_non_click_action(remaining)
+                    if followup:
+                        self._pending_actions.append(followup)
+            else:
+                # Call grounder for click-type actions
+                action = self._call_grounder(observation, instruction)
 
         # Record for history.
         action_str = action_to_string(action)
@@ -342,9 +374,86 @@ class PlannerGrounderAgent(BenchmarkAgent):
         # Default: needs grounder (it's a click action)
         return None
 
+    def _build_action_from_structured(
+        self,
+        action_type: str,
+        action_value: str,
+        target_description: str,
+    ) -> BenchmarkAction | None:
+        """Build a BenchmarkAction from structured planner fields.
+
+        Returns ``None`` when the planner output does not contain structured
+        fields (backward-compat path) or when the action type is ``click``
+        (needs the grounder for coordinates).
+        """
+        if not action_type:
+            return None
+
+        if action_type == "type":
+            text = action_value
+            if text.endswith("\\n"):
+                # Strip the literal "\n" suffix and queue a follow-up Enter.
+                text = text[:-2]
+                self._pending_actions.append(
+                    BenchmarkAction(type="key", key="enter")
+                )
+            logger.info(
+                "Structured planner output: TYPE %r (pending=%d)",
+                text, len(self._pending_actions),
+            )
+            return BenchmarkAction(type="type", text=text)
+
+        if action_type == "key":
+            key_str = action_value.strip()
+            # Handle modifier combos like "Ctrl+A"
+            if "+" in key_str:
+                parts = key_str.split("+")
+                key = parts[-1].lower()
+                modifiers = [p.lower() for p in parts[:-1]]
+                logger.info("Structured planner output: KEY %s+%s", modifiers, key)
+                return BenchmarkAction(type="key", key=key, modifiers=modifiers)
+            logger.info("Structured planner output: KEY %s", key_str.lower())
+            return BenchmarkAction(type="key", key=key_str.lower())
+
+        if action_type == "scroll":
+            direction = action_value.lower() if action_value else "down"
+            logger.info("Structured planner output: SCROLL %s", direction)
+            return BenchmarkAction(type="scroll", scroll_direction=direction)
+
+        if action_type == "click":
+            # Click needs grounder — return None so the caller invokes it
+            # using target_description as the instruction.
+            return None
+
+        logger.warning("Unknown structured action_type: %r", action_type)
+        return None
+
+    @staticmethod
+    def _extract_continuation(instruction: str) -> str | None:
+        """Extract a follow-up action from compound instruction text.
+
+        Looks for continuation phrases like "then press Enter",
+        "and then press Tab", "followed by pressing Enter".
+
+        Returns the follow-up portion of the instruction, or None.
+        """
+        import re
+
+        # Patterns that indicate a second action after the first
+        match = re.search(
+            r"(?:,?\s*(?:and\s+)?then\s+|,?\s*followed\s+by\s+)"
+            r"(press\s+\S+.*|type\s+.+)",
+            instruction,
+            re.IGNORECASE,
+        )
+        if match:
+            return match.group(1).strip()
+        return None
+
     def reset(self) -> None:
         """Reset agent state between episodes."""
         self._action_history.clear()
+        self._pending_actions.clear()
         self._step_index = 0
 
         if hasattr(self._planner, "reset"):
@@ -365,7 +474,9 @@ class PlannerGrounderAgent(BenchmarkAgent):
         making an API call and stores the result on a miss.
 
         Returns:
-            Dict with keys ``decision``, ``instruction``, ``reasoning``.
+            Dict with keys ``decision``, ``reasoning``, and either
+            structured fields (``action_type``, ``action_value``,
+            ``target_description``) or the legacy ``instruction`` field.
         """
         if not isinstance(self._planner, str):
             # Delegate to the agent's act() — interpret the returned action.
