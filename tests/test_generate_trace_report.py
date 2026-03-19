@@ -131,11 +131,14 @@ class TestGenerateReport:
 
         content = result.read_text()
 
-        # Trajectory data should be present for steps that match
-        assert "**Planner**: Click the Start button in the taskbar" in content
-        assert "**Reasoning**: Need to open Start menu to find Notepad" in content
-        assert "**Decision**: COMMAND" in content
+        # Trajectory step_index=0 maps to Step 0 (Reset) which skips trajectory
+        # data by design.  step_index=1 and 2 map to Steps 1 and 2.
+        assert "**Planner**: Click the Start button in the taskbar" not in content
         assert "**Planner**: Type 'Notepad' in the search box" in content
+        assert "**Reasoning**: Start menu is open, need to search for Notepad" in content
+        assert "**Decision**: COMMAND" in content
+        assert "**Planner**: Click on Notepad in the search results" in content
+        assert "**Reasoning**: Notepad appeared in search results" in content
 
     def test_screenshots_copied_to_output_dir(
         self, screenshot_dir: Path, tmp_path: Path
