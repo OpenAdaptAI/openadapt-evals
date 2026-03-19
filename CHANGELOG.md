@@ -1,6 +1,43 @@
 # CHANGELOG
 
 
+## v0.47.2 (2026-03-19)
+
+### Bug Fixes
+
+- **agent**: Add double_click support and anti-loop recovery to PlannerGrounderAgent
+  ([#148](https://github.com/OpenAdaptAI/openadapt-evals/pull/148),
+  [`1c9a1bb`](https://github.com/OpenAdaptAI/openadapt-evals/commit/1c9a1bbbbd05096e1152c663df98804ddc1f9064))
+
+- Add double_click to planner prompt action types with guidance to use it for opening applications,
+  files, and desktop icons (fixes Windows 11 desktop icons requiring double-click) - Handle
+  double_click in _build_action_from_structured by routing through the grounder for coordinates and
+  overriding the returned click type - Add anti-loop detection that checks the last 3 planner
+  instructions for exact string match and injects a WARNING into the planner prompt forcing a
+  different strategy (fixes agent repeating the same failed action 15+ times) - Add dialog dismissal
+  awareness to planner prompt (dismiss popups, notifications, and dialog boxes before attempting
+  target actions) - Add 10 new tests covering double_click parsing, anti-loop detection, and dialog
+  dismissal prompt content
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Documentation
+
+- Add governed agent demo trace on macOS
+  ([`76501cc`](https://github.com/OpenAdaptAI/openadapt-evals/commit/76501cce52b8c3d0c3cf686221a351269ab09c55))
+
+First end-to-end test of the governed agent on a real macOS desktop: LocalAdapter + ScrubMiddleware
+  + PlannerGrounderAgent (Claude).
+
+5 steps: opened Apple menu, clicked System Settings, dismissed unexpected dialog, attempted
+  recovery. Agent demonstrated adaptive behavior but didn't reach Displays in 5 steps.
+
+Components validated: LocalAdapter screenshots + clicks, ScrubMiddleware wrapping,
+  PlannerGrounderAgent planning + grounding, VLM evaluation.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.47.1 (2026-03-19)
 
 ### Bug Fixes
