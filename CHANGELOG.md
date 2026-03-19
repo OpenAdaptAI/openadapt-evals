@@ -1,6 +1,63 @@
 # CHANGELOG
 
 
+## v0.45.0 (2026-03-19)
+
+### Documentation
+
+- Add planner-grounder experiment results report
+  ([`540dde7`](https://github.com/OpenAdaptAI/openadapt-evals/commit/540dde7218e6276717604e64c84b97ec9f4db78c))
+
+Four live runs with Claude planner + UI-Venus-1.5-8B grounder on WAA VM. Architecture validated:
+  planner reasons correctly, grounder places accurate bounding boxes, non-click actions parse
+  correctly, dense milestones work. Remaining issues are task design (Notepad session restore) and
+  planner prompting (hallucination, loops), not architecture.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Add research docs and design docs from Mar 17-18 session
+  ([`d8c4f4d`](https://github.com/OpenAdaptAI/openadapt-evals/commit/d8c4f4d83a71486fa84f5d5c2a452015d55f4490))
+
+Research: - Planner-grounder literature review (40+ papers, terminology) - RL planner vs executor
+  analysis (executor first, staged approach) - OSS planner alternatives (EvoCUA-32B + UI-Venus on 1x
+  A10G) - Training targets in planner-grounder architecture (4 targets, staging) - Stack audit (what
+  to keep/replace/simplify) - CODA and Agent Lightning evaluations (neither viable for desktop VLM
+  RL)
+
+Design: - ROI and cost analysis (planner distillation breaks even in 10-70 episodes) - Repo
+  organization plan (what moves where after customer sprint)
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Add successful experiment trace (GIF + screenshots) and AReaL evaluation
+  ([`866f32d`](https://github.com/OpenAdaptAI/openadapt-evals/commit/866f32d369b937a28eed79a717438d17bdccd2dd))
+
+Execution trace from successful planner-grounder run: - Claude planner + UI-Venus-1.5-8B grounder on
+  WAA VM - 6 steps: Start → Notepad → focus → Ctrl+A → type "Hello World" → DONE - GIF animation +
+  per-step screenshots with annotations
+
+AReaL evaluation: recommended as training backend replacement for TRL. Same org as UI-Venus,
+  first-class VLM support, async rollouts.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Features
+
+- Add execution trace report generator from screenshots and trajectory data
+  ([#138](https://github.com/OpenAdaptAI/openadapt-evals/pull/138),
+  [`5dab11c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/5dab11c3cbdaabee401c0f3d1020454e2fdac83c))
+
+Add scripts/generate_trace_report.py that reads step PNG screenshots and optionally a JSONL
+  trajectory file (from PlannerTrajectoryLogger) to produce a markdown report with embedded
+  screenshot references and per-step planner metadata (instruction, reasoning, decision).
+
+Also add --generate-trace flag to scripts/run_planner_grounder.py which auto-enables
+  --save-screenshots and attaches a PlannerTrajectoryLogger, then generates the trace report after
+  the run completes.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.44.0 (2026-03-18)
 
 ### Features
