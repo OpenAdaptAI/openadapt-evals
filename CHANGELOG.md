@@ -1,6 +1,41 @@
 # CHANGELOG
 
 
+## v0.47.3 (2026-03-19)
+
+### Bug Fixes
+
+- Auto-detect evaluate_url, waa_examples_path, and screen resolution
+  ([#149](https://github.com/OpenAdaptAI/openadapt-evals/pull/149),
+  [`80d7990`](https://github.com/OpenAdaptAI/openadapt-evals/commit/80d7990382c86160d530a1acedc5a52cd4a6d925))
+
+Three configuration improvements:
+
+1. evaluate_url: when /evaluate returns 404 on the main server, auto-tries port 5050 (where
+  evaluate_server.py runs). Caches the working URL.
+
+2. waa_examples_path: auto-detects from WAA_EXAMPLES_PATH env var or common directory locations
+  (WindowsAgentArena submodule paths).
+
+3. Screen resolution: defaults to 1280x720 (matches typical WAA QEMU resolution) instead of
+  1920x1200.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Documentation
+
+- Add verified YouTube history deletion trace (score 0.75, 3/4 milestones)
+  ([`791440d`](https://github.com/OpenAdaptAI/openadapt-evals/commit/791440d8eba2a7aa093d5e8aa0e3353c8f3b9435))
+
+Customer's exact task UUID (44ee5668). Claude planner + UI-Venus grounder on WAA VM with all fixes
+  applied (#147, #148). 6 steps: opened Chrome history → selected YouTube entries → clicked Delete →
+  confirmed dialog → verified history cleared.
+
+Tested: Docker build verified, container booted, experiment completed.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.47.2 (2026-03-19)
 
 ### Bug Fixes
