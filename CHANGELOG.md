@@ -1,6 +1,31 @@
 # CHANGELOG
 
 
+## v0.46.0 (2026-03-19)
+
+### Features
+
+- Add AReaL AgentWorkflow wrapping WAADesktopEnv for RL training
+  ([#140](https://github.com/OpenAdaptAI/openadapt-evals/pull/140),
+  [`a7983cc`](https://github.com/OpenAdaptAI/openadapt-evals/commit/a7983cc423f497ddb81b6fa132da70be31e0b564))
+
+Add proof-of-concept integration with AReaL (inclusionAI/AReaL), an async RL training framework. The
+  WAADesktopWorkflow class implements AReaL's agent workflow pattern: an async run() method that
+  receives task data and an OpenAI-compatible proxy URL, runs a full desktop automation episode
+  against WAADesktopEnv, and returns a scalar reward.
+
+New files: - openadapt_evals/training/areal_workflow.py: WAADesktopWorkflow class with
+  screenshot-to-base64 encoding, multi-turn message building, action parsing via parse_action_json,
+  and dense milestone rewards. - configs/areal_waa_grpo.yaml: AReaL config template for single-GPU
+  GRPO training with Qwen2.5-VL-3B-Instruct. - tests/test_areal_workflow.py: 14 tests covering
+  episode execution, reward computation, edge cases, and message building.
+
+AReaL is an optional dependency -- the workflow gracefully handles the case where AReaL is not
+  installed. Tests use mock adapters and mock OpenAI clients (no real VM or AReaL needed).
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.45.1 (2026-03-19)
 
 ### Bug Fixes
