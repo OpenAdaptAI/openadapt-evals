@@ -1,6 +1,120 @@
 # CHANGELOG
 
 
+## v0.47.0 (2026-03-19)
+
+### Bug Fixes
+
+- Align trace report test assertions with reset-step behavior
+  ([#141](https://github.com/OpenAdaptAI/openadapt-evals/pull/141),
+  [`8c6b815`](https://github.com/OpenAdaptAI/openadapt-evals/commit/8c6b8155e3dd95b548cb4454efd37c63bb0057b0))
+
+The test_report_with_trajectory test expected trajectory data from step_index=0 to appear in the
+  report, but generate_trace_report.py skips trajectory metadata for Step 0 (Reset) by design.
+  Updated assertions to match the actual report output: step_index=0 data is absent, while
+  step_index=1 and 2 data appears correctly under Steps 1 and 2.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Improve WAA VM infrastructure reliability
+  ([#145](https://github.com/OpenAdaptAI/openadapt-evals/pull/145),
+  [`641e6e5`](https://github.com/OpenAdaptAI/openadapt-evals/commit/641e6e5adeeacf7007b73a8d05a7dc099a6d6f9f))
+
+1. Remote Docker build: add missing files (evaluate_server.py, start_with_evaluate.sh,
+  patch_setup_ps1.py) to the SCP file list in _build_remote(). Without these, the Dockerfile COPY
+  commands fail because the build context is incomplete.
+
+2. LibreOffice sed patch: replace fragile chained sed commands with a standalone Python patch script
+  (patch_setup_ps1.py). The old second sed matched the wrong occurrence of Add-ToEnvPath after the
+  first sed inserted text containing the same pattern.
+
+3. Chrome sign-in dialog: add _is_chrome_task() detection and _prepare_chrome_clean_state() to
+  suppress the "Sign in to Chrome" modal that blocks automation on fresh VMs. Uses registry policies
+  (BrowserSignin=0, SyncDisabled=1, PromotionalTabsEnabled=0) and creates the "First Run" sentinel
+  file. Also adds Chrome first-run suppression to _apply_clean_desktop_policy() and to the
+  Dockerfile FirstLogonCommands for defense-in-depth.
+
+4. Default CMD: add CMD directive to Dockerfile so containers don't exit immediately if started
+  without explicit command arguments.
+
+5. start_with_evaluate.sh: add fallback to /run/entry.sh when no CMD arguments are provided (empty
+  $@).
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Use persistent storage for WAA data instead of ephemeral /mnt
+  ([#144](https://github.com/OpenAdaptAI/openadapt-evals/pull/144),
+  [`bef392d`](https://github.com/OpenAdaptAI/openadapt-evals/commit/bef392dbfd16477fbeed4459991d225715bc08f6))
+
+Replace all /mnt/waa-storage with WAA_STORAGE_DIR constant pointing to /home/azureuser/waa-storage
+  (persistent OS disk). Azure /mnt is ephemeral temp storage wiped on every deallocate, causing
+  15-20 min cold reinstalls.
+
+Also adds --os-disk-size-gb 128 to single-VM cmd_create path.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Use structured planner output to prevent compound instruction drops
+  ([#146](https://github.com/OpenAdaptAI/openadapt-evals/pull/146),
+  [`b311e13`](https://github.com/OpenAdaptAI/openadapt-evals/commit/b311e13de7fd548849e6e97efaa0c1ccd81afeb8))
+
+* fix: use structured planner output to prevent compound instruction drops
+
+The planner prompt now outputs structured action fields (action_type, action_value,
+  target_description) instead of free-form instruction text. This fixes the compound instruction
+  problem where type X then press Enter would only execute the type, dropping the Enter keypress.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* fix: Chrome task setup dismisses sign-in dialog + compound instruction research
+
+Chrome tasks now launch with --no-first-run --disable-sync and press Escape to dismiss any sign-in
+  dialog. Settings task navigates directly to chrome://settings/cookies via CLI arg.
+
+Also adds compound instruction research doc.
+
+---------
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Documentation
+
+- Comprehensive workflow extraction pipeline + AReaL evaluation
+  ([`e5e848d`](https://github.com/OpenAdaptAI/openadapt-evals/commit/e5e848d8be857a4df7b94b80f761edc429f2cb4c))
+
+Workflow extraction pipeline (1350 lines, self-contained): - 4-pass pipeline: PII scrub → VLM
+  transcript → workflow extraction → cosine matching - All Pydantic classes inline (11 classes) -
+  Simple cosine similarity threshold (>0.85) instead of HDBSCAN - Full test strategy with synthetic
+  data families - Cost analysis, integration points, file layout
+
+AReaL evaluation: recommended as training backend.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Features
+
+- Add workflow extraction Pydantic models, WAA adapter, and matching pipeline
+  ([#142](https://github.com/OpenAdaptAI/openadapt-evals/pull/142),
+  [`fea40b6`](https://github.com/OpenAdaptAI/openadapt-evals/commit/fea40b63103b01854d74ea5f0b0dfb8cb5304cb3))
+
+Implement Priority 1 of the workflow extraction pipeline: - Pydantic models for RecordingSession,
+  Workflow, CanonicalWorkflow, WorkflowLibrary - WAARecordingAdapter to parse WAA meta.json
+  recordings into normalized sessions - Cosine similarity matching for grouping workflows into
+  canonical workflows - 31 tests with synthetic data families (settings toggles, spreadsheet entry,
+  document formatting, file archiving) validating models, adapter, and matching
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Add workflow transcript generation pipeline (Pass 0 + Pass 1)
+  ([#143](https://github.com/OpenAdaptAI/openadapt-evals/pull/143),
+  [`329826e`](https://github.com/OpenAdaptAI/openadapt-evals/commit/329826e1a8a8ce563cf04f7c912c886555c44629))
+
+Pass 0: PII scrubbing wrapper. Pass 1: VLM-based transcript with batched screenshots, robust
+  parsing, cost estimation. 14 tests.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.46.0 (2026-03-19)
 
 ### Features
