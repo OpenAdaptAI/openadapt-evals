@@ -884,32 +884,201 @@ class PoolManager:
         tasks: int,
         agent_factory: Callable[[], Any],
         exp_name: str,
+        task_ids: list[str] | None = None,
     ) -> PoolRunResult:
         """Run an external agent against pool workers via Flask API.
 
-        This is a placeholder for the full external agent integration.
-        The external agent communicates with WAA's Flask server on each
-        worker via SSH tunnel.
+        Sets up SSH tunnels to each worker, creates per-worker adapters
+        and agents, then runs the benchmark evaluation loop locally.
+        Each worker gets a unique local port for its SSH tunnel.
 
         Args:
             workers: Ready pool workers.
-            tasks: Number of tasks.
+            tasks: Number of tasks to run (used if task_ids is None).
             agent_factory: Callable that returns a BenchmarkAgent.
             exp_name: Experiment name for result tracking.
+            task_ids: Optional list of specific task IDs to run.
+                Distributed round-robin across workers.
 
         Returns:
             PoolRunResult.
         """
-        self._log(
-            "POOL-RUN",
-            "External agent support is a preview feature. "
-            "Use openadapt-evals CLI for full external agent evaluation.",
+        from openadapt_evals.adapters.waa.live import WAALiveAdapter, WAALiveConfig
+        from openadapt_evals.benchmarks.runner import (
+            EvaluationConfig,
+            evaluate_agent_on_benchmark,
         )
-        # TODO: Implement SSH tunnel setup + agent loop per worker
-        # For now, raise to signal this path isn't fully wired yet
-        raise NotImplementedError(
-            "External agent_factory support is not yet fully implemented. "
-            "Use the openadapt-evals CLI with --agent api-claude for now."
+        from openadapt_evals.infrastructure.ssh_tunnel import (
+            SSHTunnelManager,
+            TunnelConfig,
+        )
+
+        num_workers = len(workers)
+        _username = self._ssh_username
+
+        # Base ports for per-worker tunnels (each worker gets unique local ports)
+        base_waa_port = 15001
+        base_eval_port = 15050
+
+        self._log("POOL-RUN", f"Setting up SSH tunnels for {num_workers} workers...")
+
+        # Set up SSH tunnels per worker
+        tunnel_managers: list[SSHTunnelManager] = []
+        worker_ports: list[tuple[int, int]] = []  # (waa_port, eval_port)
+
+        for i, worker in enumerate(workers):
+            waa_port = base_waa_port + i
+            eval_port = base_eval_port + i
+
+            tunnel_mgr = SSHTunnelManager(
+                tunnels=[
+                    TunnelConfig(
+                        name=f"waa-{worker.name}",
+                        local_port=waa_port,
+                        remote_port=5000,
+                    ),
+                    TunnelConfig(
+                        name=f"eval-{worker.name}",
+                        local_port=eval_port,
+                        remote_port=5051,
+                    ),
+                ],
+            )
+            statuses = tunnel_mgr.start_tunnels_for_vm(
+                vm_ip=worker.ip,
+                ssh_user=_username,
+            )
+
+            all_ok = all(s.active for s in statuses.values())
+            if all_ok:
+                self._log(
+                    "POOL-RUN",
+                    f"  {worker.name}: tunnels up "
+                    f"(waa=:{waa_port}, eval=:{eval_port})",
+                )
+                tunnel_managers.append(tunnel_mgr)
+                worker_ports.append((waa_port, eval_port))
+            else:
+                failed = [n for n, s in statuses.items() if not s.active]
+                self._log(
+                    "POOL-RUN",
+                    f"  {worker.name}: tunnel FAILED ({', '.join(failed)})",
+                )
+
+        if not tunnel_managers:
+            return PoolRunResult(
+                total_tasks=tasks,
+                completed=0,
+                failed=tasks,
+                elapsed_seconds=0.0,
+                worker_results=[
+                    (w.name, 0, 0, "SSH tunnel setup failed") for w in workers
+                ],
+            )
+
+        active_workers = [
+            (workers[i], worker_ports[i]) for i in range(len(tunnel_managers))
+        ]
+
+        # Distribute task_ids round-robin across workers
+        if task_ids:
+            per_worker_tasks: list[list[str]] = [[] for _ in active_workers]
+            for idx, tid in enumerate(task_ids):
+                per_worker_tasks[idx % len(active_workers)].append(tid)
+        else:
+            per_worker_tasks = [None] * len(active_workers)  # type: ignore[list-item]
+
+        # Run evaluation on each worker in parallel
+        start_time = time.time()
+        results: list[tuple[str, int, int, str | None]] = []
+
+        def run_on_worker(
+            worker_info: tuple[tuple[PoolWorker, tuple[int, int]], list[str] | None],
+        ) -> tuple[str, int, int, str | None]:
+            (worker, (waa_port, eval_port)), w_task_ids = worker_info
+
+            try:
+                adapter = WAALiveAdapter(
+                    WAALiveConfig(
+                        server_url=f"http://localhost:{waa_port}",
+                        evaluate_url=f"http://localhost:{eval_port}",
+                    )
+                )
+
+                agent = agent_factory()
+
+                config = EvaluationConfig(
+                    max_steps=15,
+                    save_execution_traces=True,
+                    output_dir=f"benchmark_results/{exp_name}",
+                    run_name=f"{exp_name}_{worker.name}",
+                )
+
+                eval_results = evaluate_agent_on_benchmark(
+                    agent=agent,
+                    adapter=adapter,
+                    task_ids=w_task_ids,
+                    config=config,
+                )
+
+                completed = sum(1 for r in eval_results if r.success)
+                failed = len(eval_results) - completed
+                return (worker.name, completed, failed, None)
+
+            except Exception as e:
+                logger.error(f"Worker {worker.name} failed: {e}")
+                return (worker.name, 0, 1, str(e))
+
+        with ThreadPoolExecutor(max_workers=len(active_workers)) as executor:
+            worker_inputs = list(zip(active_workers, per_worker_tasks))
+            futures = {
+                executor.submit(run_on_worker, wi): wi[0][0].name
+                for wi in worker_inputs
+            }
+            for future in as_completed(futures):
+                name = futures[future]
+                try:
+                    result = future.result()
+                    results.append(result)
+                    if result[3]:
+                        self._log("POOL-RUN", f"  {name}: ERROR - {result[3]}")
+                    else:
+                        self._log(
+                            "POOL-RUN",
+                            f"  {name}: {result[1]} passed, {result[2]} failed",
+                        )
+                    self.registry.update_pool_progress(
+                        completed=result[1], failed=result[2]
+                    )
+                except Exception as e:
+                    results.append((name, 0, 1, str(e)))
+                    self._log("POOL-RUN", f"  {name}: EXCEPTION - {e}")
+
+        # Tear down tunnels
+        for mgr in tunnel_managers:
+            try:
+                mgr.stop_all_tunnels()
+            except Exception:
+                pass
+
+        elapsed = time.time() - start_time
+        total_completed = sum(r[1] for r in results)
+        total_failed = sum(r[2] for r in results)
+
+        self._log("POOL-RUN", "")
+        self._log("POOL-RUN", "=" * 60)
+        self._log("POOL-RUN", "EXTERNAL AGENT BENCHMARK COMPLETE")
+        self._log("POOL-RUN", f"  Time: {elapsed / 60:.1f} minutes")
+        self._log("POOL-RUN", f"  Completed: {total_completed}")
+        self._log("POOL-RUN", f"  Failed: {total_failed}")
+        self._log("POOL-RUN", "=" * 60)
+
+        return PoolRunResult(
+            total_tasks=len(task_ids) if task_ids else tasks,
+            completed=total_completed,
+            failed=total_failed,
+            elapsed_seconds=elapsed,
+            worker_results=results,
         )
 
     def status(self) -> VMPool | None:
