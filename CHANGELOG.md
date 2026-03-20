@@ -1,6 +1,26 @@
 # CHANGELOG
 
 
+## v0.48.4 (2026-03-20)
+
+### Bug Fixes
+
+- Add update_browse_history handler and fix verify_apps crash
+  ([#156](https://github.com/OpenAdaptAI/openadapt-evals/pull/156),
+  [`56e1b63`](https://github.com/OpenAdaptAI/openadapt-evals/commit/56e1b6383c35781977407dfad2b5ab0d9a1f0d7a))
+
+Bug 6a: The YouTube task config uses "update_browse_history" to pre-populate Chrome's history.sqlite
+  with URLs before the agent runs. This was being skipped as an unknown type. Now translates to a
+  Python script that kills Chrome, finds the History DB, and INSERTs entries with proper Chrome
+  timestamps (microseconds since 1601-01-01).
+
+Bug 6b: verify_apps crashed with "AttributeError: 'list' object has no attribute 'replace'" because
+  the WAA task JSON uses "app" (list) but the handler expected "apps" (string). Now handles both
+  parameter names and properly serializes the list with repr().
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.48.3 (2026-03-20)
 
 ### Bug Fixes
