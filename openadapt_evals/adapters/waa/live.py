@@ -1716,12 +1716,114 @@ class WAALiveAdapter(BenchmarkAdapter):
             apps = params.get("apps", params.get("app", []))
             if isinstance(apps, str):
                 apps = [apps]
-            logger.warning(
-                "install_apps is not yet supported (apps: %s). "
-                "Ensure required apps are pre-installed on the VM.",
-                apps,
+            if not apps:
+                return None
+            # Map common app names to winget package IDs.  Keys are
+            # normalised (lowercase, underscores) to match WAA task
+            # configs which use both hyphens and underscores.
+            winget_ids = {
+                "chrome": "Google.Chrome",
+                "google_chrome": "Google.Chrome",
+                "firefox": "Mozilla.Firefox",
+                "libreoffice": "TheDocumentFoundation.LibreOffice",
+                "libreoffice_calc": "TheDocumentFoundation.LibreOffice",
+                "libreoffice_writer": "TheDocumentFoundation.LibreOffice",
+                "libreoffice_impress": "TheDocumentFoundation.LibreOffice",
+                "vlc": "VideoLAN.VLC",
+                "vscode": "Microsoft.VisualStudioCode",
+                "vs_code": "Microsoft.VisualStudioCode",
+                "7zip": "7zip.7zip",
+                "notepad++": "Notepad++.Notepad++",
+                "notepadplusplus": "Notepad++.Notepad++",
+                "gimp": "GIMP.GIMP",
+                "obs": "OBSProject.OBSStudio",
+                "obs_studio": "OBSProject.OBSStudio",
+                "audacity": "Audacity.Audacity",
+                "paint.net": "dotPDN.PaintDotNet",
+            }
+            # Build a Python script that installs each app via winget,
+            # falling back to a winget search for unknown app names.
+            # Each install is independent: failures are collected but
+            # do not prevent later apps from being attempted.
+            install_lines = [
+                "import subprocess, re",
+                "failed = []",
+            ]
+            seen_ids = set()
+            for app in apps:
+                norm = re.sub(r'[\s\-]+', '_', app.strip().lower())
+                pkg_id = winget_ids.get(norm)
+                if pkg_id and pkg_id in seen_ids:
+                    continue  # e.g. libreoffice_calc and libreoffice_writer
+                if pkg_id:
+                    seen_ids.add(pkg_id)
+                # Use repr for safe string embedding
+                app_repr = repr(app)
+                if pkg_id:
+                    pkg_repr = repr(pkg_id)
+                    install_lines.append(
+                        f"r = subprocess.run("
+                        f"'winget install --id {pkg_id}"
+                        f" --accept-package-agreements"
+                        f" --accept-source-agreements"
+                        f" --silent', shell=True,"
+                        f" capture_output=True, text=True, timeout=300)"
+                    )
+                    install_lines.append(
+                        f"print(f'winget install {pkg_id}: rc={{r.returncode}}')"
+                    )
+                    install_lines.append(
+                        f"print(r.stdout[-500:] if len(r.stdout) > 500"
+                        f" else r.stdout)"
+                    )
+                    # winget returns 0 on success, -1978335189 (0x8A150019)
+                    # when already installed — both are fine.
+                    install_lines.append(
+                        f"failed.append({app_repr})"
+                        f" if r.returncode not in (0, -1978335189) else None"
+                    )
+                else:
+                    # Unknown app: try winget search and install first match
+                    esc_app = app.replace("'", "\\'")
+                    install_lines.append(
+                        f"print('Unknown app {app_repr}, "
+                        f"attempting winget search...')"
+                    )
+                    install_lines.append(
+                        f"s = subprocess.run("
+                        f"'winget search \"{esc_app}\"',"
+                        f" shell=True, capture_output=True,"
+                        f" text=True, timeout=30)"
+                    )
+                    # Parse first package ID from winget search output
+                    install_lines.append(
+                        f"match = re.search("
+                        f"r'(\\S+\\.\\S+)\\s+\\S+\\s+winget', s.stdout)"
+                    )
+                    install_lines.append(
+                        f"pkg = match.group(1) if match else None"
+                    )
+                    install_lines.append(
+                        f"r2 = subprocess.run("
+                        f"f'winget install --id {{pkg}}"
+                        f" --accept-package-agreements"
+                        f" --accept-source-agreements"
+                        f" --silent', shell=True,"
+                        f" capture_output=True, text=True, timeout=300)"
+                        f" if pkg else None"
+                    )
+                    install_lines.append(
+                        f"failed.append({app_repr})"
+                        f" if not pkg or"
+                        f" (r2 and r2.returncode not in (0, -1978335189))"
+                        f" else None"
+                    )
+            install_lines.append(
+                "print(f'install_apps done."
+                " Failed: {failed}' if failed"
+                " else 'install_apps: all apps installed')"
             )
-            return None
+            return "; ".join(install_lines)
 
         # Unknown type — skip
         logger.warning("Unknown config entry type %r, skipping", entry_type)
@@ -1779,11 +1881,15 @@ class WAALiveAdapter(BenchmarkAdapter):
                 )
                 continue
 
+            # install_apps uses winget which can take several minutes per
+            # app, so we give it a longer HTTP timeout.
+            http_timeout = 600.0 if entry_type == "install_apps" else 120.0
+
             try:
                 resp = requests.post(
                     f"{self.config.server_url}/execute_windows",
                     json={"command": command},
-                    timeout=120.0,
+                    timeout=http_timeout,
                 )
                 if resp.status_code == 200:
                     result = resp.json()
