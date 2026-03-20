@@ -311,4 +311,4 @@ COPY start_with_evaluate.sh /run/start_with_evaluate.sh
 RUN chmod +x /run/start_with_evaluate.sh
 
 ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/run/start_with_evaluate.sh"]
-CMD ["./entry.sh", "--prepare-image", "false", "--start-client", "false"]
+CMD ["/entry.sh", "--prepare-image", "false", "--start-client", "false"]
