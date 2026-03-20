@@ -1,6 +1,55 @@
 # CHANGELOG
 
 
+## v0.49.0 (2026-03-20)
+
+### Documentation
+
+- Comprehensive README update for planner-grounder, workflow, and training features
+  ([#158](https://github.com/OpenAdaptAI/openadapt-evals/pull/158),
+  [`1cb83b3`](https://github.com/OpenAdaptAI/openadapt-evals/commit/1cb83b308717565984cd903a556f035c1135a170))
+
+Covers ~20 PRs merged since March 17 (#134-#157): PlannerGrounderAgent dual-model architecture,
+  TaskConfig YAML custom tasks, 4-pass workflow extraction pipeline, RL training infra (TRL GRPO
+  rollout, AReaL workflow, OpenEnv), LocalAdapter + ScrubMiddleware for governed desktop agent,
+  correction flywheel, strict mode, and task setup dispatch. Updated architecture tree and key files
+  table.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Features
+
+- Add full evaluation runner with resume support and pool integration
+  ([#160](https://github.com/OpenAdaptAI/openadapt-evals/pull/160),
+  [`ada912d`](https://github.com/OpenAdaptAI/openadapt-evals/commit/ada912d8a7c14532cc26f3b8a62ba3b2769e3996))
+
+Implement _run_external_agent in pool.py to support PlannerGrounderAgent and other external agents
+  across pool VMs via SSH tunnels. Create run_full_eval.py script for robust unattended WAA
+  evaluation runs with incremental JSONL checkpointing, per-task error isolation, exponential
+  backoff retry on server drops, --resume to continue interrupted runs, --dry-run mode,
+  --save-screenshots, progress display with ETA, and --parallel N for distributed pool execution.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Implement install_apps handler via winget for WAA task setup
+  ([#159](https://github.com/OpenAdaptAI/openadapt-evals/pull/159),
+  [`233295e`](https://github.com/OpenAdaptAI/openadapt-evals/commit/233295e454a310e323eefad6dfcf1656bd4f835c))
+
+Replace the warning-only stub in _config_entry_to_command with a working implementation that
+  installs apps using Windows Package Manager (winget).
+
+- Map 16 common app names (chrome, firefox, libreoffice, vlc, vscode, 7zip, notepad++, gimp, obs,
+  audacity, paint.net) to winget package IDs - Normalize app names (hyphens/spaces to underscores)
+  to handle WAA config inconsistencies (e.g. "libreoffice-calc" vs "libreoffice_calc") - Deduplicate
+  installs (e.g. libreoffice_calc + libreoffice_writer both map to
+  TheDocumentFoundation.LibreOffice) - For unknown apps, fall back to winget search and install
+  first match - Collect failures without crashing — each app install is independent - Use 600s HTTP
+  timeout for install_apps (vs 120s default) since winget installs can take several minutes - Accept
+  both success (rc=0) and already-installed (rc=-1978335189)
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.48.5 (2026-03-20)
 
 ### Bug Fixes
