@@ -16,6 +16,7 @@ Available agents:
     - PolicyAgent: Uses local trained policy model
     - RetrievalAugmentedAgent: Automatically retrieves demos from a library
     - PlannerGrounderAgent: Planner-grounder architecture (SeeAct/UFO2/CODA)
+    - DemoGuidedAgent: Demo-guided execution with self-verification
     - BaselineAgent: Unified baselines using openadapt-ml (Claude/GPT/Gemini)
 
 Example:
@@ -47,6 +48,19 @@ Example:
         grounder_provider="openai",
     )
 
+    # Use demo-guided agent with self-verification
+    from openadapt_evals.agents import DemoGuidedAgent, PlannerGrounderAgent
+    from openadapt_evals.demo_library import DemoLibrary
+
+    base = PlannerGrounderAgent(
+        planner="claude-sonnet-4-20250514",
+        grounder="gpt-4.1-mini",
+        planner_provider="anthropic",
+        grounder_provider="openai",
+    )
+    library = DemoLibrary("./demos")
+    agent = DemoGuidedAgent(base_agent=base, demo_library=library)
+
     # Use unified baseline agent (requires openadapt-ml)
     from openadapt_evals.agents import BaselineAgent
     agent = BaselineAgent.from_alias("gemini-3-pro")
@@ -69,6 +83,7 @@ from openadapt_evals.agents.claude_computer_use_agent import ClaudeComputerUseAg
 from openadapt_evals.agents.http_agent import HttpAgent
 from openadapt_evals.agents.retrieval_agent import RetrievalAugmentedAgent
 from openadapt_evals.agents.planner_grounder_agent import PlannerGrounderAgent
+from openadapt_evals.agents.demo_guided_agent import DemoGuidedAgent
 
 # Lazy imports for agents requiring additional dependencies
 def __getattr__(name: str):
@@ -102,6 +117,7 @@ __all__ = [
     "PolicyAgent",
     "RetrievalAugmentedAgent",
     "PlannerGrounderAgent",
+    "DemoGuidedAgent",
     "BaselineAgent",
     # Utilities
     "action_to_string",

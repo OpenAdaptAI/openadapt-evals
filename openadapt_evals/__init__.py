@@ -76,10 +76,12 @@ from openadapt_evals.agents import (
     SmartMockAgent,
     ApiAgent,
     RetrievalAugmentedAgent,
+    DemoGuidedAgent,
     action_to_string,
     format_accessibility_tree,
     parse_action_response,
 )
+from openadapt_evals.demo_library import DemoLibrary
 from openadapt_evals.adapters import (
     BenchmarkAction,
     BenchmarkAdapter,
@@ -139,6 +141,8 @@ __all__ = [
     "ApiAgent",
     "PolicyAgent",
     "RetrievalAugmentedAgent",
+    "DemoGuidedAgent",
+    "DemoLibrary",
     # Evaluation
     "EvaluationConfig",
     "evaluate_agent_on_benchmark",

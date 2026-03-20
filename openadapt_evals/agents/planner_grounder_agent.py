@@ -67,7 +67,7 @@ Previous actions:
 
 Accessibility tree:
 {a11y_tree}
-
+{demo_guidance}
 Look at the screenshot and decide the next action.
 
 Output a JSON object with exactly these fields:
@@ -172,6 +172,10 @@ class PlannerGrounderAgent(BenchmarkAgent):
         self._max_history = max_history
         self._planner_cache = planner_cache
         self._trajectory_logger = trajectory_logger
+
+        # Optional demo guidance text injected into the planner prompt.
+        # Set externally (e.g., by DemoGuidedAgent) or left empty.
+        self.demo_guidance: str = ""
 
         # Internal action history for planner context.
         self._action_history: list[str] = []
@@ -595,10 +599,16 @@ class PlannerGrounderAgent(BenchmarkAgent):
         # Check for repeated identical actions and inject anti-loop warning.
         anti_loop_warning = self._check_action_loop()
 
+        # Build optional demo guidance section.
+        demo_guidance_text = ""
+        if self.demo_guidance:
+            demo_guidance_text = f"\n{self.demo_guidance}\n"
+
         prompt = _PLANNER_PROMPT.format(
             task_instruction=task.instruction,
             action_history=history_text,
             a11y_tree=a11y_text,
+            demo_guidance=demo_guidance_text,
             anti_loop_warning=anti_loop_warning,
         )
 
