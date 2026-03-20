@@ -1653,6 +1653,76 @@ class WAALiveAdapter(BenchmarkAdapter):
                 "print(f'Inserted {len(history)} history entries into {db_path}')"
             )
 
+        if entry_type == "command":
+            # Alias for "execute" used by some WAA tasks
+            shell_cmd = params.get("command", "")
+            if not shell_cmd:
+                return None
+            escaped = shell_cmd.replace("\\", "\\\\").replace("'", "\\'")
+            return (
+                "import subprocess; "
+                f"subprocess.run('{escaped}', shell=True, timeout=60)"
+            )
+
+        if entry_type == "close_all":
+            # Close all application windows except File Explorer
+            return (
+                "import subprocess; "
+                "subprocess.run(['powershell', '-Command', "
+                "'Get-Process | Where-Object {$_.MainWindowTitle -ne \\\"\\\"} | "
+                "Where-Object {$_.ProcessName -ne \\\"explorer\\\"} | "
+                "ForEach-Object { $_.CloseMainWindow() }'], "
+                "timeout=15, capture_output=True); "
+                "import time; time.sleep(1); "
+                # Force-kill anything that didn't close gracefully
+                "subprocess.run(['powershell', '-Command', "
+                "'Get-Process | Where-Object {$_.MainWindowTitle -ne \\\"\\\"} | "
+                "Where-Object {$_.ProcessName -ne \\\"explorer\\\"} | "
+                "Stop-Process -Force'], "
+                "timeout=10, capture_output=True)"
+            )
+
+        if entry_type == "create_folder":
+            path = params.get("path", "")
+            if not path:
+                return None
+            escaped = path.replace("\\", "\\\\").replace("'", "\\'")
+            return f"import os; os.makedirs('{escaped}', exist_ok=True)"
+
+        if entry_type == "create_file":
+            path = params.get("path", "")
+            content = params.get("content", "")
+            if not path:
+                return None
+            escaped_path = path.replace("\\", "\\\\").replace("'", "\\'")
+            escaped_content = content.replace("\\", "\\\\").replace("'", "\\'")
+            return (
+                "import os; "
+                f"os.makedirs(os.path.dirname('{escaped_path}') or '.', exist_ok=True); "
+                f"open('{escaped_path}', 'w', encoding='utf-8').write('{escaped_content}')"
+            )
+
+        if entry_type == "clear_task_files":
+            return (
+                "import shutil, glob, os; "
+                "[shutil.rmtree(d, ignore_errors=True) "
+                "for d in glob.glob(os.path.expandvars("
+                r"r'%TEMP%\\task_*'"
+                "))]; "
+                "print('Cleared task files')"
+            )
+
+        if entry_type == "install_apps":
+            apps = params.get("apps", params.get("app", []))
+            if isinstance(apps, str):
+                apps = [apps]
+            logger.warning(
+                "install_apps is not yet supported (apps: %s). "
+                "Ensure required apps are pre-installed on the VM.",
+                apps,
+            )
+            return None
+
         # Unknown type — skip
         logger.warning("Unknown config entry type %r, skipping", entry_type)
         return None
