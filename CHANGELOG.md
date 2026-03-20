@@ -1,6 +1,25 @@
 # CHANGELOG
 
 
+## v0.48.1 (2026-03-20)
+
+### Bug Fixes
+
+- Dispatch task setup commands via /execute_windows instead of nonexistent /setup endpoint
+  ([#153](https://github.com/OpenAdaptAI/openadapt-evals/pull/153),
+  [`b79cc72`](https://github.com/OpenAdaptAI/openadapt-evals/commit/b79cc72b148abe6fb9d4684904a104634b7d1c78))
+
+The adapter was calling POST /setup to send all config entries at once, but neither the WAA server
+  (port 5000) nor evaluate_server.py (port 5050) has this endpoint, causing SetupReadinessError on
+  every task with setup commands.
+
+Now each config entry (download, open, launch, execute, sleep, activate_window, verify_apps) is
+  translated to a Python command and dispatched individually via /execute_windows. This is the last
+  blocker before scored task evaluation and GRPO training.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.48.0 (2026-03-20)
 
 ### Features
