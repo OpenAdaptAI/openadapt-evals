@@ -14,13 +14,20 @@
 #   # Build the image
 #   docker build -t waa-auto:latest .
 #
-#   # Run benchmark (after Windows is set up)
-#   docker run --rm --device=/dev/kvm --cap-add NET_ADMIN \
-#     -p 8006:8006 -p 5000:5000 -p 7200:7200 \
+#   # Run the container
+#   # CRITICAL: --cap-add NET_ADMIN is REQUIRED for the network bridge between
+#   # the Linux container and the Windows QEMU guest. Without it, the container
+#   # falls back to user-mode networking and cannot reach the Windows VM at
+#   # 20.20.20.21. Port 5000 (WAA Flask server inside Windows) will never be
+#   # accessible. Port 5050 (evaluate server on Linux side) will work, which
+#   # makes the failure confusing — the container appears to be running but
+#   # the WAA server is unreachable.
+#   docker run -d --name winarena \
+#     --device=/dev/kvm \
+#     --cap-add NET_ADMIN \
+#     -p 5000:5000 -p 5050:5050 -p 8006:8006 \
 #     -v /path/to/storage:/storage \
-#     -e OPENAI_API_KEY="your-key" \
-#     waa-auto:latest \
-#     "/entry.sh --start-client true --model gpt-4o --num-tasks 5"
+#     waa-auto:latest
 #
 # =============================================================================
 
