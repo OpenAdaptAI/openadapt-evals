@@ -1,6 +1,28 @@
 # CHANGELOG
 
 
+## v0.48.5 (2026-03-20)
+
+### Bug Fixes
+
+- Add all missing WAA config entry type handlers
+  ([#157](https://github.com/OpenAdaptAI/openadapt-evals/pull/157),
+  [`a5fec25`](https://github.com/OpenAdaptAI/openadapt-evals/commit/a5fec255fe248c5620c7c6630345b627c6d1102d))
+
+Proactively adds handlers for every config type defined in the WAA server to prevent further
+  customer bug reports:
+
+- command: alias for execute (some tasks use this) - close_all: graceful then force-kill all app
+  windows - create_folder: os.makedirs with exist_ok - create_file: create file with initial content
+  - clear_task_files: remove task workspace temp files - install_apps: logged warning (too complex
+  for client-side)
+
+Audited all 154 WAA task JSONs to ensure complete coverage. The only remaining unhandled type is
+  install_apps which requires WAA's server-side app download registry.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.48.4 (2026-03-20)
 
 ### Bug Fixes
