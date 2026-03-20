@@ -664,13 +664,25 @@ class WAALiveAdapter(BenchmarkAdapter):
 
         import requests
 
-        # Try to close all windows for clean state
+        # Try to close all windows for clean state via /execute_windows
         try:
-            requests.post(
-                f"{self.config.server_url}/setup/close_all",
-                timeout=30.0
+            close_cmd = (
+                "import subprocess; "
+                "subprocess.run("
+                "['powershell', '-Command', "
+                "'Get-Process | Where-Object {$_.MainWindowTitle -ne \\\"\\\"} | "
+                "ForEach-Object { $_.CloseMainWindow() }'], "
+                "timeout=15)"
             )
-            logger.info("Closed all windows for clean state")
+            resp = requests.post(
+                f"{self.config.server_url}/execute_windows",
+                json={"command": close_cmd},
+                timeout=30.0,
+            )
+            if resp.status_code == 200:
+                logger.info("Closed all windows for clean state")
+            else:
+                logger.warning("close_all failed: HTTP %s", resp.status_code)
         except Exception as e:
             logger.warning(f"Failed to close windows: {e}")
 
@@ -1504,12 +1516,100 @@ class WAALiveAdapter(BenchmarkAdapter):
         except Exception as e:
             logger.error(f"update_computer request error: {e}")
 
+    @staticmethod
+    def _config_entry_to_command(entry: dict) -> str | None:
+        """Translate a WAA config entry to a Python command for /execute_windows.
+
+        Config entries have ``{"type": "<type>", "parameters": {...}}``.
+        Returns a Python one-liner suitable for ``/execute_windows``, or *None*
+        for types that are handled inline (e.g. ``sleep``).
+        """
+        entry_type = entry.get("type", "")
+        params = entry.get("parameters", {})
+
+        if entry_type == "execute":
+            shell_cmd = params.get("command", "")
+            if not shell_cmd:
+                return None
+            # Wrap shell command in subprocess so /execute_windows can run it
+            escaped = shell_cmd.replace("\\", "\\\\").replace("'", "\\'")
+            return (
+                "import subprocess; "
+                f"subprocess.run('{escaped}', shell=True, timeout=60)"
+            )
+
+        if entry_type == "launch":
+            app = params.get("command", "")
+            if not app:
+                return None
+            escaped = app.replace("\\", "\\\\").replace("'", "\\'")
+            return (
+                "import subprocess; "
+                f"subprocess.Popen('{escaped}')"
+            )
+
+        if entry_type == "open":
+            path = params.get("path", "")
+            if not path:
+                return None
+            escaped = path.replace("\\", "\\\\").replace("'", "\\'")
+            return f"import os; os.startfile('{escaped}')"
+
+        if entry_type == "download":
+            files = params.get("files", [])
+            if not files:
+                return None
+            # Download each file; files is a list of {url, path} dicts
+            lines = ["import urllib.request, os"]
+            for f in files:
+                url = f.get("url", "")
+                dest = f.get("path", "")
+                if url and dest:
+                    esc_url = url.replace("'", "\\'")
+                    esc_dest = dest.replace("\\", "\\\\").replace("'", "\\'")
+                    lines.append(
+                        f"os.makedirs(os.path.dirname('{esc_dest}'), exist_ok=True)"
+                    )
+                    lines.append(
+                        f"urllib.request.urlretrieve('{esc_url}', '{esc_dest}')"
+                    )
+            return "; ".join(lines)
+
+        if entry_type == "activate_window":
+            window_name = params.get("window_name", "")
+            if not window_name:
+                return None
+            escaped = window_name.replace("'", "\\'")
+            return (
+                "import pyautogui, subprocess; "
+                f"subprocess.run(['powershell', '-Command', "
+                f"\"(Get-Process | Where-Object {{$_.MainWindowTitle -like '*{escaped}*'}}).MainWindowHandle | "
+                f"ForEach-Object {{[void][System.Runtime.InteropServices.Marshal]::"
+                f"SetForegroundWindow($_)}}\"], timeout=10)"
+            )
+
+        if entry_type == "verify_apps":
+            apps = params.get("apps", [])
+            if not apps:
+                return None
+            apps_str = str(apps).replace("'", "\\'")
+            return (
+                "import subprocess, shutil; "
+                f"missing = [a for a in {apps_str} if not shutil.which(a)]; "
+                "print(f'Missing apps: {{missing}}' if missing else 'All apps found')"
+            )
+
+        # Unknown type — skip
+        logger.warning("Unknown config entry type %r, skipping", entry_type)
+        return None
+
     def _run_task_setup(self, raw_config: dict) -> None:
         """Run task setup commands from raw_config.
 
         WAA tasks use a 'config' array of {type, parameters} objects specifying
-        preconditions (file downloads, app launches, sleeps). We POST this array
-        to the evaluate server's /setup endpoint which processes each entry.
+        preconditions (file downloads, app launches, sleeps). Each entry is
+        translated to a Python command and dispatched individually via
+        ``/execute_windows`` on the WAA server.
 
         If the task has ``related_apps``, a ``verify_apps`` step is prepended so
         missing applications are caught before the rest of setup runs.
@@ -1533,35 +1633,61 @@ class WAALiveAdapter(BenchmarkAdapter):
 
         import requests
 
-        evaluate_base = self.config.evaluate_url or self.config.server_url
-        try:
-            resp = requests.post(
-                f"{evaluate_base}/setup",
-                json={"config": config},
-                timeout=120.0,
-            )
-            payload = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
-            results = payload.get("results", [])
-            self._last_setup_results = results
-            for r in results:
-                status = r.get("status", "unknown")
-                logger.info(f"Setup {r.get('type')}: {status}")
+        errors = []
+        for entry in config:
+            entry_type = entry.get("type", "unknown")
 
-            if resp.status_code != 200:
-                raise SetupReadinessError(
-                    f"Task setup failed (HTTP {resp.status_code}): "
-                    f"{resp.text[:200]}"
+            # Sleep is handled locally, not on the server
+            if entry_type == "sleep":
+                duration = entry.get("parameters", {}).get("seconds", 1)
+                logger.info("Setup sleep: %s seconds", duration)
+                time.sleep(float(duration))
+                self._last_setup_results.append(
+                    {"type": "sleep", "status": "ok"}
                 )
-            errors = [r for r in results if r.get("status") == "error"]
-            if errors:
-                details = "; ".join(
-                    f"{r.get('type')}: {r.get('error', 'unknown')}" for r in errors
+                continue
+
+            command = self._config_entry_to_command(entry)
+            if command is None:
+                logger.warning("Skipping setup entry with no command: %s", entry)
+                self._last_setup_results.append(
+                    {"type": entry_type, "status": "skipped"}
                 )
-                raise SetupReadinessError(f"Task setup contained failing steps: {details}")
-        except Exception as e:
-            if isinstance(e, SetupReadinessError):
-                raise
-            raise SetupReadinessError(f"Task setup request failed: {e}") from e
+                continue
+
+            try:
+                resp = requests.post(
+                    f"{self.config.server_url}/execute_windows",
+                    json={"command": command},
+                    timeout=120.0,
+                )
+                if resp.status_code == 200:
+                    result = resp.json()
+                    stderr = result.get("stderr", "")
+                    if stderr:
+                        logger.warning("Setup %s stderr: %s", entry_type, stderr)
+                    logger.info("Setup %s: ok", entry_type)
+                    self._last_setup_results.append(
+                        {"type": entry_type, "status": "ok"}
+                    )
+                else:
+                    err_msg = f"HTTP {resp.status_code}: {resp.text[:200]}"
+                    logger.warning("Setup %s failed: %s", entry_type, err_msg)
+                    self._last_setup_results.append(
+                        {"type": entry_type, "status": "error", "error": err_msg}
+                    )
+                    errors.append(f"{entry_type}: {err_msg}")
+            except Exception as e:
+                logger.warning("Setup %s request failed: %s", entry_type, e)
+                self._last_setup_results.append(
+                    {"type": entry_type, "status": "error", "error": str(e)}
+                )
+                errors.append(f"{entry_type}: {e}")
+
+        if errors:
+            raise SetupReadinessError(
+                f"Task setup contained failing steps: {'; '.join(errors)}"
+            )
 
     def _run_setup_execute_commands(
         self,
@@ -1571,33 +1697,32 @@ class WAALiveAdapter(BenchmarkAdapter):
         label: str,
         timeout: float = 20.0,
     ) -> None:
-        """Run a batch of setup execute commands."""
+        """Run a batch of setup execute commands via /execute_windows."""
         if not commands:
             return
-        evaluate_base = self.config.evaluate_url or self.config.server_url
-        payload = {
-            "config": [
-                {"type": "execute", "parameters": {"command": cmd, "shell": True}}
-                for cmd in commands
-            ]
-        }
-        try:
-            resp = requests_module.post(
-                f"{evaluate_base}/setup",
-                json=payload,
-                timeout=timeout,
-            )
-            if resp.status_code == 200:
-                logger.info("%s applied (%d command(s))", label, len(commands))
-            else:
-                logger.warning(
-                    "%s failed: HTTP %s %s",
-                    label,
-                    resp.status_code,
-                    resp.text[:200],
+        for cmd in commands:
+            entry = {"type": "execute", "parameters": {"command": cmd, "shell": True}}
+            py_command = self._config_entry_to_command(entry)
+            if py_command is None:
+                continue
+            try:
+                resp = requests_module.post(
+                    f"{self.config.server_url}/execute_windows",
+                    json={"command": py_command},
+                    timeout=timeout,
                 )
-        except Exception as e:
-            logger.warning("%s request failed: %s", label, e)
+                if resp.status_code == 200:
+                    logger.debug("%s command ok: %s", label, cmd[:80])
+                else:
+                    logger.warning(
+                        "%s command failed: HTTP %s %s",
+                        label,
+                        resp.status_code,
+                        resp.text[:200],
+                    )
+            except Exception as e:
+                logger.warning("%s command request failed: %s", label, e)
+        logger.info("%s applied (%d command(s))", label, len(commands))
 
     def _dismiss_notifications(self, requests_module) -> None:
         """Dismiss system notifications that persist through close_all.
@@ -1914,40 +2039,41 @@ $obj | ConvertTo-Json -Compress
         open_steps = [s for s in raw_config.get("config", []) if s.get("type") == "open"]
         if not open_steps:
             return False
-        evaluate_base = self.config.evaluate_url or self.config.server_url
-        try:
-            resp = requests_module.post(
-                f"{evaluate_base}/setup",
-                json={"config": open_steps},
-                timeout=60.0,
-            )
-            payload = (
-                resp.json()
-                if resp.headers.get("content-type", "").startswith("application/json")
-                else {}
-            )
-            results = payload.get("results", [])
-            if results:
-                # Keep diagnostics tied to the most recent remediation attempt.
-                self._last_setup_results = results
-            elif resp.status_code != 200:
-                self._last_setup_results = [{
+        self._last_setup_results = []
+        all_ok = True
+        for step in open_steps:
+            py_command = self._config_entry_to_command(step)
+            if py_command is None:
+                continue
+            try:
+                resp = requests_module.post(
+                    f"{self.config.server_url}/execute_windows",
+                    json={"command": py_command},
+                    timeout=60.0,
+                )
+                if resp.status_code == 200:
+                    self._last_setup_results.append(
+                        {"type": "open", "status": "ok"}
+                    )
+                else:
+                    self._last_setup_results.append({
+                        "type": "open",
+                        "status": "error",
+                        "error": f"HTTP {resp.status_code}: {resp.text[:200]}",
+                    })
+                    all_ok = False
+            except Exception as e:
+                self._last_setup_results.append({
                     "type": "open",
                     "status": "error",
-                    "error": f"HTTP {resp.status_code}: {resp.text[:200]}",
-                }]
-            if resp.status_code != 200:
-                logger.warning(
-                    "Open-step remediation failed: HTTP %s %s",
-                    resp.status_code,
-                    resp.text[:200],
-                )
-                return False
+                    "error": str(e),
+                })
+                all_ok = False
+        if all_ok:
             logger.info("Open-step remediation succeeded (%d step(s))", len(open_steps))
-            return True
-        except Exception as e:
-            logger.warning("Open-step remediation request failed: %s", e)
-            return False
+        else:
+            logger.warning("Open-step remediation had failures")
+        return all_ok
 
     # --- App-name to window-title mapping for post-setup focus ---
 
@@ -2163,20 +2289,21 @@ $wins = Get-Process | Where-Object { $_.MainWindowTitle -and $_.MainWindowTitle.
         requests_module: Any,
     ) -> bool:
         """Try to activate expected windows and verify active title."""
-        evaluate_base = self.config.evaluate_url or self.config.server_url
         max_retries = max(1, self.config.setup_readiness_retries)
         retry_delays = [1.5, 2.5, 4.0, 6.0]
         for attempt in range(max_retries):
             for pattern in patterns:
+                entry = {
+                    "type": "activate_window",
+                    "parameters": {"window_name": pattern},
+                }
+                py_command = self._config_entry_to_command(entry)
+                if py_command is None:
+                    continue
                 try:
                     resp = requests_module.post(
-                        f"{evaluate_base}/setup",
-                        json={"config": [
-                            {
-                                "type": "activate_window",
-                                "parameters": {"window_name": pattern},
-                            },
-                        ]},
+                        f"{self.config.server_url}/execute_windows",
+                        json={"command": py_command},
                         timeout=15.0,
                     )
                     if resp.status_code == 200:

@@ -400,20 +400,21 @@ class TestLiveAdapterVerifyAppsInjection:
         with patch("requests.post") as mock_post:
             mock_resp = MagicMock()
             mock_resp.status_code = 200
-            mock_resp.json.return_value = {"results": []}
+            mock_resp.json.return_value = {"stdout": "", "stderr": ""}
             mock_post.return_value = mock_resp
 
             adapter._run_task_setup(raw_config)
 
-            # Verify the POST body has verify_apps as first step
-            call_args = mock_post.call_args
-            posted_config = call_args[1].get("json", call_args[0][1] if len(call_args[0]) > 1 else {}).get("config", [])
-            # If called with keyword json=
-            if not posted_config and call_args.kwargs.get("json"):
-                posted_config = call_args.kwargs["json"].get("config", [])
-            assert posted_config[0]["type"] == "verify_apps"
-            assert posted_config[0]["parameters"]["apps"] == ["libreoffice_calc"]
-            assert posted_config[1]["type"] == "launch"
+            # Now dispatches per-entry via /execute_windows.
+            # First call should be verify_apps, second should be launch.
+            assert mock_post.call_count == 2
+            first_call = mock_post.call_args_list[0]
+            assert "/execute_windows" in first_call[0][0]
+            first_cmd = first_call.kwargs.get("json", {}).get("command", "")
+            assert "shutil.which" in first_cmd  # verify_apps checks
+            second_call = mock_post.call_args_list[1]
+            second_cmd = second_call.kwargs.get("json", {}).get("command", "")
+            assert "Popen" in second_cmd  # launch
 
     def test_no_verify_without_related_apps(self):
         """Without related_apps, no verify_apps step is added."""
@@ -433,14 +434,16 @@ class TestLiveAdapterVerifyAppsInjection:
         with patch("requests.post") as mock_post:
             mock_resp = MagicMock()
             mock_resp.status_code = 200
-            mock_resp.json.return_value = {"results": []}
+            mock_resp.json.return_value = {"stdout": "", "stderr": ""}
             mock_post.return_value = mock_resp
 
             adapter._run_task_setup(raw_config)
 
+            # Only launch step, no verify_apps
+            assert mock_post.call_count == 1
             call_args = mock_post.call_args
-            posted_config = call_args.kwargs.get("json", {}).get("config", [])
-            assert posted_config[0]["type"] == "launch"
+            cmd = call_args.kwargs.get("json", {}).get("command", "")
+            assert "Popen" in cmd  # launch command
 
     def test_empty_config_with_related_apps(self):
         """related_apps with empty config still injects verify_apps."""
@@ -459,15 +462,16 @@ class TestLiveAdapterVerifyAppsInjection:
         with patch("requests.post") as mock_post:
             mock_resp = MagicMock()
             mock_resp.status_code = 200
-            mock_resp.json.return_value = {"results": []}
+            mock_resp.json.return_value = {"stdout": "", "stderr": ""}
             mock_post.return_value = mock_resp
 
             adapter._run_task_setup(raw_config)
 
+            # Only verify_apps step (empty config + related_apps)
+            assert mock_post.call_count == 1
             call_args = mock_post.call_args
-            posted_config = call_args.kwargs.get("json", {}).get("config", [])
-            assert len(posted_config) == 1
-            assert posted_config[0]["type"] == "verify_apps"
+            cmd = call_args.kwargs.get("json", {}).get("command", "")
+            assert "shutil.which" in cmd  # verify_apps
 
 
 # ---------------------------------------------------------------------------
@@ -605,8 +609,8 @@ class TestEnsureAppFocused:
             setup_calls.append(url)
             resp = MagicMock()
             resp.status_code = 200
-            resp.json.return_value = {"results": [{"type": "activate_window", "status": "ok"}]}
-            resp.text = '{"results": [{"type": "activate_window", "status": "ok"}]}'
+            resp.json.return_value = {"stdout": "", "stderr": ""}
+            resp.text = '{"stdout": "", "stderr": ""}'
             return resp
 
         def _fake_powershell(script, **kwargs):
@@ -635,8 +639,8 @@ class TestEnsureAppFocused:
             setup_calls.append(url)
             resp = MagicMock()
             resp.status_code = 200
-            resp.json.return_value = {"results": [{"type": "activate_window", "status": "ok"}]}
-            resp.text = '{"results": [{"type": "activate_window", "status": "ok"}]}'
+            resp.json.return_value = {"stdout": "", "stderr": ""}
+            resp.text = '{"stdout": "", "stderr": ""}'
             return resp
 
         def _fake_powershell(script, **kwargs):
