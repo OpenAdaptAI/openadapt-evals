@@ -1589,14 +1589,68 @@ class WAALiveAdapter(BenchmarkAdapter):
             )
 
         if entry_type == "verify_apps":
-            apps = params.get("apps", [])
+            # WAA uses both "apps" (list) and "app" (list) parameter names
+            apps = params.get("apps", params.get("app", []))
+            if isinstance(apps, str):
+                apps = [apps]
             if not apps:
                 return None
-            apps_str = str(apps).replace("'", "\\'")
+            # Use repr() for safe list serialization instead of str().replace()
+            apps_repr = repr(apps)
             return (
-                "import subprocess, shutil; "
-                f"missing = [a for a in {apps_str} if not shutil.which(a)]; "
-                "print(f'Missing apps: {{missing}}' if missing else 'All apps found')"
+                "import shutil; "
+                f"missing = [a for a in {apps_repr} if not shutil.which(a)]; "
+                "print(f'Missing apps: {missing}' if missing else 'All apps found')"
+            )
+
+        if entry_type == "update_browse_history":
+            history = params.get("history", [])
+            if not history:
+                return None
+            # Build Python script to write Chrome history entries.
+            # Chrome stores timestamps as microseconds since 1601-01-01.
+            history_repr = repr(history)
+            return (
+                "import sqlite3, os, time, subprocess, glob; "
+                # Kill Chrome so the DB isn't locked
+                "subprocess.run('taskkill /F /IM chrome.exe /T', "
+                "shell=True, capture_output=True); "
+                "time.sleep(1); "
+                # Find Chrome's History DB
+                "profiles = glob.glob("
+                "os.path.expandvars("
+                r"r'%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\History'"
+                ")); "
+                "db_path = profiles[0] if profiles else "
+                "os.path.expandvars("
+                r"r'%LOCALAPPDATA%\\Google\\Chrome\\User Data\\Default\\History'"
+                "); "
+                "conn = sqlite3.connect(db_path); "
+                "c = conn.cursor(); "
+                # Chrome epoch: microseconds since 1601-01-01
+                # Offset from Unix epoch: 11644473600 seconds
+                "CHROME_EPOCH_OFFSET = 11644473600; "
+                "now_us = int((time.time() + CHROME_EPOCH_OFFSET) * 1_000_000); "
+                f"history = {history_repr}; "
+                "["
+                "("
+                "c.execute("
+                "'INSERT OR IGNORE INTO urls (url, title, visit_count, "
+                "typed_count, last_visit_time) VALUES (?, ?, 1, 0, ?)', "
+                "(e['url'], e.get('title', ''), "
+                "now_us - int(e.get('visit_time_from_now_in_seconds', 0)) * 1_000_000)"
+                "), "
+                "c.execute("
+                "'INSERT INTO visits (url, visit_time, from_visit, transition, "
+                "segment_id, visit_duration) VALUES ("
+                "(SELECT id FROM urls WHERE url=?), ?, 0, 805306368, 0, 0)', "
+                "(e['url'], "
+                "now_us - int(e.get('visit_time_from_now_in_seconds', 0)) * 1_000_000)"
+                ")"
+                ") for e in history"
+                "]; "
+                "conn.commit(); conn.close(); "
+                "print(f'Inserted {len(history)} history entries into {db_path}')"
             )
 
         # Unknown type — skip
