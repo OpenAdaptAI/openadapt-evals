@@ -1,6 +1,26 @@
 # CHANGELOG
 
 
+## v0.48.3 (2026-03-20)
+
+### Bug Fixes
+
+- Restore optional-dependencies removed by PR #151
+  ([#155](https://github.com/OpenAdaptAI/openadapt-evals/pull/155),
+  [`7f57eda`](https://github.com/OpenAdaptAI/openadapt-evals/commit/7f57eda3f2fff10c69a03ec9732cf6cedd2cf935))
+
+PR #151 (docs: add openadapt-ml migration analysis report) accidentally deleted the entire
+  [project.optional-dependencies] section and the openadapt-ml editable source from pyproject.toml.
+  This broke CI because `uv sync --extra dev --no-sources` fails when the dev extra doesn't exist.
+  The PR was merged despite failing CI because enforce_admins is disabled on branch protection.
+
+Restores all optional-dependency groups (dev, waa, azure, aws, retrieval, viewer, wandb, training,
+  verl, all, test) and the openadapt-ml editable source. Regenerates uv.lock with --no-sources to
+  match CI resolution.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.48.2 (2026-03-20)
 
 ### Bug Fixes
