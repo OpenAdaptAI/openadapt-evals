@@ -1,6 +1,27 @@
 # CHANGELOG
 
 
+## v0.50.0 (2026-03-20)
+
+### Features
+
+- Add demo-guided execution and self-verification for 99% accuracy target
+  ([#161](https://github.com/OpenAdaptAI/openadapt-evals/pull/161),
+  [`d8d2fa5`](https://github.com/OpenAdaptAI/openadapt-evals/commit/d8d2fa58c03890921f0ebe5f16542b1c32e4ba04))
+
+Add DemoLibrary (directory-based demo storage with sequential step alignment), DemoGuidedAgent
+  (wraps any BenchmarkAgent with demo guidance injection and optional VLM-based self-verification),
+  and PlannerGrounderAgent integration (demo_guidance attribute + prompt slot).
+
+Key components: - DemoLibrary: stores demos as JSON + screenshots on disk, provides align_step() for
+  sequential guidance with graceful fallback - DemoGuidedAgent: augments task instructions with demo
+  context, runs post-action verification comparing actual vs expected screenshots -
+  PlannerGrounderAgent: new demo_guidance attribute and {demo_guidance} template slot in planner
+  prompt (purely additive, no behavior change when empty)
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.49.0 (2026-03-20)
 
 ### Documentation
