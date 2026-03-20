@@ -1,6 +1,21 @@
 # CHANGELOG
 
 
+## v0.48.0 (2026-03-20)
+
+### Features
+
+- Add workflow extraction Pass 2 (transcript to structured workflow)
+  ([#152](https://github.com/OpenAdaptAI/openadapt-evals/pull/152),
+  [`721f940`](https://github.com/OpenAdaptAI/openadapt-evals/commit/721f9400eeb669bec843f2a9130acce766c2499d))
+
+Implements Pass 2 of the workflow pipeline: takes an EpisodeTranscript (Pass 1 output) and uses a
+  VLM to extract structured Workflow objects with merged WorkflowStep entries. Includes fallback to
+  1:1 mapping when VLM parsing fails.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.47.4 (2026-03-19)
 
 ### Bug Fixes
