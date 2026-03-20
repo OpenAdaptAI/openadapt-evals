@@ -1,6 +1,27 @@
 # CHANGELOG
 
 
+## v0.50.1 (2026-03-20)
+
+### Bug Fixes
+
+- Use absolute path /entry.sh in Dockerfile CMD and document install_apps
+  ([#162](https://github.com/OpenAdaptAI/openadapt-evals/pull/162),
+  [`6e408d4`](https://github.com/OpenAdaptAI/openadapt-evals/commit/6e408d4fd37440bb78e42db828093b77fbb4d500))
+
+The Dockerfile CMD used ./entry.sh (relative path) which fails when start_with_evaluate.sh runs exec
+  "$@" — the working directory doesn't contain entry.sh. This caused Windows to never boot, leaving
+  port 5000 down while port 5050 (evaluate server) worked fine.
+
+This was the root cause of the customer's "WAA server not starting" bug — the same issue on both our
+  VM and theirs.
+
+Also adds documentation comment to install_apps handler explaining it's a safety net for edge cases,
+  not needed for standard WAA tasks (all apps are pre-installed in the Docker image).
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.50.0 (2026-03-20)
 
 ### Features
