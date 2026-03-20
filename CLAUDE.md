@@ -68,17 +68,30 @@ Governed desktop agent evaluation and training infrastructure. Provides benchmar
 ## Quick Start
 
 ```bash
-# Install
+# 1. Install
 uv sync
 
-# Mock evaluation (no VM required)
-openadapt-evals mock --tasks 10
+# 2. Create .env with API keys
+cat > .env << 'EOF'
+ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=sk-...
+EOF
 
-# Live evaluation (uses localhost:5001 by default)
+# 3. Smoke test (no VM, no API key needed)
+openadapt-evals mock --tasks 5
+
+# 4. Run against a live WAA server (requires VM with SSH tunnel on :5001)
 openadapt-evals run --agent api-claude --task notepad_1
 
-# Full control
-openadapt-evals live --agent api-claude --server http://localhost:5001 --task-ids notepad_1
+# 5. Full evaluation with the PlannerGrounderAgent
+python scripts/run_full_eval.py \
+    --server-url http://localhost:5001 \
+    --grounder-model gpt-4.1-mini \
+    --max-steps 15 \
+    --save-screenshots
+
+# 6. View results
+openadapt-evals view --run-name live_eval
 ```
 
 ---
@@ -127,6 +140,32 @@ openadapt-evals view --run-name live_eval
 # 5. Cleanup (stop billing)
 oa-vm pool-cleanup -y
 ```
+
+### Docker / WAA Container
+
+**CRITICAL: `--cap-add NET_ADMIN` is REQUIRED.** Without it, QEMU's network bridge cannot form, the Windows VM is unreachable at `172.30.0.2`, and port 5000 (WAA Flask) never responds. The container *appears* to run (port 5050 works on the Linux side) but the WAA server inside Windows is inaccessible.
+
+```bash
+# Build the WAA image
+docker build -t waa-auto:latest openadapt_evals/waa_deploy/
+
+# Run the container -- note the REQUIRED --cap-add NET_ADMIN
+docker run -d --name winarena \
+  --device=/dev/kvm \
+  --cap-add NET_ADMIN \
+  -p 5000:5000 -p 5050:5050 -p 8006:8006 \
+  -v /path/to/storage:/storage \
+  waa-auto:latest
+```
+
+**Boot timeline:**
+- Fresh first boot (Windows download + install): ~20 min
+- Subsequent boots (Windows already installed in /storage): 2-5 min
+
+**Ports:**
+- `5000`: WAA Flask API (inside Windows QEMU guest, forwarded through bridge)
+- `5050`: Evaluate server (Linux side, runs task evaluation)
+- `8006`: noVNC web viewer (browser-based VNC to Windows desktop)
 
 ### Key Points
 
@@ -212,6 +251,314 @@ Run `oa-vm --help` for the full list of 50+ commands.
 
 ---
 
+## Full Evaluation Runner (`scripts/run_full_eval.py`)
+
+Production-grade evaluation runner with resume support, per-task error isolation, health checks with exponential backoff, and parallel pool execution.
+
+```bash
+# Smoke test: list all tasks without executing
+python scripts/run_full_eval.py --dry-run --server-url http://localhost:5001
+
+# Single VM, all WAA tasks, API grounder
+python scripts/run_full_eval.py \
+    --server-url http://localhost:5001 \
+    --grounder-model gpt-4.1-mini
+
+# Specific tasks only
+python scripts/run_full_eval.py \
+    --server-url http://localhost:5001 \
+    --grounder-model gpt-4.1-mini \
+    --task-ids TASK_UUID_1,TASK_UUID_2
+
+# Save screenshots per task
+python scripts/run_full_eval.py \
+    --server-url http://localhost:5001 \
+    --grounder-model gpt-4.1-mini \
+    --save-screenshots
+
+# Resume interrupted run
+python scripts/run_full_eval.py \
+    --server-url http://localhost:5001 \
+    --grounder-model gpt-4.1-mini \
+    --resume --output benchmark_results/full_eval_20260320_120000.jsonl
+
+# HTTP grounder (e.g., vLLM serving UI-Venus)
+python scripts/run_full_eval.py \
+    --server-url http://localhost:5001 \
+    --grounder-endpoint http://gpu-host:8000/v1
+
+# Parallel across pool VMs
+python scripts/run_full_eval.py \
+    --grounder-model gpt-4.1-mini \
+    --parallel 3
+```
+
+**All flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--server-url` | `http://localhost:5001` | WAA server URL |
+| `--task-ids` | all from server | Comma-separated task IDs |
+| `--resume` | off | Skip tasks already in output file |
+| `--output` / `-o` | auto-timestamped JSONL | Output file path |
+| `--max-steps` | 15 | Max steps per task |
+| `--save-screenshots` | off | Save PNGs per task |
+| `--screenshots-dir` | `<output_dir>/screenshots` | Screenshot directory |
+| `--dry-run` | off | List tasks without executing |
+| `--planner-model` | `claude-sonnet-4-6` | Planner VLM model |
+| `--planner-provider` | `anthropic` | Planner API provider |
+| `--grounder-endpoint` | none | HTTP endpoint for grounder (vLLM) |
+| `--grounder-model` | none | API model for grounder |
+| `--grounder-provider` | `openai` | Grounder API provider |
+| `--parallel` | 0 (sequential) | Number of pool VMs |
+| `--cloud` | azure | Cloud provider for pool VMs |
+| `--max-server-retries` | 5 | Retries when server unreachable |
+| `--retry-base-delay` | 5.0 | Base delay (seconds) for backoff |
+
+Results are written incrementally to JSONL (safe to Ctrl+C and resume).
+
+---
+
+## Distillation Pipeline
+
+Two-step workflow: collect expert trajectories from a frontier teacher model, then fine-tune a smaller student model.
+
+### Step 1: Collect Teacher Trajectories (`scripts/collect_distillation_data.py`)
+
+Runs a frontier model (GPT-5.4, Claude, etc.) as a unified desktop agent on WAA tasks, saving every successful trajectory as SFT training data. Failed episodes are automatically discarded.
+
+```bash
+# Collect from GPT-5.4 (default teacher)
+python scripts/collect_distillation_data.py \
+    --server-url http://localhost:5001
+
+# Collect from Claude with cost-limited testing
+python scripts/collect_distillation_data.py \
+    --model claude-sonnet-4-6-20260210 \
+    --provider anthropic \
+    --max-tasks 5 \
+    --server-url http://localhost:5001
+
+# Specific tasks
+python scripts/collect_distillation_data.py \
+    --tasks TASK_UUID_1,TASK_UUID_2 \
+    --server-url http://localhost:5001
+
+# Resume previous collection
+python scripts/collect_distillation_data.py \
+    --server-url http://localhost:5001 \
+    --output-dir distillation_data/gpt54_run1 \
+    --resume
+
+# Dry run (list tasks, estimate cost)
+python scripts/collect_distillation_data.py \
+    --dry-run --server-url http://localhost:5001
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--model` | `gpt-5.4` | Teacher model API ID |
+| `--provider` | `openai` | `openai` or `anthropic` |
+| `--tasks` | all from server | Comma-separated task IDs |
+| `--max-tasks` | unlimited | Limit tasks (for cost control) |
+| `--server-url` | `http://localhost:5001` | WAA server URL |
+| `--output-dir` | `distillation_data/` | Output directory |
+| `--max-steps` | 15 | Steps per episode |
+| `--resume` | off | Skip tasks with existing data |
+| `--dry-run` | off | List tasks without running |
+
+Output: `distillation_data/trajectories.jsonl` + per-episode screenshot PNGs.
+
+### Step 2: Fine-tune Student Model (`scripts/finetune_distilled.py`)
+
+LoRA fine-tunes a VLM on the collected trajectories. Auto-detects Unsloth for 2x speedup.
+
+```bash
+# Fine-tune Qwen3.5-9B on collected data
+python scripts/finetune_distilled.py \
+    --data-dir distillation_data/ \
+    --output-dir checkpoints/qwen35_distilled
+
+# Different base model
+python scripts/finetune_distilled.py \
+    --base-model Qwen/Qwen3-VL-7B \
+    --data-dir distillation_data/
+
+# Validate pipeline without GPU (mock mode)
+python scripts/finetune_distilled.py \
+    --data-dir distillation_data/ \
+    --mock
+
+# Custom LoRA parameters
+python scripts/finetune_distilled.py \
+    --data-dir distillation_data/ \
+    --lora-r 32 --lora-alpha 64 \
+    --epochs 5 --batch-size 2
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--base-model` | `Qwen/Qwen3.5-9B` | HuggingFace model ID |
+| `--data-dir` | (required) | Directory from step 1 |
+| `--output-dir` | `checkpoints/<model>_distilled` | Checkpoint directory |
+| `--lora-r` | 16 | LoRA rank |
+| `--lora-alpha` | 32 | LoRA alpha scaling |
+| `--epochs` | 3 | Training epochs |
+| `--batch-size` | 1 | Per-device batch size |
+| `--learning-rate` | 2e-4 | Learning rate |
+| `--max-seq-length` | 2048 | Maximum sequence length |
+| `--gradient-accumulation-steps` | 4 | Gradient accumulation |
+| `--no-4bit` | off | Disable 4-bit quantization |
+| `--mock` | off | Validate without GPU |
+
+Requires: GPU with sufficient VRAM (A10G 24GB for 9B + LoRA 4-bit), `pip install trl peft transformers accelerate bitsandbytes`. Optional: `pip install unsloth` for 2x speedup.
+
+---
+
+## Demo-Guided Execution
+
+### DemoLibrary
+
+Directory-based demonstration library storing (screenshot, action, metadata) sequences on disk. No embeddings or vector DB needed.
+
+```python
+from openadapt_evals.demo_library import DemoLibrary
+
+library = DemoLibrary("./demos")
+
+# Add a demo (screenshots + actions from a successful episode)
+library.add_demo(
+    task_id="notepad_1",
+    screenshots=[Path("step0.png"), Path("step1.png"), Path("step2.png")],
+    actions=[action0, action1, action2],
+    description="Open Notepad and type hello",
+)
+
+# List available demos
+library.list_tasks()        # -> ["notepad_1"]
+library.list_demos("notepad_1")  # -> ["a1b2c3d4e5f6"]
+
+# Get step-by-step guidance
+guidance = library.align_step("notepad_1", current_screenshot=screenshot_bytes, step_index=2)
+print(guidance.instruction)       # "Type 'hello'"
+print(guidance.to_prompt_text())  # Formatted for agent prompt injection
+```
+
+Directory structure:
+```
+demos/
+  notepad_1/
+    a1b2c3d4e5f6/
+      demo.json        # metadata + steps
+      step_000.png     # screenshot for step 0
+      step_001.png
+```
+
+### DemoGuidedAgent
+
+Wraps any `BenchmarkAgent` and augments each step with demo guidance. Optionally verifies results against the demo's expected next state using a VLM.
+
+```python
+from openadapt_evals.agents import DemoGuidedAgent, PlannerGrounderAgent
+from openadapt_evals.demo_library import DemoLibrary
+
+base = PlannerGrounderAgent(
+    planner="claude-sonnet-4-20250514",
+    grounder="gpt-4.1-mini",
+    planner_provider="anthropic",
+    grounder_provider="openai",
+)
+library = DemoLibrary("./demos")
+
+agent = DemoGuidedAgent(
+    base_agent=base,
+    demo_library=library,
+    enable_verification=True,   # VLM verifies each step (extra API call)
+    verification_threshold=0.5, # Flag steps below this confidence
+    verify_model="gpt-4.1-mini",
+)
+
+# Use like any other agent
+action = agent.act(observation, task)
+
+# After the episode, check verification results
+summary = agent.get_verification_summary()
+print(summary["passed"], summary["failed"], summary["flagged_steps"])
+```
+
+### Recording Demos from WAA
+
+Use `scripts/record_waa_demos.py` to record demonstrations from VNC sessions, or `scripts/convert_recording_to_demo.py` to convert an existing openadapt-capture recording to demo library format.
+
+---
+
+## Task Setup Config Entry Types
+
+WAA tasks use a `config` array of `{type, parameters}` objects for preconditions. All 15 types are handled and dispatched via `/execute_windows`:
+
+| Type | Description | Example Parameters |
+|------|-------------|-------------------|
+| `execute` | Run a shell command | `{"command": "notepad.exe"}` |
+| `launch` | Launch an application | `{"command": "chrome"}` |
+| `open` | Open a file/URL | `{"path": "C:\\file.txt"}` |
+| `download` | Download files to disk | `{"files": [{"url": "...", "path": "..."}]}` |
+| `sleep` | Pause (handled locally) | `{"seconds": 5}` |
+| `activate_window` | Focus a window by name | `{"window_name": "Notepad"}` |
+| `verify_apps` | Check apps are running | `{"apps": ["notepad.exe"]}` |
+| `update_browse_history` | Add Chrome history entries | `{"history": [{"url": "...", "title": "..."}]}` |
+| `command` | Alias for `execute` | `{"command": "cmd /c dir"}` |
+| `close_all` | Close all app windows | (no params) |
+| `create_folder` | Create a directory | `{"path": "C:\\NewFolder"}` |
+| `create_file` | Create a file with content | `{"path": "...", "content": "..."}` |
+| `clear_task_files` | Remove task temp files | (no params) |
+| `install_apps` | Install via winget | `{"apps": ["Mozilla.Firefox"]}` |
+| `open_app` | Open an application | `{"app": "wordpad"}` |
+
+---
+
+## Strict Mode
+
+Strict mode prevents silent fallback degradation during benchmarking. Components that support it:
+
+- **ScrubMiddleware**: `ScrubMiddleware(adapter, strict=True)` -- raises errors if PII scrubbing fails instead of returning unscrubbed data
+- **Workflow pipeline**: `generate_transcript(..., strict=True)` and `extract_workflow(..., strict=True)` -- raises errors instead of returning partial/placeholder results
+- **WAALiveAdapter**: `WAALiveConfig(strict_setup_readiness=True)` -- fails the task before step 0 if setup succeeded but the target app cannot be focused
+
+```python
+# Strict scrub middleware
+adapter = ScrubMiddleware(LocalAdapter(), strict=True)
+
+# Strict workflow extraction
+workflow = extract_workflow(transcript, strict=True)
+```
+
+---
+
+## Pool Execution with External Agents
+
+`pool-run` supports external agents (not just WAA's built-in agent). Pass an `agent_factory` callable to `PoolManager.run()`:
+
+```python
+from openadapt_evals.infrastructure.pool import PoolManager
+from openadapt_evals.agents import PlannerGrounderAgent
+
+def agent_factory():
+    return PlannerGrounderAgent(
+        planner="claude-sonnet-4-20250514",
+        grounder="gpt-4.1-mini",
+        planner_provider="anthropic",
+        grounder_provider="openai",
+    )
+
+manager = PoolManager(vm_manager=vm_manager)
+result = manager.run(tasks=10, agent_factory=agent_factory)
+print(f"Completed: {result.completed}, Failed: {result.failed}")
+```
+
+The `run_full_eval.py` script's `--parallel N` flag uses this mechanism automatically.
+
+---
+
 ## Architecture
 
 ```
@@ -220,6 +567,7 @@ openadapt_evals/
 |   +-- base.py                #   BenchmarkAgent ABC
 |   +-- api_agent.py           #   ApiAgent (Claude, GPT) with demo persistence
 |   +-- planner_grounder_agent.py  # PlannerGrounderAgent (dual-model)
+|   +-- demo_guided_agent.py   #   DemoGuidedAgent (demo-conditioned + self-verification)
 |   +-- retrieval_agent.py     #   RetrievalAugmentedAgent
 |   +-- policy_agent.py        #   PolicyAgent (trained models)
 |   +-- claude_computer_use_agent.py  # Claude CU native agent
@@ -266,13 +614,25 @@ openadapt_evals/
 |   +-- pool_viewer.py         #   Pool results viewer
 |   +-- trace_export.py        #   Training data export (openadapt-ml + lightweight)
 +-- task_config.py             # YAML/JSON custom task definitions
++-- demo_library.py            # DemoLibrary (directory-based demo storage)
 +-- correction_capture.py      # Human correction capture (flywheel)
 +-- correction_store.py        # Correction library (JSON-file-based)
 +-- correction_parser.py       # VLM-based correction parsing
-+-- waa_deploy/                # Docker agent deployment
++-- waa_deploy/                # Docker agent deployment (Dockerfile, evaluate_server)
 +-- server/                    # WAA server extensions (/evaluate endpoint)
 +-- config.py                  # Settings (pydantic-settings, .env)
 +-- __init__.py
+
+scripts/
++-- run_full_eval.py           # Full evaluation runner with resume
++-- collect_distillation_data.py  # Teacher trajectory collection
++-- finetune_distilled.py      # Student model LoRA fine-tuning
++-- run_planner_grounder.py    # Single-task PlannerGrounder runner
++-- record_waa_demos.py        # Record demos from VNC sessions
++-- convert_recording_to_demo.py  # Convert recordings to demo format
++-- train_trl_grpo.py          # TRL GRPO RL training
++-- serve_grounder.sh          # Serve grounder model via vLLM
++-- generate_trace_report.py   # Execution trace report from screenshots
 ```
 
 ---
@@ -503,17 +863,19 @@ openadapt-evals mock --tasks 5
 | File                                | Description                                    |
 |-------------------------------------|------------------------------------------------|
 | `agents/planner_grounder_agent.py` | PlannerGrounderAgent (dual-model, structured)  |
+| `agents/demo_guided_agent.py`     | DemoGuidedAgent (demo-conditioned + self-verify) |
 | `agents/api_agent.py`              | ApiAgent with demo persistence                 |
 | `agents/retrieval_agent.py`        | Auto demo selection                            |
-| `adapters/waa/`                    | WAA live + mock adapters                       |
+| `adapters/waa/`                    | WAA live + mock adapters (15 setup types)      |
 | `adapters/local/adapter.py`        | LocalAdapter (native desktop, no VM)           |
 | `adapters/rl_env.py`              | RLEnvironment (Gymnasium-style RL wrapper)     |
-| `adapters/scrub_middleware.py`     | ScrubMiddleware (PII removal via Presidio)     |
+| `adapters/scrub_middleware.py`     | ScrubMiddleware (PII removal, strict mode)     |
 | `openenv/environment.py`          | WAAOpenEnvEnvironment (OpenEnv-compatible)     |
 | `training/trl_rollout.py`         | TRL GRPO rollout_func                          |
 | `training/areal_workflow.py`      | AReaL AgentWorkflow wrapper                    |
 | `training/trajectory_logger.py`   | SFT data collection from planner calls         |
 | `training/planner_cache.py`       | pHash-based planner response cache             |
+| `demo_library.py`                 | DemoLibrary (directory-based demo storage)     |
 | `workflow/pipeline/`              | 4-pass workflow extraction (scrub/transcript/extract/match) |
 | `workflow/models.py`              | Pydantic models for recordings + workflows     |
 | `task_config.py`                  | YAML/JSON custom task definitions              |
@@ -523,8 +885,12 @@ openadapt-evals mock --tasks 5
 | `benchmarks/vm_cli.py`           | VM/Pool CLI (oa-vm, 50+ commands)              |
 | `benchmarks/trace_export.py`     | Training data export (openadapt-ml + lightweight) |
 | `infrastructure/azure_vm.py`     | AzureVMManager                                 |
-| `infrastructure/pool.py`         | PoolManager for parallel evaluation            |
+| `infrastructure/pool.py`         | PoolManager (parallel eval, external agents)   |
+| `waa_deploy/Dockerfile`          | WAA Docker image (QEMU + Windows 11 + Flask)   |
 | `config.py`                      | Settings (pydantic-settings, .env)             |
+| `scripts/run_full_eval.py`       | Full evaluation runner with resume + parallel  |
+| `scripts/collect_distillation_data.py` | Teacher trajectory collection for SFT    |
+| `scripts/finetune_distilled.py`  | Student model LoRA fine-tuning                 |
 
 ## PyPI Publishing
 
