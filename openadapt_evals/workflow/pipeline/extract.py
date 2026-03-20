@@ -259,6 +259,7 @@ def extract_workflow(
     model: str = "gpt-4.1-mini",
     provider: str = "openai",
     recording_source: RecordingSource = RecordingSource.NATIVE_CAPTURE,
+    strict: bool = False,
 ) -> Workflow:
     """Extract a structured Workflow from an EpisodeTranscript.
 
@@ -270,6 +271,9 @@ def extract_workflow(
         model: VLM model name.
         provider: VLM provider (``"openai"`` or ``"anthropic"``).
         recording_source: Source of the original recording.
+        strict: When True, raise errors instead of falling back to 1:1
+            transcript-to-step mapping. Use during benchmarking/training
+            to ensure VLM extraction is actually working.
 
     Returns:
         A Workflow with WorkflowStep entries derived from the transcript.
@@ -293,16 +297,31 @@ def extract_workflow(
         len(transcript.entries),
     )
 
-    raw = vlm_call(
-        prompt,
-        model=model,
-        provider=provider,
-        max_tokens=4096,
-    )
+    try:
+        raw = vlm_call(
+            prompt,
+            model=model,
+            provider=provider,
+            max_tokens=4096,
+        )
+    except Exception:
+        if strict:
+            raise
+        logger.warning(
+            "VLM call failed for transcript %s, using fallback",
+            transcript.transcript_id,
+            exc_info=True,
+        )
+        return _build_fallback_workflow(transcript, recording_source)
 
     parsed = _parse_extraction_response(raw, transcript)
 
     if parsed is None:
+        if strict:
+            raise ValueError(
+                f"VLM extraction failed to parse response for transcript "
+                f"{transcript.transcript_id}. Raw response: {raw!r:.500}"
+            )
         logger.warning(
             "VLM extraction failed for transcript %s, using fallback",
             transcript.transcript_id,

@@ -52,6 +52,9 @@ class ScrubMiddleware(BenchmarkAdapter):
         scrub_text: Whether to redact detected text PII (default True).
         scrub_images: Whether to redact detected image PII such as faces
             (default True).
+        strict: When True, raise errors instead of silently falling back
+            to unscrubbed data. Use during benchmarking/training to ensure
+            scrubbing is actually active.
     """
 
     def __init__(
@@ -59,10 +62,12 @@ class ScrubMiddleware(BenchmarkAdapter):
         adapter: BenchmarkAdapter,
         scrub_text: bool = True,
         scrub_images: bool = True,
+        strict: bool = False,
     ):
         self._adapter = adapter
         self._scrub_text = scrub_text
         self._scrub_images = scrub_images
+        self._strict = strict
         self._provider = None  # lazy-loaded
         self._provider_load_attempted = False
         self.last_original_screenshot: bytes | None = None
@@ -156,6 +161,8 @@ class ScrubMiddleware(BenchmarkAdapter):
         try:
             return provider.scrub_image(screenshot_bytes)
         except Exception:
+            if self._strict:
+                raise
             logger.warning(
                 "PII scrubbing failed, returning original screenshot",
                 exc_info=True,
@@ -178,6 +185,12 @@ class ScrubMiddleware(BenchmarkAdapter):
             logger.info("PII scrubbing enabled via openadapt-privacy (Presidio)")
             return self._provider
         except ImportError:
+            if self._strict:
+                raise ImportError(
+                    "openadapt-privacy is not installed and strict mode is enabled. "
+                    "PII scrubbing cannot be skipped. "
+                    "Install with: pip install openadapt-privacy"
+                )
             logger.warning(
                 "openadapt-privacy is not installed. "
                 "PII scrubbing is DISABLED — screenshots will pass through unmodified. "

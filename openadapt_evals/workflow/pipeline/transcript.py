@@ -141,6 +141,7 @@ def generate_transcript(
     model: str = "gpt-4.1-mini",
     provider: str = "openai",
     batch_size: int = 6,
+    strict: bool = False,
 ) -> EpisodeTranscript:
     """Generate a natural language transcript from a recording session.
 
@@ -152,6 +153,9 @@ def generate_transcript(
         model: VLM model name.
         provider: VLM provider ("openai" or "anthropic").
         batch_size: Number of actions per VLM call.
+        strict: When True, raise errors instead of returning partial
+            or placeholder results. Use during benchmarking/training
+            to ensure VLM transcript generation is actually working.
 
     Returns:
         EpisodeTranscript with one TranscriptEntry per action.
@@ -178,15 +182,37 @@ def generate_transcript(
             batch_num, idx, end_idx - 1, len(images) if images else 0,
         )
 
-        raw = vlm_call(
-            prompt,
-            images=images,
-            model=model,
-            provider=provider,
-            max_tokens=2048,
-        )
+        try:
+            raw = vlm_call(
+                prompt,
+                images=images,
+                model=model,
+                provider=provider,
+                max_tokens=2048,
+            )
+        except Exception:
+            if strict:
+                raise
+            logger.warning(
+                "VLM call failed for batch %d (actions %d-%d), skipping",
+                batch_num, idx, end_idx - 1,
+                exc_info=True,
+            )
+            idx = end_idx if end_idx >= len(session.actions) else end_idx - overlap
+            batch_num += 1
+            continue
 
         parsed = _parse_transcript_response(raw, len(batch_actions))
+
+        if strict and all(
+            entry.get("vlm_confidence", 1.0) == 0.0
+            and entry.get("narration") == "Action performed"
+            for entry in parsed
+        ):
+            raise ValueError(
+                f"VLM transcript parsing returned only placeholders for batch "
+                f"{batch_num} (actions {idx}-{end_idx - 1}). Raw response: {raw!r:.500}"
+            )
 
         # Create TranscriptEntry objects
         for i, (action, entry_data) in enumerate(zip(batch_actions, parsed)):
