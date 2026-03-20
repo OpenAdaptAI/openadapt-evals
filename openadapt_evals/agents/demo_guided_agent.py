@@ -4,6 +4,10 @@ Wraps any ``BenchmarkAgent`` and augments its observations with demo
 guidance from a ``DemoLibrary``.  After each action, optionally verifies
 the result against the demo's expected next state using a VLM comparison.
 
+Demo-conditioned execution is a well-established approach in the
+imitation learning and learning from demonstrations literature, where
+agent behavior is guided by pre-recorded expert trajectories.
+
 Usage:
     from openadapt_evals.agents import DemoGuidedAgent, PlannerGrounderAgent
     from openadapt_evals.demo_library import DemoLibrary
@@ -18,6 +22,21 @@ Usage:
     agent = DemoGuidedAgent(base_agent=base, demo_library=library)
 
     action = agent.act(observation, task)
+
+Prior Art:
+    - DAgger: Ross et al., "A Reduction of Imitation Learning and
+      Structured Prediction to No-Regret Online Learning", AISTATS 2011.
+      Foundational work on interactive imitation learning with iterative
+      dataset aggregation.
+    - Argall et al., "A Survey of Robot Learning from Demonstration",
+      Robotics and Autonomous Systems, 2009. Comprehensive survey of
+      learning from demonstrations techniques.
+    - Humphreys et al., "A Data-Driven Approach for Learning to Control
+      Computers", ICML 2022. Demo-conditioned evaluation for computer
+      control agents.
+    - Behavioral Cloning: Pomerleau, "ALVINN: An Autonomous Land Vehicle
+      in a Neural Network", NeurIPS 1989. Early demonstration-conditioned
+      policy learning.
 """
 
 from __future__ import annotations

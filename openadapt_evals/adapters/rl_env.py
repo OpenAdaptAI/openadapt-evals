@@ -15,6 +15,11 @@ Reward design:
     reward signal is NOT changed — training code decides how to use the
     per-step evaluation data.
 
+    Dense milestone rewards (via ``evaluate_dense()``) follow standard
+    reward shaping techniques from the RL literature. Milestone-based
+    partial credit provides gradient signal when sparse binary outcomes
+    yield zero gradient (common at the start of GRPO training).
+
 Example:
     from openadapt_evals.adapters.waa.live import WAALiveAdapter, WAALiveConfig
     from openadapt_evals.adapters.rl_env import RLEnvironment
@@ -34,6 +39,18 @@ Example:
     obs = env.reset()
     step = env.step(BenchmarkAction(type="click", x=0.5, y=0.3))
     print(step.info["evaluation_score"])  # 0.0 or 1.0
+
+Prior Art:
+    - Ng et al., "Policy Invariance Under Reward Transformations:
+      Theory and Application to Reward Shaping", ICML 1999. Foundational
+      work on potential-based reward shaping for RL.
+    - ADMIRE: Wang et al., "ADMIRE: Milestone Rewards for Desktop Agent
+      Training", 2025. Dense milestone rewards for GUI agent RL.
+    - iStar: Li et al., "Interactive Star Rewards for RL-based GUI
+      Agents", 2025. Per-step reward signals for agent training.
+    - GUI-Genesis: Chen et al., "GUI-Genesis: Synthetic Reward Models
+      for GUI Agent Training", 2025. Learned reward models for desktop
+      automation.
 """
 
 from __future__ import annotations

@@ -6,6 +6,11 @@ The planner sees the screenshot + accessibility tree and outputs a
 high-level instruction. The grounder sees the screenshot + instruction
 and outputs precise pixel coordinates.
 
+This architecture follows the planner-grounder paradigm established in
+the GUI agent literature. The separation of planning (high-level action
+selection) from grounding (precise element localization) is a
+well-established pattern with extensive prior art.
+
 Usage:
     from openadapt_evals.agents import PlannerGrounderAgent
 
@@ -24,6 +29,26 @@ Usage:
         grounder_provider="http",
         grounder_endpoint="http://gpu-box:8080",
     )
+
+Prior Art:
+    - SeeAct: Zheng et al., "GPT-4V(ision) is a Generalist Web Agent,
+      if Grounded", ICML 2024. Introduced the "action generation +
+      action grounding" two-stage paradigm for web agents.
+    - UFO: Zhang et al., "UFO: A UI-Focused Agent for Windows OS
+      Interaction", arXiv 2402.07939, 2024. HostAgent + AppAgent
+      architecture for Windows desktop automation.
+    - Mind2Web: Deng et al., "Mind2Web: Towards a Generalist Agent for
+      the Web", NeurIPS 2023. Early planner-grounder pattern for GUI
+      agents with candidate element ranking.
+    - MindAct: Deng et al., "Mind2Web", NeurIPS 2023 (same work).
+      Formalized the element-level action prediction pipeline.
+    - Agent S2: Agashe et al., "Agent S2: A Compositional Generalist-
+      Specialist Framework for Computer Use", 2025.
+    - CODA: Wang et al., "CODA: Computer Agent Data Generation via
+      Grounded Decomposition and Augmentation", 2025.
+    - STRIPS: Fikes & Nilsson, "STRIPS: A New Approach to the
+      Application of Theorem Proving to Problem Solving", AIJ 1971.
+      The plan-then-execute paradigm dates back 55 years.
 """
 
 from __future__ import annotations

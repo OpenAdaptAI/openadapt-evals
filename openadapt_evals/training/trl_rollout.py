@@ -8,6 +8,11 @@ runs multi-step episodes against the environment, collects action tokens
 and logprobs, computes dense rewards via milestones, and returns everything
 in the format TRL expects.
 
+GRPO (Group Relative Policy Optimization) training uses group-level
+advantage estimation from multiple rollouts of the same prompt, as
+introduced in the DeepSeek-Math work. This module integrates that
+algorithm with live desktop environments via TRL's rollout API.
+
 Usage with TRL:
     from trl import GRPOConfig, GRPOTrainer
     from openadapt_evals.training.trl_rollout import make_waa_rollout_func
@@ -35,6 +40,20 @@ Usage with mock adapter (no VM):
         adapter=WAAMockAdapter(),
         task_configs=task_configs,
     )
+
+Prior Art:
+    - GRPO: Shao et al., "DeepSeekMath: Pushing the Limits of
+      Mathematical Reasoning in Open Language Models", arXiv 2402.03300,
+      2024. Introduced Group Relative Policy Optimization.
+    - TRL: Hugging Face, "TRL: Transformer Reinforcement Learning",
+      https://github.com/huggingface/trl. Open-source library providing
+      GRPOTrainer and the experimental rollout_func API.
+    - PPO for LLMs: Schulman et al., "Proximal Policy Optimization
+      Algorithms", arXiv 2017. Foundation for policy gradient methods
+      in language model fine-tuning.
+    - RLHF: Ouyang et al., "Training Language Models to Follow
+      Instructions with Human Feedback", NeurIPS 2022. Established the
+      RL fine-tuning paradigm for language models.
 """
 
 from __future__ import annotations
