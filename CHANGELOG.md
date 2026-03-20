@@ -1,6 +1,34 @@
 # CHANGELOG
 
 
+## v0.48.2 (2026-03-20)
+
+### Bug Fixes
+
+- Add strict mode to prevent silent fallback degradation during benchmarking
+  ([#154](https://github.com/OpenAdaptAI/openadapt-evals/pull/154),
+  [`62934ab`](https://github.com/OpenAdaptAI/openadapt-evals/commit/62934ab54cbec4cadbbf6ad2ba691814d5fa732f))
+
+When strict=True, components that previously degraded silently now raise errors instead, ensuring
+  benchmarking/training runs use the intended system configuration (e.g., PII scrubbing active, VLM
+  extraction working).
+
+- ScrubMiddleware: raise ImportError if openadapt-privacy missing, re-raise on scrubbing failure -
+  extract_workflow(): raise ValueError on VLM parse failure, re-raise on VLM call failure -
+  generate_transcript(): re-raise on VLM call failure, raise ValueError if parser returns only
+  placeholders
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Documentation
+
+- Add openadapt-ml migration analysis report
+  ([#151](https://github.com/OpenAdaptAI/openadapt-evals/pull/151),
+  [`101289b`](https://github.com/OpenAdaptAI/openadapt-evals/commit/101289b9516e144867f370ca76265d1e59b4dd9e))
+
+Co-authored-by: Wright Bot <wright@openadaptai.noreply.github.com>
+
+
 ## v0.48.1 (2026-03-20)
 
 ### Bug Fixes
