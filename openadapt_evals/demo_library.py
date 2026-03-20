@@ -4,6 +4,11 @@ Stores demonstrations as sequences of (screenshot, action, metadata) on disk.
 Retrieval uses sequential step alignment with visual similarity fallback.
 No embeddings or vector DBs -- just files on disk.
 
+Demonstration libraries for GUI agents follow the retrieval-augmented
+approach in the agent literature, where pre-recorded expert trajectories
+are stored, indexed, and retrieved at inference time to guide agent
+behavior on similar tasks.
+
 Usage:
     from openadapt_evals.demo_library import DemoLibrary
 
@@ -12,6 +17,20 @@ Usage:
 
     guidance = library.align_step("notepad_1", current_screenshot, step_index=2)
     print(guidance.instruction)
+
+Prior Art:
+    - AgentTrek: Li et al., "AgentTrek: Agent Trajectory Synthesis via
+      Guiding Replay with Web Tutorials", arXiv 2412.09605, 2024.
+      Retrieval-augmented trajectory synthesis for web agents.
+    - WebAgent: Gur et al., "A Real-World WebAgent with Planning, Long
+      Context Understanding, and Program Synthesis", ICLR 2024.
+      Demonstration-augmented web agent architecture.
+    - RCI: Kim et al., "Language Models can Solve Computer Tasks",
+      NeurIPS 2023. Recursive Criticism and Improvement with
+      demonstration conditioning.
+    - Retrieval-augmented generation: Lewis et al., "Retrieval-Augmented
+      Generation for Knowledge-Intensive NLP Tasks", NeurIPS 2020.
+      General RAG paradigm applied here to agent trajectories.
 """
 
 from __future__ import annotations
