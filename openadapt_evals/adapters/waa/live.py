@@ -1713,6 +1713,14 @@ class WAALiveAdapter(BenchmarkAdapter):
             )
 
         if entry_type == "install_apps":
+            # NOTE: This is a safety net, not a normal code path. The standard
+            # WAA Docker image comes with all required apps pre-installed
+            # (Chrome, LibreOffice, Notepad++, VLC, etc.) during image build.
+            # For the 154 standard WAA tasks, install_apps should never need
+            # to fire. This handler exists only for:
+            #   - Custom tasks requiring non-standard software
+            #   - Stripped-down or freshly-installed Windows images
+            #   - Recovery after app uninstall/corruption
             apps = params.get("apps", params.get("app", []))
             if isinstance(apps, str):
                 apps = [apps]
