@@ -735,7 +735,7 @@ class PoolManager:
                 f"--agent {agent} --model {model} "
                 f"--exp_name {exp_name}_{worker.name} "
                 f"--worker_id {worker_idx} --num_workers {total_workers} "
-                f"--emulator_ip 172.30.0.2 {test_meta_arg}"
+                f"--emulator_ip 20.20.20.21 {test_meta_arg}"
                 f"> {log_file} 2>&1; echo $? > {exit_file}"
             )
             ssh_run(

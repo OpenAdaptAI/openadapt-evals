@@ -2,7 +2,7 @@
 """Lightweight evaluate endpoint that runs inside the WAA Docker container.
 
 Imports WAA's evaluator modules (getters + metrics) and exposes them via Flask.
-The PythonController connects to the Windows VM at 172.30.0.2:5000.
+The PythonController connects to the Windows VM at 20.20.20.21:5000.
 
 Deploy:
     docker cp evaluate_server.py winarena:/tmp/
@@ -35,7 +35,7 @@ from evaluators import getters as getter_module
 from evaluators import metrics as metric_module
 
 # Controller pointing to Windows VM inside QEMU
-controller = PythonController(vm_ip="172.30.0.2")
+controller = PythonController(vm_ip="20.20.20.21")
 
 TASK_EXAMPLES_PATH = "/client/evaluation_examples_windows"
 
@@ -77,7 +77,7 @@ def get_task(task_id):
 # Task setup handlers — mirror WAA's SetupController logic
 # ---------------------------------------------------------------------------
 
-WAA_SERVER = "http://172.30.0.2:5000"
+WAA_SERVER = "http://20.20.20.21:5000"
 SETUP_CACHE = "/tmp/setup_cache"
 os.makedirs(SETUP_CACHE, exist_ok=True)
 
@@ -653,7 +653,7 @@ def _run_postconfig_cmd(cmd):
         try:
             import requests as req
             req.post(
-                "http://172.30.0.2:5000/setup/activate_window",
+                "http://20.20.20.21:5000/setup/activate_window",
                 json={"window_name": window_name, "strict": strict},
                 timeout=10,
             )
@@ -739,5 +739,5 @@ def _run_metric(func_name, actual, expected):
 if __name__ == "__main__":
     logger.info("Starting evaluate server on port 5050")
     logger.info(f"WAA evaluators loaded from /client/desktop_env/evaluators/")
-    logger.info(f"Controller pointing to 172.30.0.2:5000")
+    logger.info(f"Controller pointing to 20.20.20.21:5000")
     app.run(host="0.0.0.0", port=5050, debug=False)

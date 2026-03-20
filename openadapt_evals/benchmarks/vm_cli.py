@@ -1898,7 +1898,7 @@ def cmd_test_golden_image(args):
     while True:
         result = ssh_run(
             ip,
-            "docker exec winarena curl -s --max-time 5 http://172.30.0.2:5000/probe 2>/dev/null || echo FAIL",
+            "docker exec winarena curl -s --max-time 5 http://20.20.20.21:5000/probe 2>/dev/null || echo FAIL",
         )
 
         if "FAIL" not in result.stdout and result.stdout.strip():
@@ -2134,7 +2134,7 @@ def cmd_test_waa_tasks(args):
     log("TEST-TASKS", "Fetching task list from WAA server...")
     result = ssh_run(
         ip,
-        "docker exec winarena curl -s --max-time 10 http://172.30.0.2:5000/tasks 2>/dev/null || echo 'FAIL'",
+        "docker exec winarena curl -s --max-time 10 http://20.20.20.21:5000/tasks 2>/dev/null || echo 'FAIL'",
     )
 
     if "FAIL" in result.stdout or not result.stdout.strip():
@@ -2461,7 +2461,7 @@ def cmd_probe(args):
         # Check via SSH - must run curl INSIDE container to reach Docker network
         result = ssh_run(
             ip,
-            "docker exec winarena curl -s --max-time 5 http://172.30.0.2:5000/probe 2>/dev/null || echo FAIL",
+            "docker exec winarena curl -s --max-time 5 http://20.20.20.21:5000/probe 2>/dev/null || echo FAIL",
         )
 
         if "FAIL" not in result.stdout and result.stdout.strip():
@@ -2534,7 +2534,7 @@ def cmd_run(args):
     log("RUN", "Checking WAA server...")
     result = ssh_run(
         ip,
-        "docker exec winarena curl -s --max-time 5 http://172.30.0.2:5000/probe 2>/dev/null || echo FAIL",
+        "docker exec winarena curl -s --max-time 5 http://20.20.20.21:5000/probe 2>/dev/null || echo FAIL",
     )
     if "FAIL" in result.stdout or not result.stdout.strip():
         log("RUN", "ERROR: WAA server not ready. Run 'probe --wait' first.")
@@ -3415,7 +3415,7 @@ def cmd_logs(args):
                 "ssh",
                 *SSH_OPTS,
                 f"azureuser@{ip}",
-                "docker exec winarena curl -s --max-time 5 http://172.30.0.2:5000/probe 2>/dev/null && echo ' (READY)' || echo 'Not ready (Windows installing - check VNC for progress)'",
+                "docker exec winarena curl -s --max-time 5 http://20.20.20.21:5000/probe 2>/dev/null && echo ' (READY)' || echo 'Not ready (Windows installing - check VNC for progress)'",
             ]
         )
 
@@ -4999,7 +4999,7 @@ def cmd_run_azure_ml_auto(args):
         # Check probe endpoint
         result = ssh_run(
             ip,
-            "docker exec winarena curl -s --max-time 5 http://172.30.0.2:5000/probe 2>/dev/null || echo FAIL",
+            "docker exec winarena curl -s --max-time 5 http://20.20.20.21:5000/probe 2>/dev/null || echo FAIL",
         )
 
         if "FAIL" not in result.stdout and result.stdout.strip():

@@ -53,13 +53,14 @@ Dockerfile patches XML for 11e, but runtime uses 11's XML (unpatched).
 1. Windows stuck at installation prompt (see Issue #1)
 2. Windows installed but install.bat never ran (FirstLogonCommands failed)
 3. Python/Flask not installed in Windows
-4. Network misconfiguration (wrong IP: should be 172.30.0.2)
+4. Network misconfiguration (VM should be at 20.20.20.21 via the WAA bridge)
 
 **Fix Checklist**:
 - [ ] Check VNC at localhost:8006 - what does Windows show?
 - [ ] If at desktop, check if install.bat ran (look for WAA folder)
 - [ ] Check container logs: `docker logs winarena`
-- [ ] Verify network: container should use `--net=waa-net` with IP 172.30.0.2
+- [ ] Verify network: `docker exec winarena ping -c1 20.20.20.21` should work
+- [ ] Verify bridge: `docker exec winarena ip link show dockerbridge` should exist
 
 **Beads Tasks**: `bd list --labels=waa,timeout`
 

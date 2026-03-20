@@ -51,14 +51,12 @@ so no product key prompts.
 
 ### 3. IP address fix (3 lines)
 
-**File**: `vendor/WindowsAgentArena/src/win-arena-container/Dockerfile-WinArena`
-```dockerfile
-RUN sed -i 's|20\.20\.20\.21|172.30.0.2|g' /entry_setup.sh /entry.sh /start_client.sh && \
-    find /client -name "*.py" -exec sed -i 's|20\.20\.20\.21|172.30.0.2|g' {} \;
-```
+**File**: `openadapt_evals/waa_deploy/Dockerfile`
 
-**Why**: Modern dockurr/windows (v5.07+) changed the Windows VM IP from
-`20.20.20.21` to `172.30.0.2`. Microsoft's scripts hardcode the old IP.
+The Dockerfile copies `waa_network.sh` to `/run/network.sh`, overriding the
+dockurr/windows version. This restores the WAA bridge setup with the VM at
+`20.20.20.21`, matching what all WAA scripts expect natively. No IP patching
+with sed is needed.
 
 ## Quick Start
 

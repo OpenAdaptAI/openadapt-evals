@@ -143,7 +143,7 @@ oa-vm pool-cleanup -y
 
 ### Docker / WAA Container
 
-**CRITICAL: `--cap-add NET_ADMIN` is REQUIRED.** Without it, QEMU's network bridge cannot form, the Windows VM is unreachable at `172.30.0.2`, and port 5000 (WAA Flask) never responds. The container *appears* to run (port 5050 works on the Linux side) but the WAA server inside Windows is inaccessible.
+**CRITICAL: `--cap-add NET_ADMIN` is REQUIRED.** Without it, QEMU's network bridge cannot form, the Windows VM is unreachable at `20.20.20.21`, and port 5000 (WAA Flask) never responds. The container *appears* to run (port 5050 works on the Linux side) but the WAA server inside Windows is inaccessible.
 
 ```bash
 # Build the WAA image

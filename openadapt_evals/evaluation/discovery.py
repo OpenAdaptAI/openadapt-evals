@@ -197,7 +197,7 @@ class VMIPDiscovery:
             pass
 
         # Check for standard Docker bridge IP
-        docker_ip = "172.30.0.2"  # Standard WAA container IP
+        docker_ip = "20.20.20.21"  # Standard WAA container IP
         return DiscoveryResult(
             ip=docker_ip,
             method=DiscoveryMethod.DOCKER,

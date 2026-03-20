@@ -163,7 +163,7 @@ oa-vm pool-wait --cloud aws
 oa-vm pool-wait --cloud aws --timeout 45
 ```
 
-This starts the WAA Docker container (with `--device=/dev/kvm` for QEMU) and polls the WAA Flask server at `http://172.30.0.2:5000/probe` inside the container until it responds. On first boot, Windows 11 is downloaded and installed automatically.
+This starts the WAA Docker container (with `--device=/dev/kvm` for QEMU) and polls the WAA Flask server at `http://20.20.20.21:5000/probe` inside the container until it responds. On first boot, Windows 11 is downloaded and installed automatically.
 
 ### Step 3: Set up SSH tunnels
 
@@ -387,7 +387,7 @@ First boot takes approximately 35 minutes (Windows 11 is downloaded and installe
 ```bash
 # Watch storage grow (Windows ISO download + install)
 ssh ubuntu@$VM_IP "
-  while ! docker exec winarena curl -s --max-time 5 http://172.30.0.2:5000/probe 2>/dev/null | grep -q ok; do
+  while ! docker exec winarena curl -s --max-time 5 http://20.20.20.21:5000/probe 2>/dev/null | grep -q ok; do
     STORAGE=\$(docker exec winarena du -sh /storage/ 2>/dev/null | cut -f1)
     QEMU_UP=\$(docker exec winarena sh -c 'QPID=\$(pgrep -f qemu-system 2>/dev/null | head -1); [ -n \"\$QPID\" ] && ps -o etime= -p \$QPID 2>/dev/null | tr -d \" \" || echo N/A')
     echo \"\$(date +%H:%M:%S) Storage: \$STORAGE | QEMU uptime: \$QEMU_UP\"

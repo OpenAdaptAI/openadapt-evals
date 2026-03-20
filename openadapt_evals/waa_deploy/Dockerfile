@@ -16,9 +16,9 @@
 #
 #   # Run the container
 #   # CRITICAL: --cap-add NET_ADMIN is REQUIRED for the network bridge between
-#   # the Linux container and the Windows QEMU guest. Without it, the container
-#   # falls back to user-mode networking and cannot reach the Windows VM at
-#   # 20.20.20.21. Port 5000 (WAA Flask server inside Windows) will never be
+#   # the Linux container and the Windows QEMU guest. Without it, the bridge
+#   # cannot be created and the container falls back to user-mode networking,
+#   # making the Windows VM unreachable. Port 5000 (WAA Flask server) will never be
 #   # accessible. Port 5050 (evaluate server on Linux side) will work, which
 #   # makes the failure confusing — the container appears to be running but
 #   # the WAA server is unreachable.
@@ -107,18 +107,23 @@ RUN for xml in /run/assets/win11x64.xml /run/assets/win11x64-enterprise-eval.xml
 RUN printf '#!/bin/bash\n/usr/bin/tini -s /run/entry.sh\n' > /start_vm.sh && chmod +x /start_vm.sh
 
 # -----------------------------------------------------------------------------
-# Patch IP addresses: official uses 20.20.20.21, dockurr/windows uses 172.30.0.2
+# Replace dockurr/windows network.sh with WAA-compatible version
 # -----------------------------------------------------------------------------
+# dockurr/windows (qemux/qemu:7.29) uses dynamic IP assignment (172.30.x.x)
+# and a bridge named "docker", which is incompatible with WAA's hardcoded
+# 20.20.20.21 in entry.sh, entry_setup.sh, and the Python client code.
+#
+# WAA's network.sh creates bridge "dockerbridge" at 20.20.20.1 and gives the
+# QEMU VM 20.20.20.21 via DNSMASQ DHCP -- matching what all WAA scripts expect.
+#
+# This replaces the IP-patching sed approach (20.20.20.21 -> 172.30.0.2) which
+# was incomplete: it patched WAA scripts but not the underlying QEMU network
+# setup, causing the VM to be unreachable.
+COPY waa_network.sh /run/network.sh
+RUN chmod 755 /run/network.sh && echo "Installed WAA-compatible network.sh (VM at 20.20.20.21)"
 
-# Patch entry scripts (must work - these files were just copied)
-RUN sed -i 's|20.20.20.21|172.30.0.2|g' /entry_setup.sh && \
-    sed -i 's|20.20.20.21|172.30.0.2|g' /entry.sh && \
-    sed -i 's|20.20.20.21|172.30.0.2|g' /start_client.sh && \
-    echo "Patched entry scripts"
-
-# Patch client Python files
-RUN find /client -name "*.py" -exec sed -i 's|20.20.20.21|172.30.0.2|g' {} \; && \
-    echo "Patched client Python files"
+# No IP patching needed -- WAA scripts use 20.20.20.21 natively and the
+# WAA network.sh configures DNSMASQ to assign that IP to the QEMU VM.
 
 # Add timeout to OpenAI API calls (prevents infinite hangs)
 RUN sed -i 's|openai.OpenAI(api_key=self.api_key)|openai.OpenAI(api_key=self.api_key, timeout=120.0)|' \
@@ -138,7 +143,7 @@ COPY api_agent.py /client/mm_agents/api_agent.py
 # -----------------------------------------------------------------------------
 # Deploy evaluate server (runs on Docker Linux side, NOT inside Windows)
 # The evaluate server imports WAA evaluator modules from /client/desktop_env/
-# and connects to the Windows VM at 172.30.0.2:5000 via PythonController.
+# and connects to the Windows VM at 20.20.20.21:5000 via PythonController.
 # It exposes /evaluate and /task/<task_id> endpoints on port 5050.
 # -----------------------------------------------------------------------------
 

@@ -17,7 +17,7 @@ Architecture::
                (QEMU monitor telnet on port 7100)
 
 After reset, the container's ``entry_setup.sh`` automatically polls
-``172.30.0.2:5000/probe`` and the WAA Flask server comes back up in
+``20.20.20.21:5000/probe`` and the WAA Flask server comes back up in
 ~90 seconds.
 
 Usage::
