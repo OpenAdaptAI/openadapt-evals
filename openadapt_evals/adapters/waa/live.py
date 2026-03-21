@@ -353,6 +353,13 @@ class WAALiveConfig:
         max_steps: Default maximum steps per task.
         action_delay: Delay after actions in seconds (for UI to settle).
         timeout: Request timeout in seconds.
+        evaluate_timeout: Timeout in seconds for /evaluate requests. WAA
+            evaluators may need to reach the Windows VM (172.30.0.2) to run
+            getters/metrics, which can be slow. Defaults to 180s.
+        evaluate_retries: Number of retry attempts for /evaluate requests.
+            Uses exponential backoff between retries. Defaults to 3.
+        evaluate_retry_base_delay: Base delay in seconds between /evaluate
+            retries. Actual delay is base * 2^(attempt-1). Defaults to 5.0.
         waa_examples_path: Path to WAA evaluation_examples_windows directory
             for loading task configs with evaluator specs. If not set, tasks
             are loaded from server or created as minimal placeholders.
@@ -377,6 +384,9 @@ class WAALiveConfig:
     max_steps: int = 15
     action_delay: float = 0.5
     timeout: float = 90.0
+    evaluate_timeout: float = 180.0  # Separate timeout for /evaluate (WAA evaluators can be slow)
+    evaluate_retries: int = 3  # Number of retries for /evaluate with exponential backoff
+    evaluate_retry_base_delay: float = 5.0  # Base delay (seconds) between retries
     waa_examples_path: str | None = None  # Auto-detected from common paths + WAA_EXAMPLES_PATH env
     clean_desktop: bool = False
     force_tray_icons: bool = False
@@ -934,6 +944,69 @@ class WAALiveAdapter(BenchmarkAdapter):
                 f"Failed to connect to WAA server for PowerShell execution: {e}"
             ) from e
 
+    def _evaluate_request(
+        self,
+        endpoint: str,
+        eval_request: dict,
+        timeout: float,
+    ) -> "requests.Response":
+        """Send a single evaluate request with retry logic.
+
+        Retries on timeout and connection errors with exponential backoff.
+        Returns the first successful response or raises the last exception.
+
+        Args:
+            endpoint: Full URL of the /evaluate endpoint.
+            eval_request: JSON payload.
+            timeout: Per-request timeout in seconds.
+
+        Returns:
+            The HTTP response (may be non-200).
+
+        Raises:
+            requests.Timeout: If all retries timed out.
+            requests.RequestException: If all retries failed with connection errors.
+        """
+        import requests
+
+        max_attempts = max(1, self.config.evaluate_retries)
+        last_exc: Exception | None = None
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                logger.info(
+                    "Evaluate request attempt %d/%d to %s (timeout=%.0fs)",
+                    attempt, max_attempts, endpoint, timeout,
+                )
+                resp = requests.post(
+                    endpoint,
+                    json=eval_request,
+                    timeout=timeout,
+                )
+                # Got a response (even if non-200) -- return it, don't retry
+                # HTTP errors like 404/500 are not transient and won't benefit
+                # from retry; the caller handles them.
+                return resp
+
+            except (requests.Timeout, requests.ConnectionError) as e:
+                last_exc = e
+                error_type = "timed out" if isinstance(e, requests.Timeout) else "connection error"
+                if attempt < max_attempts:
+                    delay = self.config.evaluate_retry_base_delay * (2 ** (attempt - 1))
+                    logger.warning(
+                        "Evaluate %s on attempt %d/%d to %s, retrying in %.1fs: %s",
+                        error_type, attempt, max_attempts, endpoint, delay, e,
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.error(
+                        "Evaluate %s on attempt %d/%d to %s (final): %s",
+                        error_type, attempt, max_attempts, endpoint, e,
+                    )
+
+        # All retries exhausted -- re-raise the last exception
+        raise last_exc  # type: ignore[misc]
+
     def evaluate(self, task: BenchmarkTask) -> BenchmarkResult:
         """Evaluate current state against task success criteria.
 
@@ -943,6 +1016,12 @@ class WAALiveAdapter(BenchmarkAdapter):
         If the task has an evaluator config in raw_config, it's sent to
         the server. If the /evaluate endpoint is not available, falls back
         to a simple heuristic based on actions taken.
+
+        Uses ``evaluate_timeout`` (default 180s) instead of the general
+        ``timeout`` (90s) because WAA evaluators often need to reach the
+        Windows VM at 172.30.0.2 to run getters/metrics, which can be slow.
+        Retries up to ``evaluate_retries`` times (default 3) with exponential
+        backoff on timeout or connection errors.
 
         Args:
             task: Task to evaluate.
@@ -971,14 +1050,11 @@ class WAALiveAdapter(BenchmarkAdapter):
         # fall back to WAA server's /evaluate endpoint
         evaluate_base = self.config.evaluate_url or self.config.server_url
         evaluate_endpoint = f"{evaluate_base}/evaluate"
+        eval_timeout = self.config.evaluate_timeout
 
-        # Try the /evaluate endpoint
+        # Try the /evaluate endpoint (with retries on timeout/connection errors)
         try:
-            resp = requests.post(
-                evaluate_endpoint,
-                json=eval_request,
-                timeout=self.config.timeout,
-            )
+            resp = self._evaluate_request(evaluate_endpoint, eval_request, eval_timeout)
 
             if resp.status_code == 200:
                 result = resp.json()
@@ -1003,10 +1079,8 @@ class WAALiveAdapter(BenchmarkAdapter):
                         evaluate_endpoint, fallback_url,
                     )
                     try:
-                        resp2 = requests.post(
-                            f"{fallback_url}/evaluate",
-                            json=eval_request,
-                            timeout=self.config.timeout,
+                        resp2 = self._evaluate_request(
+                            f"{fallback_url}/evaluate", eval_request, eval_timeout,
                         )
                         if resp2.status_code == 200:
                             # Cache the working URL for future calls
@@ -1041,18 +1115,24 @@ class WAALiveAdapter(BenchmarkAdapter):
                 )
 
         except requests.Timeout:
-            logger.error("Evaluation request timed out")
+            logger.error(
+                "Evaluation request timed out after %d retries (timeout=%.0fs each)",
+                self.config.evaluate_retries, eval_timeout,
+            )
             return BenchmarkResult(
                 task_id=task.task_id,
                 success=False,
                 score=0.0,
                 num_steps=self._step_count,
-                reason="Evaluation timed out",
+                reason=(
+                    f"Evaluation timed out after {self.config.evaluate_retries} "
+                    f"retries ({eval_timeout:.0f}s timeout each)"
+                ),
                 error_type="infrastructure",
             )
 
         except requests.RequestException as e:
-            logger.error(f"Evaluation request error: {e}")
+            logger.error(f"Evaluation request error after retries: {e}")
             result = self._evaluate_fallback(task)
             result.error_type = "infrastructure"
             return result
