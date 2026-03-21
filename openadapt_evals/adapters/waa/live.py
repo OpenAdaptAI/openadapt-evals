@@ -664,34 +664,30 @@ class WAALiveAdapter(BenchmarkAdapter):
 
         import requests
 
-        # Try to close all windows for clean state via /execute_windows
-        try:
-            close_cmd = (
-                "import subprocess; "
-                "subprocess.run("
-                "['powershell', '-Command', "
-                "'Get-Process | Where-Object {$_.MainWindowTitle -ne \\\"\\\"} | "
-                "ForEach-Object { $_.CloseMainWindow() }'], "
-                "timeout=15)"
-            )
-            resp = requests.post(
-                f"{self.config.server_url}/execute_windows",
-                json={"command": close_cmd},
-                timeout=10.0,
-            )
-            if resp.status_code == 200:
-                logger.info("Closed all windows for clean state")
-            else:
-                logger.warning("close_all failed: HTTP %s", resp.status_code)
-        except Exception as e:
-            logger.warning(f"Failed to close windows (non-fatal): {e}")
-
-        # Optionally apply deterministic desktop policy before task setup.
-        if self.config.clean_desktop or self.config.force_tray_icons:
+        # Close windows and dismiss notifications ONLY if explicitly requested.
+        # The close_all and notification cleanup commands can crash the WAA Flask
+        # server (PowerShell Get-Process hangs, taskkill blocks), leaving the
+        # server unresponsive for the rest of the run.
+        if self.config.clean_desktop:
+            try:
+                close_cmd = (
+                    "import subprocess; "
+                    "subprocess.run("
+                    "['powershell', '-Command', "
+                    "'Get-Process | Where-Object {$_.MainWindowTitle -ne \\\"\\\"} | "
+                    "ForEach-Object { $_.CloseMainWindow() }'], "
+                    "timeout=10)"
+                )
+                resp = requests.post(
+                    f"{self.config.server_url}/execute_windows",
+                    json={"command": close_cmd},
+                    timeout=10.0,
+                )
+                if resp.status_code == 200:
+                    logger.info("Closed all windows for clean state")
+            except Exception as e:
+                logger.warning("close_all failed (non-fatal): %s", e)
             self._apply_clean_desktop_policy(requests)
-        else:
-            # Best-effort cleanup even when full clean policy is disabled.
-            self._dismiss_notifications(requests)
 
         # LibreOffice can surface a modal "Document Recovery" dialog after
         # dirty shutdowns. Pre-clean recovery state before setup to avoid
