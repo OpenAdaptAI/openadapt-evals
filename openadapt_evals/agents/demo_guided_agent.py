@@ -250,6 +250,8 @@ class DemoGuidedAgent(BenchmarkAgent):
             "step_index": guidance.step_index,
             "confidence": guidance.confidence,
             "total_demo_steps": guidance.total_demo_steps,
+            "visual_alignment_used": guidance.visual_alignment_used,
+            "visual_distance": guidance.visual_distance,
         }
 
         return action

@@ -1,8 +1,11 @@
 """Directory-based demonstration library for demo-guided execution.
 
 Stores demonstrations as sequences of (screenshot, action, metadata) on disk.
-Retrieval uses sequential step alignment with visual similarity fallback.
-No embeddings or vector DBs -- just files on disk.
+Retrieval uses perceptual hash (pHash) visual similarity alignment to find the
+demo step whose screenshot is most similar to the agent's current screen state.
+Falls back to sequential step index alignment when no screenshot is provided
+or imagehash is not installed.  No embeddings or vector DBs -- just files on
+disk and pHash comparison.
 
 Supports optional VLM-based element description enrichment: instead of
 returning raw coordinate instructions like ``CLICK(0.960, 0.066)``, enriched
@@ -49,6 +52,7 @@ Prior Art:
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import uuid
@@ -58,6 +62,14 @@ from pathlib import Path
 from typing import Any
 
 from openadapt_evals.adapters.base import BenchmarkAction
+
+try:
+    import imagehash
+    from PIL import Image
+
+    _HAS_IMAGEHASH = True
+except ImportError:
+    _HAS_IMAGEHASH = False
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +95,11 @@ class DemoStep:
     # passing ``descriptions`` to ``add_demo()``.  Empty string if not
     # enriched.
     description: str = ""
+
+    # Cached perceptual hash for visual similarity alignment.
+    # Not serialized to demo.json -- computed lazily by
+    # ``DemoLibrary._ensure_demo_phashes()``.
+    _phash: Any = field(default=None, repr=False, compare=False)
 
 
 @dataclass
@@ -121,6 +138,11 @@ class DemoGuidance:
     total_demo_steps: int  # total steps in the demo
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    # Visual alignment metadata -- populated when align_step() uses
+    # perceptual hash matching instead of sequential index.
+    visual_alignment_used: bool = False
+    visual_distance: float | None = None  # pHash Hamming distance (lower=closer)
+
     def to_prompt_text(self) -> str:
         """Format guidance as text suitable for injection into an agent prompt.
 
@@ -146,6 +168,18 @@ class DemoGuidance:
             "This is guidance, not a rigid script."
         )
         return "\n".join(lines)
+
+
+def _demo_to_dict(demo: Demo) -> dict[str, Any]:
+    """Serialize a Demo to a dict, stripping non-serializable internal fields.
+
+    Removes ``DemoStep._phash`` which is a cached runtime value (an
+    ``imagehash.ImageHash`` object) that should not be persisted.
+    """
+    data = asdict(demo)
+    for step_dict in data.get("steps", []):
+        step_dict.pop("_phash", None)
+    return data
 
 
 def _empty_guidance(step_index: int = 0) -> DemoGuidance:
@@ -295,7 +329,7 @@ class DemoLibrary:
         # Save demo.json
         demo_json_path = demo_dir / "demo.json"
         with open(demo_json_path, "w") as f:
-            json.dump(asdict(demo), f, indent=2)
+            json.dump(_demo_to_dict(demo), f, indent=2)
 
         logger.info(
             "Saved demo %s for task %s (%d steps)",
@@ -396,11 +430,20 @@ class DemoLibrary:
         current_screenshot: bytes | None,
         step_index: int,
         current_resolution: tuple[int, int] | None = None,
+        use_visual_alignment: bool = True,
     ) -> DemoGuidance:
         """Get demo guidance for a specific step.
 
-        Uses simple sequential alignment (step_index) with visual
-        similarity fallback when the step_index exceeds the demo length.
+        When *use_visual_alignment* is ``True`` and *current_screenshot*
+        is provided, alignment uses perceptual hash (pHash) similarity
+        to find the demo step whose screenshot is most similar to the
+        current screen state.  This is critical when the agent takes a
+        different number of steps than the demo -- sequential step index
+        alignment breaks, but the visual state still matches.
+
+        Falls back to sequential ``step_index`` alignment when visual
+        alignment is disabled, no screenshot is provided, or
+        ``imagehash`` is not installed.
 
         When VLM-enriched descriptions are available, the returned
         instruction uses the description instead of raw coordinate
@@ -414,14 +457,20 @@ class DemoLibrary:
 
         Args:
             task_id: Task identifier.
-            current_screenshot: Current screenshot bytes (for visual
-                similarity fallback, currently unused -- reserved for
-                future perceptual hash matching).
+            current_screenshot: Current screenshot bytes.  When provided
+                with *use_visual_alignment=True*, enables pHash-based
+                demo step matching instead of sequential index.
             step_index: Current step index in the agent's execution.
+                Used as fallback when visual alignment is disabled or
+                unavailable.
             current_resolution: Optional ``(width, height)`` of the
                 agent's current screen.  When provided and the demo has
                 stored resolution metadata, coordinates are
                 proportionally normalized.
+            use_visual_alignment: Whether to use perceptual hash
+                similarity for step alignment.  Defaults to ``True``.
+                Set to ``False`` to force sequential index alignment
+                (original behavior).
 
         Returns:
             DemoGuidance with the demo's recommendation for this step.
@@ -434,8 +483,32 @@ class DemoLibrary:
         if total_steps == 0:
             return _empty_guidance(step_index)
 
-        # Sequential alignment: use step_index directly
-        if step_index < total_steps:
+        # --- Visual similarity alignment ------------------------------------
+        visual_alignment_used = False
+        visual_distance: float | None = None
+        demo_dir = self._demo_dir(task_id, demo.demo_id)
+
+        if (
+            use_visual_alignment
+            and current_screenshot is not None
+            and _HAS_IMAGEHASH
+        ):
+            matched_idx, distance = self._find_closest_demo_step(
+                current_screenshot, demo, demo_dir,
+            )
+            step = demo.steps[matched_idx]
+            visual_alignment_used = True
+            visual_distance = float(distance)
+            # Confidence: distance 0 -> 1.0, distance 32 -> 0.5,
+            # distance 64 -> 0.0.  pHash is 64-bit so max distance=64.
+            confidence = max(0.0, 1.0 - distance / 64.0)
+            logger.info(
+                "Visual alignment: step_index=%d matched demo step %d "
+                "(distance=%d, confidence=%.2f) for task %s",
+                step_index, matched_idx, distance, confidence, task_id,
+            )
+        elif step_index < total_steps:
+            # Sequential alignment: use step_index directly
             step = demo.steps[step_index]
             confidence = 1.0
         else:
@@ -450,7 +523,6 @@ class DemoLibrary:
             )
 
         # Resolve screenshot paths
-        demo_dir = self._demo_dir(task_id, demo.demo_id)
         screenshot_path = str(demo_dir / step.screenshot_path) if step.screenshot_path else None
 
         next_screenshot_path = None
@@ -493,6 +565,8 @@ class DemoLibrary:
             next_screenshot_path=next_screenshot_path,
             confidence=confidence,
             total_demo_steps=total_steps,
+            visual_alignment_used=visual_alignment_used,
+            visual_distance=visual_distance,
         )
 
     def enrich_demo(
@@ -592,7 +666,7 @@ class DemoLibrary:
             # Persist updated demo
             demo_json_path = demo_dir / "demo.json"
             with open(demo_json_path, "w") as f:
-                json.dump(asdict(demo), f, indent=2)
+                json.dump(_demo_to_dict(demo), f, indent=2)
             logger.info(
                 "Enriched %d steps in demo %s for task %s",
                 enriched_count, demo.demo_id, task_id,
@@ -602,6 +676,83 @@ class DemoLibrary:
                 "No steps needed enrichment in demo %s for task %s",
                 demo.demo_id, task_id,
             )
+
+    def _find_closest_demo_step(
+        self,
+        current_screenshot: bytes,
+        demo: Demo,
+        demo_dir: Path,
+    ) -> tuple[int, int]:
+        """Find the demo step whose screenshot is most similar to current state.
+
+        Uses perceptual hashing (pHash) to compare the current screenshot
+        against all demo screenshots.  Returns the index of the closest
+        match and the Hamming distance.
+
+        Demo screenshot hashes are cached on the ``DemoStep._phash``
+        field so they are only computed once per session.
+
+        Args:
+            current_screenshot: PNG bytes of the current screen.
+            demo: The demo to search.
+            demo_dir: Directory containing the demo's screenshot files.
+
+        Returns:
+            Tuple of ``(best_step_index, hamming_distance)``.
+        """
+        current_img = Image.open(io.BytesIO(current_screenshot))
+        current_hash = imagehash.phash(current_img)
+
+        # Ensure all demo step pHashes are computed
+        self._ensure_demo_phashes(demo, demo_dir)
+
+        best_step = 0
+        best_distance = float("inf")
+        for i, step in enumerate(demo.steps):
+            if step._phash is None:
+                continue
+            distance = current_hash - step._phash
+            if distance < best_distance:
+                best_distance = distance
+                best_step = i
+
+        # If no step had a valid hash, return step 0 with max distance
+        if best_distance == float("inf"):
+            return 0, 64
+
+        return best_step, int(best_distance)
+
+    def _ensure_demo_phashes(self, demo: Demo, demo_dir: Path) -> None:
+        """Compute and cache pHash for each demo step's screenshot.
+
+        Only computes hashes for steps that don't already have one
+        cached in ``step._phash``.  This means the first call per demo
+        does the work and all subsequent calls are free.
+
+        Args:
+            demo: Demo whose steps need hashes.
+            demo_dir: Directory containing the demo's screenshot files.
+        """
+        for step in demo.steps:
+            if step._phash is not None:
+                continue
+            if not step.screenshot_path:
+                continue
+            screenshot_file = demo_dir / step.screenshot_path
+            if not screenshot_file.exists():
+                logger.debug(
+                    "Screenshot %s not found, skipping pHash for step %d",
+                    screenshot_file, step.step_index,
+                )
+                continue
+            try:
+                img = Image.open(screenshot_file)
+                step._phash = imagehash.phash(img)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to compute pHash for step %d: %s",
+                    step.step_index, exc,
+                )
 
     def _demo_dir(self, task_id: str, demo_id: str) -> Path:
         """Get the directory for a specific demo."""
