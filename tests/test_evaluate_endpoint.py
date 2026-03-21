@@ -198,7 +198,10 @@ class TestWAALiveAdapterEvaluate:
         from openadapt_evals.adapters import WAALiveAdapter, WAALiveConfig
         from openadapt_evals.adapters.base import BenchmarkTask
 
-        adapter = WAALiveAdapter(WAALiveConfig(server_url="http://test:5000"))
+        adapter = WAALiveAdapter(WAALiveConfig(
+            server_url="http://test:5000",
+            evaluate_retries=1,
+        ))
         task = BenchmarkTask(
             task_id="test_1",
             instruction="Test task",
@@ -233,7 +236,10 @@ class TestWAALiveAdapterEvaluate:
         from openadapt_evals.adapters import WAALiveAdapter, WAALiveConfig
         from openadapt_evals.adapters.base import BenchmarkTask, BenchmarkAction
 
-        adapter = WAALiveAdapter(WAALiveConfig(server_url="http://test:5000"))
+        adapter = WAALiveAdapter(WAALiveConfig(
+            server_url="http://test:5000",
+            evaluate_retries=1,
+        ))
         adapter._actions = [BenchmarkAction(type="click", x=100, y=100)]
 
         task = BenchmarkTask(
@@ -260,7 +266,10 @@ class TestWAALiveAdapterEvaluate:
         from openadapt_evals.adapters import WAALiveAdapter, WAALiveConfig
         from openadapt_evals.adapters.base import BenchmarkTask, BenchmarkAction
 
-        adapter = WAALiveAdapter(WAALiveConfig(server_url="http://test:5000"))
+        adapter = WAALiveAdapter(WAALiveConfig(
+            server_url="http://test:5000",
+            evaluate_retries=1,  # No retries for fast test
+        ))
         adapter._actions = [
             BenchmarkAction(type="type", text="hello"),
             BenchmarkAction(type="done"),
@@ -281,6 +290,112 @@ class TestWAALiveAdapterEvaluate:
             assert result.success is False
             assert "unavailable" in result.reason.lower() or "evaluator" in result.reason.lower()
             assert result.score == 0.0
+
+    def test_evaluate_retries_on_timeout(self):
+        """Test that evaluate retries on timeout with backoff."""
+        import requests
+        from openadapt_evals.adapters import WAALiveAdapter, WAALiveConfig
+        from openadapt_evals.adapters.base import BenchmarkTask
+
+        adapter = WAALiveAdapter(WAALiveConfig(
+            server_url="http://test:5000",
+            evaluate_timeout=10.0,
+            evaluate_retries=3,
+            evaluate_retry_base_delay=0.01,  # Fast backoff for tests
+        ))
+
+        task = BenchmarkTask(
+            task_id="test_1",
+            instruction="Test task",
+            domain="test",
+        )
+
+        with patch("requests.post") as mock_post:
+            mock_post.side_effect = requests.Timeout("Request timed out")
+
+            result = adapter.evaluate(task)
+
+            # Should have retried 3 times
+            assert mock_post.call_count == 3
+            assert result.success is False
+            assert "timed out" in result.reason.lower()
+            assert "3 retries" in result.reason
+            assert result.error_type == "infrastructure"
+
+    def test_evaluate_succeeds_after_retry(self):
+        """Test that evaluate succeeds on second attempt after timeout."""
+        import requests
+        from openadapt_evals.adapters import WAALiveAdapter, WAALiveConfig
+        from openadapt_evals.adapters.base import BenchmarkTask
+
+        adapter = WAALiveAdapter(WAALiveConfig(
+            server_url="http://test:5000",
+            evaluate_timeout=10.0,
+            evaluate_retries=3,
+            evaluate_retry_base_delay=0.01,  # Fast backoff for tests
+        ))
+
+        task = BenchmarkTask(
+            task_id="test_1",
+            instruction="Test task",
+            domain="test",
+            raw_config={"evaluator": {"func": "exact_match"}},
+        )
+
+        # First call times out, second succeeds
+        mock_success = MagicMock()
+        mock_success.status_code = 200
+        mock_success.json.return_value = {
+            "success": True,
+            "score": 1.0,
+            "reason": "Test passed",
+        }
+
+        with patch("requests.post") as mock_post:
+            mock_post.side_effect = [
+                requests.Timeout("Request timed out"),
+                mock_success,
+            ]
+
+            result = adapter.evaluate(task)
+
+            assert mock_post.call_count == 2
+            assert result.success is True
+            assert result.score == 1.0
+
+    def test_evaluate_uses_evaluate_timeout(self):
+        """Test that evaluate uses evaluate_timeout, not general timeout."""
+        from openadapt_evals.adapters import WAALiveAdapter, WAALiveConfig
+        from openadapt_evals.adapters.base import BenchmarkTask
+
+        adapter = WAALiveAdapter(WAALiveConfig(
+            server_url="http://test:5000",
+            timeout=90.0,
+            evaluate_timeout=180.0,
+            evaluate_retries=1,
+        ))
+
+        task = BenchmarkTask(
+            task_id="test_1",
+            instruction="Test task",
+            domain="test",
+        )
+
+        with patch("requests.post") as mock_post:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {
+                "success": True,
+                "score": 1.0,
+                "reason": "Test passed",
+            }
+            mock_post.return_value = mock_response
+
+            adapter.evaluate(task)
+
+            # Verify the evaluate_timeout (180s) was used, not general timeout (90s)
+            call_kwargs = mock_post.call_args[1]
+            assert call_kwargs["timeout"] == 180.0
 
 
 class TestLoadTaskFromJson:
