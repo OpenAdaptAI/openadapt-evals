@@ -1,6 +1,25 @@
 # CHANGELOG
 
 
+## v0.51.1 (2026-03-21)
+
+### Bug Fixes
+
+- Reduce cleanup timeouts and make verify_apps non-fatal
+  ([#169](https://github.com/OpenAdaptAI/openadapt-evals/pull/169),
+  [`4094c68`](https://github.com/OpenAdaptAI/openadapt-evals/commit/4094c682dfc1d1a8cc25d60918c1396e06d66e4f))
+
+The notification cleanup (taskkill OneDrive, etc.) and close_all commands were causing the WAA Flask
+  server to hang or crash. The 15s HTTP timeout per cleanup command × 4 commands = 60s of blocking
+  before task execution even starts.
+
+Changes: - Reduce notification cleanup timeout from 15s to 5s - Reduce close_all timeout from 30s to
+  10s - Make verify_apps and activate_window timeouts non-fatal (warn instead of crash) — a timeout
+  checking if an app exists shouldn't prevent the task from running
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.51.0 (2026-03-21)
 
 ### Documentation
