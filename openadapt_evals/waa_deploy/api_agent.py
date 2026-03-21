@@ -177,7 +177,7 @@ class ApiAgent:
     # Default models for each provider
     DEFAULT_MODELS = {
         "anthropic": "claude-sonnet-4-5-20250929",
-        "openai": "gpt-5.1",
+        "openai": "gpt-5.4",
     }
 
     def __init__(
