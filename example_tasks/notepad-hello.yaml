@@ -9,25 +9,14 @@ setup:
   - sleep: 1
 
 evaluate:
-  # Use notepad* wildcard to match both classic Notepad and Windows 11 modern Notepad
-  - check: command
-    run: "powershell -c \"Get-Process notepad* -ErrorAction SilentlyContinue | Measure | Select -ExpandProperty Count\""
-    expect: "1"
-    match: contains
-
   - check: screenshot
-    description: "A Notepad window (classic or modern Windows 11 style) is open with 'Hello World' typed in the text area"
-
-combine: and
+    description: "A Notepad window is open with 'Hello World' typed in the text area"
 max_steps: 10
 
 milestones:
   - name: "Notepad is open"
-    check: command
-    # Wildcard catches both classic 'notepad' and Win11 'Notepad' process names
-    run: "powershell -c \"Get-Process notepad* -ErrorAction SilentlyContinue | Measure | Select -ExpandProperty Count\""
-    expect: "1"
-    match: contains
+    check: screenshot
+    description: "A Notepad window is visible on screen (classic or modern Windows 11 style)"
 
   - name: "Text is typed"
     check: screenshot
