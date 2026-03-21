@@ -1,6 +1,36 @@
 # CHANGELOG
 
 
+## v0.52.0 (2026-03-21)
+
+### Features
+
+- Update default planner model to gpt-5.4
+  ([#170](https://github.com/OpenAdaptAI/openadapt-evals/pull/170),
+  [`3e56272`](https://github.com/OpenAdaptAI/openadapt-evals/commit/3e562726dca3079abf7ba31379005144272046f4))
+
+* fix: skip close_all and notification cleanup by default
+
+The close_all PowerShell command (Get-Process | CloseMainWindow) and notification cleanup (taskkill
+  OneDrive) crash the WAA Flask server, making it unresponsive for the rest of the run. This
+  happened on every test run.
+
+Now these only run when clean_desktop=True is explicitly set. Default behavior skips them entirely —
+  the task runs against whatever state the desktop is in, which is more reliable than crashing the
+  server trying to clean up.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* feat: update default planner model to gpt-5.4
+
+Update the OpenAI default model in ApiAgent from gpt-5.1 to gpt-5.4 for higher-quality planning and
+  reasoning in both the main agent and the WAA deploy copy.
+
+---------
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.51.1 (2026-03-21)
 
 ### Bug Fixes
