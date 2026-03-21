@@ -119,11 +119,17 @@ def _vlm_call_openai(
     messages.append({"role": "user", "content": content})
 
     client = openai.OpenAI(timeout=timeout)
+    # GPT-5.x models require max_completion_tokens instead of max_tokens
+    token_param = (
+        {"max_completion_tokens": max_tokens}
+        if model.startswith(("gpt-5", "o1", "o3", "o4"))
+        else {"max_tokens": max_tokens}
+    )
     resp = client.chat.completions.create(
         model=model,
         messages=messages,
-        max_tokens=max_tokens,
         temperature=temperature,
+        **token_param,
     )
     return resp.choices[0].message.content
 
