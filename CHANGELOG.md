@@ -1,6 +1,20 @@
 # CHANGELOG
 
 
+## v0.58.1 (2026-03-21)
+
+### Bug Fixes
+
+- Use screenshot-only milestones in notepad-hello.yaml
+  ([`9d55adf`](https://github.com/OpenAdaptAI/openadapt-evals/commit/9d55adf453e2e910a1414dd06ff73723523b9629))
+
+PowerShell process checks via /execute_windows timeout when the WAA Flask server is slow. VLM
+  screenshot checks work reliably (proven with confidence 1.00). Simpler, more robust, no server
+  dependency.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.58.0 (2026-03-21)
 
 ### Bug Fixes
