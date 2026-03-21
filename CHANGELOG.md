@@ -1,6 +1,40 @@
 # CHANGELOG
 
 
+## v0.54.0 (2026-03-21)
+
+### Bug Fixes
+
+- Use max_completion_tokens for GPT-5.x and o-series models
+  ([`c2396eb`](https://github.com/OpenAdaptAI/openadapt-evals/commit/c2396eb0aa13eda72d0cde15f7cf3d5f299ea881))
+
+GPT-5.4-mini returns 400 Bad Request when max_tokens is used. These models require
+  max_completion_tokens instead. Auto-detect based on model name prefix.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Features
+
+- Add visual similarity alignment to DemoLibrary
+  ([#174](https://github.com/OpenAdaptAI/openadapt-evals/pull/174),
+  [`e773d85`](https://github.com/OpenAdaptAI/openadapt-evals/commit/e773d855fddd0b30a79e352299f01cff4850f463))
+
+Replace sequential step-index alignment with perceptual hash (pHash) visual similarity matching.
+  When align_step() receives a current screenshot, it compares it against all demo screenshots using
+  pHash and returns guidance for the most visually similar demo step. This fixes misalignment when
+  the agent takes a different number of steps than the demo.
+
+Key changes: - Add _find_closest_demo_step() using imagehash.phash comparison - Cache demo
+  screenshot pHashes on DemoStep._phash (computed once) - Add use_visual_alignment parameter
+  (default True) for opt-out - Add visual_alignment_used and visual_distance to DemoGuidance - Strip
+  _phash from JSON serialization via _demo_to_dict helper - Falls back to sequential alignment when
+  no screenshot provided, visual alignment disabled, or imagehash not installed - 20 new tests
+  covering matching, fallback, caching, confidence, edge cases, and resolution normalization
+  interaction
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.53.0 (2026-03-21)
 
 ### Bug Fixes
