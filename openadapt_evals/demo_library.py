@@ -10,7 +10,10 @@ Alignment strategies are pluggable via the ``AlignmentStrategy`` protocol.
 The default ``PHashAlignmentStrategy`` uses perceptual hashing.  When
 ``open-clip-torch`` is installed (part of ``[training]`` extras), a
 ``CLIPAlignmentStrategy`` and ``HybridAlignmentStrategy`` (pHash top-K +
-CLIP re-rank) become available.
+CLIP re-rank) become available.  An ``OpenAIEmbeddingAlignment`` strategy
+uses OpenAI's VLM + text-embedding-3-small for semantic matching without
+requiring a local CLIP model.  Use ``create_alignment_strategy("openai")``
+or pass ``alignment_strategy="openai"`` to ``DemoLibrary``.
 
 Monotonic progress bias penalizes backward jumps in alignment to prevent
 oscillating step matches.  Adaptive guidance disabling turns off demo
@@ -89,6 +92,13 @@ try:
     _HAS_CLIP = True
 except ImportError:
     _HAS_CLIP = False
+
+try:
+    import openai as _openai_module
+
+    _HAS_OPENAI = True
+except ImportError:
+    _HAS_OPENAI = False
 
 logger = logging.getLogger(__name__)
 
@@ -214,7 +224,7 @@ class AlignmentTraceEntry:
     matched_demo_step: int  # Which demo step was matched
     distance: float  # Normalized distance (0-1)
     confidence: float  # Final confidence score (0-1)
-    method: str  # "phash", "phash+clip", "sequential", "disabled"
+    method: str  # "phash", "phash+clip", "openai", "sequential", "disabled"
     visual_alignment_used: bool
     candidates_considered: int  # How many demo steps were compared
     elapsed_ms: float  # Time for alignment computation
@@ -608,6 +618,298 @@ class HybridAlignmentStrategy:
         return best_step, best_adjusted, meta
 
 
+class OpenAIEmbeddingAlignment:
+    """OpenAI VLM + text-embedding-3-small alignment strategy.
+
+    Two-step pipeline per screenshot:
+    1. Send the screenshot to ``gpt-4o-mini`` asking for a one-sentence
+       description of the UI state.
+    2. Embed that description with ``text-embedding-3-small``.
+    3. Cosine similarity against pre-computed demo step embeddings.
+
+    Demo step embeddings are pre-computed during ``enrich_demo()`` (or
+    lazily on first ``find_closest_step`` call) and cached in
+    ``DemoStep.metadata["_openai_embedding"]``.  The text descriptions
+    are persisted in ``DemoStep.metadata["openai_ui_description"]`` and
+    the embedding vectors in ``DemoStep.metadata["openai_embedding"]``
+    so they survive serialization to ``demo.json``.
+
+    Falls back to ``PHashAlignmentStrategy`` when no ``OPENAI_API_KEY``
+    is set.
+
+    Cost: ~$0.001 per screenshot ($0.0005 VLM describe + $0.00002
+    embedding).  Negligible for typical demo libraries.
+    """
+
+    # Prompt sent to the VLM to describe the screenshot.
+    _DESCRIBE_PROMPT = (
+        "Describe the UI state visible in this screenshot in one sentence. "
+        "Focus on which application is open, what dialog/page is shown, "
+        "and any notable UI elements. Reply with ONLY the sentence."
+    )
+
+    def __init__(
+        self,
+        vlm_model: str = "gpt-4o-mini",
+        embedding_model: str = "text-embedding-3-small",
+    ):
+        if not _HAS_OPENAI:
+            raise ImportError(
+                "openai is required for OpenAIEmbeddingAlignment. "
+                "Install with: pip install openai"
+            )
+        self._vlm_model = vlm_model
+        self._embedding_model = embedding_model
+        self._client: _openai_module.OpenAI | None = None
+
+    def _ensure_client(self) -> _openai_module.OpenAI:
+        """Lazily create the OpenAI client."""
+        if self._client is None:
+            self._client = _openai_module.OpenAI()
+        return self._client
+
+    def _describe_screenshot(self, screenshot_bytes: bytes) -> str:
+        """Get a one-sentence UI description from a screenshot via VLM."""
+        import base64
+
+        client = self._ensure_client()
+        b64 = base64.b64encode(screenshot_bytes).decode("ascii")
+        resp = client.chat.completions.create(
+            model=self._vlm_model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": self._DESCRIBE_PROMPT},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{b64}",
+                                "detail": "low",
+                            },
+                        },
+                    ],
+                }
+            ],
+            max_tokens=128,
+            temperature=0.0,
+        )
+        return resp.choices[0].message.content.strip()
+
+    def _embed_text(self, text: str) -> list[float]:
+        """Get a text embedding vector from OpenAI."""
+        client = self._ensure_client()
+        resp = client.embeddings.create(
+            model=self._embedding_model,
+            input=text,
+        )
+        return resp.data[0].embedding
+
+    @staticmethod
+    def _cosine_similarity(a: list[float], b: list[float]) -> float:
+        """Compute cosine similarity between two vectors.
+
+        Uses numpy when available, otherwise a pure-Python fallback.
+        """
+        try:
+            import numpy as _np
+
+            a_arr = _np.array(a)
+            b_arr = _np.array(b)
+            dot = float(_np.dot(a_arr, b_arr))
+            norm_a = float(_np.linalg.norm(a_arr))
+            norm_b = float(_np.linalg.norm(b_arr))
+        except ImportError:
+            import math
+
+            dot = sum(x * y for x, y in zip(a, b))
+            norm_a = math.sqrt(sum(x * x for x in a))
+            norm_b = math.sqrt(sum(y * y for y in b))
+        if norm_a == 0 or norm_b == 0:
+            return 0.0
+        return dot / (norm_a * norm_b)
+
+    def precompute_embeddings(self, demo: Demo, demo_dir: Path) -> int:
+        """Pre-compute OpenAI embeddings for all demo steps.
+
+        Skips steps that already have embeddings.  Descriptions and
+        embedding vectors are stored in ``DemoStep.metadata`` so they
+        can be persisted to ``demo.json``.
+
+        Args:
+            demo: Demo to enrich with embeddings.
+            demo_dir: Directory containing demo screenshots.
+
+        Returns:
+            Number of steps that were newly embedded.
+        """
+        enriched = 0
+        for step in demo.steps:
+            # Skip if already has a persisted embedding
+            if step.metadata.get("openai_embedding") is not None:
+                # Also populate runtime cache
+                step.metadata["_openai_embedding"] = step.metadata[
+                    "openai_embedding"
+                ]
+                continue
+            if not step.screenshot_path:
+                continue
+            screenshot_file = demo_dir / step.screenshot_path
+            if not screenshot_file.exists():
+                continue
+
+            try:
+                screenshot_bytes = screenshot_file.read_bytes()
+                description = self._describe_screenshot(screenshot_bytes)
+                embedding = self._embed_text(description)
+
+                # Persist description and embedding
+                step.metadata["openai_ui_description"] = description
+                step.metadata["openai_embedding"] = embedding
+                # Runtime cache
+                step.metadata["_openai_embedding"] = embedding
+                enriched += 1
+
+                logger.info(
+                    "OpenAI embedding for step %d: %s",
+                    step.step_index,
+                    description[:80],
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to compute OpenAI embedding for step %d: %s",
+                    step.step_index,
+                    exc,
+                )
+        return enriched
+
+    def _ensure_embeddings(self, demo: Demo, demo_dir: Path) -> None:
+        """Ensure all demo steps have OpenAI embeddings (lazy)."""
+        needs_compute = False
+        for step in demo.steps:
+            if step.metadata.get("_openai_embedding") is not None:
+                continue
+            # Check if persisted embedding exists
+            if step.metadata.get("openai_embedding") is not None:
+                step.metadata["_openai_embedding"] = step.metadata[
+                    "openai_embedding"
+                ]
+                continue
+            needs_compute = True
+            break
+
+        if needs_compute:
+            count = self.precompute_embeddings(demo, demo_dir)
+            if count > 0:
+                logger.info(
+                    "Lazily computed %d OpenAI embeddings for demo %s",
+                    count,
+                    demo.demo_id,
+                )
+
+    def find_closest_step(
+        self,
+        current_screenshot: bytes,
+        demo: Demo,
+        demo_dir: Path,
+        min_step: int,
+        backward_penalty: float,
+    ) -> tuple[int, float, dict[str, Any]]:
+        """Find closest step using OpenAI embedding cosine similarity."""
+        self._ensure_embeddings(demo, demo_dir)
+
+        # Describe and embed the current screenshot
+        try:
+            description = self._describe_screenshot(current_screenshot)
+            current_embedding = self._embed_text(description)
+        except Exception as exc:
+            logger.warning(
+                "OpenAI embedding failed for current screenshot: %s", exc
+            )
+            return 0, 1.0, {"method": "openai", "error": str(exc)}
+
+        total_steps = len(demo.steps)
+        best_step = 0
+        best_adjusted = float("inf")
+        candidates: list[tuple[int, float, float]] = []
+
+        for i, step in enumerate(demo.steps):
+            emb = step.metadata.get("_openai_embedding")
+            if emb is None:
+                continue
+            similarity = self._cosine_similarity(current_embedding, emb)
+            distance = 1.0 - similarity
+
+            adjusted = distance
+            if min_step > 0 and i < min_step and total_steps > 0:
+                jump = min_step - i
+                adjusted += backward_penalty * (jump / total_steps)
+
+            candidates.append((i, distance, adjusted))
+
+            if adjusted < best_adjusted:
+                best_adjusted = adjusted
+                best_step = i
+
+        if best_adjusted == float("inf"):
+            return 0, 1.0, {"method": "openai", "candidates": []}
+
+        candidates.sort(key=lambda x: x[2])
+        top_k = candidates[:5]
+
+        meta: dict[str, Any] = {
+            "method": "openai",
+            "current_description": description,
+            "top_k_candidates": [
+                {
+                    "step": c[0],
+                    "cosine_distance": round(c[1], 4),
+                    "adjusted": round(c[2], 4),
+                }
+                for c in top_k
+            ],
+            "backward_penalty_applied": (
+                min_step > 0 and best_step < min_step
+            ),
+        }
+
+        return best_step, best_adjusted, meta
+
+
+def create_alignment_strategy(
+    name: str,
+) -> AlignmentStrategy:
+    """Create an alignment strategy by name.
+
+    Convenience factory for constructing alignment strategies from
+    string identifiers.  Useful for CLI flags and configuration files.
+
+    Args:
+        name: Strategy name.  One of ``"phash"``, ``"clip"``,
+            ``"hybrid"``, ``"openai"``.
+
+    Returns:
+        An ``AlignmentStrategy`` instance.
+
+    Raises:
+        ValueError: If *name* is not a recognized strategy.
+    """
+    name = name.lower().strip()
+    if name == "phash":
+        return PHashAlignmentStrategy()
+    elif name == "clip":
+        return CLIPAlignmentStrategy()
+    elif name == "hybrid":
+        return HybridAlignmentStrategy()
+    elif name == "openai":
+        return OpenAIEmbeddingAlignment()
+    else:
+        raise ValueError(
+            f"Unknown alignment strategy: {name!r}. "
+            f"Choose from: phash, clip, hybrid, openai"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Module-level helpers for pHash computation
 # ---------------------------------------------------------------------------
@@ -651,15 +953,21 @@ def _ensure_demo_phashes(demo: Demo, demo_dir: Path) -> None:
 def _demo_to_dict(demo: Demo) -> dict[str, Any]:
     """Serialize a Demo to a dict, stripping non-serializable internal fields.
 
-    Removes ``DemoStep._phash`` (cached ``imagehash.ImageHash`` object)
-    and ``DemoStep.metadata["_clip_embedding"]`` (cached numpy array)
-    which are runtime-only values that should not be persisted.
+    Removes ``DemoStep._phash`` (cached ``imagehash.ImageHash`` object),
+    ``DemoStep.metadata["_clip_embedding"]`` (cached numpy array), and
+    ``DemoStep.metadata["_openai_embedding"]`` (runtime cache of
+    persisted ``openai_embedding``).
+
+    Note: ``openai_embedding`` and ``openai_ui_description`` are *kept*
+    because they are the persisted forms (plain lists/strings) that
+    should survive serialization.
     """
     data = asdict(demo)
     for step_dict in data.get("steps", []):
         step_dict.pop("_phash", None)
         if "metadata" in step_dict and isinstance(step_dict["metadata"], dict):
             step_dict["metadata"].pop("_clip_embedding", None)
+            step_dict["metadata"].pop("_openai_embedding", None)
     return data
 
 
@@ -694,9 +1002,12 @@ class DemoLibrary:
 
     Args:
         library_dir: Root directory for storing demos.
-        alignment_strategy: Strategy for visual alignment.  Defaults to
-            ``PHashAlignmentStrategy``.  Pass a ``CLIPAlignmentStrategy``
-            or ``HybridAlignmentStrategy`` for semantic matching.
+        alignment_strategy: Strategy for visual alignment.  Accepts an
+            ``AlignmentStrategy`` instance *or* a string name
+            (``"phash"``, ``"clip"``, ``"hybrid"``, ``"openai"``).
+            Defaults to ``PHashAlignmentStrategy`` when *imagehash* is
+            installed.  The ``"openai"`` strategy falls back to pHash
+            if ``OPENAI_API_KEY`` is not set.
         backward_penalty: Penalty weight for backward jumps in monotonic
             progress tracking.  Default ``0.3``.  Set to ``0.0`` to
             disable monotonic bias.
@@ -710,7 +1021,7 @@ class DemoLibrary:
     def __init__(
         self,
         library_dir: str = "demo_library",
-        alignment_strategy: AlignmentStrategy | None = None,
+        alignment_strategy: AlignmentStrategy | str | None = None,
         backward_penalty: float = _DEFAULT_BACKWARD_PENALTY,
         low_confidence_threshold: float = _DEFAULT_LOW_CONFIDENCE_THRESHOLD,
         max_consecutive_low_confidence: int = _DEFAULT_MAX_CONSECUTIVE_LOW_CONFIDENCE,
@@ -719,8 +1030,24 @@ class DemoLibrary:
         self.library_dir.mkdir(parents=True, exist_ok=True)
 
         # Alignment strategy (pluggable)
-        if alignment_strategy is not None:
-            self._alignment_strategy: AlignmentStrategy | None = alignment_strategy
+        if isinstance(alignment_strategy, str):
+            try:
+                self._alignment_strategy: AlignmentStrategy | None = (
+                    create_alignment_strategy(alignment_strategy)
+                )
+            except (ImportError, ValueError) as exc:
+                logger.warning(
+                    "Failed to create alignment strategy %r, "
+                    "falling back to pHash: %s",
+                    alignment_strategy,
+                    exc,
+                )
+                if _HAS_IMAGEHASH:
+                    self._alignment_strategy = PHashAlignmentStrategy()
+                else:
+                    self._alignment_strategy = None
+        elif alignment_strategy is not None:
+            self._alignment_strategy = alignment_strategy
         elif _HAS_IMAGEHASH:
             self._alignment_strategy = PHashAlignmentStrategy()
         else:
@@ -1301,14 +1628,35 @@ class DemoLibrary:
                     exc,
                 )
 
-        if enriched_count > 0:
+        # --- Pre-compute OpenAI embeddings if strategy is OpenAI -----------
+        openai_enriched = 0
+        if isinstance(self._alignment_strategy, OpenAIEmbeddingAlignment):
+            try:
+                openai_enriched = (
+                    self._alignment_strategy.precompute_embeddings(
+                        demo, demo_dir
+                    )
+                )
+            except Exception as exc:
+                logger.warning(
+                    "OpenAI embedding pre-computation failed for demo "
+                    "%s: %s",
+                    demo.demo_id,
+                    exc,
+                )
+
+        total_enriched = enriched_count + openai_enriched
+        if total_enriched > 0:
             # Persist updated demo
             demo_json_path = demo_dir / "demo.json"
             with open(demo_json_path, "w") as f:
                 json.dump(_demo_to_dict(demo), f, indent=2)
             logger.info(
-                "Enriched %d steps in demo %s for task %s",
+                "Enriched %d steps (%d VLM descriptions, %d OpenAI "
+                "embeddings) in demo %s for task %s",
+                total_enriched,
                 enriched_count,
+                openai_enriched,
                 demo.demo_id,
                 task_id,
             )
