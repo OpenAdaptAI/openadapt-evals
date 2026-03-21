@@ -1,6 +1,26 @@
 # CHANGELOG
 
 
+## v0.56.0 (2026-03-21)
+
+### Features
+
+- Add console_scripts entry points for training, eval, and analysis
+  ([#175](https://github.com/OpenAdaptAI/openadapt-evals/pull/175),
+  [`950d21b`](https://github.com/OpenAdaptAI/openadapt-evals/commit/950d21b7ebaaf52195f513c18501bd4913998761))
+
+Add four new CLI commands installable via `pip install openadapt-evals`: - openadapt-train-grpo: TRL
+  GRPO RL training (scripts.train_trl_grpo) - openadapt-eval: full WAA evaluation runner with resume
+  (scripts.run_full_eval) - openadapt-collect: distillation data collection
+  (scripts.collect_distillation_data) - openadapt-analyze: trace analysis CLI
+  (openadapt_evals.analysis.cli)
+
+Also adds scripts/ to the hatch wheel build and creates scripts/__init__.py to make the directory
+  importable.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.55.0 (2026-03-21)
 
 ### Features
