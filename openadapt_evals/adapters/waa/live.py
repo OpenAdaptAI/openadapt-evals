@@ -1928,7 +1928,7 @@ class WAALiveAdapter(BenchmarkAdapter):
         self._last_setup_results = []
 
         related_apps = raw_config.get("related_apps", [])
-        if related_apps:
+        if related_apps and not self.config.lightweight:
             verify_step = {
                 "type": "verify_apps",
                 "parameters": {"apps": related_apps},
@@ -1943,6 +1943,19 @@ class WAALiveAdapter(BenchmarkAdapter):
         errors = []
         for entry in config:
             entry_type = entry.get("type", "unknown")
+
+            # In lightweight mode, skip non-critical setup entries that are
+            # known to hang or crash the WAA server.
+            if self.config.lightweight and entry_type in (
+                "verify_apps",
+                "close_all",
+                "activate_window",
+            ):
+                logger.debug("Lightweight mode: skipping %s", entry_type)
+                self._last_setup_results.append(
+                    {"type": entry_type, "status": "skipped"}
+                )
+                continue
 
             # Sleep is handled locally, not on the server
             if entry_type == "sleep":
