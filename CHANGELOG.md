@@ -1,6 +1,45 @@
 # CHANGELOG
 
 
+## v0.57.0 (2026-03-21)
+
+### Documentation
+
+- Add GRPO training troubleshooting guide
+  ([`2953be1`](https://github.com/OpenAdaptAI/openadapt-evals/commit/2953be12fad6fcb0544d6729104ba9b877733072))
+
+Common errors, VRAM requirements, training paths (TRL vs standalone), monitoring, checkpointing, and
+  diagnostic flowchart.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Features
+
+- Add monotonic progress bias and pluggable alignment strategy to DemoLibrary
+  ([`c85b28a`](https://github.com/OpenAdaptAI/openadapt-evals/commit/c85b28abde0032fc08a327380503ec2189041809))
+
+Add three major improvements to demo-guided alignment:
+
+1. Pluggable AlignmentStrategy protocol with PHashAlignmentStrategy (default), CLIPAlignmentStrategy
+  (optional, requires open-clip-torch), and HybridAlignmentStrategy (pHash top-K + CLIP re-rank).
+
+2. Monotonic progress bias that penalizes backward jumps in step matching to prevent oscillating
+  alignment. Configurable via backward_penalty parameter (default 0.3).
+
+3. Adaptive guidance disabling that turns off demo guidance after N consecutive low-confidence
+  alignments (default 3 at threshold 0.3), preventing the "demo hurts" failure mode.
+
+Also adds AlignmentTraceEntry dataclass for post-hoc analysis of alignment quality, stored in
+  DemoGuidance.metadata["alignment_trace"].
+
+DemoGuidedAgent now calls reset_alignment_state() on task change and episode reset to clear
+  monotonic progress tracking.
+
+All 77 tests pass (20 existing + 31 enrichment + 26 new).
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.56.0 (2026-03-21)
 
 ### Features
