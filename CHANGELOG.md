@@ -1,6 +1,24 @@
 # CHANGELOG
 
 
+## v0.55.0 (2026-03-21)
+
+### Features
+
+- Add lightweight mode to WAALiveAdapter (default on)
+  ([`dfa128e`](https://github.com/OpenAdaptAI/openadapt-evals/commit/dfa128e11f5d1a7e1c8d082e1f22ed1bc054ab50))
+
+Lightweight mode skips all cleanup, notification dismissal, and post-setup focus checks during
+  reset(). Just runs task setup commands, takes a screenshot, and lets the agent go.
+
+The agent handles popups autonomously — proven more reliable than our cleanup code which frequently
+  crashed the WAA Flask server.
+
+Legacy mode (lightweight=False) preserved for backward compatibility.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.54.0 (2026-03-21)
 
 ### Bug Fixes
