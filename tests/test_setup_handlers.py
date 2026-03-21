@@ -385,9 +385,11 @@ class TestLiveAdapterVerifyAppsInjection:
         """related_apps in raw_config causes verify_apps step to be prepended."""
         from openadapt_evals.adapters import WAALiveAdapter, WAALiveConfig
 
+        # lightweight=False to test verify_apps injection (default skips it)
         adapter = WAALiveAdapter(WAALiveConfig(
             server_url="http://test:5000",
             evaluate_url="http://test:5050",
+            lightweight=False,
         ))
 
         raw_config = {
@@ -446,12 +448,13 @@ class TestLiveAdapterVerifyAppsInjection:
             assert "Popen" in cmd  # launch command
 
     def test_empty_config_with_related_apps(self):
-        """related_apps with empty config still injects verify_apps."""
+        """related_apps with empty config still injects verify_apps (non-lightweight)."""
         from openadapt_evals.adapters import WAALiveAdapter, WAALiveConfig
 
         adapter = WAALiveAdapter(WAALiveConfig(
             server_url="http://test:5000",
             evaluate_url="http://test:5050",
+            lightweight=False,
         ))
 
         raw_config = {
