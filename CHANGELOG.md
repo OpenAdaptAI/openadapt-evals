@@ -1,6 +1,86 @@
 # CHANGELOG
 
 
+## v0.58.0 (2026-03-21)
+
+### Bug Fixes
+
+- Replace AutoModelForVision2Seq with AutoModelForImageTextToText for transformers 5.x
+  ([#178](https://github.com/OpenAdaptAI/openadapt-evals/pull/178),
+  [`b017b6e`](https://github.com/OpenAdaptAI/openadapt-evals/commit/b017b6e52071b52e8f7f25f3a881cd6845bd2538))
+
+* fix: skip verify_apps, close_all, activate_window in lightweight mode
+
+These setup entry types hang (120s timeout), crash the WAA server, or are unnecessary for task
+  execution. In lightweight mode (the default), they are now skipped entirely — both the verify_apps
+  step injected from related_apps and any close_all / activate_window entries in the task config
+  array. Each skipped entry is recorded with status "skipped" in _last_setup_results for
+  auditability.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* fix: replace AutoModelForVision2Seq with AutoModelForImageTextToText for transformers 5.x
+
+AutoModelForVision2Seq was removed in transformers 5.x (shipped on AWS DL AMI). Use
+  AutoModelForImageTextToText as the primary import with a fallback to AutoModelForVision2Seq for
+  older transformers versions.
+
+Files updated: - scripts/train_trl_grpo.py - scripts/train_grpo_example.py -
+  openadapt_evals/agents/qwen3vl_agent.py - openadapt_evals/agents/smol_agent.py -
+  examples/http_agent_server.py (comment only)
+
+---------
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Skip verify_apps, close_all, activate_window in lightweight mode
+  ([#177](https://github.com/OpenAdaptAI/openadapt-evals/pull/177),
+  [`5899c4c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/5899c4c163bd8490824c4814c827677d17b92fdf))
+
+These setup entry types hang (120s timeout), crash the WAA server, or are unnecessary for task
+  execution. In lightweight mode (the default), they are now skipped entirely — both the verify_apps
+  step injected from related_apps and any close_all / activate_window entries in the task config
+  array. Each skipped entry is recorded with status "skipped" in _last_setup_results for
+  auditability.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Update verify_apps tests to use lightweight=False
+  ([`f4854b6`](https://github.com/OpenAdaptAI/openadapt-evals/commit/f4854b6d858770fc63b244b00dfc4db7a8fe2c47))
+
+Tests expected verify_apps to be called, but lightweight mode (now default) skips it. Tests now
+  explicitly set lightweight=False.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Features
+
+- Add monotonic progress bias and pluggable alignment strategy to DemoLibrary
+  ([#176](https://github.com/OpenAdaptAI/openadapt-evals/pull/176),
+  [`f5ad884`](https://github.com/OpenAdaptAI/openadapt-evals/commit/f5ad8845020c2c2dd96b63d69985e9e8ec3fb941))
+
+Add three major improvements to demo-guided alignment:
+
+1. Pluggable AlignmentStrategy protocol with PHashAlignmentStrategy (default), CLIPAlignmentStrategy
+  (optional, requires open-clip-torch), and HybridAlignmentStrategy (pHash top-K + CLIP re-rank).
+
+2. Monotonic progress bias that penalizes backward jumps in step matching to prevent oscillating
+  alignment. Configurable via backward_penalty parameter (default 0.3).
+
+3. Adaptive guidance disabling that turns off demo guidance after N consecutive low-confidence
+  alignments (default 3 at threshold 0.3), preventing the "demo hurts" failure mode.
+
+Also adds AlignmentTraceEntry dataclass for post-hoc analysis of alignment quality, stored in
+  DemoGuidance.metadata["alignment_trace"].
+
+DemoGuidedAgent now calls reset_alignment_state() on task change and episode reset to clear
+  monotonic progress tracking.
+
+All 77 tests pass (20 existing + 31 enrichment + 26 new).
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.57.0 (2026-03-21)
 
 ### Documentation
