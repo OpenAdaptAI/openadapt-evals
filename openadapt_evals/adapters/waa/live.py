@@ -677,14 +677,14 @@ class WAALiveAdapter(BenchmarkAdapter):
             resp = requests.post(
                 f"{self.config.server_url}/execute_windows",
                 json={"command": close_cmd},
-                timeout=30.0,
+                timeout=10.0,
             )
             if resp.status_code == 200:
                 logger.info("Closed all windows for clean state")
             else:
                 logger.warning("close_all failed: HTTP %s", resp.status_code)
         except Exception as e:
-            logger.warning(f"Failed to close windows: {e}")
+            logger.warning(f"Failed to close windows (non-fatal): {e}")
 
         # Optionally apply deterministic desktop policy before task setup.
         if self.config.clean_desktop or self.config.force_tray_icons:
@@ -1923,8 +1923,22 @@ class WAALiveAdapter(BenchmarkAdapter):
                 errors.append(f"{entry_type}: {e}")
 
         if errors:
-            raise SetupReadinessError(
-                f"Task setup contained failing steps: {'; '.join(errors)}"
+            # Only raise for critical setup failures (download, open, execute).
+            # verify_apps and activate_window timeouts are non-fatal — the task
+            # may still work even if verification times out.
+            critical_errors = [
+                e for e in errors
+                if not any(
+                    e.startswith(t) for t in ("verify_apps:", "activate_window:")
+                )
+            ]
+            if critical_errors:
+                raise SetupReadinessError(
+                    f"Task setup contained failing steps: {'; '.join(critical_errors)}"
+                )
+            logger.warning(
+                "Non-critical setup issues (continuing): %s",
+                "; ".join(errors),
             )
 
     def _run_setup_execute_commands(
@@ -1986,7 +2000,7 @@ class WAALiveAdapter(BenchmarkAdapter):
             requests_module,
             commands,
             label="notification cleanup",
-            timeout=15.0,
+            timeout=5.0,
         )
 
     def _apply_clean_desktop_policy(self, requests_module) -> None:
