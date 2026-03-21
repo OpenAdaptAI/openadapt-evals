@@ -111,6 +111,11 @@ oa = "openadapt_evals.cli.main:main"
 openadapt-evals = "openadapt_evals.benchmarks.cli:main"
 # VM/pool infrastructure CLI (migrated from openadapt-ml)
 oa-vm = "openadapt_evals.benchmarks.vm_cli:main"
+# Training, evaluation, collection, and analysis
+openadapt-train-grpo = "scripts.train_trl_grpo:main"
+openadapt-eval = "scripts.run_full_eval:main"
+openadapt-collect = "scripts.collect_distillation_data:main"
+openadapt-analyze = "openadapt_evals.analysis.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/OpenAdaptAI/openadapt-evals"
@@ -123,7 +128,7 @@ openadapt-consilium = { git = "https://github.com/OpenAdaptAI/openadapt-consiliu
 openadapt-ml = { path = "../openadapt-ml", editable = true }
 
 [tool.hatch.build.targets.wheel]
-packages = ["openadapt_evals"]
+packages = ["openadapt_evals", "scripts"]
 
 [tool.ruff]
 line-length = 100
