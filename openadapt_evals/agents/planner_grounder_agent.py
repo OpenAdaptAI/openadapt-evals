@@ -79,13 +79,29 @@ _MAX_HISTORY_ACTIONS = 10
 # Prompt templates -------------------------------------------------------
 
 _PLANNER_SYSTEM = (
-    "You are a desktop automation planner. Given the current screenshot, "
-    "accessibility tree, and task, decide the single next action the agent "
-    "should take. Be precise and unambiguous in your instruction."
+    "You are a desktop automation planner. You MUST follow the task "
+    "instruction exactly. Given the current screenshot, accessibility tree, "
+    "and task, decide the single next action the agent should take. "
+    "Be precise and unambiguous in your instruction. "
+    "IMPORTANT: Only interact with applications and UI elements that are "
+    "relevant to the task instruction. Do NOT open or click on applications "
+    "that the task does not ask you to use."
 )
 
 _PLANNER_PROMPT = """\
-Task: {task_instruction}
+=== YOUR TASK (follow this EXACTLY) ===
+{task_instruction}
+=== END TASK ===
+
+IMPORTANT: Every action you take MUST work toward completing the task above.
+Do NOT open or interact with applications that the task does not require.
+If you see icons on the desktop (e.g., Chrome, Edge, Recycle Bin) that are NOT
+related to your task, IGNORE them. Only interact with what the task asks for.
+
+If the application you need is not visible on the desktop or taskbar:
+- Use the Start menu (click the Start button or press the Windows key)
+- Or use Win+R (Run dialog) to launch it by name
+- Do NOT default to clicking desktop icons that are unrelated to your task
 
 Previous actions:
 {action_history}
@@ -93,14 +109,14 @@ Previous actions:
 Accessibility tree:
 {a11y_tree}
 {demo_guidance}
-Look at the screenshot and decide the next action.
+Look at the screenshot and decide the next action to advance the TASK above.
 
 Output a JSON object with exactly these fields:
 {{"decision": "COMMAND" | "DONE" | "FAIL",
   "action_type": "click" | "double_click" | "type" | "key" | "scroll",
   "action_value": "<text to type, key to press, or empty for click/double_click>",
   "target_description": "<what element to interact with>",
-  "reasoning": "<brief explanation>"}}
+  "reasoning": "<brief explanation of how this action advances the task>"}}
 
 Rules:
 - action_type must be exactly ONE of: click, double_click, type, key, scroll
@@ -113,6 +129,7 @@ Rules:
 - Do NOT include pixel coordinates — a grounding model handles that.
 - If there are dialog boxes, notifications, or popups blocking your target, dismiss them first (click X, press Escape, or click 'Not now'/'Later'/'Skip').
 - If your last 3 actions were the same and failed, you MUST try a completely different approach: dismiss any dialogs, try keyboard shortcuts, or interact with different UI elements.
+- Your reasoning MUST explain how the action relates to the task instruction.
 {anti_loop_warning}"""
 
 # Warning injected when repeated identical actions are detected.
@@ -636,6 +653,11 @@ class PlannerGrounderAgent(BenchmarkAgent):
             demo_guidance=demo_guidance_text,
             anti_loop_warning=anti_loop_warning,
         )
+
+        logger.info(
+            "Planner task instruction: %r", task.instruction,
+        )
+        logger.debug("Planner full prompt:\n%s", prompt[:2000])
 
         images = [observation.screenshot] if observation.screenshot else None
 
