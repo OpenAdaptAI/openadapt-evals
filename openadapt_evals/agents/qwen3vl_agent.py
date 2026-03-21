@@ -553,12 +553,16 @@ class Qwen3VLAgent(BenchmarkAgent):
         logger.info(f"Loading model: {hf_model_id}")
 
         # Qwen3-VL uses the same architecture class as Qwen2.5-VL in
-        # current transformers versions. Try AutoModelForVision2Seq first
-        # (more generic), then fall back to the specific class.
+        # current transformers versions. Try AutoModelForImageTextToText first
+        # (transformers 5.x), then AutoModelForVision2Seq (older), then
+        # fall back to the specific class.
         try:
-            from transformers import AutoModelForVision2Seq
+            try:
+                from transformers import AutoModelForImageTextToText as AutoVLM
+            except ImportError:
+                from transformers import AutoModelForVision2Seq as AutoVLM
 
-            self._model = AutoModelForVision2Seq.from_pretrained(
+            self._model = AutoVLM.from_pretrained(
                 hf_model_id,
                 torch_dtype=resolved_dtype,
                 device_map=self.device,
