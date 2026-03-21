@@ -1,6 +1,94 @@
 # CHANGELOG
 
 
+## v0.51.0 (2026-03-21)
+
+### Documentation
+
+- Add prior art citations to agent and training modules
+  ([#163](https://github.com/OpenAdaptAI/openadapt-evals/pull/163),
+  [`9ad6d96`](https://github.com/OpenAdaptAI/openadapt-evals/commit/9ad6d96a702db28d370fa7c741e07bd3290f604b))
+
+Add Prior Art sections to module-level docstrings in the five highest-risk files. Each citation
+  documents published academic precedent for the architecture or technique used.
+
+- planner_grounder_agent.py: SeeAct, UFO, Mind2Web, STRIPS - rl_env.py: Ng et al. reward shaping,
+  ADMIRE milestones - demo_guided_agent.py: DAgger, Argall et al., Humphreys et al. -
+  trl_rollout.py: DeepSeek-Math GRPO, TRL, PPO - demo_library.py: AgentTrek, WebAgent, RCI, RAG
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Comprehensive usage documentation for eval runner, distillation, and demo-guided execution
+  ([#166](https://github.com/OpenAdaptAI/openadapt-evals/pull/166),
+  [`8e825dd`](https://github.com/OpenAdaptAI/openadapt-evals/commit/8e825ddea71590f4b75dc1c4c6de806fdaa2eff6))
+
+Add detailed usage documentation for all major features added in PRs #134-#165:
+
+- Docker/WAA Container: --cap-add NET_ADMIN requirement, full docker run command, boot timeline,
+  port reference - Full Evaluation Runner (run_full_eval.py): all flags with defaults, example
+  commands for smoke test, resume, parallel, HTTP grounder - Distillation Pipeline: two-step
+  workflow (collect_distillation_data.py + finetune_distilled.py), all flags, mock validation mode -
+  Demo-Guided Execution: DemoLibrary API, DemoGuidedAgent with self- verification, recording
+  workflow - Task Setup Config Types: all 15 supported types with example params - Strict Mode:
+  ScrubMiddleware, workflow pipeline, WAALiveAdapter - Pool Execution: external agent_factory
+  support via PoolManager.run() - Updated Quick Start with copy-pasteable sequence - Updated
+  Architecture tree with new files (demo_library, demo_guided_agent, scripts/) - Updated Key Files
+  table with new entries
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Document --cap-add NET_ADMIN as required for WAA container networking
+  ([#165](https://github.com/OpenAdaptAI/openadapt-evals/pull/165),
+  [`564a4af`](https://github.com/OpenAdaptAI/openadapt-evals/commit/564a4afc44d80a7742717777670fd36c93071cb7))
+
+* feat: add GPT-5.4 distillation pipeline for Qwen3.5-9B fine-tuning
+
+Add two scripts implementing Phase 1 of the distillation pipeline:
+
+- collect_distillation_data.py: Runs a frontier model (GPT-5.4, Claude, etc.) as teacher on WAA
+  tasks, saving successful (screenshot, action) trajectories as SFT-ready JSONL + PNGs via
+  PlannerTrajectoryLogger. Supports resume, cost tracking, task filtering, and --max-tasks for
+  cost-limited testing.
+
+- finetune_distilled.py: Fine-tunes a student VLM (Qwen3.5-9B or any HuggingFace model) with LoRA on
+  the collected trajectories using TRL SFTTrainer. Supports Unsloth for 2x speedup, 4-bit
+  quantization, and a --mock mode that validates the full pipeline without GPU.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* docs: document --cap-add NET_ADMIN as required for WAA container networking
+
+Without this flag, the container falls back to user-mode networking and cannot reach the Windows
+  QEMU guest at 20.20.20.21. Port 5050 (evaluate server on Linux side) works fine, making the
+  failure confusing — but port 5000 (WAA Flask server inside Windows) is unreachable.
+
+---------
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Features
+
+- Add VLM element description enrichment and resolution normalization to DemoLibrary
+  ([#168](https://github.com/OpenAdaptAI/openadapt-evals/pull/168),
+  [`5b91def`](https://github.com/OpenAdaptAI/openadapt-evals/commit/5b91defd8d71b34775ed3b143d7abb5b6bb6847b))
+
+Add VLM-based element description enrichment so demo guidance returns human-readable instructions
+  like 'Click on three-dot menu button in Chrome toolbar at approximately (0.960, 0.066)' instead of
+  raw 'CLICK(0.960, 0.066)' coordinates.
+
+Changes: - Add description field to DemoStep for VLM-generated element labels - Add enrich_demo()
+  method: crops region around click point, sends full screenshot + crop to VLM, stores element
+  description per step - Add descriptions and auto_enrich params to add_demo() for providing
+  descriptions at creation time or auto-enriching via VLM - Add resolution param to add_demo() and
+  current_resolution to align_step() for proportional coordinate normalization across different
+  screen sizes - Build enriched instructions via _build_enriched_instruction() that uses
+  descriptions when available, falls back to raw coordinates - Graceful degradation: VLM failures
+  log warnings but do not break the pipeline; Pillow import is lazy; enrichment is fully optional -
+  31 new tests covering all features including backward compatibility
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.50.1 (2026-03-20)
 
 ### Bug Fixes
