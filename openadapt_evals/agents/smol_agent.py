@@ -329,7 +329,12 @@ class SmolOperatorAgent(BenchmarkAgent):
 
         try:
             import torch
-            from transformers import AutoModelForVision2Seq, AutoProcessor
+            from transformers import AutoProcessor
+
+            try:
+                from transformers import AutoModelForImageTextToText as AutoVLM
+            except ImportError:
+                from transformers import AutoModelForVision2Seq as AutoVLM
         except ImportError as e:
             raise RuntimeError(
                 "SmolOperatorAgent requires transformers and torch. "
@@ -348,7 +353,7 @@ class SmolOperatorAgent(BenchmarkAgent):
         resolved_dtype = dtype_map.get(self.torch_dtype, "auto")
 
         logger.info(f"Loading model: {self.model_path}")
-        self._model = AutoModelForVision2Seq.from_pretrained(
+        self._model = AutoVLM.from_pretrained(
             self.model_path,
             torch_dtype=resolved_dtype,
             device_map=self.device,

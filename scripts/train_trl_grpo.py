@@ -88,11 +88,16 @@ def load_model_standard(model_name, lora_r=16):
     """Load model with standard HuggingFace + PEFT."""
     import torch
     from peft import LoraConfig, get_peft_model
-    from transformers import AutoModelForVision2Seq, AutoProcessor
+    from transformers import AutoProcessor
+
+    try:
+        from transformers import AutoModelForImageTextToText as AutoVLM
+    except ImportError:
+        from transformers import AutoModelForVision2Seq as AutoVLM
 
     logger.info("Loading model (standard): %s", model_name)
     processor = AutoProcessor.from_pretrained(model_name)
-    model = AutoModelForVision2Seq.from_pretrained(
+    model = AutoVLM.from_pretrained(
         model_name,
         torch_dtype=torch.bfloat16,
         device_map="auto",

@@ -36,8 +36,12 @@ def load_model():
     """Load your model here. Called once at startup."""
     log.info("Loading model... (replace this with your model loading code)")
     # Example:
-    #   from transformers import AutoModelForVision2Seq, AutoProcessor
-    #   model = AutoModelForVision2Seq.from_pretrained("your-model")
+    #   from transformers import AutoProcessor
+    #   try:
+    #       from transformers import AutoModelForImageTextToText as AutoVLM
+    #   except ImportError:
+    #       from transformers import AutoModelForVision2Seq as AutoVLM
+    #   model = AutoVLM.from_pretrained("your-model")
     #   processor = AutoProcessor.from_pretrained("your-model")
     #   return model, processor
     return None

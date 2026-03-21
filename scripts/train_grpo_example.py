@@ -39,7 +39,12 @@ import fire
 import torch
 from peft import LoraConfig, get_peft_model
 from PIL import Image
-from transformers import AutoModelForVision2Seq, AutoProcessor
+from transformers import AutoProcessor
+
+try:
+    from transformers import AutoModelForImageTextToText as AutoVLM
+except ImportError:
+    from transformers import AutoModelForVision2Seq as AutoVLM
 
 from openadapt_evals.adapters.base import BenchmarkAction, BenchmarkObservation
 from openadapt_evals.adapters.rl_env import RLEnvironment
@@ -227,7 +232,7 @@ def main(
     # 1. Load model with LoRA
     print(f"Loading {model_name} ...")
     processor = AutoProcessor.from_pretrained(model_name)
-    model = AutoModelForVision2Seq.from_pretrained(
+    model = AutoVLM.from_pretrained(
         model_name, torch_dtype=torch.bfloat16, device_map="auto"
     )
     lora = LoraConfig(
