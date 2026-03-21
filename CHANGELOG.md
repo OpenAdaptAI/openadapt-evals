@@ -1,6 +1,31 @@
 # CHANGELOG
 
 
+## v0.59.0 (2026-03-21)
+
+### Features
+
+- Add OpenAI embedding-based alignment strategy for DemoLibrary
+  ([#179](https://github.com/OpenAdaptAI/openadapt-evals/pull/179),
+  [`006688c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/006688c7ead71254ed84264ffac9e6ad657bfdfd))
+
+Add OpenAIEmbeddingAlignment class that implements the AlignmentStrategy protocol using OpenAI's VLM
+  (gpt-4o-mini) for screenshot description and text-embedding-3-small for semantic embedding. This
+  provides a cloud-based alternative to local CLIP models for demo step alignment.
+
+Key changes: - OpenAIEmbeddingAlignment: two-step pipeline (VLM describe + embed) with cosine
+  similarity matching against pre-computed demo embeddings - create_alignment_strategy() factory:
+  accepts string names ("phash", "clip", "hybrid", "openai") for easy construction - DemoLibrary
+  constructor now accepts string alignment_strategy names with automatic fallback to pHash on
+  failure - enrich_demo() pre-computes OpenAI embeddings when strategy is "openai" - Embeddings
+  persist to demo.json as plain lists for serialization - Pure-Python cosine similarity fallback
+  when numpy is not installed
+
+Cost: ~$0.001 per screenshot (~$0.06 for 61 demos total).
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.58.1 (2026-03-21)
 
 ### Bug Fixes
