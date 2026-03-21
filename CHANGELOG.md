@@ -1,6 +1,64 @@
 # CHANGELOG
 
 
+## v0.53.0 (2026-03-21)
+
+### Bug Fixes
+
+- Add retry logic and configurable timeout for evaluation endpoint
+  ([#173](https://github.com/OpenAdaptAI/openadapt-evals/pull/173),
+  [`57dd53b`](https://github.com/OpenAdaptAI/openadapt-evals/commit/57dd53b48998071664a50ac8e918126a5ae83a3d))
+
+The /evaluate endpoint frequently times out because WAA evaluators need to reach the Windows VM at
+  172.30.0.2 to run getters/metrics. The previous 90s general timeout was shared with all requests
+  and insufficient for evaluation.
+
+Changes: - Add evaluate_timeout (default 180s) separate from general timeout (90s) - Add
+  evaluate_retries (default 3) with exponential backoff on timeout/connection errors - Add
+  evaluate_retry_base_delay (default 5s) for configurable backoff - Extract _evaluate_request()
+  helper that encapsulates retry logic - Only retry on Timeout and ConnectionError (not HTTP 404/500
+  which are not transient) - Existing tests updated to use evaluate_retries=1 for speed - Three new
+  tests: retry on timeout, success after retry, evaluate_timeout usage
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Make task instruction more prominent in planner prompt
+  ([#171](https://github.com/OpenAdaptAI/openadapt-evals/pull/171),
+  [`172f1ee`](https://github.com/OpenAdaptAI/openadapt-evals/commit/172f1ee40c8d64c6e0f65ec3992383d216911a54))
+
+The planner was ignoring task instructions and defaulting to clicking visible desktop icons (Chrome)
+  regardless of the task. Three fixes:
+
+1. Task instruction in prominent delimited block at TOP of prompt: "=== YOUR TASK (follow this
+  EXACTLY) ===" 2. Anti-distraction directive: "Do NOT open applications the task does not ask you
+  to use" 3. App launch guidance: "Use Start menu or Win+R if the app isn't on the desktop"
+
+Also adds diagnostic logging of task instruction on every planner call.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Features
+
+- Add trace analysis utilities with HTML report generation
+  ([#172](https://github.com/OpenAdaptAI/openadapt-evals/pull/172),
+  [`658a884`](https://github.com/OpenAdaptAI/openadapt-evals/commit/658a88457d8ccdfccdf4ca58a572111910d21433))
+
+* feat: add trace analysis utilities with HTML report generation
+
+Add openadapt_evals.analysis package: - TraceAnalyzer: auto-format detection, loads
+  JSONL/trajectory/benchmark - summary(), failure_modes(), step_timeline(), compare() APIs -
+  Self-contained HTML report with dark-theme dashboard - CLI: python -m openadapt_evals.analysis
+  path [--report out.html] - 37 tests
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* docs: add trace analysis report screenshots for PR #172
+
+---------
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.52.0 (2026-03-21)
 
 ### Features
