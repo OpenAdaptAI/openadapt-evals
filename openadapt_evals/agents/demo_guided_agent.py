@@ -164,6 +164,10 @@ class DemoGuidedAgent(BenchmarkAgent):
         """
         # Detect task change and reset
         if task.task_id != self._current_task_id:
+            # Reset alignment state for the previous task (monotonic
+            # progress tracking and adaptive guidance disabling)
+            if self._current_task_id is not None:
+                self._demo_library.reset_alignment_state(self._current_task_id)
             self._current_task_id = task.task_id
             self._step_index = 0
             self._last_observation = None
@@ -328,6 +332,9 @@ class DemoGuidedAgent(BenchmarkAgent):
 
     def reset(self) -> None:
         """Reset agent state between episodes."""
+        # Reset alignment state (monotonic progress, adaptive disabling)
+        self._demo_library.reset_alignment_state()
+
         self._step_index = 0
         self._current_task_id = None
         self._last_observation = None

@@ -4,8 +4,17 @@ Stores demonstrations as sequences of (screenshot, action, metadata) on disk.
 Retrieval uses perceptual hash (pHash) visual similarity alignment to find the
 demo step whose screenshot is most similar to the agent's current screen state.
 Falls back to sequential step index alignment when no screenshot is provided
-or imagehash is not installed.  No embeddings or vector DBs -- just files on
-disk and pHash comparison.
+or imagehash is not installed.
+
+Alignment strategies are pluggable via the ``AlignmentStrategy`` protocol.
+The default ``PHashAlignmentStrategy`` uses perceptual hashing.  When
+``open-clip-torch`` is installed (part of ``[training]`` extras), a
+``CLIPAlignmentStrategy`` and ``HybridAlignmentStrategy`` (pHash top-K +
+CLIP re-rank) become available.
+
+Monotonic progress bias penalizes backward jumps in alignment to prevent
+oscillating step matches.  Adaptive guidance disabling turns off demo
+guidance when alignment confidence is consistently low.
 
 Supports optional VLM-based element description enrichment: instead of
 returning raw coordinate instructions like ``CLICK(0.960, 0.066)``, enriched
@@ -55,11 +64,12 @@ from __future__ import annotations
 import io
 import json
 import logging
+import time
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from openadapt_evals.adapters.base import BenchmarkAction
 
@@ -71,7 +81,28 @@ try:
 except ImportError:
     _HAS_IMAGEHASH = False
 
+try:
+    import numpy as np
+    import open_clip
+    import torch
+
+    _HAS_CLIP = True
+except ImportError:
+    _HAS_CLIP = False
+
 logger = logging.getLogger(__name__)
+
+# Default backward penalty for monotonic progress bias.  A full backward
+# jump (from last step to step 0) adds this fraction to the normalized
+# distance.  Configurable via ``DemoLibrary(backward_penalty=...)``.
+_DEFAULT_BACKWARD_PENALTY = 0.3
+
+# Default threshold below which alignment is considered "low confidence".
+_DEFAULT_LOW_CONFIDENCE_THRESHOLD = 0.3
+
+# Number of consecutive low-confidence alignments before guidance is
+# disabled for the remainder of the episode.
+_DEFAULT_MAX_CONSECUTIVE_LOW_CONFIDENCE = 3
 
 
 @dataclass
@@ -98,7 +129,7 @@ class DemoStep:
 
     # Cached perceptual hash for visual similarity alignment.
     # Not serialized to demo.json -- computed lazily by
-    # ``DemoLibrary._ensure_demo_phashes()``.
+    # ``_ensure_demo_phashes()``.
     _phash: Any = field(default=None, repr=False, compare=False)
 
 
@@ -141,7 +172,7 @@ class DemoGuidance:
     # Visual alignment metadata -- populated when align_step() uses
     # perceptual hash matching instead of sequential index.
     visual_alignment_used: bool = False
-    visual_distance: float | None = None  # pHash Hamming distance (lower=closer)
+    visual_distance: float | None = None  # normalized distance (lower=closer)
 
     def to_prompt_text(self) -> str:
         """Format guidance as text suitable for injection into an agent prompt.
@@ -170,15 +201,465 @@ class DemoGuidance:
         return "\n".join(lines)
 
 
+@dataclass
+class AlignmentTraceEntry:
+    """One step's alignment result for post-hoc analysis.
+
+    Stored in ``DemoGuidance.metadata["alignment_trace"]`` when visual
+    alignment is used.  Enables retroactive comparison of alignment
+    methods and identification of failure patterns.
+    """
+
+    agent_step_index: int  # Agent's step number
+    matched_demo_step: int  # Which demo step was matched
+    distance: float  # Normalized distance (0-1)
+    confidence: float  # Final confidence score (0-1)
+    method: str  # "phash", "phash+clip", "sequential", "disabled"
+    visual_alignment_used: bool
+    candidates_considered: int  # How many demo steps were compared
+    elapsed_ms: float  # Time for alignment computation
+    backward_penalty_applied: bool = False
+    guidance_disabled: bool = False
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Alignment Strategy Protocol
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class AlignmentStrategy(Protocol):
+    """Protocol for pluggable alignment strategies.
+
+    Implementations find the closest demo step to a given screenshot.
+    The ``DemoLibrary`` delegates to an ``AlignmentStrategy`` during
+    ``align_step()`` so that the matching algorithm can be swapped
+    (pHash, CLIP, hybrid, etc.) without changing the library's API.
+    """
+
+    def find_closest_step(
+        self,
+        current_screenshot: bytes,
+        demo: Demo,
+        demo_dir: Path,
+        min_step: int,
+        backward_penalty: float,
+    ) -> tuple[int, float, dict[str, Any]]:
+        """Find the demo step whose screenshot best matches the current state.
+
+        Args:
+            current_screenshot: PNG bytes of current screen.
+            demo: Demo to search.
+            demo_dir: Directory containing demo screenshots.
+            min_step: Last matched step index (for monotonic bias).
+                Steps before this index receive a backward penalty.
+                Use ``0`` to disable monotonic bias.
+            backward_penalty: Penalty weight for backward jumps.
+                A value of ``0.3`` means a full backward jump adds
+                0.3 to the normalized distance.
+
+        Returns:
+            Tuple of ``(step_index, normalized_distance, metadata)``.
+            ``normalized_distance`` is in [0, 1] range.
+            ``metadata`` contains method-specific info (e.g., top-K
+            candidates, raw distances).
+        """
+        ...
+
+
+class PHashAlignmentStrategy:
+    """Perceptual hash (pHash) alignment strategy.
+
+    Uses pHash Hamming distance to find the closest demo step.
+    This is the default strategy -- fast (sub-millisecond per
+    comparison), zero additional dependencies beyond ``imagehash``.
+    """
+
+    def find_closest_step(
+        self,
+        current_screenshot: bytes,
+        demo: Demo,
+        demo_dir: Path,
+        min_step: int,
+        backward_penalty: float,
+    ) -> tuple[int, float, dict[str, Any]]:
+        """Find closest step using pHash Hamming distance."""
+        current_img = Image.open(io.BytesIO(current_screenshot))
+        current_hash = imagehash.phash(current_img)
+
+        # Ensure all demo step pHashes are computed
+        _ensure_demo_phashes(demo, demo_dir)
+
+        total_steps = len(demo.steps)
+        best_step = 0
+        best_adjusted = float("inf")
+        raw_distances: list[tuple[int, int, float]] = []
+
+        for i, step in enumerate(demo.steps):
+            if step._phash is None:
+                continue
+            raw_dist = current_hash - step._phash
+            normalized = raw_dist / 64.0
+
+            # Apply monotonic backward penalty
+            adjusted = normalized
+            if min_step > 0 and i < min_step and total_steps > 0:
+                jump = min_step - i
+                adjusted += backward_penalty * (jump / total_steps)
+
+            raw_distances.append((i, raw_dist, adjusted))
+
+            if adjusted < best_adjusted:
+                best_adjusted = adjusted
+                best_step = i
+
+        # If no step had a valid hash, return step 0 with max distance
+        if best_adjusted == float("inf"):
+            return 0, 1.0, {"method": "phash", "raw_distances": []}
+
+        # Sort by adjusted distance for top-K metadata
+        raw_distances.sort(key=lambda x: x[2])
+        top_k = raw_distances[:5]
+
+        meta: dict[str, Any] = {
+            "method": "phash",
+            "raw_hamming_distance": next(
+                (d[1] for d in raw_distances if d[0] == best_step), 64
+            ),
+            "top_k_candidates": [
+                {"step": d[0], "raw_distance": d[1], "adjusted": round(d[2], 4)}
+                for d in top_k
+            ],
+            "backward_penalty_applied": (
+                min_step > 0 and best_step < min_step
+            ),
+        }
+
+        return best_step, best_adjusted, meta
+
+
+class CLIPAlignmentStrategy:
+    """CLIP embedding alignment strategy.
+
+    Uses CLIP (ViT-B/32) cosine similarity for semantic matching.
+    Requires ``open-clip-torch`` (included in ``[training]`` extras).
+
+    CLIP embeddings are cached on ``DemoStep.metadata["_clip_embedding"]``
+    (runtime only, not serialized).
+    """
+
+    def __init__(
+        self, model_name: str = "ViT-B-32", pretrained: str = "openai"
+    ):
+        if not _HAS_CLIP:
+            raise ImportError(
+                "open-clip-torch is required for CLIPAlignmentStrategy. "
+                "Install with: pip install open-clip-torch"
+            )
+        self._model_name = model_name
+        self._pretrained = pretrained
+        self._model = None
+        self._preprocess = None
+
+    def _ensure_model(self) -> None:
+        """Lazily load the CLIP model on first use."""
+        if self._model is not None:
+            return
+        logger.info(
+            "Loading CLIP model %s/%s (one-time, ~2s)...",
+            self._model_name,
+            self._pretrained,
+        )
+        self._model, _, self._preprocess = open_clip.create_model_and_transforms(
+            self._model_name,
+            pretrained=self._pretrained,
+        )
+        self._model.eval()
+        logger.info("CLIP model loaded")
+
+    def _embed_image(self, img: Image.Image) -> Any:
+        """Compute CLIP embedding for a PIL Image."""
+        self._ensure_model()
+        preprocessed = self._preprocess(img).unsqueeze(0)
+        with torch.no_grad():
+            embedding = self._model.encode_image(preprocessed)
+            embedding = embedding / embedding.norm(dim=-1, keepdim=True)
+        return embedding.squeeze(0).cpu().numpy()
+
+    def _ensure_clip_embeddings(self, demo: Demo, demo_dir: Path) -> None:
+        """Compute and cache CLIP embeddings for demo screenshots."""
+        for step in demo.steps:
+            if step.metadata.get("_clip_embedding") is not None:
+                continue
+            if not step.screenshot_path:
+                continue
+            screenshot_file = demo_dir / step.screenshot_path
+            if not screenshot_file.exists():
+                continue
+            try:
+                img = Image.open(screenshot_file).convert("RGB")
+                step.metadata["_clip_embedding"] = self._embed_image(img)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to compute CLIP embedding for step %d: %s",
+                    step.step_index,
+                    exc,
+                )
+
+    def find_closest_step(
+        self,
+        current_screenshot: bytes,
+        demo: Demo,
+        demo_dir: Path,
+        min_step: int,
+        backward_penalty: float,
+    ) -> tuple[int, float, dict[str, Any]]:
+        """Find closest step using CLIP cosine similarity."""
+        self._ensure_model()
+        self._ensure_clip_embeddings(demo, demo_dir)
+
+        current_img = Image.open(io.BytesIO(current_screenshot)).convert("RGB")
+        current_emb = self._embed_image(current_img)
+
+        total_steps = len(demo.steps)
+        best_step = 0
+        best_adjusted = float("inf")
+        candidates: list[tuple[int, float, float]] = []
+
+        for i, step in enumerate(demo.steps):
+            emb = step.metadata.get("_clip_embedding")
+            if emb is None:
+                continue
+            similarity = float(np.dot(current_emb, emb))
+            distance = 1.0 - similarity  # cosine distance
+
+            adjusted = distance
+            if min_step > 0 and i < min_step and total_steps > 0:
+                jump = min_step - i
+                adjusted += backward_penalty * (jump / total_steps)
+
+            candidates.append((i, distance, adjusted))
+
+            if adjusted < best_adjusted:
+                best_adjusted = adjusted
+                best_step = i
+
+        if best_adjusted == float("inf"):
+            return 0, 1.0, {"method": "clip", "candidates": []}
+
+        candidates.sort(key=lambda x: x[2])
+        top_k = candidates[:5]
+
+        meta: dict[str, Any] = {
+            "method": "clip",
+            "top_k_candidates": [
+                {
+                    "step": c[0],
+                    "cosine_distance": round(c[1], 4),
+                    "adjusted": round(c[2], 4),
+                }
+                for c in top_k
+            ],
+            "backward_penalty_applied": (min_step > 0 and best_step < min_step),
+        }
+
+        return best_step, best_adjusted, meta
+
+
+class HybridAlignmentStrategy:
+    """Two-stage pHash + CLIP alignment strategy.
+
+    Stage 1: pHash filters to top-K candidates (fast, ~1ms total).
+    Stage 2: CLIP re-ranks the shortlist by semantic similarity.
+
+    Falls back to pHash-only when CLIP is not available.
+    """
+
+    def __init__(
+        self,
+        top_k: int = 5,
+        clip_model_name: str = "ViT-B-32",
+        clip_pretrained: str = "openai",
+    ):
+        self._top_k = top_k
+        self._clip: CLIPAlignmentStrategy | None = None
+        if _HAS_CLIP:
+            try:
+                self._clip = CLIPAlignmentStrategy(
+                    model_name=clip_model_name,
+                    pretrained=clip_pretrained,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "CLIP initialization failed, using pHash only: %s", exc
+                )
+
+    def find_closest_step(
+        self,
+        current_screenshot: bytes,
+        demo: Demo,
+        demo_dir: Path,
+        min_step: int,
+        backward_penalty: float,
+    ) -> tuple[int, float, dict[str, Any]]:
+        """Two-stage alignment: pHash top-K then CLIP re-rank."""
+        current_img = Image.open(io.BytesIO(current_screenshot))
+        current_hash = imagehash.phash(current_img)
+
+        _ensure_demo_phashes(demo, demo_dir)
+
+        total_steps = len(demo.steps)
+
+        # Stage 1: pHash coarse filter
+        phash_candidates: list[tuple[int, int]] = []
+        for i, step in enumerate(demo.steps):
+            if step._phash is None:
+                continue
+            dist = current_hash - step._phash
+            phash_candidates.append((i, dist))
+
+        if not phash_candidates:
+            return 0, 1.0, {"method": "phash+clip", "stage": "no_candidates"}
+
+        phash_candidates.sort(key=lambda x: x[1])
+        shortlist = phash_candidates[: self._top_k]
+
+        # Stage 2: CLIP re-ranking (if available and shortlist > 1)
+        if self._clip is not None and len(shortlist) > 1:
+            try:
+                self._clip._ensure_model()
+                self._clip._ensure_clip_embeddings(demo, demo_dir)
+
+                current_rgb = current_img.convert("RGB")
+                current_emb = self._clip._embed_image(current_rgb)
+
+                best_step = shortlist[0][0]
+                best_adjusted = float("inf")
+                clip_results: list[tuple[int, float, float]] = []
+
+                for step_idx, phash_dist in shortlist:
+                    step = demo.steps[step_idx]
+                    emb = step.metadata.get("_clip_embedding")
+                    if emb is None:
+                        sim = 1.0 - (phash_dist / 64.0)
+                    else:
+                        sim = float(np.dot(current_emb, emb))
+                    distance = 1.0 - sim
+
+                    adjusted = distance
+                    if min_step > 0 and step_idx < min_step and total_steps > 0:
+                        jump = min_step - step_idx
+                        adjusted += backward_penalty * (jump / total_steps)
+
+                    clip_results.append((step_idx, distance, adjusted))
+                    if adjusted < best_adjusted:
+                        best_adjusted = adjusted
+                        best_step = step_idx
+
+                clip_results.sort(key=lambda x: x[2])
+                meta: dict[str, Any] = {
+                    "method": "phash+clip",
+                    "phash_shortlist": [
+                        {"step": s[0], "phash_distance": s[1]} for s in shortlist
+                    ],
+                    "clip_reranked": [
+                        {
+                            "step": c[0],
+                            "clip_distance": round(c[1], 4),
+                            "adjusted": round(c[2], 4),
+                        }
+                        for c in clip_results
+                    ],
+                    "backward_penalty_applied": (
+                        min_step > 0 and best_step < min_step
+                    ),
+                }
+                return best_step, best_adjusted, meta
+
+            except Exception as exc:
+                logger.warning(
+                    "CLIP re-ranking failed, falling back to pHash: %s", exc
+                )
+
+        # Fallback: pHash only with monotonic bias
+        best_step = shortlist[0][0]
+        best_adjusted = float("inf")
+        for step_idx, phash_dist in phash_candidates:
+            normalized = phash_dist / 64.0
+            adjusted = normalized
+            if min_step > 0 and step_idx < min_step and total_steps > 0:
+                jump = min_step - step_idx
+                adjusted += backward_penalty * (jump / total_steps)
+            if adjusted < best_adjusted:
+                best_adjusted = adjusted
+                best_step = step_idx
+
+        meta = {
+            "method": "phash",
+            "raw_hamming_distance": next(
+                (d[1] for d in phash_candidates if d[0] == best_step), 64
+            ),
+            "top_k_candidates": [
+                {"step": s[0], "phash_distance": s[1]} for s in shortlist
+            ],
+            "backward_penalty_applied": (min_step > 0 and best_step < min_step),
+        }
+        return best_step, best_adjusted, meta
+
+
+# ---------------------------------------------------------------------------
+# Module-level helpers for pHash computation
+# ---------------------------------------------------------------------------
+
+
+def _ensure_demo_phashes(demo: Demo, demo_dir: Path) -> None:
+    """Compute and cache pHash for each demo step's screenshot.
+
+    Only computes hashes for steps that don't already have one
+    cached in ``step._phash``.  This means the first call per demo
+    does the work and all subsequent calls are free.
+
+    Args:
+        demo: Demo whose steps need hashes.
+        demo_dir: Directory containing the demo's screenshot files.
+    """
+    for step in demo.steps:
+        if step._phash is not None:
+            continue
+        if not step.screenshot_path:
+            continue
+        screenshot_file = demo_dir / step.screenshot_path
+        if not screenshot_file.exists():
+            logger.debug(
+                "Screenshot %s not found, skipping pHash for step %d",
+                screenshot_file,
+                step.step_index,
+            )
+            continue
+        try:
+            img = Image.open(screenshot_file)
+            step._phash = imagehash.phash(img)
+        except Exception as exc:
+            logger.warning(
+                "Failed to compute pHash for step %d: %s",
+                step.step_index,
+                exc,
+            )
+
+
 def _demo_to_dict(demo: Demo) -> dict[str, Any]:
     """Serialize a Demo to a dict, stripping non-serializable internal fields.
 
-    Removes ``DemoStep._phash`` which is a cached runtime value (an
-    ``imagehash.ImageHash`` object) that should not be persisted.
+    Removes ``DemoStep._phash`` (cached ``imagehash.ImageHash`` object)
+    and ``DemoStep.metadata["_clip_embedding"]`` (cached numpy array)
+    which are runtime-only values that should not be persisted.
     """
     data = asdict(demo)
     for step_dict in data.get("steps", []):
         step_dict.pop("_phash", None)
+        if "metadata" in step_dict and isinstance(step_dict["metadata"], dict):
+            step_dict["metadata"].pop("_clip_embedding", None)
     return data
 
 
@@ -213,11 +694,67 @@ class DemoLibrary:
 
     Args:
         library_dir: Root directory for storing demos.
+        alignment_strategy: Strategy for visual alignment.  Defaults to
+            ``PHashAlignmentStrategy``.  Pass a ``CLIPAlignmentStrategy``
+            or ``HybridAlignmentStrategy`` for semantic matching.
+        backward_penalty: Penalty weight for backward jumps in monotonic
+            progress tracking.  Default ``0.3``.  Set to ``0.0`` to
+            disable monotonic bias.
+        low_confidence_threshold: Threshold below which alignment is
+            considered "low confidence".  Default ``0.3``.
+        max_consecutive_low_confidence: Number of consecutive
+            low-confidence alignments before guidance is disabled.
+            Default ``3``.  Set to ``0`` to disable adaptive disabling.
     """
 
-    def __init__(self, library_dir: str = "demo_library"):
+    def __init__(
+        self,
+        library_dir: str = "demo_library",
+        alignment_strategy: AlignmentStrategy | None = None,
+        backward_penalty: float = _DEFAULT_BACKWARD_PENALTY,
+        low_confidence_threshold: float = _DEFAULT_LOW_CONFIDENCE_THRESHOLD,
+        max_consecutive_low_confidence: int = _DEFAULT_MAX_CONSECUTIVE_LOW_CONFIDENCE,
+    ):
         self.library_dir = Path(library_dir)
         self.library_dir.mkdir(parents=True, exist_ok=True)
+
+        # Alignment strategy (pluggable)
+        if alignment_strategy is not None:
+            self._alignment_strategy: AlignmentStrategy | None = alignment_strategy
+        elif _HAS_IMAGEHASH:
+            self._alignment_strategy = PHashAlignmentStrategy()
+        else:
+            self._alignment_strategy = None
+
+        # Monotonic progress tracking
+        self._backward_penalty = backward_penalty
+        self._last_matched_step: dict[str, int] = {}
+
+        # Adaptive guidance disabling
+        self._low_confidence_threshold = low_confidence_threshold
+        self._max_consecutive_low_confidence = max_consecutive_low_confidence
+        self._consecutive_low_confidence: dict[str, int] = {}
+        self._guidance_disabled: dict[str, bool] = {}
+
+    def reset_alignment_state(self, task_id: str | None = None) -> None:
+        """Reset per-episode alignment tracking state.
+
+        Should be called between episodes to reset monotonic progress
+        tracking and adaptive guidance disabling.  If *task_id* is
+        provided, only resets state for that task.  Otherwise resets
+        all tasks.
+
+        Args:
+            task_id: Optional task to reset.  If ``None``, resets all.
+        """
+        if task_id is not None:
+            self._last_matched_step.pop(task_id, None)
+            self._consecutive_low_confidence.pop(task_id, None)
+            self._guidance_disabled.pop(task_id, None)
+        else:
+            self._last_matched_step.clear()
+            self._consecutive_low_confidence.clear()
+            self._guidance_disabled.clear()
 
     def add_demo(
         self,
@@ -280,6 +817,7 @@ class DemoLibrary:
             if isinstance(screenshot, (str, Path)):
                 # Copy file
                 import shutil
+
                 shutil.copy2(str(screenshot), str(screenshot_path))
             elif isinstance(screenshot, bytes):
                 screenshot_path.write_bytes(screenshot)
@@ -290,6 +828,7 @@ class DemoLibrary:
 
             # Build action description
             from openadapt_evals.agents.base import action_to_string
+
             action_desc = action_to_string(action)
 
             step_description = ""
@@ -333,7 +872,9 @@ class DemoLibrary:
 
         logger.info(
             "Saved demo %s for task %s (%d steps)",
-            demo_id, task_id, len(steps),
+            demo_id,
+            task_id,
+            len(steps),
         )
 
         # Auto-enrich with VLM descriptions if requested
@@ -344,7 +885,8 @@ class DemoLibrary:
                 logger.warning(
                     "Auto-enrich failed for demo %s (continuing without "
                     "descriptions): %s",
-                    demo_id, exc,
+                    demo_id,
+                    exc,
                 )
 
         return demo_id
@@ -383,7 +925,9 @@ class DemoLibrary:
                 return Demo(steps=steps, **data)
             except (json.JSONDecodeError, TypeError, KeyError) as exc:
                 logger.warning(
-                    "Skipping invalid demo %s: %s", demo_dir.name, exc,
+                    "Skipping invalid demo %s: %s",
+                    demo_dir.name,
+                    exc,
                 )
 
         return None
@@ -417,7 +961,8 @@ class DemoLibrary:
         return [
             d.name
             for d in self.library_dir.iterdir()
-            if d.is_dir() and any(
+            if d.is_dir()
+            and any(
                 (sub / "demo.json").exists()
                 for sub in d.iterdir()
                 if sub.is_dir()
@@ -435,15 +980,20 @@ class DemoLibrary:
         """Get demo guidance for a specific step.
 
         When *use_visual_alignment* is ``True`` and *current_screenshot*
-        is provided, alignment uses perceptual hash (pHash) similarity
-        to find the demo step whose screenshot is most similar to the
-        current screen state.  This is critical when the agent takes a
-        different number of steps than the demo -- sequential step index
-        alignment breaks, but the visual state still matches.
+        is provided, alignment uses the configured ``AlignmentStrategy``
+        (default: pHash) to find the demo step whose screenshot is most
+        similar to the current screen state.  This is critical when the
+        agent takes a different number of steps than the demo --
+        sequential step index alignment breaks, but the visual state
+        still matches.
+
+        Monotonic progress bias penalizes backward jumps to prevent
+        oscillating alignment.  Adaptive guidance disabling turns off
+        guidance when alignment confidence is consistently low.
 
         Falls back to sequential ``step_index`` alignment when visual
-        alignment is disabled, no screenshot is provided, or
-        ``imagehash`` is not installed.
+        alignment is disabled, no screenshot is provided, or no
+        alignment strategy is available.
 
         When VLM-enriched descriptions are available, the returned
         instruction uses the description instead of raw coordinate
@@ -458,7 +1008,7 @@ class DemoLibrary:
         Args:
             task_id: Task identifier.
             current_screenshot: Current screenshot bytes.  When provided
-                with *use_visual_alignment=True*, enables pHash-based
+                with *use_visual_alignment=True*, enables visual
                 demo step matching instead of sequential index.
             step_index: Current step index in the agent's execution.
                 Used as fallback when visual alignment is disabled or
@@ -467,14 +1017,22 @@ class DemoLibrary:
                 agent's current screen.  When provided and the demo has
                 stored resolution metadata, coordinates are
                 proportionally normalized.
-            use_visual_alignment: Whether to use perceptual hash
-                similarity for step alignment.  Defaults to ``True``.
-                Set to ``False`` to force sequential index alignment
-                (original behavior).
+            use_visual_alignment: Whether to use visual similarity for
+                step alignment.  Defaults to ``True``.  Set to
+                ``False`` to force sequential index alignment (original
+                behavior).
 
         Returns:
             DemoGuidance with the demo's recommendation for this step.
         """
+        # --- Check adaptive guidance disabling ------------------------------
+        if self._guidance_disabled.get(task_id, False):
+            logger.debug(
+                "Demo guidance disabled for task %s (low confidence)",
+                task_id,
+            )
+            return _empty_guidance(step_index)
+
         demo = self.get_demo(task_id)
         if demo is None:
             return _empty_guidance(step_index)
@@ -486,26 +1044,89 @@ class DemoLibrary:
         # --- Visual similarity alignment ------------------------------------
         visual_alignment_used = False
         visual_distance: float | None = None
+        alignment_trace: AlignmentTraceEntry | None = None
         demo_dir = self._demo_dir(task_id, demo.demo_id)
 
         if (
             use_visual_alignment
             and current_screenshot is not None
-            and _HAS_IMAGEHASH
+            and self._alignment_strategy is not None
         ):
-            matched_idx, distance = self._find_closest_demo_step(
-                current_screenshot, demo, demo_dir,
+            t0 = time.monotonic()
+
+            # Get last matched step for monotonic bias
+            min_step = self._last_matched_step.get(task_id, 0)
+
+            matched_idx, distance, meta = (
+                self._alignment_strategy.find_closest_step(
+                    current_screenshot,
+                    demo,
+                    demo_dir,
+                    min_step=min_step,
+                    backward_penalty=self._backward_penalty,
+                )
             )
+
+            elapsed_ms = (time.monotonic() - t0) * 1000.0
+
             step = demo.steps[matched_idx]
             visual_alignment_used = True
             visual_distance = float(distance)
-            # Confidence: distance 0 -> 1.0, distance 32 -> 0.5,
-            # distance 64 -> 0.0.  pHash is 64-bit so max distance=64.
-            confidence = max(0.0, 1.0 - distance / 64.0)
+            # Confidence: normalized distance 0 -> 1.0, distance 1.0 -> 0.0
+            confidence = max(0.0, 1.0 - distance)
+
+            # Build alignment trace
+            method = meta.get("method", "unknown")
+            alignment_trace = AlignmentTraceEntry(
+                agent_step_index=step_index,
+                matched_demo_step=matched_idx,
+                distance=distance,
+                confidence=confidence,
+                method=method,
+                visual_alignment_used=True,
+                candidates_considered=len(demo.steps),
+                elapsed_ms=elapsed_ms,
+                backward_penalty_applied=meta.get(
+                    "backward_penalty_applied", False
+                ),
+                metadata=meta,
+            )
+
+            # Update monotonic progress tracking
+            self._last_matched_step[task_id] = matched_idx
+
+            # Update adaptive guidance disabling
+            if (
+                self._max_consecutive_low_confidence > 0
+                and confidence < self._low_confidence_threshold
+            ):
+                count = (
+                    self._consecutive_low_confidence.get(task_id, 0) + 1
+                )
+                self._consecutive_low_confidence[task_id] = count
+                if count >= self._max_consecutive_low_confidence:
+                    logger.warning(
+                        "Disabling demo guidance for task %s after %d "
+                        "consecutive low-confidence alignments "
+                        "(threshold=%.2f)",
+                        task_id,
+                        count,
+                        self._low_confidence_threshold,
+                    )
+                    self._guidance_disabled[task_id] = True
+                    alignment_trace.guidance_disabled = True
+            else:
+                self._consecutive_low_confidence[task_id] = 0
+
             logger.info(
                 "Visual alignment: step_index=%d matched demo step %d "
-                "(distance=%d, confidence=%.2f) for task %s",
-                step_index, matched_idx, distance, confidence, task_id,
+                "(distance=%.3f, confidence=%.2f, method=%s) for task %s",
+                step_index,
+                matched_idx,
+                distance,
+                confidence,
+                method,
+                task_id,
             )
         elif step_index < total_steps:
             # Sequential alignment: use step_index directly
@@ -519,16 +1140,26 @@ class DemoLibrary:
             logger.info(
                 "Step %d exceeds demo length %d for task %s, "
                 "returning last step with low confidence",
-                step_index, total_steps, task_id,
+                step_index,
+                total_steps,
+                task_id,
             )
 
         # Resolve screenshot paths
-        screenshot_path = str(demo_dir / step.screenshot_path) if step.screenshot_path else None
+        screenshot_path = (
+            str(demo_dir / step.screenshot_path)
+            if step.screenshot_path
+            else None
+        )
 
         next_screenshot_path = None
         if step.step_index + 1 < total_steps:
             next_step = demo.steps[step.step_index + 1]
-            next_screenshot_path = str(demo_dir / next_step.screenshot_path) if next_step.screenshot_path else None
+            next_screenshot_path = (
+                str(demo_dir / next_step.screenshot_path)
+                if next_step.screenshot_path
+                else None
+            )
 
         # --- Resolution normalization ----------------------------------------
         norm_x = step.x
@@ -554,6 +1185,11 @@ class DemoLibrary:
             normalized_y=norm_y,
         )
 
+        # Include alignment trace in guidance metadata
+        guidance_metadata: dict[str, Any] = {}
+        if alignment_trace is not None:
+            guidance_metadata["alignment_trace"] = asdict(alignment_trace)
+
         return DemoGuidance(
             available=True,
             step_index=step.step_index,
@@ -565,6 +1201,7 @@ class DemoLibrary:
             next_screenshot_path=next_screenshot_path,
             confidence=confidence,
             total_demo_steps=total_steps,
+            metadata=guidance_metadata,
             visual_alignment_used=visual_alignment_used,
             visual_distance=visual_distance,
         )
@@ -607,9 +1244,7 @@ class DemoLibrary:
             demo_dir = self._demo_dir(task_id, demo_id)
             demo_json = demo_dir / "demo.json"
             if not demo_json.exists():
-                raise ValueError(
-                    f"No demo.json found at {demo_dir}"
-                )
+                raise ValueError(f"No demo.json found at {demo_dir}")
             with open(demo_json) as f:
                 data = json.load(f)
             steps = [DemoStep(**s) for s in data.pop("steps", [])]
@@ -637,7 +1272,8 @@ class DemoLibrary:
                 logger.warning(
                     "Screenshot %s not found, skipping enrichment for "
                     "step %d",
-                    screenshot_file, step.step_index,
+                    screenshot_file,
+                    step.step_index,
                 )
                 continue
 
@@ -654,12 +1290,15 @@ class DemoLibrary:
                     step.description = desc
                     enriched_count += 1
                     logger.info(
-                        "Step %d enriched: %s", step.step_index, desc,
+                        "Step %d enriched: %s",
+                        step.step_index,
+                        desc,
                     )
             except Exception as exc:
                 logger.warning(
                     "VLM enrichment failed for step %d: %s",
-                    step.step_index, exc,
+                    step.step_index,
+                    exc,
                 )
 
         if enriched_count > 0:
@@ -669,90 +1308,16 @@ class DemoLibrary:
                 json.dump(_demo_to_dict(demo), f, indent=2)
             logger.info(
                 "Enriched %d steps in demo %s for task %s",
-                enriched_count, demo.demo_id, task_id,
+                enriched_count,
+                demo.demo_id,
+                task_id,
             )
         else:
             logger.info(
                 "No steps needed enrichment in demo %s for task %s",
-                demo.demo_id, task_id,
+                demo.demo_id,
+                task_id,
             )
-
-    def _find_closest_demo_step(
-        self,
-        current_screenshot: bytes,
-        demo: Demo,
-        demo_dir: Path,
-    ) -> tuple[int, int]:
-        """Find the demo step whose screenshot is most similar to current state.
-
-        Uses perceptual hashing (pHash) to compare the current screenshot
-        against all demo screenshots.  Returns the index of the closest
-        match and the Hamming distance.
-
-        Demo screenshot hashes are cached on the ``DemoStep._phash``
-        field so they are only computed once per session.
-
-        Args:
-            current_screenshot: PNG bytes of the current screen.
-            demo: The demo to search.
-            demo_dir: Directory containing the demo's screenshot files.
-
-        Returns:
-            Tuple of ``(best_step_index, hamming_distance)``.
-        """
-        current_img = Image.open(io.BytesIO(current_screenshot))
-        current_hash = imagehash.phash(current_img)
-
-        # Ensure all demo step pHashes are computed
-        self._ensure_demo_phashes(demo, demo_dir)
-
-        best_step = 0
-        best_distance = float("inf")
-        for i, step in enumerate(demo.steps):
-            if step._phash is None:
-                continue
-            distance = current_hash - step._phash
-            if distance < best_distance:
-                best_distance = distance
-                best_step = i
-
-        # If no step had a valid hash, return step 0 with max distance
-        if best_distance == float("inf"):
-            return 0, 64
-
-        return best_step, int(best_distance)
-
-    def _ensure_demo_phashes(self, demo: Demo, demo_dir: Path) -> None:
-        """Compute and cache pHash for each demo step's screenshot.
-
-        Only computes hashes for steps that don't already have one
-        cached in ``step._phash``.  This means the first call per demo
-        does the work and all subsequent calls are free.
-
-        Args:
-            demo: Demo whose steps need hashes.
-            demo_dir: Directory containing the demo's screenshot files.
-        """
-        for step in demo.steps:
-            if step._phash is not None:
-                continue
-            if not step.screenshot_path:
-                continue
-            screenshot_file = demo_dir / step.screenshot_path
-            if not screenshot_file.exists():
-                logger.debug(
-                    "Screenshot %s not found, skipping pHash for step %d",
-                    screenshot_file, step.step_index,
-                )
-                continue
-            try:
-                img = Image.open(screenshot_file)
-                step._phash = imagehash.phash(img)
-            except Exception as exc:
-                logger.warning(
-                    "Failed to compute pHash for step %d: %s",
-                    step.step_index, exc,
-                )
 
     def _demo_dir(self, task_id: str, demo_id: str) -> Path:
         """Get the directory for a specific demo."""
