@@ -388,6 +388,7 @@ class WAALiveConfig:
     evaluate_retries: int = 3  # Number of retries for /evaluate with exponential backoff
     evaluate_retry_base_delay: float = 5.0  # Base delay (seconds) between retries
     waa_examples_path: str | None = None  # Auto-detected from common paths + WAA_EXAMPLES_PATH env
+    lightweight: bool = True  # Skip cleanup/focus checks; let the agent handle popups
     clean_desktop: bool = False
     force_tray_icons: bool = False
     reapply_clean_desktop_each_reset: bool = False
@@ -674,54 +675,50 @@ class WAALiveAdapter(BenchmarkAdapter):
 
         import requests
 
-        # Close windows and dismiss notifications ONLY if explicitly requested.
-        # The close_all and notification cleanup commands can crash the WAA Flask
-        # server (PowerShell Get-Process hangs, taskkill blocks), leaving the
-        # server unresponsive for the rest of the run.
+        if self.config.lightweight:
+            # Lightweight mode: run task setup commands, take screenshot, go.
+            # No cleanup, no notification dismissal, no focus checks.
+            # The agent handles popups autonomously (proven more reliable).
+            if task.raw_config:
+                self._run_task_setup(task.raw_config)
+                time.sleep(2.0)
+            return self._get_observation()
+
+        # Legacy mode (lightweight=False): full cleanup + focus checks.
+        # Kept for backward compatibility but not recommended — the cleanup
+        # commands frequently crash the WAA Flask server.
+        try:
+            dismiss_cmd = (
+                "import pyautogui, subprocess; "
+                "subprocess.run('taskkill /F /IM OneDriveStandaloneUpdater.exe /T', "
+                "shell=True, capture_output=True, timeout=5); "
+                "pyautogui.press('escape'); "
+                "pyautogui.press('escape')"
+            )
+            resp = requests.post(
+                f"{self.config.server_url}/execute_windows",
+                json={"command": dismiss_cmd},
+                timeout=8.0,
+            )
+            if resp.status_code == 200:
+                logger.debug("OneDrive dismiss sent")
+        except Exception as e:
+            logger.debug("OneDrive dismiss failed (non-fatal): %s", e)
+
         if self.config.clean_desktop:
-            try:
-                close_cmd = (
-                    "import subprocess; "
-                    "subprocess.run("
-                    "['powershell', '-Command', "
-                    "'Get-Process | Where-Object {$_.MainWindowTitle -ne \\\"\\\"} | "
-                    "ForEach-Object { $_.CloseMainWindow() }'], "
-                    "timeout=10)"
-                )
-                resp = requests.post(
-                    f"{self.config.server_url}/execute_windows",
-                    json={"command": close_cmd},
-                    timeout=10.0,
-                )
-                if resp.status_code == 200:
-                    logger.info("Closed all windows for clean state")
-            except Exception as e:
-                logger.warning("close_all failed (non-fatal): %s", e)
             self._apply_clean_desktop_policy(requests)
 
-        # LibreOffice can surface a modal "Document Recovery" dialog after
-        # dirty shutdowns. Pre-clean recovery state before setup to avoid
-        # spending task steps dismissing infra popups.
         if task.raw_config and self._is_libreoffice_task(task.raw_config):
             self._prepare_libreoffice_clean_state(requests)
 
-        # Chrome shows a "Sign in to Chrome" modal dialog on first launch
-        # that blocks automation.  Suppress first-run UX before task setup
-        # opens Chrome.
         if task.raw_config and self._is_chrome_task(task.raw_config):
             self._prepare_chrome_clean_state(requests)
 
-        # If task has setup commands in raw_config, execute them
         if task.raw_config:
             self._run_task_setup(task.raw_config)
 
-        # Delay for UI to settle after setup (WAA uses 5s)
         time.sleep(5.0)
 
-        # Ensure the target application is focused and visible.
-        # After setup (close_all -> verify_apps -> download -> open), the
-        # opened application may be behind other windows, still loading, or
-        # obscured by notifications.  This wastes agent steps recovering.
         if task.raw_config:
             focused = self._ensure_app_focused(task.raw_config)
             if not focused and self.config.strict_setup_readiness:
