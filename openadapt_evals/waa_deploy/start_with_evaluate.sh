@@ -24,6 +24,17 @@ else
     cd /client
     python "$EVAL_SERVER" > /tmp/evaluate_server.log 2>&1 &
     echo "Evaluate server started on port 5050 (PID: $!)"
+
+    # Exempt port 5050 from the DNAT rule that forwards all traffic to
+    # the Windows VM. Without this, connections to port 5050 get forwarded
+    # to 172.30.0.2:5050 (Windows) instead of reaching the evaluate server
+    # running on the container's Linux side.
+    (
+        sleep 10  # Wait for network.sh to set up DNAT rules
+        iptables -t nat -I PREROUTING 1 -p tcp --dport 5050 -j ACCEPT 2>/dev/null \
+            && echo "iptables: exempted port 5050 from DNAT" \
+            || echo "iptables: failed to exempt port 5050 (non-fatal)"
+    ) &
 fi
 
 # Execute the command passed as arguments (e.g., /entry.sh --prepare-image false)
