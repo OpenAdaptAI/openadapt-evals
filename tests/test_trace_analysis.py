@@ -570,6 +570,115 @@ class TestReportGeneration:
         generate_report(analyzer=analyzer, output_path=output)
         assert output.exists()
 
+    def test_report_contains_score_chart(self, full_eval_jsonl: Path, tmp_path: Path):
+        """Score Distribution bar chart should be present."""
+        analyzer = TraceAnalyzer(full_eval_jsonl)
+        output = tmp_path / "score_chart.html"
+        generate_report(analyzer=analyzer, output_path=output)
+        content = output.read_text(encoding="utf-8")
+        assert "Score Distribution" in content
+        assert "score-bar-fill" in content
+
+    def test_report_contains_failure_analysis(self, full_eval_jsonl: Path, tmp_path: Path):
+        """Failure Analysis section with example episode IDs."""
+        analyzer = TraceAnalyzer(full_eval_jsonl)
+        output = tmp_path / "failures.html"
+        generate_report(analyzer=analyzer, output_path=output)
+        content = output.read_text(encoding="utf-8")
+        assert "Failure Analysis" in content
+        # Should contain example episode IDs
+        assert "Example Episodes" in content
+
+    def test_report_contains_percentile_stats(self, full_eval_jsonl: Path, tmp_path: Path):
+        """Summary should include median and percentile breakdowns."""
+        analyzer = TraceAnalyzer(full_eval_jsonl)
+        output = tmp_path / "percentiles.html"
+        generate_report(analyzer=analyzer, output_path=output)
+        content = output.read_text(encoding="utf-8")
+        assert "Median Score" in content
+        assert "Median Time" in content
+        assert "P25" in content
+        assert "P75" in content
+
+    def test_report_contains_copy_markdown_button(self, full_eval_jsonl: Path, tmp_path: Path):
+        """Copy as Markdown button should be present."""
+        analyzer = TraceAnalyzer(full_eval_jsonl)
+        output = tmp_path / "copy_md.html"
+        generate_report(analyzer=analyzer, output_path=output)
+        content = output.read_text(encoding="utf-8")
+        assert "Copy as Markdown" in content
+        assert "copyMarkdown" in content
+
+    def test_report_contains_sort_indicators(self, full_eval_jsonl: Path, tmp_path: Path):
+        """Table headers should have sort functionality."""
+        analyzer = TraceAnalyzer(full_eval_jsonl)
+        output = tmp_path / "sort.html"
+        generate_report(analyzer=analyzer, output_path=output)
+        content = output.read_text(encoding="utf-8")
+        assert "sortTable" in content
+        assert "sorted-asc" in content or "sorted-desc" in content
+
+    def test_report_embeds_screenshots_as_base64(self, trajectory_dir: Path, tmp_path: Path):
+        """Screenshots should be embedded as base64 data URIs."""
+        analyzer = TraceAnalyzer(trajectory_dir)
+        output = tmp_path / "embedded.html"
+        generate_report(analyzer=analyzer, output_path=output)
+        content = output.read_text(encoding="utf-8")
+        # Should contain base64 data URI prefix (only if screenshots exist and are valid)
+        # The fixture creates minimal PNG files that should be embeddable
+        assert "data:image/png;base64," in content
+
+    def test_report_inline_step_expansion(self, trajectory_dir: Path, tmp_path: Path):
+        """Episode table rows with steps should be clickable for inline expansion."""
+        analyzer = TraceAnalyzer(trajectory_dir)
+        output = tmp_path / "inline_steps.html"
+        generate_report(analyzer=analyzer, output_path=output)
+        content = output.read_text(encoding="utf-8")
+        assert "toggleInlineSteps" in content
+        assert "step-detail-row" in content
+
+    def test_report_comparison_side_by_side(
+        self, full_eval_jsonl: Path, second_eval_jsonl: Path, tmp_path: Path
+    ):
+        """Comparison report should have side-by-side stat cards and task-level diff table."""
+        a1 = TraceAnalyzer(full_eval_jsonl)
+        a2 = TraceAnalyzer(second_eval_jsonl)
+        output = tmp_path / "comparison_v2.html"
+        generate_report(analyzer=a1, output_path=output, compare_with=a2)
+        content = output.read_text(encoding="utf-8")
+        assert "Run A" in content or "Baseline" in content
+        assert "Run B" in content or "New Run" in content
+        assert "Task-Level Changes" in content
+        assert "Score Delta" in content
+        assert "Steps Delta" in content
+
+    def test_report_generated_timestamp(self, full_eval_jsonl: Path, tmp_path: Path):
+        """Report should include generation timestamp."""
+        analyzer = TraceAnalyzer(full_eval_jsonl)
+        output = tmp_path / "timestamp.html"
+        generate_report(analyzer=analyzer, output_path=output)
+        content = output.read_text(encoding="utf-8")
+        assert "Generated:" in content
+
+    def test_report_lightbox(self, trajectory_dir: Path, tmp_path: Path):
+        """Lightbox for screenshot zoom should be present."""
+        analyzer = TraceAnalyzer(trajectory_dir)
+        output = tmp_path / "lightbox.html"
+        generate_report(analyzer=analyzer, output_path=output)
+        content = output.read_text(encoding="utf-8")
+        assert "lightbox" in content
+        assert "openLightbox" in content
+        assert "closeLightbox" in content
+
+    def test_report_score_color_coding(self, full_eval_jsonl: Path, tmp_path: Path):
+        """Score bars should be color-coded (green/yellow/red)."""
+        analyzer = TraceAnalyzer(full_eval_jsonl)
+        output = tmp_path / "colors.html"
+        generate_report(analyzer=analyzer, output_path=output)
+        content = output.read_text(encoding="utf-8")
+        assert "score-high" in content  # green for >0.75
+        assert "score-low" in content   # red for <0.25
+
 
 # ---------------------------------------------------------------------------
 # CLI tests
