@@ -1,6 +1,21 @@
 # CHANGELOG
 
 
+## v0.60.0 (2026-03-22)
+
+### Features
+
+- Add evaluate_milestones_screenshot for client-side reward computation
+  ([#182](https://github.com/OpenAdaptAI/openadapt-evals/pull/182),
+  [`0a615de`](https://github.com/OpenAdaptAI/openadapt-evals/commit/0a615de7e94c9d82a85ea82f978bbe350e85d722))
+
+Standalone function that evaluates milestone rewards from a screenshot using VLM checks only,
+  without requiring a WAA server. This enables the GRPO trainer to compute rewards client-side
+  during rollouts.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.59.3 (2026-03-22)
 
 ### Bug Fixes
