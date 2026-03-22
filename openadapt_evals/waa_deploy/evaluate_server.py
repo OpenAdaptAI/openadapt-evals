@@ -43,10 +43,17 @@ app = Flask(__name__)
 
 
 class MockEnv:
-    """Minimal env object matching what WAA getters expect."""
+    """Minimal env object matching what WAA getters expect.
 
-    def __init__(self, ctrl):
+    WAA getter functions access env.vm_ip and env.controller (and sometimes
+    env.cache_dir) to communicate with the Windows VM.  The vm_ip must match
+    the QEMU guest address used by the PythonController.
+    """
+
+    def __init__(self, ctrl, vm_ip: str = "172.30.0.2", port: int = 5000):
         self.controller = ctrl
+        self.vm_ip = vm_ip
+        self.port = port
         self.cache_dir = "/tmp/eval_cache"
         os.makedirs(self.cache_dir, exist_ok=True)
 
