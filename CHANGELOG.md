@@ -1,6 +1,20 @@
 # CHANGELOG
 
 
+## v0.59.1 (2026-03-22)
+
+### Bug Fixes
+
+- Add shell=True to launch handler for Windows app resolution
+  ([`1f5eb21`](https://github.com/OpenAdaptAI/openadapt-evals/commit/1f5eb211c10e1318f9ed04f64b7d46ede1a75129))
+
+subprocess.Popen('calc') without shell=True fails on Windows because CreateProcessW doesn't search
+  PATH the same way cmd.exe does. WAA's native /setup/launch endpoint hardcodes shell=True which is
+  why it works. Match that behavior.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.59.0 (2026-03-21)
 
 ### Features
