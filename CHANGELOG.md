@@ -1,6 +1,31 @@
 # CHANGELOG
 
 
+## v0.62.0 (2026-03-22)
+
+### Features
+
+- Improve TraceAnalyzer HTML report with embedded screenshots and failure analysis
+  ([#184](https://github.com/OpenAdaptAI/openadapt-evals/pull/184),
+  [`8d4f595`](https://github.com/OpenAdaptAI/openadapt-evals/commit/8d4f59526f2b574f2db7893318d68cc33ca1873e))
+
+- Add score distribution bar chart with color-coded bars (green >0.75, yellow 0.25-0.75, red <0.25)
+  for per-task score visualization - Add failure analysis section with grouped failure types and
+  example episode IDs for each failure mode - Add interactive inline step viewer: click episode
+  table rows to expand and see step-by-step screenshots without scrolling to a separate section -
+  Embed screenshots as base64 data URIs so the HTML report is fully self-contained with no external
+  file references - Add percentile statistics: median score, P25/P75 breakdowns, median time, and
+  time distribution - Add side-by-side comparison stat cards (Run A vs Run B) with delta
+  highlighting (green = improved, red = regressed) and unified task-level diff table showing score
+  and step deltas - Add "Copy as Markdown" button that formats the summary as a Markdown table for
+  pasting into Slack/GitHub - Improve table sorting with sort direction indicators and data-sort
+  attributes for correct numeric sorting - Add hover effects on cards (lift + shadow), table rows,
+  and screenshot thumbnails; add print-friendly styles - Add generation timestamp in report header -
+  Add 14 new tests covering all new report features
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.61.0 (2026-03-22)
 
 ### Features
