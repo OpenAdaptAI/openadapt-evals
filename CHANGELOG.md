@@ -1,6 +1,17 @@
 # CHANGELOG
 
 
+## v0.63.0 (2026-03-22)
+
+### Features
+
+- Add end-to-end correction flywheel demonstration script
+  ([#185](https://github.com/OpenAdaptAI/openadapt-evals/pull/185),
+  [`fdc4cb4`](https://github.com/OpenAdaptAI/openadapt-evals/commit/fdc4cb4f39212ea10439efcf0b3af3697bc768da))
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.62.0 (2026-03-22)
 
 ### Features
