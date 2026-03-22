@@ -1,6 +1,24 @@
 # CHANGELOG
 
 
+## v0.59.3 (2026-03-22)
+
+### Bug Fixes
+
+- Add vm_ip and port to MockEnv in evaluate_server.py
+  ([#181](https://github.com/OpenAdaptAI/openadapt-evals/pull/181),
+  [`ee7eb8c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/ee7eb8c1237173483f347a74fb07f6a8b3bc51c2))
+
+WAA getter modules access env.vm_ip to make HTTP calls to the Windows VM. The MockEnv class in
+  evaluate_server.py was missing this attribute, causing getters to crash with AttributeError during
+  evaluation.
+
+Add vm_ip (default "172.30.0.2") and port (default 5000) to match the MockEnv in
+  evaluate_endpoint.py and the QEMU guest address used by the PythonController.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.59.2 (2026-03-22)
 
 ### Bug Fixes
