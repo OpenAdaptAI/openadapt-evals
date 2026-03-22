@@ -1,6 +1,20 @@
 # CHANGELOG
 
 
+## v0.61.0 (2026-03-22)
+
+### Features
+
+- Add checkpoint evaluation script for GRPO before/after comparison
+  ([#183](https://github.com/OpenAdaptAI/openadapt-evals/pull/183),
+  [`075472b`](https://github.com/OpenAdaptAI/openadapt-evals/commit/075472bd3b8dd4bb1eb41fb2aaa13f64068ba77c))
+
+Evaluates LoRA checkpoints against WAA tasks with milestone scoring. Same model loading, prompt, and
+  action parsing as the GRPO trainer. Supports baseline vs checkpoint comparison via TraceAnalyzer.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.60.0 (2026-03-22)
 
 ### Features
