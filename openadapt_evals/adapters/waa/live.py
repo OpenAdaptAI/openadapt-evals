@@ -1618,7 +1618,7 @@ class WAALiveAdapter(BenchmarkAdapter):
             escaped = app.replace("\\", "\\\\").replace("'", "\\'")
             return (
                 "import subprocess; "
-                f"subprocess.Popen('{escaped}')"
+                f"subprocess.Popen('{escaped}', shell=True)"
             )
 
         if entry_type == "open":
