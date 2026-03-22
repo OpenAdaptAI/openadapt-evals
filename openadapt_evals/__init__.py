@@ -110,6 +110,7 @@ from openadapt_evals.evaluation.verifier_registry import (
     TaskVerifierRegistry,
     VerificationResult,
 )
+from openadapt_evals.task_config import evaluate_milestones_screenshot
 
 # Lazy imports for optional dependencies
 def __getattr__(name: str):
@@ -151,6 +152,8 @@ __all__ = [
     # Task verification
     "TaskVerifierRegistry",
     "VerificationResult",
+    # Milestone evaluation
+    "evaluate_milestones_screenshot",
     # WAA adapters
     "WAAAdapter",
     "WAAConfig",

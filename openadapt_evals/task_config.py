@@ -455,6 +455,46 @@ class TaskConfig:
         return False
 
 
+def evaluate_milestones_screenshot(
+    task_config: TaskConfig,
+    screenshot: bytes,
+    *,
+    model: str = "gpt-4.1-mini",
+) -> float:
+    """Evaluate milestones using VLM screenshot checks only.
+
+    Returns milestones_passed / total as a float [0, 1].
+    Skips non-screenshot milestones (command, file checks).
+    No WAA server needed -- runs entirely client-side.
+
+    Args:
+        task_config: A TaskConfig with milestones defined.
+        screenshot: PNG screenshot bytes.
+        model: VLM model name for screenshot evaluation.
+
+    Returns:
+        Fraction of screenshot milestones passed (0.0 to 1.0).
+        Returns 0.0 if there are no screenshot milestones.
+    """
+    screenshot_milestones = [
+        m for m in task_config.milestones if m.check.check == "screenshot"
+    ]
+    if not screenshot_milestones:
+        return 0.0
+
+    from openadapt_evals.vlm_evaluator import vlm_judge
+
+    passed = 0
+    for milestone in screenshot_milestones:
+        success, _confidence = vlm_judge(
+            screenshot, milestone.check.description or "", model=model
+        )
+        if success:
+            passed += 1
+
+    return passed / len(screenshot_milestones)
+
+
 # ---------------------------------------------------------------------------
 # WAA JSON parsing helpers (module-level to keep TaskConfig class concise)
 # ---------------------------------------------------------------------------
