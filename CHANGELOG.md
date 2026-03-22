@@ -1,6 +1,23 @@
 # CHANGELOG
 
 
+## v0.59.2 (2026-03-22)
+
+### Bug Fixes
+
+- Exempt port 5050 from DNAT so evaluate server is reachable
+  ([`b379290`](https://github.com/OpenAdaptAI/openadapt-evals/commit/b3792907ed759dc1c1b1539e4bd6e1510baabaca))
+
+The DNAT rule in the container forwards ALL TCP ports to the Windows VM at 172.30.0.2, except a few
+  (5700, 5900, 7100, 8006, 8004). Port 5050 was NOT exempted, so connections to the evaluate server
+  were forwarded to the Windows VM instead of the container's Flask app.
+
+This was the root cause of every evaluate endpoint timeout/disconnect in this session. The evaluate
+  server was running fine — traffic just never reached it.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.59.1 (2026-03-22)
 
 ### Bug Fixes
