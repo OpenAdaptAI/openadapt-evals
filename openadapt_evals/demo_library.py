@@ -191,12 +191,18 @@ class DemoGuidance:
         will include the element description (e.g., *"Click on three-dot
         menu button in Chrome toolbar at approximately (0.96, 0.07)"*)
         instead of raw coordinate notation.
+
+        NOTE: The guidance intentionally does NOT include step counts or
+        position information (e.g., "step 4/4") because the planner can
+        misinterpret "last step" as "task is done" and prematurely signal
+        DONE. The guidance describes WHAT to do, not WHERE in the demo
+        the agent currently is.
         """
         if not self.available:
             return ""
 
         lines = [
-            f"DEMONSTRATION GUIDANCE (step {self.step_index + 1}/{self.total_demo_steps}):",
+            "DEMONSTRATION GUIDANCE:",
             f"  Expected action: {self.action_type}",
         ]
         if self.target_description:
@@ -206,7 +212,9 @@ class DemoGuidance:
         lines.append(f"  Instruction: {self.instruction}")
         lines.append(
             "  NOTE: Adapt if the current UI state differs from the demo. "
-            "This is guidance, not a rigid script."
+            "This is guidance, not a rigid script. "
+            "Do NOT assume the task is complete just because this is the "
+            "last guidance step -- verify the task goal is actually met."
         )
         return "\n".join(lines)
 

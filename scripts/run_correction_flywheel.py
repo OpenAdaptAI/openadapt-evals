@@ -589,6 +589,72 @@ def deallocate_vm(name: str, resource_group: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Environment reset between phases (Bug 1 fix)
+# ---------------------------------------------------------------------------
+
+
+def _reset_environment_between_phases(
+    server_url: str,
+    task_config,
+    mock: bool = False,
+) -> bool:
+    """Reset the WAA environment to a clean state between flywheel phases.
+
+    This ensures Phase 3 starts on a clean desktop, not leftover state from
+    Phase 1. Without this reset, artifacts from Phase 1 (e.g., open windows,
+    typed text) leak into Phase 3 and confuse both the agent and visual
+    alignment.
+
+    For live mode: runs the task's setup commands again via env.reset(), which
+    re-executes config entries (close processes, sleep, launch apps, etc.).
+
+    For mock mode: this is a no-op since MockFlywheelAdapter.reset() already
+    provides clean state.
+
+    Args:
+        server_url: WAA server URL.
+        task_config: Task configuration with setup commands.
+        mock: Whether we're in mock mode.
+
+    Returns:
+        True if reset succeeded.
+    """
+    if mock:
+        logger.info("Mock mode: environment reset is a no-op")
+        return True
+
+    logger.info("=" * 60)
+    logger.info("RESETTING ENVIRONMENT (clean state for Phase 3)")
+    logger.info("=" * 60)
+
+    try:
+        from openadapt_evals.adapters.rl_env import RLEnvironment, ResetConfig
+        from openadapt_evals.adapters.waa.live import WAALiveAdapter, WAALiveConfig
+
+        adapter = WAALiveAdapter(WAALiveConfig(server_url=server_url))
+        env = RLEnvironment(adapter, task_config=task_config)
+
+        # Full reset: closes all windows and re-runs setup commands
+        # The task_config.setup entries typically include process kills and
+        # cleanup commands that restore the desktop to a known state.
+        obs = env.reset(config=ResetConfig(task_id=task_config.id))
+
+        if obs and obs.screenshot:
+            logger.info(
+                "Environment reset succeeded (screenshot: %d bytes)",
+                len(obs.screenshot),
+            )
+        else:
+            logger.info("Environment reset completed (no screenshot returned)")
+
+        return True
+
+    except Exception as e:
+        logger.error("Environment reset failed: %s", e, exc_info=True)
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Mock adapter and agent for offline testing
 # ---------------------------------------------------------------------------
 
@@ -707,6 +773,7 @@ def _run_live_episode(
     grounder_model: str = "gpt-4.1-mini",
     grounder_provider: str = "openai",
     screenshot_dir: Path | None = None,
+    use_visual_alignment: bool = True,
 ) -> tuple[float, list[bytes]]:
     """Run one episode against a live WAA server. Returns (score, screenshots)."""
     from openadapt_evals.adapters.base import BenchmarkTask
@@ -728,7 +795,11 @@ def _run_live_episode(
     agent: object
     if demo_library is not None:
         from openadapt_evals.agents.demo_guided_agent import DemoGuidedAgent
-        agent = DemoGuidedAgent(base_agent=base_agent, demo_library=demo_library)
+        agent = DemoGuidedAgent(
+            base_agent=base_agent,
+            demo_library=demo_library,
+            use_visual_alignment=use_visual_alignment,
+        )
     else:
         agent = base_agent
 
@@ -954,6 +1025,86 @@ def phase2_correct(
     return demo_dir
 
 
+def _validate_demo_quality(demo_dir: str, task_id: str) -> list[str]:
+    """Validate demo quality before using it for guidance (Bug 2 fix).
+
+    Checks:
+    - Screenshots exist and are real image files
+    - Screenshots don't contain duplicate content (e.g., "Hello WorldHello world")
+    - Demo steps have distinct screenshots (not all identical)
+
+    Args:
+        demo_dir: Root demo directory.
+        task_id: Task identifier to check.
+
+    Returns:
+        List of warning messages. Empty if demo passes all checks.
+    """
+    warnings = []
+    demo_path = Path(demo_dir) / task_id
+    if not demo_path.exists():
+        return ["Demo directory does not exist"]
+
+    # Find demo subdirectories
+    demo_subdirs = [
+        d for d in demo_path.iterdir()
+        if d.is_dir() and (d / "demo.json").exists()
+    ]
+    if not demo_subdirs:
+        return ["No demo.json found in demo directory"]
+
+    for demo_subdir in demo_subdirs:
+        demo_json = demo_subdir / "demo.json"
+        try:
+            with open(demo_json) as f:
+                metadata = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            warnings.append(f"Cannot read {demo_json}: {e}")
+            continue
+
+        steps = metadata.get("steps", [])
+        screenshot_sizes = []
+
+        for i, step in enumerate(steps):
+            ss_name = step.get("screenshot", f"step_{i:03d}.png")
+            ss_path = demo_subdir / ss_name
+
+            if not ss_path.exists():
+                warnings.append(f"Missing screenshot: {ss_path}")
+                continue
+
+            size = ss_path.stat().st_size
+            if size < 100:
+                warnings.append(
+                    f"Screenshot {ss_name} is suspiciously small "
+                    f"({size} bytes) -- may be a placeholder"
+                )
+            screenshot_sizes.append(size)
+
+        # Check for duplicate screenshots (all same size is a heuristic
+        # for identical content -- exact check would require hashing)
+        if len(screenshot_sizes) > 2 and len(set(screenshot_sizes)) == 1:
+            warnings.append(
+                f"All {len(screenshot_sizes)} screenshots have identical size "
+                f"({screenshot_sizes[0]} bytes) -- likely indistinguishable"
+            )
+
+        # Check action values for duplicate content patterns
+        for i, step in enumerate(steps):
+            action = step.get("action", {})
+            text_val = action.get("text", "")
+            if text_val:
+                # Check for doubled text like "Hello WorldHello world"
+                half = len(text_val) // 2
+                if half > 3 and text_val[:half].lower() == text_val[half:].lower():
+                    warnings.append(
+                        f"Step {i} action text appears doubled: "
+                        f"'{text_val}' -- demo may be from a failed run"
+                    )
+
+    return warnings
+
+
 def phase3_retry(
     mock: bool,
     server_url: str | None,
@@ -969,6 +1120,23 @@ def phase3_retry(
 
     ss_dir = output_dir / "phase3_screenshots"
     ss_dir.mkdir(parents=True, exist_ok=True)
+
+    # --- Bug 2: Validate demo quality before using it -----------------------
+    demo_warnings = _validate_demo_quality(demo_dir, task_config.id)
+    if demo_warnings:
+        for w in demo_warnings:
+            logger.warning("Demo quality issue: %s", w)
+        # Write warnings to output for audit trail
+        warnings_path = output_dir / "demo_quality_warnings.json"
+        with open(warnings_path, "w") as f:
+            json.dump(
+                {"task_id": task_config.id, "warnings": demo_warnings},
+                f, indent=2,
+            )
+        logger.warning(
+            "Demo has %d quality issues. See %s",
+            len(demo_warnings), warnings_path,
+        )
 
     if mock:
         adapter = MockFlywheelAdapter()
@@ -989,11 +1157,27 @@ def phase3_retry(
     else:
         from openadapt_evals.demo_library import DemoLibrary
         demo_library = DemoLibrary(demo_dir)
+
+        # --- Bug 3: Force sequential alignment for short demos ---------------
+        # When the demo has very few steps (< 5), pHash visual alignment
+        # cannot distinguish similar desktop screenshots (e.g., steps 0-2 all
+        # show the same desktop). Use sequential step index alignment instead.
+        demo = demo_library.get_demo(task_config.id)
+        use_visual_alignment = True
+        if demo is not None and len(demo.steps) < 5:
+            use_visual_alignment = False
+            logger.info(
+                "Short demo (%d steps < 5): forcing sequential alignment "
+                "instead of pHash visual alignment",
+                len(demo.steps),
+            )
+
         score, screenshots = _run_live_episode(
             server_url=server_url,
             task_config=task_config,
             demo_library=demo_library,
             screenshot_dir=ss_dir,
+            use_visual_alignment=use_visual_alignment,
             **kwargs,
         )
 
@@ -1104,6 +1288,14 @@ Examples:
                         help="Use mock adapter (no VM, no API keys)")
     parser.add_argument("--server-url", default="http://localhost:5001",
                         help="WAA server URL (ignored in mock mode)")
+    parser.add_argument("--reset-between-phases", action="store_true",
+                        default=True,
+                        help="Reset VM environment between Phase 1 and Phase 3 "
+                             "(default: True). Ensures Phase 3 starts on a clean "
+                             "desktop, not leftover state from Phase 1.")
+    parser.add_argument("--no-reset-between-phases", action="store_false",
+                        dest="reset_between_phases",
+                        help="Skip environment reset between phases.")
     parser.add_argument("--max-steps", type=int, default=15)
 
     # Model selection
@@ -1310,6 +1502,25 @@ Examples:
             msg = f"Phase 2 failed: {e}"
             logger.error(msg, exc_info=True)
             phase_errors.append(msg)
+
+        # ---------------------------------------------------------------
+        # Reset environment between phases (Bug 1 fix)
+        # ---------------------------------------------------------------
+        if args.reset_between_phases:
+            try:
+                reset_ok = _reset_environment_between_phases(
+                    server_url=args.server_url,
+                    task_config=task_config,
+                    mock=args.mock,
+                )
+                if not reset_ok:
+                    msg = "Environment reset between phases failed"
+                    logger.warning(msg)
+                    phase_errors.append(msg)
+            except Exception as e:
+                msg = f"Environment reset between phases failed: {e}"
+                logger.error(msg, exc_info=True)
+                phase_errors.append(msg)
 
         # ---------------------------------------------------------------
         # Phase 3: Retry with guidance
