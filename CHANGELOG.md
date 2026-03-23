@@ -1,6 +1,28 @@
 # CHANGELOG
 
 
+## v0.67.0 (2026-03-23)
+
+### Features
+
+- Add SGLang local model serving to comparison framework
+  ([#190](https://github.com/OpenAdaptAI/openadapt-evals/pull/190),
+  [`6454bc9`](https://github.com/OpenAdaptAI/openadapt-evals/commit/6454bc9057bf5bea9abd368ae7b0819e85c0a5b2))
+
+Add support for serving models via SGLang on remote GPU hosts, enabling comparison of API models
+  (GPT, Claude) against locally-served models (e.g. Qwen3.5-9B) that vLLM cannot serve.
+
+Key changes: - New scripts/sglang_server.py: SGLangServerManager handles full lifecycle (SSH
+  install, server start, readiness polling, SSH tunnel, cleanup) - Extended ModelConfig with
+  provider="sglang", serve config, max_new_tokens - New --gpu-host and --ssh-key CLI flags
+  (optional; sglang models skipped without --gpu-host) - SGLang server auto-starts per model,
+  tunneled as OpenAI-compatible API - Environment variables (OPENAI_BASE_URL, OPENAI_API_KEY)
+  saved/restored between models so API models remain unaffected - New
+  example_comparisons/unified_agents.yaml demonstrating mixed config
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.66.0 (2026-03-23)
 
 ### Features
