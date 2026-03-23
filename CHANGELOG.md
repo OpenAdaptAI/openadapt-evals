@@ -1,6 +1,26 @@
 # CHANGELOG
 
 
+## v0.66.0 (2026-03-23)
+
+### Features
+
+- Add GPU instance lifecycle CLI for model serving
+  ([#189](https://github.com/OpenAdaptAI/openadapt-evals/pull/189),
+  [`ce379be`](https://github.com/OpenAdaptAI/openadapt-evals/commit/ce379be06ef18c7308c2258905eb3215abfe03d5))
+
+Add `openadapt-gpu` CLI that automates the full GPU experiment workflow: launch EC2 instance,
+  install inference engine (SGLang/vLLM), serve model, set up SSH tunnel, and terminate. Replaces 9
+  manual steps with one command.
+
+Commands: launch, status, terminate, serve, run-comparison, ssh, logs.
+
+State persisted to ~/.openadapt/gpu_state.json so terminate always works even when SSH is broken
+  (uses EC2 API directly).
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.65.0 (2026-03-23)
 
 ### Features
