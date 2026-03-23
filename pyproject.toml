@@ -116,6 +116,8 @@ openadapt-train-grpo = "scripts.train_trl_grpo:main"
 openadapt-eval = "scripts.run_full_eval:main"
 openadapt-collect = "scripts.collect_distillation_data:main"
 openadapt-analyze = "openadapt_evals.analysis.cli:main"
+# GPU instance lifecycle (launch, serve, terminate)
+openadapt-gpu = "scripts.gpu_cli:main"
 
 [project.urls]
 Homepage = "https://github.com/OpenAdaptAI/openadapt-evals"
