@@ -1,6 +1,32 @@
 # CHANGELOG
 
 
+## v0.68.0 (2026-03-23)
+
+### Features
+
+- Add standalone GRPO trainer with WAADirect (no openadapt-ml dependency)
+  ([#191](https://github.com/OpenAdaptAI/openadapt-evals/pull/191),
+  [`ba049f7`](https://github.com/OpenAdaptAI/openadapt-evals/commit/ba049f74f82bb3034465cf4368f4808f22b5f7e9))
+
+Self-contained GRPO training package that eliminates the openadapt-ml dependency for RL training.
+  Uses direct HTTP calls to WAA Flask server (WAADirect) instead of the WAALiveAdapter +
+  RLEnvironment stack, removing version coupling and adapter indirection.
+
+Package structure (695 LOC total): - config.py: TrainingConfig dataclass - waa_direct.py: WAADirect
+  HTTP client (screenshot/click/type/key) - prompt.py: SYSTEM_PROMPT + build_agent_messages +
+  parse_vlm_output_to_action - reward.py: compute_group_advantages + evaluate_milestones_screenshot
+  - model_loader.py: load_model_and_processor (HF + PEFT) - trainer.py: GRPOTrainer with rollout
+  collection + training loop
+
+Key design decisions: - ZERO openadapt-ml imports (self-contained, will migrate later) -
+  max_new_tokens=2048 default (100 was catastrophically low) - Multi-format parser (Thought/Action,
+  bare DSL, JSON) - Fresh screenshot for evaluation (not cached) - Per-step backward to avoid OOM on
+  long trajectories - VLM judge via OpenAI API for milestone evaluation
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.67.0 (2026-03-23)
 
 ### Features
