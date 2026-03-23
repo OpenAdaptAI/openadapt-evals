@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""End-to-end correction flywheel demonstration.
+"""End-to-end correction flywheel with full VM lifecycle automation.
 
 Proves the core product thesis: agent fails -> human corrects -> correction
 stored -> agent retries with correction -> agent succeeds.
 
-Four phases:
-    Phase 1 (ATTEMPT):  Agent tries the task without guidance. Expected: low score.
-    Phase 2 (CORRECT):  Correction captured (from demo or human). Stored.
-    Phase 3 (RETRY):    Agent retries WITH demo guidance. Expected: higher score.
-    Phase 4 (VERIFY):   Compare scores. Improvement = flywheel working.
+Full lifecycle (with --manage-vm --setup-tunnels):
+    Step 0:  Start VM, wait for SSH, start container, apply iptables fix
+    Step 1:  Set up SSH tunnels, wait for WAA /probe
+    Phase 1: Agent attempts the task WITHOUT demo guidance (expected: low score)
+    Phase 2: Correction captured (from demo or human), stored
+    Phase 3: Agent retries WITH demo guidance (expected: higher score)
+    Phase 4: Compare scores, generate report
+    Cleanup: Deallocate VM (even on error, via try/finally)
 
 Usage:
     # Mock mode (no VM, no API keys -- proves the wiring):
@@ -18,11 +21,29 @@ Usage:
         --mock \
         --output flywheel_results/
 
-    # Live WAA mode:
+    # Live WAA mode (VM/tunnels already running):
     python scripts/run_correction_flywheel.py \
         --task-config example_tasks/notepad-hello.yaml \
         --demo-dir ./demos \
         --server-url http://localhost:5001 \
+        --output flywheel_results/
+
+    # Fully automated (single command, handles everything):
+    python scripts/run_correction_flywheel.py \
+        --task-config example_tasks/clear-browsing-data-chrome.yaml \
+        --demo-dir ./demos \
+        --manage-vm \
+        --setup-tunnels \
+        --output flywheel_results/
+
+    # Use a weaker baseline model to increase chance of failure:
+    python scripts/run_correction_flywheel.py \
+        --task-config example_tasks/clear-browsing-data-chrome.yaml \
+        --demo-dir ./demos \
+        --manage-vm \
+        --setup-tunnels \
+        --baseline-model gpt-4o-mini \
+        --guided-model gpt-4.1-mini \
         --output flywheel_results/
 """
 
@@ -32,8 +53,13 @@ import argparse
 import json
 import logging
 import os
+import signal
+import socket
+import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,6 +69,523 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("correction_flywheel")
+
+
+# ---------------------------------------------------------------------------
+# Infrastructure helpers (VM, container, tunnel, iptables)
+# ---------------------------------------------------------------------------
+
+# SSH options matching infrastructure/azure_vm.py
+_SSH_OPTS = [
+    "-o", "StrictHostKeyChecking=no",
+    "-o", "UserKnownHostsFile=/dev/null",
+    "-o", "LogLevel=ERROR",
+    "-o", "ConnectTimeout=10",
+    "-o", "ServerAliveInterval=60",
+    "-o", "ServerAliveCountMax=10",
+]
+
+# WAA storage directory on the VM (persistent OS disk, not ephemeral /mnt)
+_WAA_STORAGE_DIR = "/home/azureuser/waa-storage"
+
+
+def _ssh_run(
+    ip: str,
+    cmd: str,
+    username: str = "azureuser",
+    timeout: int = 120,
+) -> subprocess.CompletedProcess:
+    """Run a command on the VM via SSH.
+
+    Args:
+        ip: VM public IP address.
+        cmd: Command to execute on the VM.
+        username: SSH username.
+        timeout: Command timeout in seconds.
+
+    Returns:
+        CompletedProcess with return code and output.
+    """
+    full_cmd = ["ssh", *_SSH_OPTS, f"{username}@{ip}", cmd]
+    return subprocess.run(
+        full_cmd, capture_output=True, text=True, timeout=timeout,
+    )
+
+
+def start_vm(name: str, resource_group: str) -> bool:
+    """Start a deallocated Azure VM.
+
+    Idempotent: if the VM is already running, this is a no-op that returns True.
+
+    Args:
+        name: VM name (e.g., "waa-pool-00").
+        resource_group: Azure resource group.
+
+    Returns:
+        True if the VM is running after this call.
+    """
+    logger.info("Starting VM %s in resource group %s...", name, resource_group)
+
+    # Check current state first
+    state = get_vm_state(name, resource_group)
+    if state and "running" in state.lower():
+        logger.info("VM %s is already running", name)
+        return True
+
+    result = subprocess.run(
+        ["az", "vm", "start", "-g", resource_group, "-n", name],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        logger.error("Failed to start VM %s: %s", name, result.stderr.strip())
+        return False
+
+    logger.info("VM %s started successfully", name)
+    return True
+
+
+def get_vm_ip(name: str, resource_group: str) -> str | None:
+    """Get the public IP address of an Azure VM.
+
+    Args:
+        name: VM name.
+        resource_group: Azure resource group.
+
+    Returns:
+        Public IP string, or None if not found.
+    """
+    result = subprocess.run(
+        [
+            "az", "vm", "show", "-d",
+            "-g", resource_group,
+            "-n", name,
+            "--query", "publicIps",
+            "-o", "tsv",
+        ],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        return result.stdout.strip()
+    return None
+
+
+def get_vm_state(name: str, resource_group: str) -> str | None:
+    """Get the power state of an Azure VM.
+
+    Args:
+        name: VM name.
+        resource_group: Azure resource group.
+
+    Returns:
+        Power state string (e.g., "VM running"), or None.
+    """
+    result = subprocess.run(
+        [
+            "az", "vm", "get-instance-view",
+            "-g", resource_group,
+            "-n", name,
+            "--query", "instanceView.statuses[1].displayStatus",
+            "-o", "tsv",
+        ],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        return result.stdout.strip()
+    return None
+
+
+def wait_for_ssh(
+    ip: str,
+    username: str = "azureuser",
+    timeout: int = 180,
+) -> bool:
+    """Wait for SSH to become available on the VM.
+
+    Args:
+        ip: VM public IP address.
+        username: SSH username.
+        timeout: Maximum seconds to wait.
+
+    Returns:
+        True if SSH is reachable within timeout.
+    """
+    logger.info("Waiting for SSH on %s (timeout %ds)...", ip, timeout)
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            result = subprocess.run(
+                ["ssh", *_SSH_OPTS, f"{username}@{ip}", "echo ok"],
+                capture_output=True, text=True, timeout=15,
+            )
+            if result.returncode == 0:
+                elapsed = int(time.time() - start)
+                logger.info("SSH available after %ds", elapsed)
+                return True
+        except subprocess.TimeoutExpired:
+            pass
+        time.sleep(5)
+
+    logger.error("SSH not available after %ds", timeout)
+    return False
+
+
+def start_container(
+    vm_ip: str,
+    username: str = "azureuser",
+) -> bool:
+    """Ensure the WAA Docker container is running on the VM.
+
+    Idempotent: if the container is already running, returns True.
+    If the container exists but is stopped, starts it.
+    If no container exists, runs a new one.
+
+    Args:
+        vm_ip: VM public IP address.
+        username: SSH username.
+
+    Returns:
+        True if the container is running after this call.
+    """
+    logger.info("Ensuring WAA container is running on %s...", vm_ip)
+
+    # Check container state
+    result = _ssh_run(
+        vm_ip,
+        "docker inspect -f '{{.State.Running}}' winarena 2>/dev/null || echo missing",
+        username=username,
+    )
+    state = result.stdout.strip()
+
+    if state == "true":
+        logger.info("WAA container already running")
+        return True
+
+    if state == "missing":
+        # No container exists -- create and run one
+        logger.info("No winarena container found, creating new one...")
+        home_dir = f"/home/{username}"
+        docker_cmd = (
+            f"sudo mkdir -p {home_dir}/waa-storage && "
+            f"sudo chown {username}:{username} {home_dir}/waa-storage && "
+            f"docker run -d --name winarena "
+            f"--device=/dev/kvm "
+            f"--cap-add NET_ADMIN "
+            f"--stop-timeout 120 "
+            f"-p 5000:5000 "
+            f"-p 5050:5050 "
+            f"-p 8006:8006 "
+            f"-p 7200:7200 "
+            f"-v {home_dir}/waa-storage:/storage "
+            f"-e VERSION=11e "
+            f"-e RAM_SIZE=8G "
+            f"-e CPU_CORES=4 "
+            f"-e DISK_SIZE=64G "
+            f'-e ARGUMENTS="-qmp tcp:0.0.0.0:7200,server,nowait" '
+            f"waa-auto:latest "
+            f"/entry.sh --prepare-image false --start-client false"
+        )
+        result = _ssh_run(vm_ip, docker_cmd, username=username, timeout=60)
+        if result.returncode != 0:
+            logger.error(
+                "Failed to create container: %s", result.stderr.strip()
+            )
+            return False
+        logger.info("WAA container created and started")
+        return True
+
+    # Container exists but not running -- restart it
+    logger.info("WAA container stopped, starting...")
+    result = _ssh_run(vm_ip, "docker start winarena", username=username)
+    if result.returncode == 0:
+        logger.info("WAA container started")
+        return True
+
+    logger.error("Failed to start container: %s", result.stderr.strip())
+    return False
+
+
+def apply_iptables_fix(
+    vm_ip: str,
+    username: str = "azureuser",
+) -> bool:
+    """Apply the iptables fix for port 5050 inside the container.
+
+    The dockurr/windows base image sets up DNAT rules that redirect all
+    traffic to the Windows VM (172.30.0.2). Port 5050 (evaluate server)
+    runs on the Linux side of the container and needs to be exempted.
+
+    This is idempotent -- running it multiple times is safe because
+    iptables -C checks for the rule before adding it.
+
+    Args:
+        vm_ip: VM public IP address.
+        username: SSH username.
+
+    Returns:
+        True if the fix was applied (or was already in place).
+    """
+    logger.info("Applying iptables fix for port 5050...")
+
+    # Check if the rule already exists, add it if not
+    iptables_cmd = (
+        "docker exec winarena sh -c '"
+        "iptables -t nat -C PREROUTING -p tcp --dport 5050 -j ACCEPT 2>/dev/null "
+        "|| iptables -t nat -I PREROUTING 1 -p tcp --dport 5050 -j ACCEPT"
+        "'"
+    )
+    result = _ssh_run(vm_ip, iptables_cmd, username=username)
+
+    if result.returncode == 0:
+        logger.info("iptables fix applied (port 5050 exempted from DNAT)")
+        return True
+
+    # Non-fatal: the evaluate server may still work if the container's
+    # start_with_evaluate.sh already applied the fix
+    logger.warning(
+        "iptables fix returned non-zero (may already be applied): %s",
+        result.stderr.strip(),
+    )
+    return True  # Non-fatal, continue anyway
+
+
+def setup_eval_proxy(
+    vm_ip: str,
+    username: str = "azureuser",
+) -> bool:
+    """Set up the socat proxy for the evaluate server on the VM.
+
+    Docker port forwarding for 5050 is broken by QEMU's --cap-add NET_ADMIN
+    tap networking. We proxy VM:5051 -> docker exec -> container:5050.
+
+    Idempotent: restarts the systemd service if it exists, otherwise sets up
+    a manual socat process.
+
+    Args:
+        vm_ip: VM public IP address.
+        username: SSH username.
+
+    Returns:
+        True if proxy setup succeeded.
+    """
+    logger.info("Setting up socat eval proxy on %s...", vm_ip)
+
+    script = (
+        "if systemctl list-unit-files socat-waa-evaluate.service "
+        "| grep -q socat-waa-evaluate; then "
+        "  sudo systemctl restart socat-waa-evaluate.service; "
+        "else "
+        "  killall socat 2>/dev/null || true; sleep 1; "
+        "  which socat >/dev/null 2>&1 "
+        "  || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq socat; "
+        "  nohup socat TCP-LISTEN:5051,fork,reuseaddr "
+        "  'EXEC:docker exec -i winarena socat - TCP\\:127.0.0.1\\:5050' "
+        "  </dev/null >/dev/null 2>&1 & "
+        "fi"
+    )
+    result = _ssh_run(vm_ip, script, username=username)
+    if result.returncode != 0:
+        logger.warning("socat proxy setup returned non-zero: %s", result.stderr.strip())
+        return False
+    logger.info("socat eval proxy set up")
+    return True
+
+
+def _kill_existing_tunnels(ports: list[int]) -> None:
+    """Kill any existing SSH tunnel processes listening on the given ports.
+
+    Args:
+        ports: List of local ports to free up.
+    """
+    for port in ports:
+        # Find PIDs listening on the port
+        try:
+            result = subprocess.run(
+                ["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
+                capture_output=True, text=True,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                pids = result.stdout.strip().split("\n")
+                for pid in pids:
+                    pid = pid.strip()
+                    if pid:
+                        try:
+                            os.kill(int(pid), signal.SIGTERM)
+                            logger.info(
+                                "Killed process %s on port %d", pid, port
+                            )
+                        except (ProcessLookupError, ValueError):
+                            pass
+        except FileNotFoundError:
+            # lsof not available, try fuser
+            try:
+                subprocess.run(
+                    ["fuser", "-k", f"{port}/tcp"],
+                    capture_output=True, text=True,
+                )
+            except FileNotFoundError:
+                logger.warning(
+                    "Neither lsof nor fuser available, cannot kill port %d",
+                    port,
+                )
+
+
+def setup_tunnels(
+    vm_ip: str,
+    username: str = "azureuser",
+    local_ports: dict[str, tuple[int, int]] | None = None,
+) -> dict[str, int | None]:
+    """Set up SSH tunnels to the VM.
+
+    Kills existing tunnels on the target ports, then creates new ones.
+    Also sets up the socat eval proxy on the VM.
+
+    Default tunnel mapping:
+        - waa:      localhost:5001 -> VM:5000  (WAA Flask API)
+        - evaluate: localhost:5050 -> VM:5051  (evaluate server via socat)
+        - vnc:      localhost:8006 -> VM:8006  (noVNC web viewer)
+
+    Args:
+        vm_ip: VM public IP address.
+        username: SSH username.
+        local_ports: Dict of name -> (local_port, remote_port).
+            If None, uses default mapping.
+
+    Returns:
+        Dict of tunnel name -> subprocess PID (or None on failure).
+    """
+    if local_ports is None:
+        local_ports = {
+            "waa": (5001, 5000),
+            "evaluate": (5050, 5051),
+            "vnc": (8006, 8006),
+        }
+
+    logger.info("Setting up SSH tunnels to %s...", vm_ip)
+
+    # Kill existing tunnels on these ports
+    all_local_ports = [lp for lp, _ in local_ports.values()]
+    _kill_existing_tunnels(all_local_ports)
+    time.sleep(1)
+
+    # Set up socat proxy for the evaluate server
+    setup_eval_proxy(vm_ip, username=username)
+
+    pids: dict[str, int | None] = {}
+
+    for name, (local_port, remote_port) in local_ports.items():
+        ssh_cmd = [
+            "ssh",
+            *_SSH_OPTS,
+            "-o", "TCPKeepAlive=yes",
+            "-o", "ExitOnForwardFailure=yes",
+            "-N",  # Don't execute remote command
+            "-L", f"{local_port}:localhost:{remote_port}",
+            f"{username}@{vm_ip}",
+        ]
+
+        try:
+            proc = subprocess.Popen(
+                ssh_cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
+            )
+            time.sleep(0.5)
+
+            if proc.poll() is not None:
+                _, stderr = proc.communicate(timeout=2)
+                error_msg = stderr.decode().strip() if stderr else "unknown"
+                logger.error(
+                    "Tunnel %s failed: %s", name, error_msg[:200]
+                )
+                pids[name] = None
+            else:
+                logger.info(
+                    "Tunnel %s: localhost:%d -> %s:%d (PID %d)",
+                    name, local_port, vm_ip, remote_port, proc.pid,
+                )
+                pids[name] = proc.pid
+        except Exception as e:
+            logger.error("Failed to start tunnel %s: %s", name, e)
+            pids[name] = None
+
+    return pids
+
+
+def wait_for_waa(
+    server_url: str = "http://localhost:5001",
+    timeout: int = 600,
+) -> bool:
+    """Wait for the WAA server to respond to /probe.
+
+    Args:
+        server_url: WAA server URL.
+        timeout: Maximum seconds to wait.
+
+    Returns:
+        True if the server responded within timeout.
+    """
+    logger.info(
+        "Waiting for WAA server at %s/probe (timeout %ds)...",
+        server_url, timeout,
+    )
+    start = time.time()
+    last_log = 0
+
+    while time.time() - start < timeout:
+        elapsed = int(time.time() - start)
+        if elapsed - last_log >= 15:
+            logger.info("  [%ds] probing WAA...", elapsed)
+            last_log = elapsed
+
+        try:
+            req = urllib.request.Request(
+                f"{server_url}/probe", method="GET",
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                if resp.status == 200:
+                    logger.info("WAA server ready after %ds", elapsed)
+                    return True
+        except (urllib.error.URLError, OSError, TimeoutError):
+            pass
+
+        time.sleep(10)
+
+    logger.error("WAA server not ready after %ds", timeout)
+    return False
+
+
+def deallocate_vm(name: str, resource_group: str) -> bool:
+    """Deallocate an Azure VM (stop billing, keep disk).
+
+    This is safe to call even if the VM is already deallocated.
+
+    Args:
+        name: VM name.
+        resource_group: Azure resource group.
+
+    Returns:
+        True if deallocation succeeded (or VM was already deallocated).
+    """
+    logger.info("Deallocating VM %s (stops billing)...", name)
+    result = subprocess.run(
+        ["az", "vm", "deallocate", "-g", resource_group, "-n", name],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        logger.info("VM %s deallocated successfully", name)
+        return True
+
+    # Check if already deallocated
+    state = get_vm_state(name, resource_group)
+    if state and "deallocated" in state.lower():
+        logger.info("VM %s was already deallocated", name)
+        return True
+
+    logger.warning(
+        "Deallocate may have failed for %s: %s", name, result.stderr.strip()
+    )
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -463,6 +1006,9 @@ def phase4_verify(
     retry_score: float,
     output_dir: Path,
     task_name: str,
+    baseline_model: str | None = None,
+    guided_model: str | None = None,
+    phase_errors: list[str] | None = None,
 ) -> bool:
     """Phase 4: Compare scores and generate report."""
     logger.info("=" * 60)
@@ -473,7 +1019,7 @@ def phase4_verify(
     success = retry_score > attempt_score
 
     # Generate report
-    report = {
+    report: dict = {
         "task": task_name,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "attempt_score": attempt_score,
@@ -481,6 +1027,13 @@ def phase4_verify(
         "improvement": improvement,
         "flywheel_working": success,
     }
+
+    if baseline_model:
+        report["baseline_model"] = baseline_model
+    if guided_model:
+        report["guided_model"] = guided_model
+    if phase_errors:
+        report["errors"] = phase_errors
 
     report_path = output_dir / "flywheel_report.json"
     with open(report_path, "w") as f:
@@ -491,11 +1044,19 @@ def phase4_verify(
     print("CORRECTION FLYWHEEL RESULTS")
     print("=" * 60)
     print(f"Task:            {task_name}")
+    if baseline_model:
+        print(f"Baseline model:  {baseline_model}")
+    if guided_model:
+        print(f"Guided model:    {guided_model}")
     print(f"Attempt score:   {attempt_score:.2f}  (no guidance)")
     print(f"Retry score:     {retry_score:.2f}  (with correction/demo)")
     print(f"Improvement:     {improvement:+.2f}")
     print(f"Flywheel works:  {'YES' if success else 'NO'}")
     print(f"Report:          {report_path}")
+    if phase_errors:
+        print(f"Errors:          {len(phase_errors)} phase(s) had errors")
+        for err in phase_errors:
+            print(f"  - {err}")
     print("=" * 60)
 
     if success:
@@ -513,7 +1074,25 @@ def phase4_verify(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="End-to-end correction flywheel demonstration"
+        description="End-to-end correction flywheel with full VM lifecycle automation",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Mock mode (no VM, no API keys):
+  %(prog)s --task-config example_tasks/notepad-hello.yaml --mock
+
+  # Live mode, VM/tunnels already running:
+  %(prog)s --task-config example_tasks/notepad-hello.yaml --demo-dir ./demos
+
+  # Fully automated (single command):
+  %(prog)s --task-config example_tasks/clear-browsing-data-chrome.yaml \\
+      --demo-dir ./demos --manage-vm --setup-tunnels
+
+  # Weaker baseline for harder task differentiation:
+  %(prog)s --task-config example_tasks/clear-browsing-data-chrome.yaml \\
+      --demo-dir ./demos --manage-vm --setup-tunnels \\
+      --baseline-model gpt-4o-mini --guided-model gpt-4.1-mini
+""",
     )
     parser.add_argument("--task-config", required=True,
                         help="Path to task YAML config")
@@ -526,11 +1105,75 @@ def main() -> int:
     parser.add_argument("--server-url", default="http://localhost:5001",
                         help="WAA server URL (ignored in mock mode)")
     parser.add_argument("--max-steps", type=int, default=15)
-    parser.add_argument("--planner-model", default="gpt-4.1-mini")
-    parser.add_argument("--planner-provider", default="openai")
-    parser.add_argument("--grounder-model", default="gpt-4.1-mini")
-    parser.add_argument("--grounder-provider", default="openai")
+
+    # Model selection
+    model_group = parser.add_argument_group("model selection")
+    model_group.add_argument(
+        "--planner-model", default="gpt-4.1-mini",
+        help="Planner model for both phases (overridden by --baseline-model/--guided-model)",
+    )
+    model_group.add_argument("--planner-provider", default="openai")
+    model_group.add_argument(
+        "--grounder-model", default="gpt-4.1-mini",
+        help="Grounder model for both phases",
+    )
+    model_group.add_argument("--grounder-provider", default="openai")
+    model_group.add_argument(
+        "--baseline-model",
+        help="Planner model for Phase 1 (attempt without guidance). "
+             "Use a weaker model (e.g., gpt-4o-mini) to increase chance of failure.",
+    )
+    model_group.add_argument(
+        "--guided-model",
+        help="Planner model for Phase 3 (retry with guidance). "
+             "Use a stronger model to increase chance of success.",
+    )
+
+    # VM management
+    vm_group = parser.add_argument_group("VM management (optional)")
+    vm_group.add_argument(
+        "--manage-vm", action="store_true",
+        help="Start VM at beginning, deallocate at end (even on error)",
+    )
+    vm_group.add_argument(
+        "--vm-name", default="waa-pool-00",
+        help="Azure VM name (default: waa-pool-00)",
+    )
+    vm_group.add_argument(
+        "--vm-resource-group", default="openadapt-agents",
+        help="Azure resource group (default: openadapt-agents)",
+    )
+    vm_group.add_argument(
+        "--vm-user", default="azureuser",
+        help="SSH username for the VM (default: azureuser)",
+    )
+
+    # Tunnel setup
+    tunnel_group = parser.add_argument_group("tunnel setup (optional)")
+    tunnel_group.add_argument(
+        "--setup-tunnels", action="store_true",
+        help="Kill existing tunnels and create fresh SSH tunnels to the VM",
+    )
+    tunnel_group.add_argument(
+        "--waa-timeout", type=int, default=600,
+        help="Max seconds to wait for WAA server (default: 600)",
+    )
+    tunnel_group.add_argument(
+        "--ssh-timeout", type=int, default=180,
+        help="Max seconds to wait for SSH (default: 180)",
+    )
+
     args = parser.parse_args()
+
+    # Resolve baseline/guided models (fall back to --planner-model)
+    baseline_planner = args.baseline_model or args.planner_model
+    guided_planner = args.guided_model or args.planner_model
+
+    if args.baseline_model or args.guided_model:
+        logger.info(
+            "Model config: baseline=%s, guided=%s",
+            baseline_planner, guided_planner,
+        )
 
     # Load task config
     from openadapt_evals.task_config import TaskConfig
@@ -541,55 +1184,185 @@ def main() -> int:
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    live_kwargs = dict(
-        max_steps=args.max_steps,
-        planner_model=args.planner_model,
-        planner_provider=args.planner_provider,
-        grounder_model=args.grounder_model,
-        grounder_provider=args.grounder_provider,
-    )
+    # Track phase errors for partial reporting
+    phase_errors: list[str] = []
+
+    # Scores default to 0 for partial report generation
+    attempt_score = 0.0
+    attempt_screenshots: list[bytes] = []
+    retry_score = 0.0
+    demo_dir = args.demo_dir
+
+    vm_ip: str | None = None
 
     start = time.monotonic()
 
-    # Phase 1: Attempt without guidance
-    attempt_score, attempt_screenshots = phase1_attempt(
-        mock=args.mock,
-        server_url=args.server_url,
-        task_config=task_config,
-        output_dir=output_dir,
-        **live_kwargs,
-    )
+    try:
+        # ---------------------------------------------------------------
+        # Step 0: VM lifecycle (optional)
+        # ---------------------------------------------------------------
+        if args.manage_vm:
+            logger.info("=" * 60)
+            logger.info("STEP 0: VM LIFECYCLE (start + container + iptables)")
+            logger.info("=" * 60)
 
-    # Phase 2: Capture/store correction
-    demo_dir = phase2_correct(
-        task_config=task_config,
-        demo_dir=args.demo_dir,
-        attempt_screenshots=attempt_screenshots,
-        output_dir=output_dir,
-    )
+            if not start_vm(args.vm_name, args.vm_resource_group):
+                msg = f"Failed to start VM {args.vm_name}"
+                logger.error(msg)
+                phase_errors.append(msg)
+                return 1
 
-    # Phase 3: Retry with guidance
-    retry_score, retry_screenshots = phase3_retry(
-        mock=args.mock,
-        server_url=args.server_url,
-        task_config=task_config,
-        demo_dir=demo_dir,
-        output_dir=output_dir,
-        **live_kwargs,
-    )
+            vm_ip = get_vm_ip(args.vm_name, args.vm_resource_group)
+            if not vm_ip:
+                msg = f"Could not resolve IP for VM {args.vm_name}"
+                logger.error(msg)
+                phase_errors.append(msg)
+                return 1
+            logger.info("VM IP: %s", vm_ip)
 
-    # Phase 4: Verify improvement
-    success = phase4_verify(
-        attempt_score=attempt_score,
-        retry_score=retry_score,
-        output_dir=output_dir,
-        task_name=task_config.name,
-    )
+            if not wait_for_ssh(vm_ip, username=args.vm_user, timeout=args.ssh_timeout):
+                msg = f"SSH not available on {vm_ip} after {args.ssh_timeout}s"
+                logger.error(msg)
+                phase_errors.append(msg)
+                return 1
 
-    elapsed = time.monotonic() - start
-    logger.info("Flywheel completed in %.1fs", elapsed)
+            if not start_container(vm_ip, username=args.vm_user):
+                msg = "Failed to start WAA container"
+                logger.error(msg)
+                phase_errors.append(msg)
+                return 1
 
-    return 0 if success else 1
+            # Apply iptables fix (idempotent, non-fatal if it fails)
+            apply_iptables_fix(vm_ip, username=args.vm_user)
+
+        # ---------------------------------------------------------------
+        # Step 1: Tunnel setup (optional)
+        # ---------------------------------------------------------------
+        if args.setup_tunnels:
+            logger.info("=" * 60)
+            logger.info("STEP 1: SSH TUNNEL SETUP")
+            logger.info("=" * 60)
+
+            if vm_ip is None:
+                # Need to resolve VM IP even if not managing VM lifecycle
+                vm_ip = get_vm_ip(args.vm_name, args.vm_resource_group)
+                if not vm_ip:
+                    msg = (
+                        f"Cannot setup tunnels: could not resolve IP for "
+                        f"VM {args.vm_name}. Is the VM running?"
+                    )
+                    logger.error(msg)
+                    phase_errors.append(msg)
+                    return 1
+
+            tunnel_pids = setup_tunnels(vm_ip, username=args.vm_user)
+            failed_tunnels = [
+                name for name, pid in tunnel_pids.items() if pid is None
+            ]
+            if failed_tunnels:
+                msg = f"Failed to establish tunnels: {', '.join(failed_tunnels)}"
+                logger.error(msg)
+                phase_errors.append(msg)
+                return 1
+
+            # Wait for WAA server to respond through the tunnel
+            if not wait_for_waa(args.server_url, timeout=args.waa_timeout):
+                msg = f"WAA server not ready at {args.server_url} after {args.waa_timeout}s"
+                logger.error(msg)
+                phase_errors.append(msg)
+                return 1
+
+        # ---------------------------------------------------------------
+        # Phase 1: Attempt without guidance
+        # ---------------------------------------------------------------
+        baseline_kwargs = dict(
+            max_steps=args.max_steps,
+            planner_model=baseline_planner,
+            planner_provider=args.planner_provider,
+            grounder_model=args.grounder_model,
+            grounder_provider=args.grounder_provider,
+        )
+
+        try:
+            attempt_score, attempt_screenshots = phase1_attempt(
+                mock=args.mock,
+                server_url=args.server_url,
+                task_config=task_config,
+                output_dir=output_dir,
+                **baseline_kwargs,
+            )
+        except Exception as e:
+            msg = f"Phase 1 failed: {e}"
+            logger.error(msg, exc_info=True)
+            phase_errors.append(msg)
+
+        # ---------------------------------------------------------------
+        # Phase 2: Capture/store correction
+        # ---------------------------------------------------------------
+        try:
+            demo_dir = phase2_correct(
+                task_config=task_config,
+                demo_dir=args.demo_dir,
+                attempt_screenshots=attempt_screenshots,
+                output_dir=output_dir,
+            )
+        except Exception as e:
+            msg = f"Phase 2 failed: {e}"
+            logger.error(msg, exc_info=True)
+            phase_errors.append(msg)
+
+        # ---------------------------------------------------------------
+        # Phase 3: Retry with guidance
+        # ---------------------------------------------------------------
+        guided_kwargs = dict(
+            max_steps=args.max_steps,
+            planner_model=guided_planner,
+            planner_provider=args.planner_provider,
+            grounder_model=args.grounder_model,
+            grounder_provider=args.grounder_provider,
+        )
+
+        try:
+            retry_score, retry_screenshots = phase3_retry(
+                mock=args.mock,
+                server_url=args.server_url,
+                task_config=task_config,
+                demo_dir=demo_dir,
+                output_dir=output_dir,
+                **guided_kwargs,
+            )
+        except Exception as e:
+            msg = f"Phase 3 failed: {e}"
+            logger.error(msg, exc_info=True)
+            phase_errors.append(msg)
+
+        # ---------------------------------------------------------------
+        # Phase 4: Verify improvement (always runs, even with partial data)
+        # ---------------------------------------------------------------
+        success = phase4_verify(
+            attempt_score=attempt_score,
+            retry_score=retry_score,
+            output_dir=output_dir,
+            task_name=task_config.name,
+            baseline_model=args.baseline_model,
+            guided_model=args.guided_model,
+            phase_errors=phase_errors if phase_errors else None,
+        )
+
+        elapsed = time.monotonic() - start
+        logger.info("Flywheel completed in %.1fs", elapsed)
+
+        return 0 if (success and not phase_errors) else 1
+
+    finally:
+        # ---------------------------------------------------------------
+        # Cleanup: Deallocate VM (ALWAYS runs, even on error)
+        # ---------------------------------------------------------------
+        if args.manage_vm:
+            logger.info("=" * 60)
+            logger.info("CLEANUP: Deallocating VM %s", args.vm_name)
+            logger.info("=" * 60)
+            deallocate_vm(args.vm_name, args.vm_resource_group)
 
 
 if __name__ == "__main__":
