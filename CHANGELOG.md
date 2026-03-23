@@ -1,6 +1,17 @@
 # CHANGELOG
 
 
+## v0.65.0 (2026-03-23)
+
+### Features
+
+- Add systematic model comparison framework
+  ([#188](https://github.com/OpenAdaptAI/openadapt-evals/pull/188),
+  [`a609a0f`](https://github.com/OpenAdaptAI/openadapt-evals/commit/a609a0f15ff2699b1a0bd3667ff861a322b6c2dc))
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.64.1 (2026-03-23)
 
 ### Bug Fixes
