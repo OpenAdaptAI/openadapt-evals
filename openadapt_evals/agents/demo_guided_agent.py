@@ -111,6 +111,7 @@ class DemoGuidedAgent(BenchmarkAgent):
         enable_verification: bool = False,
         verify_model: str = "gpt-4.1-mini",
         verify_provider: str = "openai",
+        use_visual_alignment: bool = True,
     ):
         self._base_agent = base_agent
         self._demo_library = demo_library
@@ -118,6 +119,7 @@ class DemoGuidedAgent(BenchmarkAgent):
         self._enable_verification = enable_verification
         self._verify_model = verify_model
         self._verify_provider = verify_provider
+        self._use_visual_alignment = use_visual_alignment
 
         # Per-episode state
         self._step_index: int = 0
@@ -132,10 +134,11 @@ class DemoGuidedAgent(BenchmarkAgent):
 
         logger.info(
             "DemoGuidedAgent initialized: base=%s, verification=%s, "
-            "threshold=%.2f",
+            "threshold=%.2f, visual_alignment=%s",
             type(base_agent).__name__,
             enable_verification,
             verification_threshold,
+            use_visual_alignment,
         )
 
     def act(
@@ -218,6 +221,7 @@ class DemoGuidedAgent(BenchmarkAgent):
             task_id=task.task_id,
             current_screenshot=observation.screenshot,
             step_index=self._step_index,
+            use_visual_alignment=self._use_visual_alignment,
         )
 
         # -- Step 3: Augment task instruction ----------------------------------

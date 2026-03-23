@@ -496,9 +496,26 @@ class RLEnvironment:
 
         # Try milestone evaluation first
         if self._task_config and self._task_config.milestones:
+            # Bug 5 fix: Take a FRESH screenshot for evaluation instead of
+            # using the cached one from a previous step. The cached screenshot
+            # may be from a different phase (e.g., Phase 1 state leaking into
+            # Phase 3 evaluation) or may not reflect the current desktop state.
             screenshot = b""
-            if self._last_obs and self._last_obs.screenshot:
-                screenshot = self._last_obs.screenshot
+            try:
+                fresh_obs = self._adapter.observe()
+                if fresh_obs and fresh_obs.screenshot:
+                    screenshot = fresh_obs.screenshot
+                    logger.info(
+                        "evaluate_dense: using fresh screenshot (%d bytes)",
+                        len(screenshot),
+                    )
+            except Exception as e:
+                logger.warning(
+                    "evaluate_dense: failed to take fresh screenshot, "
+                    "falling back to cached: %s", e,
+                )
+                if self._last_obs and self._last_obs.screenshot:
+                    screenshot = self._last_obs.screenshot
 
             server_url = getattr(
                 getattr(self._adapter, "config", None), "server_url", ""
