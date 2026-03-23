@@ -1,6 +1,43 @@
 # CHANGELOG
 
 
+## v0.64.1 (2026-03-23)
+
+### Bug Fixes
+
+- Address flywheel regression bugs (VM reset, demo validation, alignment)
+  ([#187](https://github.com/OpenAdaptAI/openadapt-evals/pull/187),
+  [`e2f0928`](https://github.com/OpenAdaptAI/openadapt-evals/commit/e2f0928b93817fe32a385ead8d27ed596df91378))
+
+Fix five interacting bugs that caused the demo guidance regression (score 1.0 -> 0.5) on the
+  notepad-hello task:
+
+1. Add VM reset between phases: Phase 1 artifacts (open windows, typed text) leaked into Phase 3.
+  New --reset-between-phases flag (default True) re-runs task setup commands to restore a clean
+  desktop.
+
+2. Validate demo quality: Before using a demo, check for placeholder screenshots, identical
+  screenshots across steps, and doubled action text (e.g., "Hello WorldHello world") indicating a
+  failed run. Warnings are logged and saved to demo_quality_warnings.json.
+
+3. Force sequential alignment for short demos: When the demo has < 5 steps, disable pHash visual
+  alignment (which cannot distinguish similar desktop screenshots) and use sequential step index
+  instead. New use_visual_alignment parameter threaded through DemoGuidedAgent.
+
+4. Remove step counts from guidance prompt: The "step N/N" prefix in DEMONSTRATION GUIDANCE caused
+  the planner to interpret "last step" as "task is done" and prematurely signal DONE. Guidance now
+  describes WHAT to do without revealing position in the demo sequence.
+
+5. Evaluate on fresh screenshot: evaluate_dense() now takes a fresh screenshot from the adapter
+  instead of using a cached one from a previous step/phase. Falls back to cached on failure.
+
+Also adds task navigational ambiguity analysis identifying tasks where demo guidance should help
+  most (high: Chrome clear data, VLC preferences, LibreOffice formatting; low: notepad, desktop
+  folder, VS Code replace).
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.64.0 (2026-03-23)
 
 ### Features
