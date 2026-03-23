@@ -1,6 +1,36 @@
 # CHANGELOG
 
 
+## v0.64.0 (2026-03-23)
+
+### Features
+
+- Automate full VM lifecycle in correction flywheel script
+  ([#186](https://github.com/OpenAdaptAI/openadapt-evals/pull/186),
+  [`748534b`](https://github.com/OpenAdaptAI/openadapt-evals/commit/748534bffd3b024cd587aec22abc2697f511af6f))
+
+Integrate all manual infrastructure steps so the flywheel runs end-to-end deterministically with a
+  single command:
+
+python scripts/run_correction_flywheel.py \ --task-config
+  example_tasks/clear-browsing-data-chrome.yaml \ --demo-dir ./demos --manage-vm --setup-tunnels
+
+New infrastructure functions (inline, matching azure_vm.py patterns): - start_vm / get_vm_ip /
+  get_vm_state / wait_for_ssh / deallocate_vm - start_container (docker start or docker run with
+  correct flags) - apply_iptables_fix (exempt port 5050 from DNAT, idempotent) - setup_tunnels (kill
+  stale, create SSH tunnels for 5001/5050/8006) - setup_eval_proxy (socat bridge for evaluate
+  server) - wait_for_waa (poll /probe through tunnel)
+
+Design decisions: - --manage-vm flag: opt-in VM start/deallocate lifecycle - --setup-tunnels flag:
+  opt-in tunnel setup with port cleanup - --baseline-model / --guided-model: use different planner
+  models for Phase 1 vs Phase 3 (e.g., gpt-4o-mini baseline to ensure failure) - VM deallocate in
+  try/finally (always runs, even on error) - Phase errors are caught individually; report always
+  generated with partial results - All operations are idempotent (safe to re-run) - --mock mode
+  unchanged (no VM management needed)
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.63.0 (2026-03-22)
 
 ### Features
