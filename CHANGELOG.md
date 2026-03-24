@@ -1,6 +1,29 @@
 # CHANGELOG
 
 
+## v0.69.0 (2026-03-24)
+
+### Features
+
+- Add comprehensive API and infrastructure cost tracking
+  ([#192](https://github.com/OpenAdaptAI/openadapt-evals/pull/192),
+  [`43021a7`](https://github.com/OpenAdaptAI/openadapt-evals/commit/43021a74ede54200df9e87d83dc32bcf48d0455b))
+
+Add a centralized, thread-safe CostTracker that records token usage from every VLM/LLM API call and
+  infrastructure time (GPU/VM hours).
+
+The tracker is integrated at the vlm_call() level so all 15+ callers automatically get cost tracking
+  without any changes. Key integration points have cost_label tags for per-component breakdown
+  (planner, grounder, vlm_judge, demo_verify, etc.).
+
+- New openadapt_evals/cost_tracker.py with global singleton, pricing tables, JSON persistence, and
+  human-readable summary output - vlm.py extracts response.usage tokens from both OpenAI and
+  Anthropic responses and reports to the tracker - 18 unit tests covering pricing lookup,
+  aggregation, thread safety, persistence, and vlm.py integration
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.68.0 (2026-03-23)
 
 ### Features
