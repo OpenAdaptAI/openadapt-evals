@@ -1807,6 +1807,7 @@ def _vlm_describe_element(
         provider=provider,
         max_tokens=64,
         temperature=0.0,
+        cost_label="demo_enrich",
     )
 
     # Clean up the response (strip quotes, whitespace, periods)

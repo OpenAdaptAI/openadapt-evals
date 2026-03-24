@@ -566,6 +566,7 @@ class DemoController:
                 provider=self.verify_provider,
                 max_tokens=2048,
                 temperature=0.2,
+                cost_label="demo_verify",
             )
 
             new_steps = self._parse_replan_response(response)

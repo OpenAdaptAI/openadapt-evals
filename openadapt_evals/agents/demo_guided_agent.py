@@ -315,6 +315,7 @@ class DemoGuidedAgent(BenchmarkAgent):
                 model=self._verify_model,
                 provider=self._verify_provider,
                 max_tokens=256,
+                cost_label="demo_verify",
             )
 
             parsed = extract_json(raw)

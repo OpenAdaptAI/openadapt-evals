@@ -189,6 +189,7 @@ def generate_transcript(
                 model=model,
                 provider=provider,
                 max_tokens=2048,
+                cost_label="transcript",
             )
         except Exception:
             if strict:

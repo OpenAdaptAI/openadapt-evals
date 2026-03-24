@@ -670,6 +670,7 @@ class PlannerGrounderAgent(BenchmarkAgent):
             model=self._planner,
             provider=self._planner_provider,
             max_tokens=512,
+            cost_label="planner",
         )
 
         logger.debug("Planner raw output: %s", raw[:500])
@@ -733,6 +734,7 @@ class PlannerGrounderAgent(BenchmarkAgent):
             model=self._grounder,
             provider=self._grounder_provider,
             max_tokens=256,
+            cost_label="grounder",
         )
 
         logger.debug("Grounder raw output: %s", raw[:500])
@@ -756,6 +758,7 @@ class PlannerGrounderAgent(BenchmarkAgent):
                 model=self._grounder,
                 provider=self._grounder_provider,
                 max_tokens=128,
+                cost_label="grounder_retry",
             )
             action = parse_action_json(raw2)
             if action.type != "done":

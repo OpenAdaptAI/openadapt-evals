@@ -27,6 +27,7 @@ def vlm_call(
     timeout: int = _DEFAULT_TIMEOUT,
     use_council: bool = False,
     provider: str = "openai",
+    cost_label: str = "",
 ) -> str:
     """Send a VLM query with optional images.
 
@@ -46,6 +47,9 @@ def vlm_call(
         use_council: Whether to use consilium multi-model council.
         provider: VLM provider for direct calls (``"openai"`` or
             ``"anthropic"``).
+        cost_label: Optional label for cost tracking (e.g., ``"planner"``,
+            ``"grounder"``, ``"vlm_judge"``). Helps categorize costs in
+            the summary.
 
     Returns:
         Model response text.
@@ -76,6 +80,7 @@ def vlm_call(
             max_tokens=max_tokens,
             temperature=temperature,
             timeout=timeout,
+            cost_label=cost_label,
         )
     elif provider in ("anthropic", "claude"):
         return _vlm_call_anthropic(
@@ -86,6 +91,7 @@ def vlm_call(
             max_tokens=max_tokens,
             temperature=temperature,
             timeout=timeout,
+            cost_label=cost_label,
         )
     else:
         raise ValueError(f"Unsupported provider: {provider}")
@@ -100,6 +106,7 @@ def _vlm_call_openai(
     max_tokens: int = 1024,
     temperature: float = 0.1,
     timeout: int = _DEFAULT_TIMEOUT,
+    cost_label: str = "",
 ) -> str:
     """Single-model OpenAI call."""
     import openai
@@ -131,6 +138,15 @@ def _vlm_call_openai(
         temperature=temperature,
         **token_param,
     )
+
+    # Track cost from response usage
+    _track_response_cost(
+        model=model,
+        input_tokens=getattr(resp.usage, "prompt_tokens", 0) or 0,
+        output_tokens=getattr(resp.usage, "completion_tokens", 0) or 0,
+        label=cost_label,
+    )
+
     return resp.choices[0].message.content
 
 
@@ -143,6 +159,7 @@ def _vlm_call_anthropic(
     max_tokens: int = 1024,
     temperature: float = 0.1,
     timeout: int = _DEFAULT_TIMEOUT,
+    cost_label: str = "",
 ) -> str:
     """Single-model Anthropic call."""
     import anthropic
@@ -166,7 +183,40 @@ def _vlm_call_anthropic(
     if system:
         kwargs["system"] = system
     resp = client.messages.create(**kwargs)
+
+    # Track cost from response usage
+    _track_response_cost(
+        model=model,
+        input_tokens=getattr(resp.usage, "input_tokens", 0) or 0,
+        output_tokens=getattr(resp.usage, "output_tokens", 0) or 0,
+        label=cost_label,
+    )
+
     return resp.content[0].text
+
+
+# ---------------------------------------------------------------------------
+# Cost tracking helper
+# ---------------------------------------------------------------------------
+
+
+def _track_response_cost(
+    model: str, input_tokens: int, output_tokens: int, label: str,
+) -> None:
+    """Report token usage to the global cost tracker.
+
+    Silently does nothing if tracking fails (never interrupts API calls).
+    """
+    if input_tokens == 0 and output_tokens == 0:
+        return
+    try:
+        from openadapt_evals.cost_tracker import get_cost_tracker
+
+        get_cost_tracker().track_api_call(
+            model, input_tokens, output_tokens, label=label,
+        )
+    except Exception:
+        pass  # Cost tracking must never break API calls
 
 
 # ---------------------------------------------------------------------------

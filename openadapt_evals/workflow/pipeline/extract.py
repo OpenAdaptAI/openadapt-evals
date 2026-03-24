@@ -303,6 +303,7 @@ def extract_workflow(
             model=model,
             provider=provider,
             max_tokens=4096,
+            cost_label="workflow_extract",
         )
     except Exception:
         if strict:
