@@ -1,6 +1,33 @@
 # CHANGELOG
 
 
+## v0.69.1 (2026-03-24)
+
+### Bug Fixes
+
+- Align standalone GRPO with WAA API format and add retry logic
+  ([#193](https://github.com/OpenAdaptAI/openadapt-evals/pull/193),
+  [`43cac1c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/43cac1ca9708dbfaa858c89fdea2b3af40df5ebb))
+
+The standalone GRPO trainer produced zero rewards due to two API format bugs in WAADirect:
+
+1. screenshot() tried resp.json() expecting base64-encoded JSON, but WAA's /screenshot returns raw
+  PNG bytes via Flask's send_file(). Fixed to use resp.content (matching WAALiveAdapter).
+
+2. execute_action() wrapped commands in `python -c "..."`, but WAA's /execute_windows uses exec()
+  directly -- the wrapper caused SyntaxError inside the VM. Fixed to send bare Python statements
+  (matching WAALiveAdapter._build_pixel_command).
+
+Additional improvements: - Add probe() method for structured health checking - Add screenshot retry
+  logic (3 attempts with 2s delay) - Add double_click, right_click, scroll action types - Fix type
+  action to click target first then type (match WAALiveAdapter) - Add pre-rollout health check in
+  trainer._collect_group() - Handle empty rollouts gracefully in training loop - Fix train script to
+  bypass openadapt_evals/__init__.py eager imports (open_clip -> numpy ABI crash in minimal training
+  environments)
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.69.0 (2026-03-24)
 
 ### Features
