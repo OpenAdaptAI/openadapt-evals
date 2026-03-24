@@ -75,10 +75,13 @@ class GRPOTrainer:
         recent: list[bytes] = []
 
         for step_idx in range(self._config.max_steps_per_episode):
+            # screenshot() already has built-in retry (3 attempts by default)
             try:
                 screenshot = self._env.screenshot()
             except Exception as e:
-                logger.warning("Screenshot failed at step %d: %s", step_idx, e)
+                logger.warning(
+                    "Screenshot failed at step %d after retries: %s", step_idx, e,
+                )
                 break
             recent.append(screenshot)
             if self._env.is_stuck(recent, window=self._config.stuck_window):
@@ -124,6 +127,19 @@ class GRPOTrainer:
 
     def _collect_group(self, task_id: str) -> list[Rollout]:
         """Collect N rollouts for one GRPO gradient step."""
+        assert self._env is not None
+
+        # Pre-rollout health check: verify WAA is responsive before committing
+        # to a full group of rollouts (avoids wasting time on a dead server).
+        probe = self._env.probe()
+        if not probe.get("screenshot_ok"):
+            logger.error(
+                "Pre-rollout health check FAILED for task %s: %s — "
+                "skipping group (returning empty rollouts)",
+                task_id, probe,
+            )
+            return []
+
         tc = self._task_configs.get(task_id)
         instruction = getattr(tc, "name", "") or task_id if tc else task_id
         if tc and self._env:
@@ -242,6 +258,12 @@ class GRPOTrainer:
             self._model.eval()
             rollouts = self._collect_group(task_id)
             self._model.train()
+            if not rollouts:
+                logger.warning(
+                    "Step %d/%d: no rollouts collected (server may be down), skipping.",
+                    step + 1, self._config.num_training_steps,
+                )
+                continue
             m = self._training_step(rollouts)
             m.update({"step": step, "task_id": task_id, "elapsed": time.time() - t0, "step_time": time.time() - ts})
             logger.info("Step %d/%d: reward=%.2f loss=%.4f time=%.1fs",
