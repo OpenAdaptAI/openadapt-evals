@@ -281,11 +281,14 @@ def main() -> None:
     """CLI entry point."""
     p = argparse.ArgumentParser(description="Standalone GRPO trainer for WAA")
     p.add_argument("--task-dir", required=True, help="Directory of TaskConfig YAMLs")
+    p.add_argument("--task-ids", nargs="+", default=None, help="Specific task IDs to train on (default: all from task-dir)")
     p.add_argument("--server-url", default="http://localhost:5001")
     p.add_argument("--model", default="Qwen/Qwen2.5-VL-7B-Instruct")
     p.add_argument("--lora-checkpoint", default=None)
     p.add_argument("--num-steps", type=int, default=10)
     p.add_argument("--num-rollouts", type=int, default=8)
+    p.add_argument("--max-steps-per-episode", type=int, default=15)
+    p.add_argument("--max-new-tokens", type=int, default=2048)
     p.add_argument("--output", default="checkpoints/grpo")
     p.add_argument("--no-4bit", action="store_true")
     p.add_argument("--eval-model", default="gpt-4.1-mini")
@@ -295,7 +298,13 @@ def main() -> None:
     config = TrainingConfig(
         model_name=a.model, load_in_4bit=not a.no_4bit, lora_checkpoint=a.lora_checkpoint,
         server_url=a.server_url, task_dir=a.task_dir, num_training_steps=a.num_steps,
-        num_rollouts_per_step=a.num_rollouts, output_dir=a.output, eval_model=a.eval_model)
+        num_rollouts_per_step=a.num_rollouts, max_steps_per_episode=a.max_steps_per_episode,
+        max_new_tokens=a.max_new_tokens, output_dir=a.output, eval_model=a.eval_model)
+
+    # Filter to specific tasks if requested
+    if a.task_ids:
+        config.task_ids = a.task_ids
+
     GRPOTrainer(config).train()
 
 
