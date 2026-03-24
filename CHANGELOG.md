@@ -1,6 +1,20 @@
 # CHANGELOG
 
 
+## v0.70.0 (2026-03-24)
+
+### Features
+
+- Add --task-ids, --max-steps-per-episode, --max-new-tokens to standalone GRPO CLI
+  ([`6ecd136`](https://github.com/OpenAdaptAI/openadapt-evals/commit/6ecd1369fd834fce34e8c7f1f43a5d1f358aeba0))
+
+Without --task-ids, the trainer cycles through ALL tasks in --task-dir including hard ones
+  (calc-formula) that base models can't complete. Now you can filter: --task-ids
+  custom-notepad-hello
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.69.1 (2026-03-24)
 
 ### Bug Fixes
