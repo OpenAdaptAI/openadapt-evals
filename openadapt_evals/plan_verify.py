@@ -312,6 +312,7 @@ def verify_step(
             temperature=0.1,
             timeout=timeout,
             provider=provider,
+            cost_label="verify_step",
         )
     except Exception as exc:
         logger.error("VLM call failed during verify_step: %s", exc)
@@ -387,6 +388,7 @@ def verify_plan_progress(
             temperature=0.1,
             timeout=timeout,
             provider=provider,
+            cost_label="verify_progress",
         )
     except Exception as exc:
         logger.error("VLM call failed during verify_plan_progress: %s", exc)
@@ -475,6 +477,7 @@ def verify_goal_completion(
             temperature=0.1,
             timeout=timeout,
             provider=provider,
+            cost_label="verify_goal",
         )
     except Exception as exc:
         logger.error("VLM call failed during verify_goal_completion: %s", exc)

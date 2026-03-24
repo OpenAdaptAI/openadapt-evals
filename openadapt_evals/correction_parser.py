@@ -56,6 +56,7 @@ def parse_correction(
         model=model,
         provider=provider,
         max_tokens=512,
+        cost_label="correction_parser",
     )
 
     # Extract JSON from response

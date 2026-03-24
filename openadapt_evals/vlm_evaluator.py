@@ -69,6 +69,7 @@ def vlm_judge(
         provider=provider,
         max_tokens=256,
         temperature=0.1,
+        cost_label="vlm_judge",
     )
 
     try:
