@@ -13,13 +13,19 @@ This is the first step of the distillation pipeline described in
 ``private/research_superhuman_desktop_agent_2026_03_20.md`` Section 8.3
 (Phase 1: Distillation SFT).
 
+Uses WAADirect for reliable task setup instead of the adapter layer.
+Task configs are loaded from local YAML/JSON files via --task-dir,
+bypassing WAA's built-in task ID lookup.
+
 Usage:
     # Collect trajectories from GPT-5.4 (default teacher)
     python scripts/collect_distillation_data.py \\
+        --task-dir tasks/ \\
         --server-url http://localhost:5001
 
     # Collect from Claude with cost-limited testing
     python scripts/collect_distillation_data.py \\
+        --task-dir tasks/ \\
         --model claude-sonnet-4-6-20260210 \\
         --provider anthropic \\
         --max-tasks 5 \\
@@ -27,11 +33,13 @@ Usage:
 
     # Specific tasks only
     python scripts/collect_distillation_data.py \\
-        --tasks 04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS,0bf05a7d-... \\
+        --task-dir tasks/ \\
+        --tasks change-font-arial,open-notepad \\
         --server-url http://localhost:5001
 
     # Resume a previous collection run
     python scripts/collect_distillation_data.py \\
+        --task-dir tasks/ \\
         --server-url http://localhost:5001 \\
         --output-dir distillation_data/gpt54_run1 \\
         --resume
@@ -39,6 +47,7 @@ Usage:
 Prerequisites:
     - WAA VM running with SSH tunnel (port 5001 -> VM port 5000)
     - API key set for the teacher model (OPENAI_API_KEY, ANTHROPIC_API_KEY)
+    - Task YAML/JSON files in --task-dir
 """
 
 from __future__ import annotations
@@ -51,7 +60,6 @@ import os
 import signal
 import sys
 import time
-import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -182,69 +190,6 @@ class CostTracker:
             f"  Output cost:        ${output_cost:.2f}\n"
             f"  Total cost:         ${input_cost + output_cost:.2f}"
         )
-
-
-# ---------------------------------------------------------------------------
-# Task discovery (reused from run_full_eval.py)
-# ---------------------------------------------------------------------------
-
-
-def discover_tasks(server_url: str) -> list[str]:
-    """Discover available tasks from the WAA server."""
-    import requests
-
-    # Try /tasks endpoint
-    try:
-        resp = requests.get(f"{server_url}/tasks", timeout=10)
-        if resp.status_code == 200:
-            data = resp.json()
-            if isinstance(data, list):
-                return data
-            if isinstance(data, dict):
-                task_ids = []
-                for domain_tasks in data.values():
-                    if isinstance(domain_tasks, list):
-                        task_ids.extend(domain_tasks)
-                if task_ids:
-                    return task_ids
-    except Exception as e:
-        logger.debug("Could not fetch /tasks: %s", e)
-
-    # Try reading test_all.json via /execute
-    try:
-        resp = requests.post(
-            f"{server_url}/execute",
-            json={
-                "command": (
-                    'python -c "'
-                    "import json; "
-                    "d=json.load(open('/client/evaluation_examples_windows/"
-                    "test_all.json')); "
-                    "ids=[t for domain in d for t in d[domain]]; "
-                    'print(json.dumps(ids))"'
-                )
-            },
-            timeout=30,
-        )
-        if resp.status_code == 200:
-            output = resp.json().get("output", "").strip()
-            if output:
-                return json.loads(output)
-    except Exception as e:
-        logger.debug("Could not read test_all.json via /execute: %s", e)
-
-    return []
-
-
-def check_server_health(server_url: str, timeout: float = 10.0) -> bool:
-    """Check if WAA server is reachable."""
-    import requests
-
-    try:
-        resp = requests.get(f"{server_url}/probe", timeout=timeout)
-        return resp.status_code == 200
-    except Exception:
-        return False
 
 
 # ---------------------------------------------------------------------------
@@ -384,14 +329,18 @@ class TeacherAgent:
             }
         )
 
+        # GPT-5.x and o-series models require max_completion_tokens;
+        # older models use max_tokens.
+        token_param = (
+            {"max_completion_tokens": self.max_tokens}
+            if self.model.startswith(("gpt-5", "o1", "o3", "o4"))
+            else {"max_tokens": self.max_tokens}
+        )
+
         response = client.chat.completions.create(
             model=self.model,
             messages=messages,
-            **({
-                "max_completion_tokens": self.max_tokens
-            } if self.model.startswith(("gpt-5", "o1", "o3", "o4")) else {
-                "max_tokens": self.max_tokens
-            }),
+            **token_param,
             temperature=0.1,
         )
 
@@ -435,15 +384,12 @@ class TeacherAgent:
             }
         )
 
+        # Anthropic API always uses max_tokens (not max_completion_tokens).
         response = client.messages.create(
             model=self.model,
             system=self.SYSTEM_PROMPT,
             messages=messages,
-            **({
-                "max_completion_tokens": self.max_tokens
-            } if self.model.startswith(("gpt-5", "o1", "o3", "o4")) else {
-                "max_tokens": self.max_tokens
-            }),
+            max_tokens=self.max_tokens,
             temperature=0.1,
         )
 
@@ -494,91 +440,71 @@ class TeacherAgent:
 
 
 # ---------------------------------------------------------------------------
-# Episode runner
+# Episode runner (WAADirect-based)
 # ---------------------------------------------------------------------------
 
 
 def run_distillation_episode(
-    task_id: str,
+    task_config: Any,
     teacher: TeacherAgent,
-    server_url: str,
+    waa: Any,
     trajectory_logger: Any,
     cost_tracker: CostTracker,
     max_steps: int = 15,
+    eval_model: str = "gpt-4.1-mini",
+    screen_size: tuple[int, int] = (1920, 1080),
 ) -> tuple[bool, float]:
-    """Run a single distillation episode.
+    """Run a single distillation episode using WAADirect.
 
     The teacher agent interacts with the WAA environment while
     PlannerTrajectoryLogger records every (screenshot, action) pair.
-    At the end, if the episode succeeds (score > 0), the trajectory
-    is kept for SFT training. Otherwise it is discarded.
+    At the end, milestones are evaluated via VLM screenshot checks.
 
     Args:
-        task_id: WAA task ID.
+        task_config: TaskConfig instance with setup, instruction, milestones.
         teacher: TeacherAgent instance.
-        server_url: WAA server URL.
+        waa: WAADirect instance.
         trajectory_logger: PlannerTrajectoryLogger instance.
         cost_tracker: CostTracker instance.
         max_steps: Maximum steps per episode.
+        eval_model: VLM model for milestone evaluation.
+        screen_size: Screen resolution for coordinate conversion.
 
     Returns:
         Tuple of (success, score).
     """
-    from openadapt_evals.adapters.base import BenchmarkAction
-    from openadapt_evals.adapters.rl_env import RLEnvironment, ResetConfig
-    from openadapt_evals.adapters.waa.live import WAALiveAdapter, WAALiveConfig
+    from openadapt_evals.training.standalone.prompt import SimpleAction
+    from openadapt_evals.training.standalone.reward import evaluate_milestones_screenshot
 
+    task_id = task_config.id
+    task_instruction = task_config.name
     episode_id = f"{task_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     teacher.reset()
 
-    adapter = WAALiveAdapter(WAALiveConfig(server_url=server_url))
-    env = RLEnvironment(adapter)
-
+    # Setup task environment via WAADirect (kills old processes, runs setup commands)
     try:
-        obs = env.reset(config=ResetConfig(task_id=task_id))
+        waa_config = task_config.to_waa_config()
+        waa.setup_task(waa_config)
     except Exception as e:
-        logger.error("Failed to reset environment for task %s: %s", task_id[:12], e)
+        logger.error("Failed to setup task %s: %s", task_id, e)
+        cost_tracker.record_episode(success=False)
+        return False, 0.0
+
+    # Take initial screenshot
+    try:
+        screenshot = waa.screenshot()
+    except Exception as e:
+        logger.error("Failed to take initial screenshot for task %s: %s", task_id, e)
         cost_tracker.record_episode(success=False)
         return False, 0.0
 
     action_history: list[str] = []
-    task_instruction = f"Task {task_id}"
-
-    # Try to get task instruction from server
-    try:
-        import requests
-
-        resp = requests.post(
-            f"{server_url}/execute",
-            json={
-                "command": (
-                    f'python -c "'
-                    f"import json; "
-                    f"d=json.load(open('/client/evaluation_examples_windows/"
-                    f"test_all.json')); "
-                    f"[print(json.dumps("
-                    f"json.load(open(f'/client/evaluation_examples_windows/"
-                    f"{{domain}}/{task_id}.json')))) "
-                    f"for domain in d if '{task_id}' in d[domain]]"
-                    f'"'
-                )
-            },
-            timeout=15,
-        )
-        if resp.status_code == 200:
-            output = resp.json().get("output", "").strip()
-            if output:
-                task_data = json.loads(output.split("\n")[0])
-                task_instruction = task_data.get("instruction", task_instruction)
-    except Exception:
-        pass  # Use fallback instruction
+    screen_w, screen_h = screen_size
 
     for step in range(max_steps):
         if _shutdown_requested:
             logger.warning("Shutdown requested during episode %s", episode_id)
             break
-
-        screenshot = obs.screenshot or b""
 
         # Get teacher's action
         try:
@@ -595,8 +521,8 @@ def run_distillation_episode(
         trajectory_logger.log_step(
             episode_id=episode_id,
             step_index=step,
-            screenshot_bytes=screenshot if screenshot else None,
-            a11y_tree=obs.accessibility_tree,
+            screenshot_bytes=screenshot,
+            a11y_tree=None,
             task_instruction=task_instruction,
             action_history=list(action_history),
             planner_output=action_dict,
@@ -607,22 +533,22 @@ def run_distillation_episode(
             logger.info(
                 "Teacher signaled DONE at step %d for task %s",
                 step,
-                task_id[:12],
+                task_id,
             )
             break
 
-        # Convert teacher output to BenchmarkAction and execute
+        # Convert teacher output to SimpleAction and execute via WAADirect
         action_type = action_dict.get("action_type", "click")
-        x = action_dict.get("x")
-        y = action_dict.get("y")
+        x_frac = action_dict.get("x")
+        y_frac = action_dict.get("y")
         text = action_dict.get("text", "")
         target = action_dict.get("target_description", "")
 
         # Build action description for history
         if action_type in ("click", "double_click"):
             action_str = f"{action_type.upper()}({target})"
-            if x is not None and y is not None:
-                action_str += f" at ({x:.3f}, {y:.3f})"
+            if x_frac is not None and y_frac is not None:
+                action_str += f" at ({x_frac:.3f}, {y_frac:.3f})"
         elif action_type == "type":
             action_str = f"TYPE({text!r})"
         elif action_type == "key":
@@ -634,67 +560,77 @@ def run_distillation_episode(
 
         action_history.append(action_str)
 
-        # Execute the action
-        try:
-            action = BenchmarkAction(
-                type=action_type if action_type != "double_click" else "click",
-                x=float(x) if x is not None else None,
-                y=float(y) if y is not None else None,
-                text=text if action_type in ("type", "key") else None,
-                key=text if action_type == "key" else None,
-                scroll_direction=text if action_type == "scroll" else None,
-            )
-
-            if action.x is not None and action.y is not None:
-                if 0 <= action.x <= 1 and 0 <= action.y <= 1:
-                    step_result = env.pixel_action(
-                        x_frac=action.x,
-                        y_frac=action.y,
-                        action_type=action.type,
-                        text=action.text,
-                        key=action.key,
-                    )
-                else:
-                    step_result = env.pixel_action(
-                        x=int(action.x),
-                        y=int(action.y),
-                        action_type=action.type,
-                        text=action.text,
-                        key=action.key,
-                    )
+        # Convert fractional coordinates to absolute pixels
+        abs_x: int | None = None
+        abs_y: int | None = None
+        if x_frac is not None and y_frac is not None:
+            fx, fy = float(x_frac), float(y_frac)
+            if 0 <= fx <= 1 and 0 <= fy <= 1:
+                abs_x = int(fx * screen_w)
+                abs_y = int(fy * screen_h)
             else:
-                step_result = env.step(action)
+                # Already absolute pixel coordinates
+                abs_x = int(fx)
+                abs_y = int(fy)
 
-            obs = step_result.observation
+        # Build SimpleAction for WAADirect
+        action = SimpleAction(
+            type=action_type,
+            x=abs_x,
+            y=abs_y,
+            text=text if action_type == "type" else None,
+            key=text if action_type == "key" else None,
+        )
 
-            if step_result.done:
-                logger.info(
-                    "Environment signaled done at step %d for task %s",
-                    step,
-                    task_id[:12],
-                )
-                break
-
+        # Execute action via WAADirect
+        try:
+            waa.execute_action(action)
+            time.sleep(0.5)
         except Exception as e:
             logger.error(
                 "Action execution failed at step %d for task %s: %s",
                 step,
-                task_id[:12],
+                task_id,
                 e,
             )
             break
 
-    # Evaluate
-    try:
-        score = env.evaluate()
-    except Exception as e:
-        logger.error("Evaluation failed for task %s: %s", task_id[:12], e)
-        score = 0.0
+        # Take next screenshot
+        try:
+            screenshot = waa.screenshot()
+        except Exception as e:
+            logger.error(
+                "Screenshot failed at step %d for task %s: %s",
+                step,
+                task_id,
+                e,
+            )
+            break
+
+    # Evaluate: take a fresh screenshot and run milestone checks
+    score = 0.0
+    if getattr(task_config, "milestones", None):
+        try:
+            eval_screenshot = waa.screenshot()
+            score = evaluate_milestones_screenshot(
+                task_config, eval_screenshot, model=eval_model,
+            )
+        except Exception as e:
+            logger.error("Milestone evaluation failed for task %s: %s", task_id, e)
+            score = 0.0
+    else:
+        # No milestones defined -- teacher DONE signal counts as partial success
+        if action_history and decision == "DONE":
+            score = 0.5
+            logger.info(
+                "No milestones for task %s, using teacher DONE signal (score=0.5)",
+                task_id,
+            )
 
     success = score > 0
     cost_tracker.record_episode(success)
 
-    # End episode in trajectory logger (failed episodes are auto-cleaned)
+    # End episode in trajectory logger (with keep_failed=True, all are kept)
     trajectory_logger.end_episode(episode_id, reward=score)
 
     return success, score
@@ -766,11 +702,16 @@ def main() -> int:
         help="API provider for the teacher model (default: openai)",
     )
     parser.add_argument(
+        "--task-dir",
+        required=True,
+        help="Directory containing task YAML/JSON config files",
+    )
+    parser.add_argument(
         "--tasks",
         default=None,
         help=(
-            "Comma-separated task IDs, or 'all' to use all tasks from the "
-            "server (default: all)"
+            "Comma-separated task IDs to filter from --task-dir "
+            "(default: all tasks in task-dir)"
         ),
     )
     parser.add_argument(
@@ -796,6 +737,11 @@ def main() -> int:
         help="Maximum steps per episode (default: 15)",
     )
     parser.add_argument(
+        "--eval-model",
+        default="gpt-4.1-mini",
+        help="VLM model for milestone evaluation (default: gpt-4.1-mini)",
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help="Skip tasks that already have saved successful trajectories",
@@ -811,19 +757,32 @@ def main() -> int:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Resolve task list
-    if args.tasks and args.tasks.lower() != "all":
-        task_ids = [t.strip() for t in args.tasks.split(",") if t.strip()]
+    # Load task configs from --task-dir
+    from openadapt_evals.task_config import TaskConfig
+
+    task_dir = Path(args.task_dir)
+    if not task_dir.exists():
+        logger.error("Task directory not found: %s", task_dir)
+        return 1
+
+    all_task_configs = TaskConfig.from_dir(str(task_dir))
+    if not all_task_configs:
+        logger.error("No task configs found in %s", task_dir)
+        return 1
+    logger.info("Loaded %d task configs from %s", len(all_task_configs), task_dir)
+
+    # Build lookup by task ID
+    task_config_map: dict[str, Any] = {tc.id: tc for tc in all_task_configs}
+
+    # Filter to specific tasks if requested
+    if args.tasks:
+        requested_ids = [t.strip() for t in args.tasks.split(",") if t.strip()]
+        missing = [tid for tid in requested_ids if tid not in task_config_map]
+        if missing:
+            logger.warning("Tasks not found in --task-dir: %s", missing)
+        task_ids = [tid for tid in requested_ids if tid in task_config_map]
     else:
-        logger.info("Discovering tasks from server %s...", args.server_url)
-        task_ids = discover_tasks(args.server_url)
-        if not task_ids:
-            logger.error(
-                "Could not discover tasks from server. "
-                "Provide --tasks explicitly or ensure server is reachable."
-            )
-            return 1
-        logger.info("Discovered %d tasks", len(task_ids))
+        task_ids = list(task_config_map.keys())
 
     # Apply max-tasks limit
     if args.max_tasks is not None and args.max_tasks < len(task_ids):
@@ -847,19 +806,25 @@ def main() -> int:
         print(f"\nDry run: would collect distillation data for {len(task_ids)} tasks")
         print(f"Teacher model: {args.model} ({args.provider})")
         print(f"Server: {args.server_url}")
+        print(f"Task dir: {task_dir}")
         print(f"Output: {output_dir}")
         print(f"Max steps: {args.max_steps}")
+        print(f"Eval model: {args.eval_model}")
         print(f"\nTasks:")
         for i, tid in enumerate(task_ids, 1):
-            print(f"  {i:3d}. {tid}")
+            tc = task_config_map[tid]
+            print(f"  {i:3d}. {tid} - {tc.name[:60]}")
         return 0
 
     if not task_ids:
         logger.info("No tasks to process.")
         return 0
 
-    # Check server health
-    if not check_server_health(args.server_url):
+    # Initialize WAADirect and verify server health
+    from openadapt_evals.training.standalone.waa_direct import WAADirect
+
+    waa = WAADirect(server_url=args.server_url)
+    if not waa.health_check():
         logger.error(
             "WAA server not reachable at %s. Ensure SSH tunnel is active.",
             args.server_url,
@@ -880,7 +845,9 @@ def main() -> int:
         "teacher_model": args.model,
         "provider": args.provider,
         "server_url": args.server_url,
+        "task_dir": str(task_dir),
         "max_steps": args.max_steps,
+        "eval_model": args.eval_model,
         "total_tasks": len(task_ids),
         "resumed": args.resume,
     }
@@ -915,30 +882,33 @@ def main() -> int:
         else:
             eta_str = "estimating..."
 
+        tc = task_config_map[task_id]
         logger.info(
-            "=== Task %d/%d [%s] (%s, est cost: $%.2f) ===",
+            "=== Task %d/%d [%s] %s (%s, est cost: $%.2f) ===",
             i + 1,
             total_tasks,
-            task_id[:12],
+            task_id,
+            tc.name[:40],
             eta_str,
             cost_tracker.estimated_cost,
         )
 
         task_start = time.time()
         success, score = run_distillation_episode(
-            task_id=task_id,
+            task_config=tc,
             teacher=teacher,
-            server_url=args.server_url,
+            waa=waa,
             trajectory_logger=trajectory_logger,
             cost_tracker=cost_tracker,
             max_steps=args.max_steps,
+            eval_model=args.eval_model,
         )
         task_elapsed = time.time() - task_start
 
         status = "PASS" if success else "FAIL"
         logger.info(
             "Task %s: %s (score=%.2f, time=%.1fs)",
-            task_id[:12],
+            task_id,
             status,
             score,
             task_elapsed,
@@ -947,6 +917,7 @@ def main() -> int:
         results.append(
             {
                 "task_id": task_id,
+                "task_name": tc.name,
                 "success": success,
                 "score": score,
                 "elapsed_seconds": round(task_elapsed, 2),
@@ -962,9 +933,10 @@ def main() -> int:
     print("DISTILLATION DATA COLLECTION SUMMARY")
     print("=" * 70)
     print(f"  Teacher model:      {args.model}")
+    print(f"  Task dir:           {task_dir}")
     print(f"  Total tasks:        {total}")
     print(f"  Successful:         {successes} ({successes / total:.1%})" if total else "")
-    print(f"  Failed (discarded): {total - successes}")
+    print(f"  Failed (kept):      {total - successes}")
     print(f"  Total time:         {total_elapsed / 60:.1f} min")
     print(f"  Output dir:         {output_dir}")
     print()
@@ -977,6 +949,7 @@ def main() -> int:
         json.dump(
             {
                 "teacher_model": args.model,
+                "task_dir": str(task_dir),
                 "total_tasks": total,
                 "successful": successes,
                 "failed": total - successes,
@@ -997,6 +970,7 @@ def main() -> int:
         print(
             f"  python scripts/collect_distillation_data.py "
             f"--resume --output-dir {output_dir} "
+            f"--task-dir {task_dir} "
             f"--server-url {args.server_url} "
             f"--model {args.model}"
         )
