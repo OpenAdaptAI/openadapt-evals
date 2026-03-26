@@ -1,6 +1,30 @@
 # CHANGELOG
 
 
+## v0.70.2 (2026-03-26)
+
+### Bug Fixes
+
+- Switch distillation collection to WAADirect for reliable task setup
+  ([#194](https://github.com/OpenAdaptAI/openadapt-evals/pull/194),
+  [`fa1a9c4`](https://github.com/OpenAdaptAI/openadapt-evals/commit/fa1a9c4a9fc830315b99f655228e03e7aa4cd434))
+
+Replace RLEnvironment + WAALiveAdapter with WAADirect in the distillation data collection script.
+  The adapter layer fails on custom YAML task IDs and doesn't reset the environment properly.
+
+Key changes: - Load task configs from --task-dir (YAML/JSON files) via TaskConfig.from_dir() - Use
+  WAADirect.setup_task(task_config.to_waa_config()) for environment reset - Use
+  WAADirect.screenshot() and execute_action() instead of env.step() - Evaluate via
+  evaluate_milestones_screenshot() on fresh post-episode screenshot - Fix Anthropic API call: always
+  use max_tokens (not max_completion_tokens) - Add --eval-model flag for milestone VLM evaluation
+  model - Add --task-dir as required arg (replaces server-side task discovery)
+
+Kept unchanged: TeacherAgent, PlannerTrajectoryLogger (keep_failed=True), CostTracker, resume
+  support, graceful shutdown handling.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.70.1 (2026-03-26)
 
 ### Bug Fixes
