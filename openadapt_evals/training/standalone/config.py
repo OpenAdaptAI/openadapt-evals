@@ -17,7 +17,7 @@ class TrainingConfig:
     num_rollouts_per_step: int = 8
     max_steps_per_episode: int = 15
     temperature: float = 0.7
-    max_new_tokens: int = 2048  # 100 truncates reasoning -- keep high
+    max_new_tokens: int = 512  # 2048 OOMs on L40S; 512 sufficient for Thought+Action
     server_url: str = "http://localhost:5001"
     task_ids: list[str] = field(default_factory=list)
     task_dir: str | None = None

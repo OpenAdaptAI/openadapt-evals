@@ -147,6 +147,9 @@ class WAADirect:
             params = entry.get("parameters", {})
             if etype == "sleep":
                 time.sleep(params.get("seconds", 5))
+            elif etype == "close_all":
+                # Kill common desktop apps for a clean state
+                self.clean_desktop()
             elif etype in ("execute", "command", "launch"):
                 cmd = params.get("command", "")
                 if cmd:
@@ -166,6 +169,50 @@ class WAADirect:
                 except requests.RequestException as e:
                     logger.warning("Open failed: %s", e)
         time.sleep(2)
+        return True
+
+    def clean_desktop(
+        self,
+        kill_apps: list[str] | None = None,
+    ) -> bool:
+        """Kill known distracting apps and show desktop for a clean state.
+
+        Call between episodes (flywheel phases, GRPO rollouts) to prevent
+        stale desktop state from leaking into the next episode.
+
+        Args:
+            kill_apps: Process image names to kill. Defaults to common desktop
+                apps that interfere with task execution.
+
+        Returns:
+            True if cleanup commands executed (does not verify success).
+        """
+        if kill_apps is None:
+            kill_apps = [
+                "notepad.exe", "Code.exe", "msedge.exe", "chrome.exe",
+                "WINWORD.EXE", "EXCEL.EXE", "POWERPNT.EXE", "wordpad.exe",
+                "mspaint.exe", "calc.exe", "explorer.exe",
+            ]
+        # Build taskkill command for all apps in one call
+        kill_cmds = " ".join(
+            f"taskkill /F /IM {app}" for app in kill_apps
+        )
+        commands = [
+            # Kill listed apps (errors are OK -- app may not be running)
+            f"import subprocess; subprocess.run('{kill_cmds}', shell=True, capture_output=True)",
+            # Show desktop (Win+D) to minimize any remaining windows
+            "import pyautogui; import time; pyautogui.hotkey('win', 'd'); time.sleep(1)",
+        ]
+        for cmd in commands:
+            try:
+                self._session.post(
+                    f"{self.server_url}/execute_windows",
+                    json={"command": cmd}, timeout=30,
+                )
+            except requests.RequestException as e:
+                logger.warning("clean_desktop error: %s", e)
+        time.sleep(2)
+        logger.info("Desktop cleanup completed (killed %d app types)", len(kill_apps))
         return True
 
     def is_stuck(self, recent: list[bytes], window: int = 3) -> bool:

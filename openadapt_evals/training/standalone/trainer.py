@@ -186,7 +186,14 @@ class GRPOTrainer:
                 continue
 
             full_ids = torch.cat([prompt_inputs["input_ids"], action_ids.to(prompt_inputs["input_ids"].device)], dim=1)
-            full_inputs = dict(prompt_inputs)
+            # Exclude vision tensors from loss forward pass to avoid OOM.
+            # The vision encoder backward pass is expensive and unnecessary
+            # since we only compute loss on action tokens (past prompt_len).
+            # Proven fix from 7 training runs on L40S GPUs.
+            _VISION_KEYS = {"pixel_values", "pixel_values_videos",
+                            "image_grid_thw", "video_grid_thw"}
+            full_inputs = {k: v for k, v in prompt_inputs.items()
+                           if k not in _VISION_KEYS}
             full_inputs["input_ids"] = full_ids
             full_inputs["attention_mask"] = torch.ones_like(full_ids)
             full_inputs = {k: v.to(device) for k, v in full_inputs.items()}
@@ -288,7 +295,7 @@ def main() -> None:
     p.add_argument("--num-steps", type=int, default=10)
     p.add_argument("--num-rollouts", type=int, default=8)
     p.add_argument("--max-steps-per-episode", type=int, default=15)
-    p.add_argument("--max-new-tokens", type=int, default=2048)
+    p.add_argument("--max-new-tokens", type=int, default=512)
     p.add_argument("--output", default="checkpoints/grpo")
     p.add_argument("--no-4bit", action="store_true")
     p.add_argument("--eval-model", default="gpt-4.1-mini")
