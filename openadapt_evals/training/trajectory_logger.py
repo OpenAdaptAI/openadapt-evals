@@ -58,7 +58,9 @@ class PlannerTrajectoryLogger:
         self,
         output_dir: str,
         max_a11y_chars: int = _MAX_A11Y_CHARS,
+        keep_failed: bool = False,
     ) -> None:
+        self._keep_failed = keep_failed
         self._output_dir = Path(output_dir)
         self._output_dir.mkdir(parents=True, exist_ok=True)
         self._max_a11y_chars = max_a11y_chars
@@ -157,7 +159,7 @@ class PlannerTrajectoryLogger:
         """
         ep_dir = self._output_dir / episode_id
 
-        if reward <= 0:
+        if reward <= 0 and not self._keep_failed:
             # Delete screenshot directory for failed episodes
             if ep_dir.exists():
                 shutil.rmtree(ep_dir)

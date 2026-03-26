@@ -290,7 +290,7 @@ class TeacherAgent:
         self,
         model: str = "gpt-5.4",
         provider: str = "openai",
-        max_tokens: int = 512,
+        max_tokens: int = 2048,
     ) -> None:
         self.model = model
         self.provider = provider
@@ -387,7 +387,11 @@ class TeacherAgent:
         response = client.chat.completions.create(
             model=self.model,
             messages=messages,
-            max_tokens=self.max_tokens,
+            **({
+                "max_completion_tokens": self.max_tokens
+            } if self.model.startswith(("gpt-5", "o1", "o3", "o4")) else {
+                "max_tokens": self.max_tokens
+            }),
             temperature=0.1,
         )
 
@@ -435,7 +439,11 @@ class TeacherAgent:
             model=self.model,
             system=self.SYSTEM_PROMPT,
             messages=messages,
-            max_tokens=self.max_tokens,
+            **({
+                "max_completion_tokens": self.max_tokens
+            } if self.model.startswith(("gpt-5", "o1", "o3", "o4")) else {
+                "max_tokens": self.max_tokens
+            }),
             temperature=0.1,
         )
 
@@ -861,7 +869,7 @@ def main() -> int:
     # Initialize components
     from openadapt_evals.training.trajectory_logger import PlannerTrajectoryLogger
 
-    trajectory_logger = PlannerTrajectoryLogger(output_dir=str(output_dir))
+    trajectory_logger = PlannerTrajectoryLogger(output_dir=str(output_dir), keep_failed=True)
     teacher = TeacherAgent(model=args.model, provider=args.provider)
     cost_tracker = CostTracker(model=args.model)
 
