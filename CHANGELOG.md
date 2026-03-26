@@ -1,6 +1,25 @@
 # CHANGELOG
 
 
+## v0.71.0 (2026-03-26)
+
+### Features
+
+- Add desktop cleanup, manual demo tools, and fix trainer OOM bugs
+  ([#195](https://github.com/OpenAdaptAI/openadapt-evals/pull/195),
+  [`57a8094`](https://github.com/OpenAdaptAI/openadapt-evals/commit/57a80943c2a696d68e6e8560f1f6d24e8b054e8c))
+
+- Add clean_desktop() to WAADirect to kill known distracting apps between episodes, preventing stale
+  desktop state from leaking across phases - Handle close_all config entry type in
+  WAADirect.setup_task() - Create manual notepad-hello demo (DemoLibrary-compatible, no screenshots)
+  - Add scripts/create_manual_demo.py CLI for authoring demos from text specs - Fix vision tensor
+  exclusion in GRPO loss computation (OOM on L40S) - Add try/except for float parsing in
+  parse_vlm_output_to_action - Lower max_new_tokens default from 2048 to 512 (prevents OOM,
+  sufficient for Thought+Action format)
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.70.2 (2026-03-26)
 
 ### Bug Fixes
