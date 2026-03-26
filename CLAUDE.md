@@ -325,45 +325,52 @@ Two-step workflow: collect expert trajectories from a frontier teacher model, th
 
 ### Step 1: Collect Teacher Trajectories (`scripts/collect_distillation_data.py`)
 
-Runs a frontier model (GPT-5.4, Claude, etc.) as a unified desktop agent on WAA tasks, saving every successful trajectory as SFT training data. Failed episodes are automatically discarded.
+Runs a frontier model (GPT-5.4, Claude, etc.) as a unified desktop agent on WAA tasks, saving every trajectory as SFT training data. Uses WAADirect for reliable task setup instead of the adapter layer. Tasks are loaded from local YAML/JSON files via `--task-dir`.
 
 ```bash
 # Collect from GPT-5.4 (default teacher)
 python scripts/collect_distillation_data.py \
+    --task-dir tasks/ \
     --server-url http://localhost:5001
 
 # Collect from Claude with cost-limited testing
 python scripts/collect_distillation_data.py \
+    --task-dir tasks/ \
     --model claude-sonnet-4-6-20260210 \
     --provider anthropic \
     --max-tasks 5 \
     --server-url http://localhost:5001
 
-# Specific tasks
+# Specific tasks from task-dir
 python scripts/collect_distillation_data.py \
-    --tasks TASK_UUID_1,TASK_UUID_2 \
+    --task-dir tasks/ \
+    --tasks change-font-arial,open-notepad \
     --server-url http://localhost:5001
 
 # Resume previous collection
 python scripts/collect_distillation_data.py \
+    --task-dir tasks/ \
     --server-url http://localhost:5001 \
     --output-dir distillation_data/gpt54_run1 \
     --resume
 
 # Dry run (list tasks, estimate cost)
 python scripts/collect_distillation_data.py \
+    --task-dir tasks/ \
     --dry-run --server-url http://localhost:5001
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--task-dir` | (required) | Directory of task YAML/JSON configs |
 | `--model` | `gpt-5.4` | Teacher model API ID |
 | `--provider` | `openai` | `openai` or `anthropic` |
-| `--tasks` | all from server | Comma-separated task IDs |
+| `--tasks` | all from task-dir | Comma-separated task IDs to filter |
 | `--max-tasks` | unlimited | Limit tasks (for cost control) |
 | `--server-url` | `http://localhost:5001` | WAA server URL |
 | `--output-dir` | `distillation_data/` | Output directory |
 | `--max-steps` | 15 | Steps per episode |
+| `--eval-model` | `gpt-4.1-mini` | VLM for milestone evaluation |
 | `--resume` | off | Skip tasks with existing data |
 | `--dry-run` | off | List tasks without running |
 
