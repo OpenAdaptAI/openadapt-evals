@@ -109,9 +109,12 @@ def parse_vlm_output_to_action(
     # CLICK(x=..., y=...)
     m = re.search(r"CLICK\(x=(-?[\d.]+),\s*y=(-?[\d.]+)\)", text, re.IGNORECASE)
     if m:
-        xf = max(0.0, min(1.0, float(m.group(1))))
-        yf = max(0.0, min(1.0, float(m.group(2))))
-        return SimpleAction(type="click", x=int(xf * width), y=int(yf * height))
+        try:
+            xf = max(0.0, min(1.0, float(m.group(1))))
+            yf = max(0.0, min(1.0, float(m.group(2))))
+            return SimpleAction(type="click", x=int(xf * width), y=int(yf * height))
+        except (ValueError, OverflowError):
+            logger.warning("Malformed CLICK coords: x=%s y=%s", m.group(1), m.group(2))
 
     # TYPE(text="...")
     m = re.search(r"""TYPE\(text=["']([^"'\\]*(?:\\.[^"'\\]*)*)["']\)""", text, re.IGNORECASE)
