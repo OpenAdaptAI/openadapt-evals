@@ -1,6 +1,20 @@
 # CHANGELOG
 
 
+## v0.70.1 (2026-03-26)
+
+### Bug Fixes
+
+- Keep failed episodes in distillation + max_completion_tokens for GPT-5.x
+  ([`7495843`](https://github.com/OpenAdaptAI/openadapt-evals/commit/7495843b04778f1bc299e872b13bc1a6901e9e11))
+
+- PlannerTrajectoryLogger: add keep_failed=True option (for distillation, we want ALL teacher data,
+  not just successful episodes) - collect_distillation_data: use max_completion_tokens for GPT-5.x
+  models, increase default from 512 to 2048, enable keep_failed
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.70.0 (2026-03-24)
 
 ### Features
