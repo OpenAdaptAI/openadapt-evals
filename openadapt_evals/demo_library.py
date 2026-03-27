@@ -1382,10 +1382,18 @@ class DemoLibrary:
         alignment_trace: AlignmentTraceEntry | None = None
         demo_dir = self._demo_dir(task_id, demo.demo_id)
 
+        # Check if demo has real screenshots (not placeholders)
+        _has_real_screenshots = any(
+            s.screenshot_path and (demo_dir / s.screenshot_path).exists()
+            and (demo_dir / s.screenshot_path).stat().st_size > 100
+            for s in demo.steps
+        )
+
         if (
             use_visual_alignment
             and current_screenshot is not None
             and self._alignment_strategy is not None
+            and _has_real_screenshots
         ):
             t0 = time.monotonic()
 
