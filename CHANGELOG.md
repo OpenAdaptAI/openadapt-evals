@@ -1,6 +1,20 @@
 # CHANGELOG
 
 
+## v0.71.1 (2026-03-27)
+
+### Bug Fixes
+
+- Skip visual alignment when demo has no real screenshots
+  ([`11513c1`](https://github.com/OpenAdaptAI/openadapt-evals/commit/11513c167ed33ea29fe31a254f7ed54279ffc804))
+
+Placeholder screenshots (19 bytes) cause pHash to produce garbage distances → low confidence →
+  adaptive disabling kicks in after 3 steps → guidance disabled for entire episode. Manual demos
+  with descriptions but no screenshots need sequential alignment to work.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.71.0 (2026-03-26)
 
 ### Features
