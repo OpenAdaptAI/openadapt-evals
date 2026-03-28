@@ -1,6 +1,32 @@
 # CHANGELOG
 
 
+## v0.76.1 (2026-03-28)
+
+### Bug Fixes
+
+- Align WAAConnection API with client usage
+  ([#214](https://github.com/OpenAdaptAI/openadapt-evals/pull/214),
+  [`1a039f0`](https://github.com/OpenAdaptAI/openadapt-evals/commit/1a039f0ebb758863603943463afb7618ce32556b))
+
+Client reported API mismatches (vm_ip positional, no .url property, no env var defaults, no SSH key
+  config, no stop() method).
+
+Changes: - vm_ip now optional with WAA_HOST env var fallback - waa_host kwarg alias for vm_ip
+  (matches client naming) - waa_key / WAA_KEY env var for SSH key path - .url property returns
+  http://localhost:{local_port} - .eval_url property returns http://localhost:{eval_local_port} -
+  is_healthy() public method (non-blocking) - stop() alias for close() - SSH -i flag when ssh_key is
+  set - Updated docstring with client's usage pattern
+
+The client's pattern now works: waa = WAAConnection() # uses WAA_HOST env var waa.start() trainer =
+  GRPOTrainer(config, on_before_collect=lambda t, e: waa.ensure_healthy()) trainer.train()
+  waa.stop()
+
+W&B callbacks confirmed: do NOT call wandb.init() — caller must init first.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.76.0 (2026-03-28)
 
 ### Features
