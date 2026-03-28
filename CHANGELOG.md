@@ -1,6 +1,30 @@
 # CHANGELOG
 
 
+## v0.72.4 (2026-03-28)
+
+### Bug Fixes
+
+- Use outlines v1.2 get_regex_logits_processor API
+  ([#202](https://github.com/OpenAdaptAI/openadapt-evals/pull/202),
+  [`39e94a8`](https://github.com/OpenAdaptAI/openadapt-evals/commit/39e94a89b6ae243ac0d726cc010b2e8844386a9e))
+
+The outlines v1.2 API requires: 1. Wrapping the HF model+tokenizer in outlines.Transformers 2.
+  Calling get_regex_logits_processor(None, wrapped, regex)
+
+Prior code tried to construct OutlinesLogitsProcessor directly with a tokenizer= kwarg that doesn't
+  exist in v1.2. The error was caught and silently fell back to unconstrained generation.
+
+Tests now verify the ACTUAL API surface (import paths + factory function signature) instead of just
+  checking class names exist. This would have caught all three prior Outlines bugs: - PR #197: wrong
+  class name (RegexLogitsProcessor) - PR #201: wrong constructor (tokenizer= kwarg) - This PR: wrong
+  API pattern (direct constructor vs factory)
+
+33/33 tests pass with outlines 1.2.12 installed.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.72.3 (2026-03-28)
 
 ### Bug Fixes
