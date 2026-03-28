@@ -8,6 +8,7 @@ This module provides:
 - VMMonitor: Azure VM status monitoring
 - AzureOpsTracker: Azure operation logging
 - SSHTunnelManager: SSH tunnel management for VNC/API access
+- WAAConnection: Auto-recovering SSH tunnel for WAA servers
 - QEMUResetManager: QEMU monitor-based Windows restart
 
 Example:
@@ -47,6 +48,7 @@ from openadapt_evals.infrastructure.screen_stability import (
     wait_for_stable_screen,
 )
 from openadapt_evals.infrastructure.ssh_tunnel import SSHTunnelManager, get_tunnel_manager
+from openadapt_evals.infrastructure.waa_connection import WAAConnection
 from openadapt_evals.infrastructure.probe import (
     MultiLayerProbeResult,
     ProbeLayerResult,
@@ -75,6 +77,7 @@ __all__ = [
     "VMConfig",
     "VMProvider",
     "SSHTunnelManager",
+    "WAAConnection",
     "compare_screenshots",
     "get_tunnel_manager",
     "multi_layer_probe",

@@ -2,9 +2,15 @@
 
 This module provides integrations with:
 - Weights & Biases (wandb) for experiment tracking and report generation
+- W&B callback functions for the standalone GRPO trainer
 """
 
 from openadapt_evals.integrations.wandb_logger import WandbLogger
+from openadapt_evals.integrations.wandb_callbacks import (
+    wandb_model_loaded,
+    wandb_rollout_logger,
+    wandb_step_logger,
+)
 from openadapt_evals.integrations.fixtures import (
     generate_noise_data,
     generate_best_case_data,
@@ -30,6 +36,9 @@ except ImportError:
 __all__ = [
     "WandbLogger",
     "WandbReportGenerator",
+    "wandb_model_loaded",
+    "wandb_rollout_logger",
+    "wandb_step_logger",
     "generate_noise_data",
     "generate_best_case_data",
     "generate_worst_case_data",
