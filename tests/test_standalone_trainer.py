@@ -80,6 +80,23 @@ class TestActionRegex:
     def test_action_only_regex_matches(self, action: str) -> None:
         assert re.match(self.action_regex, action), f"Expected match: {action!r}"
 
+    def test_no_bounded_quantifiers_in_regex(self) -> None:
+        """Regression test: bounded quantifiers ({N,M}) cause DFA state explosion.
+
+        Outlines compiles regex to a DFA. Bounded quantifiers like {1,500}
+        create counting states that cross-product with every alternative,
+        exceeding the 2^31 state limit. All repetitions must use +, *, or
+        small bounds ({1,3} is OK, {0,200} is not).
+        """
+        import re as _re
+        # Find all bounded quantifiers in the full regex
+        bounds = _re.findall(r'\{(\d+),(\d+)\}', self.full_regex)
+        for lo, hi in bounds:
+            assert int(hi) <= 10, (
+                f"Bounded quantifier {{{lo},{hi}}} in ACTION_REGEX will cause "
+                f"DFA state explosion in Outlines. Use + or * instead."
+            )
+
 
 # ---------------------------------------------------------------------------
 # Constrained decoding cache tests

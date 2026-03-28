@@ -91,19 +91,24 @@ class GRPOTrainer:
     # --- Constrained decoding -------------------------------------------
 
     # Regex matching the required Thought/Action format from SYSTEM_PROMPT.
-    # The model gets up to 500 chars of chain-of-thought reasoning, then
-    # MUST output exactly one valid action.  This preserves the model's
-    # ability to reason while guaranteeing parseable output.
+    # The model reasons freely, then MUST output exactly one valid action.
     #
     # Format:  Thought: <reasoning>\nAction: <action>
+    #
+    # IMPORTANT: All repetitions use unbounded quantifiers (+, *) instead
+    # of bounded ({1,N}).  Bounded quantifiers create counting DFA states
+    # that explode combinatorially — {1,500} alone creates 1,500 states
+    # cross-producted with every action alternative.  Unbounded repetitions
+    # are single-state self-loops that Outlines handles efficiently.
+    # max_new_tokens provides the actual length limit.
     _ACTION_RE = (
-        r"CLICK\(x=0\.\d{1,3},\s*y=0\.\d{1,3}\)"
-        r'|TYPE\(text="[^"]{0,200}"\)'
+        r"CLICK\(x=0\.\d+,\s*y=0\.\d+\)"
+        r'|TYPE\(text="[^"]*"\)'
         r"|WAIT\(\)"
         r"|DONE\(\)"
     )
     _ACTION_REGEX = (
-        r"Thought: [^\n]{1,500}\nAction: (" + _ACTION_RE + r")"
+        r"Thought: [^\n]+\nAction: (" + _ACTION_RE + r")"
     )
     # Sentinel: None = not yet attempted, list = success, False = failed
     _constrained_processor_cache: Any = None
