@@ -112,6 +112,54 @@ class TestConstrainedDecodingCache:
         result = trainer._get_constrained_logits_processor()
         assert result == ["mock_processor"]
 
+    def test_outlines_import_paths_exist(self) -> None:
+        """Verify at least one of the Outlines import paths resolves.
+
+        The Outlines API changed class names across versions.  The trainer
+        tries both.  This test ensures at least one path works when
+        outlines is installed, or gracefully skips when it's not.
+        """
+        try:
+            import outlines  # noqa: F401
+        except ImportError:
+            pytest.skip("outlines not installed")
+
+        # At least one of these must exist
+        found = False
+        try:
+            from outlines.processors import OutlinesLogitsProcessor  # noqa: F401
+            found = True
+        except ImportError:
+            pass
+        try:
+            from outlines.processors import RegexLogitsProcessor  # noqa: F401
+            found = True
+        except ImportError:
+            pass
+        assert found, (
+            "Neither OutlinesLogitsProcessor nor RegexLogitsProcessor found "
+            "in outlines.processors. outlines API may have changed."
+        )
+
+    def test_outlines_tokenizer_wrapper_exists(self) -> None:
+        """Verify the Outlines tokenizer wrapper import path."""
+        try:
+            import outlines  # noqa: F401
+        except ImportError:
+            pytest.skip("outlines not installed")
+
+        # Try the v0.1+ path
+        found = False
+        try:
+            from outlines import TransformerTokenizer  # noqa: F401
+            found = True
+        except (ImportError, AttributeError):
+            pass
+        # Not fatal if missing — trainer falls back to raw tokenizer
+        if not found:
+            import warnings
+            warnings.warn("TransformerTokenizer not found — trainer will use raw tokenizer")
+
     def test_empty_list_no_longer_caches_as_success(self) -> None:
         """Regression test: empty list [] should NOT be treated as success.
 
@@ -183,3 +231,36 @@ class TestTaskRotation:
         num_steps = 9
         selected = [task_ids[step % len(task_ids)] for step in range(num_steps)]
         assert selected == ["a", "b", "c", "a", "b", "c", "a", "b", "c"]
+
+    def test_task_rotation_not_stuck_on_first(self, tmp_path) -> None:
+        """Regression test: all tasks should appear, not just the first.
+
+        Prior bug: _load_task_configs checked `if not task_ids` INSIDE
+        the loop, so after the first task was appended, the remaining
+        tasks were skipped because `not ['task-0']` is False.
+        """
+        import yaml
+
+        for i in range(5):
+            task = {
+                "name": f"Task {i}",
+                "id": f"task-{i}",
+                "setup": [],
+                "evaluate": [{"check": "screenshot", "description": "done"}],
+            }
+            (tmp_path / f"task_{i}.yaml").write_text(yaml.dump(task))
+
+        config = TrainingConfig(task_dir=str(tmp_path))
+        trainer = GRPOTrainer(config)
+        trainer._load_task_configs()
+
+        # Must have ALL 5, not just 1
+        assert len(config.task_ids) == 5, (
+            f"Expected 5 task_ids but got {len(config.task_ids)}: {config.task_ids}. "
+            "The _load_task_configs bug (checking inside loop) may have regressed."
+        )
+
+        # Simulate 10 training steps — must see more than one unique task
+        selected = [config.task_ids[step % len(config.task_ids)] for step in range(10)]
+        unique = set(selected)
+        assert len(unique) == 5, f"Expected 5 unique tasks in rotation, got {len(unique)}: {unique}"
