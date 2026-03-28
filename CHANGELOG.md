@@ -1,6 +1,30 @@
 # CHANGELOG
 
 
+## v0.72.3 (2026-03-28)
+
+### Bug Fixes
+
+- Correct Outlines API import paths, add regression tests
+  ([#201](https://github.com/OpenAdaptAI/openadapt-evals/pull/201),
+  [`62e74e0`](https://github.com/OpenAdaptAI/openadapt-evals/commit/62e74e096158d64f3616eaefb26188b4a83b139b))
+
+The Outlines library changed its API across versions: - v0.1+: OutlinesLogitsProcessor (not
+  RegexLogitsProcessor) - v0.1+: TransformerTokenizer (no 's') at outlines.TransformerTokenizer
+
+The trainer now tries both import paths for version compatibility. The tokenizer is wrapped via
+  TransformerTokenizer when available.
+
+Tests: - test_outlines_import_paths_exist: verifies at least one processor class is importable from
+  outlines.processors - test_outlines_tokenizer_wrapper_exists: checks TransformerTokenizer -
+  test_task_rotation_not_stuck_on_first: regression test with 5 tasks verifying all appear in
+  rotation (not just the first)
+
+Also adds outlines>=0.1.0 to dev dependencies so tests run in CI without needing --extra training.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.72.2 (2026-03-28)
 
 ### Bug Fixes
