@@ -1,6 +1,28 @@
 # CHANGELOG
 
 
+## v0.74.0 (2026-03-28)
+
+### Features
+
+- Document DemoExecutor, standalone trainer, add telemetry events
+  ([#209](https://github.com/OpenAdaptAI/openadapt-evals/pull/209),
+  [`3edba07`](https://github.com/OpenAdaptAI/openadapt-evals/commit/3edba0745b4ef97965155622aa765c918f3dd151))
+
+README: - Add standalone GRPO trainer to Key Features (callback hooks, vision_loss_mode, constrained
+  decoding) - Add DemoExecutor to Key Features (0.00 → 1.00 validated) - Add correction flywheel
+  description - Add training install extra
+
+CLAUDE.md: - Add DemoExecutor section with tiered execution docs - Add Standalone GRPO Trainer
+  section with full API - Update architecture tree with new files
+
+Telemetry: - Add 7 event functions: training_run, training_step, rollout_collected,
+  checkpoint_saved, demo_execution, correction, demo_recorded - Instrument DemoExecutor with
+  start/completed events + tier counts
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.73.0 (2026-03-28)
 
 ### Features
