@@ -89,6 +89,8 @@ training = [
     "open-clip-torch>=2.20.0",
     # Heavy ML deps for openadapt-ml training
     "openadapt-ml[training]>=0.11.0",
+    # Constrained decoding for GRPO (forces valid action format output)
+    "outlines>=0.1.0",
 ]
 verl = [
     # veRL: Volcano Engine Reinforcement Learning for LLMs

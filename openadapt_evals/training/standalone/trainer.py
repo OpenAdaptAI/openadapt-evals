@@ -53,6 +53,65 @@ class GRPOTrainer:
         self._env: WAADirect | None = None
         self._task_configs: dict[str, Any] = {}
 
+    # --- Constrained decoding -------------------------------------------
+
+    # Regex that matches ALL valid action formats.  Allows a free-form
+    # "Thought: ..." prefix (the model's chain-of-thought) followed by
+    # exactly one action.  Outlines converts this to a token-level DFA.
+    _ACTION_REGEX = (
+        r"(.|\n)*"  # allow any Thought prefix
+        r"(CLICK\(x=0\.\d{1,3},\s*y=0\.\d{1,3}\)"
+        r'|TYPE\(text="[^"]{0,200}"\)'
+        r"|WAIT\(\)"
+        r"|DONE\(\))"
+    )
+    _constrained_processor_cache: Any = None
+
+    def _get_constrained_logits_processor(self) -> list | None:
+        """Build an Outlines RegexLogitsProcessor for the action format.
+
+        Returns a ``[LogitsProcessor]`` list suitable for passing to
+        ``model.generate(logits_processor=...)``, or ``None`` if Outlines
+        is not installed.
+
+        The processor is cached after first creation (the DFA compilation
+        is expensive — ~2 seconds — but only happens once).
+        """
+        if self._constrained_processor_cache is not None:
+            return self._constrained_processor_cache
+
+        try:
+            from outlines.processors import RegexLogitsProcessor
+            processor = RegexLogitsProcessor(
+                self._ACTION_REGEX,
+                tokenizer=self._processor.tokenizer
+                if hasattr(self._processor, "tokenizer")
+                else self._processor,
+            )
+            self._constrained_processor_cache = [processor]
+            logger.info(
+                "Outlines constrained decoding enabled "
+                "(action format regex compiled)"
+            )
+            return self._constrained_processor_cache
+        except ImportError:
+            logger.warning(
+                "constrained_decoding=True but 'outlines' is not installed. "
+                "Install with: pip install outlines>=0.1.0"
+            )
+            self._constrained_processor_cache = []  # don't retry
+            return None
+        except Exception as exc:
+            logger.warning(
+                "Outlines RegexLogitsProcessor creation failed: %s. "
+                "Falling back to unconstrained generation.",
+                exc,
+            )
+            self._constrained_processor_cache = []
+            return None
+
+    # --- Task loading -----------------------------------------------------
+
     def _load_task_configs(self) -> None:
         """Load TaskConfig YAMLs from task_dir."""
         if not self._config.task_dir:
@@ -100,9 +159,18 @@ class GRPOTrainer:
             inputs = self._processor(text=[text_input], images=[image], return_tensors="pt")
             inputs = {k: v.to(self._model.device) for k, v in inputs.items()}
             with torch.no_grad():
-                outputs = self._model.generate(
-                    **inputs, max_new_tokens=self._config.max_new_tokens,
-                    temperature=self._config.temperature, do_sample=True)
+                generate_kwargs: dict[str, Any] = dict(
+                    max_new_tokens=self._config.max_new_tokens,
+                    temperature=self._config.temperature,
+                    do_sample=True,
+                )
+                # Constrained decoding: force output to match the
+                # action format regex, eliminating unparseable output.
+                if self._config.constrained_decoding:
+                    logits_proc = self._get_constrained_logits_processor()
+                    if logits_proc is not None:
+                        generate_kwargs["logits_processor"] = logits_proc
+                outputs = self._model.generate(**inputs, **generate_kwargs)
             decoded = self._processor.decode(
                 outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
             gen_len = outputs[0].shape[0] - inputs["input_ids"].shape[1]

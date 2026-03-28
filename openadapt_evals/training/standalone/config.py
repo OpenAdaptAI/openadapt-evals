@@ -35,6 +35,12 @@ class TrainingConfig:
     # "checkpoint" – gradient-checkpoint the vision encoder to cut peak VRAM.
     vision_loss_mode: str = "exclude"
 
+    # Constrained decoding via Outlines.  When True and the `outlines`
+    # package is installed, generation is constrained to the action format
+    # regex (CLICK/TYPE/WAIT/DONE).  Eliminates 5-15% of rollouts wasted
+    # on unparseable output.  Requires: `pip install outlines>=0.1.0`
+    constrained_decoding: bool = False
+
     server_url: str = "http://localhost:5001"
     task_ids: list[str] = field(default_factory=list)
     task_dir: str | None = None

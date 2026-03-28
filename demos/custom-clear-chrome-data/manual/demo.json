@@ -41,19 +41,7 @@
       "action_value": "",
       "x": 0.5,
       "y": 0.7,
-      "description": "Click the Clear data button in the Clear Browsing Data dialog",
-      "metadata": {}
-    },
-    {
-      "step_index": 3,
-      "screenshot_path": "",
-      "action_type": "key",
-      "action_description": "KEY(alt+f4)",
-      "target_description": "",
-      "action_value": "alt+f4",
-      "x": null,
-      "y": null,
-      "description": "Close Chrome after clearing data",
+      "description": "Click the 'Delete from this device' or 'Clear data' button in the Clear Browsing Data dialog",
       "metadata": {}
     }
   ]
