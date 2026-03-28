@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     azure_checkpoints_container: str = "checkpoints"
     azure_comparisons_container: str = "comparisons"
 
+    # WAA VM connection (used by WAAConnection for SSH tunnel)
+    waa_host: str | None = None  # VM IP address
+    waa_key: str | None = None  # SSH key path (e.g., ~/.ssh/waa_key)
+    waa_user: str = "azureuser"  # SSH username
+
     # Multi-cloud settings
     cloud_provider: str = "azure"  # "azure" or "aws"
     aws_region: str = "us-east-1"
