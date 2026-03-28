@@ -772,6 +772,7 @@ def _run_live_episode(
     planner_provider: str = "openai",
     grounder_model: str = "gpt-4.1-mini",
     grounder_provider: str = "openai",
+    grounder_endpoint: str | None = None,
     screenshot_dir: Path | None = None,
     use_visual_alignment: bool = True,
 ) -> tuple[float, list[bytes]]:
@@ -784,11 +785,21 @@ def _run_live_episode(
     adapter = WAALiveAdapter(WAALiveConfig(server_url=server_url))
     env = RLEnvironment(adapter, task_config=task_config)
 
+    # When an HTTP grounder endpoint is provided, use the HTTP provider
+    # so the PlannerGrounderAgent routes through _call_grounder_http.
+    if grounder_endpoint:
+        _grounder = "http"
+        _grounder_provider = "http"
+    else:
+        _grounder = grounder_model
+        _grounder_provider = grounder_provider
+
     base_agent = PlannerGrounderAgent(
         planner=planner_model,
-        grounder=grounder_model,
+        grounder=_grounder,
         planner_provider=planner_provider,
-        grounder_provider=grounder_provider,
+        grounder_provider=_grounder_provider,
+        grounder_endpoint=grounder_endpoint,
     )
 
     # Wrap with demo guidance if library provided
@@ -1210,6 +1221,7 @@ def phase3_retry(
             executor = DemoExecutor(
                 grounder_model=kwargs.get("grounder_model", "gpt-4.1-mini"),
                 grounder_provider=kwargs.get("grounder_provider", "openai"),
+                grounder_endpoint=kwargs.get("grounder_endpoint"),
                 planner_model=kwargs.get("planner_model", "gpt-4.1-mini"),
                 planner_provider=kwargs.get("planner_provider", "openai"),
             )
@@ -1357,6 +1369,13 @@ Examples:
         help="Grounder model for both phases",
     )
     model_group.add_argument("--grounder-provider", default="openai")
+    model_group.add_argument(
+        "--grounder-endpoint",
+        help="HTTP endpoint for a dedicated grounding model (e.g., vLLM serving "
+             "UI-Venus-1.5-8B). When set, click grounding uses the UI-Venus "
+             "native bbox format via this endpoint instead of the grounder "
+             "model API. Example: http://gpu-host:8000",
+    )
     model_group.add_argument(
         "--baseline-model",
         help="Planner model for Phase 1 (attempt without guidance). "
@@ -1520,6 +1539,7 @@ Examples:
             planner_provider=args.planner_provider,
             grounder_model=args.grounder_model,
             grounder_provider=args.grounder_provider,
+            grounder_endpoint=args.grounder_endpoint,
         )
 
         try:
@@ -1578,6 +1598,7 @@ Examples:
             planner_provider=args.planner_provider,
             grounder_model=args.grounder_model,
             grounder_provider=args.grounder_provider,
+            grounder_endpoint=args.grounder_endpoint,
         )
 
         try:

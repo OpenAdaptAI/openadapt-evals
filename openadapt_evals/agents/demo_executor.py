@@ -249,7 +249,16 @@ class DemoExecutor:
         obs: BenchmarkObservation,
         description: str,
     ) -> BenchmarkAction:
-        """Ground via HTTP endpoint (UI-Venus, UI-TARS, etc.)."""
+        """Ground via HTTP endpoint (UI-Venus, UI-TARS, etc.).
+
+        Uses the UI-Venus native grounding prompt format (same as
+        ``PlannerGrounderAgent._call_grounder_http``) which outputs
+        ``[x1, y1, x2, y2]`` bounding boxes. The center of the bbox
+        is returned as the click coordinate.
+
+        Compatible with vLLM, Ollama, or any OpenAI-compatible server
+        serving ``inclusionAI/UI-Venus-1.5-8B``.
+        """
         import base64
         import requests
 
@@ -258,8 +267,15 @@ class DemoExecutor:
             endpoint += "/v1"
         url = f"{endpoint}/chat/completions"
 
+        # Use the same UI-Venus native prompt as PlannerGrounderAgent
+        prompt = (
+            f"Outline the position corresponding to the instruction: "
+            f"{description}.\n"
+            f"The output should be only [x1,y1,x2,y2]."
+        )
+
         content = [
-            {"type": "text", "text": f"In the screenshot, locate: {description}"},
+            {"type": "text", "text": prompt},
         ]
         if obs.screenshot:
             b64 = base64.b64encode(obs.screenshot).decode()
@@ -270,7 +286,7 @@ class DemoExecutor:
 
         try:
             resp = requests.post(url, json={
-                "model": self._grounder_model,
+                "model": "UI-Venus-1.5-8B",
                 "messages": [{"role": "user", "content": content}],
                 "max_tokens": 128,
                 "temperature": 0.0,

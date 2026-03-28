@@ -169,6 +169,33 @@ python scripts/run_eval_pipeline.py \
   --waa-image-version win11-24h2-2026-03-04
 ```
 
+### Dedicated grounder endpoint (UI-Venus)
+
+For higher click accuracy, serve [UI-Venus-1.5-8B](https://huggingface.co/inclusionAI/UI-Venus-1.5-8B) on a GPU and point the DemoExecutor or PlannerGrounderAgent at it. This replaces general VLM grounding (GPT-4.1-mini) with a purpose-built GUI grounding model.
+
+```bash
+# 1. On a GPU machine (A10G 24GB, RTX 4090, etc.):
+bash scripts/serve_ui_venus.sh
+# Serves at http://0.0.0.0:8000 by default
+
+# 2. Verify it's running:
+curl http://gpu-host:8000/v1/models
+# Should list "UI-Venus-1.5-8B"
+
+# 3. Run the correction flywheel with the dedicated grounder:
+python scripts/run_correction_flywheel.py \
+    --task-config example_tasks/clear-browsing-data-chrome.yaml \
+    --demo-dir ./demos \
+    --grounder-endpoint http://gpu-host:8000
+
+# 4. Or run the full evaluation with the grounder:
+python scripts/run_full_eval.py \
+    --server-url http://localhost:5001 \
+    --grounder-endpoint http://gpu-host:8000
+```
+
+The endpoint uses the UI-Venus native bounding-box prompt format (`[x1,y1,x2,y2]`) and is compatible with vLLM, Ollama, or any OpenAI-compatible server. Both `DemoExecutor` and `PlannerGrounderAgent` use the same prompt format for consistency.
+
 ### Parallel evaluation
 
 ```bash
