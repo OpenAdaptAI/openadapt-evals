@@ -4,11 +4,20 @@ Manages an SSH tunnel as a subprocess with a background watchdog thread
 that monitors health and automatically reconnects when the tunnel drops.
 
 Usage:
-    from openadapt_evals.infrastructure.waa_connection import WAAConnection
+    from openadapt_evals.infrastructure import WAAConnection
 
-    with WAAConnection(vm_ip="172.173.66.131") as conn:
-        conn.ensure_healthy()
-        # Use http://localhost:5001 for WAA API calls
+    # All kwargs, env var defaults (WAA_HOST, WAA_KEY)
+    with WAAConnection() as waa:
+        waa.ensure_healthy()
+        print(waa.url)       # http://localhost:5001
+        print(waa.eval_url)  # http://localhost:5050
+
+    # Or with explicit args
+    waa = WAAConnection(waa_host="172.173.66.131", waa_key="~/.ssh/waa_key")
+    waa.start()
+    trainer = GRPOTrainer(config, on_before_collect=lambda t, e: waa.ensure_healthy())
+    trainer.train()
+    waa.stop()
 """
 
 from __future__ import annotations
@@ -36,7 +45,10 @@ class WAAConnection:
 
     def __init__(
         self,
-        vm_ip: str,
+        vm_ip: str | None = None,
+        *,
+        waa_host: str | None = None,
+        waa_key: str | None = None,
         username: str = "azureuser",
         local_port: int = 5001,
         remote_port: int = 5000,
@@ -46,8 +58,16 @@ class WAAConnection:
         max_retries: int = 5,
         retry_delay: int = 5,
     ):
-        self.vm_ip = vm_ip
+        import os
+
+        # vm_ip / waa_host are interchangeable; env var fallback
+        self.vm_ip = vm_ip or waa_host or os.environ.get("WAA_HOST", "")
+        if not self.vm_ip:
+            raise ValueError(
+                "vm_ip is required. Pass it directly or set WAA_HOST env var."
+            )
         self.username = username
+        self.ssh_key = waa_key or os.environ.get("WAA_KEY")
         self.local_port = local_port
         self.remote_port = remote_port
         self.eval_local_port = eval_local_port
@@ -62,11 +82,29 @@ class WAAConnection:
         self._watchdog_thread: threading.Thread | None = None
 
     # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
+
+    @property
+    def url(self) -> str:
+        """WAA API URL (e.g., ``http://localhost:5001``)."""
+        return f"http://localhost:{self.local_port}"
+
+    @property
+    def eval_url(self) -> str:
+        """Evaluate server URL (e.g., ``http://localhost:5050``)."""
+        return f"http://localhost:{self.eval_local_port}"
+
+    def is_healthy(self) -> bool:
+        """Check if the tunnel is currently healthy (non-blocking)."""
+        return self._is_healthy()
+
+    # ------------------------------------------------------------------
     # SSH tunnel lifecycle
     # ------------------------------------------------------------------
 
     def _build_ssh_cmd(self) -> list[str]:
-        return [
+        cmd = [
             "ssh", "-N",
             "-L", f"{self.local_port}:localhost:{self.remote_port}",
             "-L", f"{self.eval_local_port}:localhost:{self.eval_remote_port}",
@@ -74,8 +112,11 @@ class WAAConnection:
             "-o", "UserKnownHostsFile=/dev/null",
             "-o", "ServerAliveInterval=30",
             "-o", "ServerAliveCountMax=3",
-            f"{self.username}@{self.vm_ip}",
         ]
+        if self.ssh_key:
+            cmd.extend(["-i", self.ssh_key])
+        cmd.append(f"{self.username}@{self.vm_ip}")
+        return cmd
 
     def _start_tunnel(self) -> None:
         cmd = self._build_ssh_cmd()
@@ -171,6 +212,10 @@ class WAAConnection:
         with self._lock:
             self._kill_tunnel()
         logger.info("WAAConnection closed")
+
+    def stop(self) -> None:
+        """Alias for ``close()`` — matches the client's API."""
+        self.close()
 
     def ensure_healthy(self) -> None:
         """Block until the tunnel is healthy or raise after max retries."""
