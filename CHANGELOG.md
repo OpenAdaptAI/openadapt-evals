@@ -1,6 +1,22 @@
 # CHANGELOG
 
 
+## v0.76.2 (2026-03-28)
+
+### Bug Fixes
+
+- Waaconnection reads from .env via pydantic-settings
+  ([#215](https://github.com/OpenAdaptAI/openadapt-evals/pull/215),
+  [`8bb176d`](https://github.com/OpenAdaptAI/openadapt-evals/commit/8bb176d07dfb8fa3eef66ae85fc3185acb134d23))
+
+Added WAA_HOST, WAA_KEY, WAA_USER to Settings in config.py. WAAConnection reads defaults from .env
+  (via pydantic-settings) instead of raw os.environ, matching the rest of the codebase.
+
+.env example: WAA_HOST=172.173.66.131 WAA_KEY=~/.ssh/waa_key WAA_USER=azureuser
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.76.1 (2026-03-28)
 
 ### Bug Fixes
