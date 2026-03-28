@@ -29,11 +29,21 @@ else
     # the Windows VM. Without this, connections to port 5050 get forwarded
     # to 172.30.0.2:5050 (Windows) instead of reaching the evaluate server
     # running on the container's Linux side.
+    #
+    # The DNAT rule for Windows is set up by network.sh which can run at
+    # various times during boot. A single sleep+apply is unreliable — the
+    # Windows DNAT rule can be (re)applied AFTER our exemption.  Instead,
+    # we apply the exemption repeatedly for the first 2 minutes to ensure
+    # it always sits above any DNAT rule in the chain.
     (
-        sleep 10  # Wait for network.sh to set up DNAT rules
-        iptables -t nat -I PREROUTING 1 -p tcp --dport 5050 -j ACCEPT 2>/dev/null \
-            && echo "iptables: exempted port 5050 from DNAT" \
-            || echo "iptables: failed to exempt port 5050 (non-fatal)"
+        for attempt in $(seq 1 12); do
+            sleep 10
+            iptables -t nat -C PREROUTING -p tcp --dport 5050 -j ACCEPT 2>/dev/null \
+                && continue  # already in place
+            iptables -t nat -I PREROUTING 1 -p tcp --dport 5050 -j ACCEPT 2>/dev/null \
+                && echo "iptables: exempted port 5050 from DNAT (attempt $attempt)" \
+                || echo "iptables: failed to exempt port 5050 (attempt $attempt, non-fatal)"
+        done
     ) &
 fi
 

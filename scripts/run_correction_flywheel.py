@@ -846,10 +846,21 @@ def _run_live_episode(
                 (screenshot_dir / f"step_{step_i + 1:02d}.png").write_bytes(
                     obs.screenshot
                 )
+
+        # Per-step milestone check: capture transient states like
+        # "dialog is open" that disappear after the agent acts on them.
+        if task_config.milestones:
+            passed, total = env.check_milestones_incremental(obs.screenshot)
+            if passed > len(env._milestone_passed) - 1:
+                logger.debug(
+                    "Step %d: milestones %d/%d (high-water)",
+                    step_i + 1, passed, total,
+                )
+
         if step_result.done:
             break
 
-    # Score
+    # Score — evaluate_dense uses the high-water mark from incremental checks
     if task_config.milestones:
         score = env.evaluate_dense()
     else:
