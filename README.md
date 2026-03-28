@@ -37,7 +37,10 @@ OpenAdapt Evals is a unified framework for evaluating GUI automation agents agai
 - **Multi-cloud VM infrastructure** with `AzureVMManager`, `AWSVMManager`, `PoolManager`, `SSHTunnelManager`, and `VMMonitor` for running evaluations at scale on Azure or AWS
 - **End-to-end eval pipeline** (`scripts/run_eval_pipeline.py`) -- orchestrates demo generation, VM lifecycle, SSH tunnels, and ZS/DC evaluation in a single command
 - **Deterministic desktop parity mode** -- `--clean-desktop` suppresses OneDrive/toast/popover noise, `--force-tray-icons` keeps network/audio tray controls visible, and run metadata records requested/observed environment flags
-- **RL training environment** -- `RLEnvironment` wrapper provides a Gymnasium-style `reset`/`step`/`evaluate` interface for online RL (GRPO, PPO) with outcome-based rewards from WAA scores
+- **Standalone GRPO trainer** -- self-contained RL training loop with zero external ML dependencies, callback hooks (`on_model_loaded`, `on_before_collect`, `on_rollout_complete`, `on_step_complete`), configurable `vision_loss_mode` (exclude/include/checkpoint), and optional Outlines constrained decoding that forces `Thought: ...\nAction: CLICK/TYPE/WAIT/DONE` format
+- **Demo executor** -- tiered demo execution that replays demonstrations with adaptive grounding. Keyboard/type actions execute deterministically (no VLM needed), click actions use a grounder to find elements by description. Validated: **0.00 → 1.00** on notepad-hello
+- **Correction flywheel** -- agent fails → human demos correct approach → agent retries with demo → score improves. Full pipeline: `DemoLibrary` stores demos, `DemoExecutor` replays them with adaptation, per-step milestone tracking captures transient states
+- **RL training environment** -- `RLEnvironment` wrapper provides a Gymnasium-style `reset`/`step`/`evaluate` interface for online RL (GRPO, PPO) with per-step milestone high-water marks and dense rewards
 - **Annotation pipeline** -- VLM-based screenshot annotation (`annotation.py`, `vlm.py`) migrated from openadapt-ml so the full record-annotate-evaluate workflow runs within this repo
 - **4-layer WAA probe** -- `probe --detailed` checks screenshot capture, accessibility tree, action pipeline, and scoring independently; supports `--json` and `--layers` filtering
 - **Demo recording and review** -- VNC-based demo capture with auto-persistence (incremental `meta.json`, hardlinked PNGs), JPEG thumbnail deduplication, and markdown review artifact generation
@@ -56,6 +59,7 @@ pip install openadapt-evals
 With optional dependencies:
 
 ```bash
+pip install openadapt-evals[training]   # GRPO trainer + Outlines constrained decoding
 pip install openadapt-evals[azure]      # Azure VM management
 pip install openadapt-evals[aws]        # AWS EC2 management
 pip install openadapt-evals[retrieval]  # Demo retrieval agent

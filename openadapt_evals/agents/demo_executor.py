@@ -81,6 +81,20 @@ class DemoExecutor:
         """
         from openadapt_evals.adapters.rl_env import ResetConfig
 
+        import time as _time
+        _t0 = _time.time()
+        _tier1 = 0
+        _tier2 = 0
+
+        try:
+            from openadapt_evals.telemetry import track_demo_execution
+            track_demo_execution(
+                phase="start", task_id=task_config.id,
+                num_steps=len(demo.steps),
+            )
+        except Exception:
+            pass
+
         obs = env.reset(config=ResetConfig(task_id=task_config.id))
         screenshots: list[bytes] = []
         if obs.screenshot:
@@ -101,6 +115,13 @@ class DemoExecutor:
             if action is None:
                 logger.warning("Step %d: no action produced, skipping", i + 1)
                 continue
+
+            # Count tiers for telemetry
+            tier = (action.raw_action or {}).get("tier", 2)
+            if tier == 1:
+                _tier1 += 1
+            else:
+                _tier2 += 1
 
             # Execute the action
             step_result = self._dispatch_action(env, action)
@@ -131,6 +152,17 @@ class DemoExecutor:
         else:
             score = env.evaluate()
 
+        try:
+            from openadapt_evals.telemetry import track_demo_execution
+            track_demo_execution(
+                phase="completed", task_id=task_config.id,
+                num_steps=len(demo.steps), score=score,
+                duration_seconds=_time.time() - _t0,
+                tier1_count=_tier1, tier2_count=_tier2,
+            )
+        except Exception:
+            pass
+
         return score, screenshots
 
     def _execute_step(
@@ -151,7 +183,7 @@ class DemoExecutor:
                 logger.warning("Key step with no action_value: %s", step)
                 return None
             logger.info("Tier 1 (direct): key=%s", key)
-            return BenchmarkAction(type="key", key=key)
+            return BenchmarkAction(type="key", key=key, raw_action={"tier": 1})
 
         if step.action_type == "type":
             # Tier 1: deterministic type action
@@ -160,7 +192,7 @@ class DemoExecutor:
                 logger.warning("Type step with no value: %s", step)
                 return None
             logger.info("Tier 1 (direct): type=%r", text)
-            return BenchmarkAction(type="type", text=text)
+            return BenchmarkAction(type="type", text=text, raw_action={"tier": 1})
 
         if step.action_type == "click":
             # Tier 2: grounder finds element by description

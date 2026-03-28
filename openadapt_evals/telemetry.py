@@ -97,6 +97,87 @@ def track_action_executed(
     return capture_event("action_executed", properties)
 
 
+def track_training_run(
+    *,
+    phase: str,
+    model_name: str | None = None,
+    num_steps: int | None = None,
+    num_rollouts_per_step: int | None = None,
+    task_count: int | None = None,
+    constrained_decoding: bool | None = None,
+    vision_loss_mode: str | None = None,
+    reward_mean: float | None = None,
+    loss: float | None = None,
+    duration_seconds: float | None = None,
+) -> bool:
+    return capture_event("training_run", {
+        "phase": phase, "model_name": model_name,
+        "num_steps": num_steps, "num_rollouts_per_step": num_rollouts_per_step,
+        "task_count": task_count, "constrained_decoding": constrained_decoding,
+        "vision_loss_mode": vision_loss_mode, "reward_mean": reward_mean,
+        "loss": loss, "duration_seconds": duration_seconds,
+    })
+
+
+def track_training_step(
+    *,
+    step: int | None = None,
+    task_id: str | None = None,
+    reward_mean: float | None = None,
+    loss: float | None = None,
+    step_time: float | None = None,
+) -> bool:
+    return capture_event("training_step_completed", {
+        "step": step, "task_id": task_id,
+        "reward_mean": reward_mean, "loss": loss,
+        "step_time": step_time,
+    })
+
+
+def track_rollout_collected(
+    *,
+    task_id: str | None = None,
+    num_steps: int | None = None,
+    reward: float | None = None,
+) -> bool:
+    return capture_event("rollout_collected", {
+        "task_id": task_id, "num_steps": num_steps, "reward": reward,
+    })
+
+
+def track_checkpoint_saved(*, step: int | None = None) -> bool:
+    return capture_event("checkpoint_saved", {"step": step})
+
+
+def track_demo_execution(
+    *,
+    phase: str,
+    task_id: str | None = None,
+    num_steps: int | None = None,
+    score: float | None = None,
+    duration_seconds: float | None = None,
+    tier1_count: int | None = None,
+    tier2_count: int | None = None,
+) -> bool:
+    return capture_event("demo_execution", {
+        "phase": phase, "task_id": task_id,
+        "num_steps": num_steps, "score": score,
+        "duration_seconds": duration_seconds,
+        "tier1_count": tier1_count, "tier2_count": tier2_count,
+    })
+
+
+def track_correction(
+    *,
+    phase: str,
+    task_id: str | None = None,
+    entry_id: str | None = None,
+) -> bool:
+    return capture_event(f"correction_{phase}", {
+        "task_id": task_id, "entry_id": entry_id,
+    })
+
+
 def track_demo_recorded(
     *,
     task_id: str | None = None,

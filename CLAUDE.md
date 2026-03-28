@@ -493,9 +493,64 @@ summary = agent.get_verification_summary()
 print(summary["passed"], summary["failed"], summary["flagged_steps"])
 ```
 
+### DemoExecutor (Tiered Demo Execution)
+
+Executes demo steps directly with tiered intelligence instead of asking a VLM planner to interpret them. Validated: **0.00 → 1.00** on notepad-hello (perfect score).
+
+```python
+from openadapt_evals.agents.demo_executor import DemoExecutor
+
+executor = DemoExecutor(
+    grounder_model="gpt-4.1-mini",
+    grounder_provider="openai",
+)
+score, screenshots = executor.run(env, demo, task_config)
+```
+
+**Tiered execution:**
+- **Tier 1 (deterministic)**: Keyboard shortcuts and typing execute directly. No VLM needed. Win+R, Ctrl+Shift+Delete, typing text — all deterministic.
+- **Tier 2 (grounder-only)**: Click actions use the grounder VLM to find UI elements by description. Adapts to different window positions, resolutions, and UI layouts.
+- **Tier 3 (planner recovery)**: When the screen state doesn't match the demo's expectations, the planner reasons about how to recover.
+
+For notepad-hello (5-step demo): 4 steps are Tier 1 (keyboard/type), 1 is Tier 2 (click). All execute in ~5 minutes with perfect results.
+
 ### Recording Demos from WAA
 
 Use `scripts/record_waa_demos.py` to record demonstrations from VNC sessions, or `scripts/convert_recording_to_demo.py` to convert an existing openadapt-capture recording to demo library format.
+
+---
+
+## Standalone GRPO Trainer
+
+Self-contained GRPO training loop with zero openadapt-ml dependency. Direct HTTP to WAA, standard HF+PEFT model loading, callback hooks for extensibility.
+
+```python
+from openadapt_evals.training.standalone.trainer import GRPOTrainer
+from openadapt_evals.training.standalone.config import TrainingConfig
+
+trainer = GRPOTrainer(
+    TrainingConfig(
+        model_name="Qwen/Qwen2.5-VL-7B-Instruct",
+        task_dir="tasks/",
+        max_new_tokens=512,
+        vision_loss_mode="checkpoint",     # gradient checkpointing on vision encoder
+        constrained_decoding=True,         # Outlines regex-constrained output
+    ),
+    on_model_loaded=my_setup,              # custom model setup
+    on_before_collect=my_health_check,     # WAA tunnel verification
+    on_rollout_complete=my_wandb_logger,   # per-rollout W&B logging
+    on_step_complete=my_step_logger,       # per-step metrics
+)
+trainer.train()
+```
+
+**Key features:**
+- `vision_loss_mode`: "exclude" (safe, text-only log-probs), "include" (full multimodal), "checkpoint" (gradient checkpointing on vision encoder)
+- `constrained_decoding`: Forces model output to match `Thought: ...\nAction: CLICK/TYPE/WAIT/DONE` via Outlines regex DFA. Eliminates unparseable output.
+- Callback hooks: `on_model_loaded`, `on_before_collect`, `on_rollout_complete`, `on_step_complete` — eliminates need for monkey-patching.
+- Task rotation: all tasks from `task_dir` rotate via `step % len(task_ids)`.
+- Pre-rollout health check: verifies WAA server is responsive before committing to rollout collection.
+- Truncation warning: alerts when output hits `max_new_tokens` without a parseable action.
 
 ---
 
@@ -575,6 +630,7 @@ openadapt_evals/
 |   +-- api_agent.py           #   ApiAgent (Claude, GPT) with demo persistence
 |   +-- planner_grounder_agent.py  # PlannerGrounderAgent (dual-model)
 |   +-- demo_guided_agent.py   #   DemoGuidedAgent (demo-conditioned + self-verification)
+|   +-- demo_executor.py       #   DemoExecutor (tiered: direct keyboard + grounder clicks)
 |   +-- retrieval_agent.py     #   RetrievalAugmentedAgent
 |   +-- policy_agent.py        #   PolicyAgent (trained models)
 |   +-- claude_computer_use_agent.py  # Claude CU native agent
@@ -590,6 +646,13 @@ openadapt_evals/
 |   +-- models.py              #   WAAAction, WAAObservation, WAAState
 |   +-- server.py              #   HTTP+WebSocket server
 +-- training/                  # RL training infrastructure
+|   +-- standalone/            #   Standalone GRPO trainer (zero openadapt-ml deps)
+|   |   +-- trainer.py         #     GRPOTrainer with callback hooks + Outlines
+|   |   +-- config.py          #     TrainingConfig (vision_loss_mode, constrained_decoding)
+|   |   +-- prompt.py          #     SYSTEM_PROMPT, action parsing
+|   |   +-- model_loader.py    #     HF + PEFT + BitsAndBytes loading
+|   |   +-- reward.py          #     Group-relative advantages
+|   |   +-- waa_direct.py      #     Direct WAA HTTP client
 |   +-- trl_rollout.py         #   TRL GRPOTrainer rollout_func
 |   +-- areal_workflow.py      #   AReaL AgentWorkflow wrapper
 |   +-- trajectory_logger.py   #   PlannerTrajectoryLogger (SFT data)
