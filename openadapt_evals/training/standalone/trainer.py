@@ -126,20 +126,37 @@ class GRPOTrainer:
             return self._constrained_processor_cache
 
         try:
-            from outlines.processors import RegexLogitsProcessor
-            tokenizer = (
+            # Outlines API changed across versions — try both import paths.
+            # v0.1+: OutlinesLogitsProcessor in outlines.processors
+            # older:  RegexLogitsProcessor in outlines.processors
+            try:
+                from outlines.processors import OutlinesLogitsProcessor as _Processor
+            except ImportError:
+                from outlines.processors import RegexLogitsProcessor as _Processor
+
+            # Wrap the HF tokenizer for Outlines.  The class name also
+            # changed: TransformerTokenizer (no 's') in v0.1+.
+            raw_tokenizer = (
                 self._processor.tokenizer
                 if hasattr(self._processor, "tokenizer")
                 else self._processor
             )
-            processor = RegexLogitsProcessor(
+            try:
+                from outlines import TransformerTokenizer
+                tokenizer = TransformerTokenizer(raw_tokenizer)
+            except (ImportError, AttributeError):
+                # Older outlines or different API — pass raw tokenizer
+                tokenizer = raw_tokenizer
+
+            processor = _Processor(
                 self._ACTION_REGEX,
                 tokenizer=tokenizer,
             )
             self._constrained_processor_cache = [processor]
             logger.info(
                 "Outlines constrained decoding enabled "
-                "(action format regex compiled successfully)"
+                "(action format regex compiled successfully, "
+                "processor=%s)", type(processor).__name__,
             )
             return self._constrained_processor_cache
         except ImportError:
@@ -151,10 +168,9 @@ class GRPOTrainer:
             return None
         except Exception as exc:
             logger.error(
-                "Outlines RegexLogitsProcessor creation failed: %s. "
+                "Outlines logits processor creation failed: %s. "
                 "Falling back to unconstrained generation. "
-                "This may be a tokenizer compatibility issue — try "
-                "updating outlines: pip install -U outlines",
+                "Try: pip install -U outlines",
                 exc,
             )
             self._constrained_processor_cache = False
