@@ -30,6 +30,12 @@ from openadapt_evals.training.standalone.reward import (
     compute_group_advantages, evaluate_milestones_screenshot,
 )
 from openadapt_evals.training.standalone.waa_direct import Rollout, RolloutStep, WAADirect
+from openadapt_evals.telemetry import (
+    track_checkpoint_saved,
+    track_rollout_collected,
+    track_training_run,
+    track_training_step,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -318,6 +324,10 @@ class GRPOTrainer:
             r = self._collect_rollout(task_id, instruction)
             rollouts.append(r)
             logger.info("Rollout %d: %d steps, reward=%.2f", i + 1, len(r.steps), r.reward)
+            try:
+                track_rollout_collected(task_id=task_id, num_steps=len(r.steps), reward=r.reward)
+            except Exception:
+                pass
             if self._on_rollout_complete is not None:
                 self._on_rollout_complete(r, i)
         return rollouts
@@ -463,6 +473,19 @@ class GRPOTrainer:
                      self._config.num_training_steps, self._config.num_rollouts_per_step,
                      self._config.max_new_tokens)
 
+        try:
+            track_training_run(
+                phase="start",
+                model_name=self._config.model_name,
+                num_steps=self._config.num_training_steps,
+                num_rollouts_per_step=self._config.num_rollouts_per_step,
+                task_count=len(self._config.task_ids),
+                constrained_decoding=self._config.constrained_decoding,
+                vision_loss_mode=getattr(self._config, "vision_loss_mode", None),
+            )
+        except Exception:
+            pass
+
         self._model, self._processor = load_model_and_processor(
             self._config.model_name, load_in_4bit=self._config.load_in_4bit,
             lora_r=self._config.lora_r, lora_alpha=self._config.lora_alpha,
@@ -479,6 +502,7 @@ class GRPOTrainer:
 
         Path(self._config.output_dir).mkdir(parents=True, exist_ok=True)
         t0 = time.time()
+        last_reward_mean: float | None = None
         for step in range(self._config.num_training_steps):
             ts = time.time()
             task_id = self._config.task_ids[step % len(self._config.task_ids)]
@@ -493,18 +517,50 @@ class GRPOTrainer:
                 continue
             m = self._training_step(rollouts)
             m.update({"step": step, "task_id": task_id, "elapsed": time.time() - t0, "step_time": time.time() - ts})
+            last_reward_mean = m.get("reward_mean")
             logger.info("Step %d/%d: reward=%.2f loss=%.4f time=%.1fs",
                         step + 1, self._config.num_training_steps, m.get("reward_mean", 0), m.get("loss", 0), m["step_time"])
+
+            try:
+                track_training_step(
+                    step=step,
+                    task_id=task_id,
+                    reward_mean=m.get("reward_mean"),
+                    loss=m.get("loss"),
+                    step_time=m.get("step_time"),
+                )
+            except Exception:
+                pass
 
             if self._on_step_complete is not None:
                 self._on_step_complete(step, rollouts, m)
 
             if (step + 1) % self._config.save_every_steps == 0:
                 self._save_checkpoint(step + 1)
+                try:
+                    track_checkpoint_saved(step=step + 1)
+                except Exception:
+                    pass
 
         self._save_checkpoint(self._config.num_training_steps)
+        try:
+            track_checkpoint_saved(step=self._config.num_training_steps)
+        except Exception:
+            pass
         final = str(Path(self._config.output_dir) / f"step_{self._config.num_training_steps}")
         logger.info("Training complete. Final checkpoint: %s", final)
+
+        try:
+            track_training_run(
+                phase="completed",
+                model_name=self._config.model_name,
+                num_steps=self._config.num_training_steps,
+                duration_seconds=time.time() - t0,
+                reward_mean=last_reward_mean,
+            )
+        except Exception:
+            pass
+
         return final
 
 
