@@ -1,6 +1,28 @@
 # CHANGELOG
 
 
+## v0.72.0 (2026-03-28)
+
+### Features
+
+- Add callback hooks to standalone GRPO trainer
+  ([#198](https://github.com/OpenAdaptAI/openadapt-evals/pull/198),
+  [`28b0193`](https://github.com/OpenAdaptAI/openadapt-evals/commit/28b0193fea10c4b1c3a08142d48982a110bb1a44))
+
+Four optional callback hooks eliminate the need for monkey-patching:
+
+- on_model_loaded(model, processor): Custom model setup (gradient checkpointing on specific
+  submodules, hook attachment) - on_before_collect(task_id, env): WAA health checks, tunnel
+  verification, task-specific setup before rollout collection - on_rollout_complete(rollout, index):
+  Per-rollout W&B logging, screenshot/thought capture - on_step_complete(step, rollouts, metrics):
+  Per-step W&B logging, early stopping, custom evaluation
+
+All callbacks are keyword-only with None defaults (no-op). Eliminates 3 of 6 monkey-patches reported
+  by customer.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.71.3 (2026-03-28)
 
 ### Bug Fixes
