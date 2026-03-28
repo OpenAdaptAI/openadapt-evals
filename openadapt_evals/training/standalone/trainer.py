@@ -200,7 +200,11 @@ class GRPOTrainer:
                 logger.info("Stuck at step %d", step_idx)
                 break
 
-            image = Image.open(io.BytesIO(screenshot)).convert("RGB")
+            image = Image.open(io.BytesIO(screenshot))
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+                # .convert() drops .format; restore it for outlines.Image
+                image.format = "PNG"
             messages = build_agent_messages(instruction, include_image=True)
             if hasattr(self._processor, "apply_chat_template"):
                 text_input = self._processor.apply_chat_template(
@@ -215,10 +219,13 @@ class GRPOTrainer:
                 else None
             )
             if outlines_gen is not None:
-                # Outlines v1.2 Generator API: handles tokenization,
-                # generation, and decoding internally.  For multimodal
-                # models, pass a dict with "text" + image keys.
-                model_input = {"text": text_input, "images": [image]}
+                # Outlines v1.2 Generator API for multimodal models.
+                # TransformersMultiModal.format_input dispatches on type:
+                #   list  → [prompt_text, Image(pil), ...]
+                #   Chat  → Chat([Message(...)])
+                # A dict is NOT accepted (raises TypeError).
+                import outlines
+                model_input = [text_input, outlines.Image(image)]
                 decoded = outlines_gen(
                     model_input,
                     max_new_tokens=self._config.max_new_tokens,
