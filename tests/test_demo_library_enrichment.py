@@ -253,7 +253,7 @@ class TestResolutionNormalization:
         # 0.5 * 1280 / 1920 = 0.333...
         assert "0.333" in guidance.instruction
         # 0.5 * 720 / 1080 = 0.333...
-        assert "Click on center button" in guidance.instruction
+        assert "center button" in guidance.instruction
 
     def test_coordinates_unchanged_without_current_resolution(
         self, tmp_library: DemoLibrary, png_bytes: bytes
@@ -317,8 +317,8 @@ class TestBuildEnrichedInstruction:
         )
         result = _build_enriched_instruction(step, 0.96, 0.066)
         assert result == (
-            "Click on three-dot menu in Chrome toolbar at approximately "
-            "(0.960, 0.066)"
+            "three-dot menu in Chrome toolbar (approximately at "
+            "(0.960, 0.066))"
         )
 
     def test_click_with_description_no_coords(self):
@@ -332,7 +332,7 @@ class TestBuildEnrichedInstruction:
             description="save button",
         )
         result = _build_enriched_instruction(step)
-        assert result == "Click on save button"
+        assert result == "save button"
 
     def test_click_without_description_falls_back(self):
         step = DemoStep(
@@ -348,7 +348,7 @@ class TestBuildEnrichedInstruction:
         result = _build_enriched_instruction(step, 0.5, 0.3)
         assert result == "CLICK(0.500, 0.300)"
 
-    def test_type_action_always_falls_back(self):
+    def test_type_action_uses_description_if_available(self):
         step = DemoStep(
             step_index=0,
             screenshot_path="s.png",
@@ -356,7 +356,20 @@ class TestBuildEnrichedInstruction:
             action_description="TYPE('hello')",
             target_description="",
             action_value="hello",
-            description="should be ignored for type",
+            description="Type hello into the search box",
+        )
+        result = _build_enriched_instruction(step)
+        assert result == "Type hello into the search box"
+
+    def test_type_action_falls_back_without_description(self):
+        step = DemoStep(
+            step_index=0,
+            screenshot_path="s.png",
+            action_type="type",
+            action_description="TYPE('hello')",
+            target_description="",
+            action_value="hello",
+            description="",
         )
         result = _build_enriched_instruction(step)
         assert result == "TYPE('hello')"
@@ -384,7 +397,7 @@ class TestAlignStepEnriched:
             step_index=0,
         )
         assert guidance.available
-        assert "Click on three-dot menu button" in guidance.instruction
+        assert "three-dot menu button" in guidance.instruction
         assert "0.960" in guidance.instruction
         assert "0.066" in guidance.instruction
 
@@ -423,7 +436,7 @@ class TestAlignStepEnriched:
         )
         text = guidance.to_prompt_text()
         assert "DEMONSTRATION GUIDANCE" in text
-        assert "Click on File menu dropdown" in text
+        assert "File menu dropdown" in text
         assert "Adapt if the current UI state differs" in text
 
 
