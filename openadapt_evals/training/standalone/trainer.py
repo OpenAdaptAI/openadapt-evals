@@ -252,7 +252,6 @@ class GRPOTrainer:
                     skip_special_tokens=True,
                 )
                 gen_len = outputs[0].shape[0] - inputs["input_ids"].shape[1]
-            gen_len = outputs[0].shape[0] - inputs["input_ids"].shape[1]
             action = parse_vlm_output_to_action(decoded, screen_size=self._config.screen_size)
 
             if gen_len >= self._config.max_new_tokens - 1:
