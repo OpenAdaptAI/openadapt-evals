@@ -146,6 +146,12 @@ class RLEnvironment:
         self._trajectory: list[RolloutStep] = []
         self._last_obs: BenchmarkObservation | None = None
 
+        # Per-step milestone tracking: indices of milestones that have
+        # been observed as passing at any point during the episode.
+        # This is the "high-water mark" — once a milestone passes, it
+        # stays passed even if the transient state disappears.
+        self._milestone_passed: set[int] = set()
+
     @property
     def adapter(self) -> BenchmarkAdapter:
         """The underlying benchmark adapter."""
@@ -243,6 +249,7 @@ class RLEnvironment:
         self._done = False
         self._trajectory = []
         self._last_obs = obs
+        self._milestone_passed = set()
 
         logger.info(
             "Environment reset: task=%s, instruction=%s",
@@ -477,16 +484,87 @@ class RLEnvironment:
         )
         return result.score
 
+    def check_milestones_incremental(
+        self,
+        screenshot: bytes | None = None,
+    ) -> tuple[int, int]:
+        """Check milestones against the CURRENT state and update high-water mark.
+
+        Milestones that have passed at ANY point during the episode stay
+        passed permanently (high-water mark).  This is critical for
+        transient states like "dialog is open" which disappear after the
+        agent clicks through them.
+
+        Call this after each step to track progress.  ``evaluate_dense()``
+        uses the accumulated high-water mark for the final score.
+
+        Args:
+            screenshot: Current screenshot bytes.  If ``None``, takes a
+                fresh screenshot from the adapter.
+
+        Returns:
+            ``(passed, total)`` where *passed* is the number of milestones
+            that have passed at any point (high-water mark), and *total*
+            is the total number of milestones.
+        """
+        if not self._task_config or not self._task_config.milestones:
+            return 0, 0
+
+        total = len(self._task_config.milestones)
+
+        if screenshot is None:
+            try:
+                obs = self._adapter.observe()
+                screenshot = obs.screenshot if obs else b""
+            except Exception:
+                screenshot = b""
+
+        server_url = getattr(
+            getattr(self._adapter, "config", None), "server_url", ""
+        ) or ""
+
+        for i, ms in enumerate(self._task_config.milestones):
+            if i in self._milestone_passed:
+                continue  # already passed — skip expensive checks
+            try:
+                if ms.check.check == "screenshot":
+                    from openadapt_evals.vlm_evaluator import vlm_judge
+                    success, _ = vlm_judge(screenshot, ms.check.description or "")
+                    if success:
+                        self._milestone_passed.add(i)
+                        logger.info(
+                            "Milestone %d/%d PASSED (high-water): %s",
+                            i + 1, total, ms.name,
+                        )
+                elif ms.check.check == "command":
+                    result = self._task_config._run_vm_command(
+                        ms.check.run or "", server_url,
+                    )
+                    if self._task_config._check_match(
+                        result, ms.check.expect or "", ms.check.match,
+                    ):
+                        self._milestone_passed.add(i)
+                        logger.info(
+                            "Milestone %d/%d PASSED (high-water): %s",
+                            i + 1, total, ms.name,
+                        )
+            except Exception as exc:
+                logger.debug(
+                    "Milestone %d check failed (non-fatal): %s", i, exc,
+                )
+
+        passed = len(self._milestone_passed)
+        return passed, total
+
     def evaluate_dense(self) -> float:
         """Evaluate using dense partial rewards via milestones.
 
-        If a TaskConfig with milestones is set, returns the fraction of
-        milestones passed (0.0 to 1.0). Falls back to binary evaluate()
-        if no TaskConfig or no milestones are defined.
+        Uses the **high-water mark** from ``check_milestones_incremental()``
+        calls during the episode, plus a final check at episode end.
+        Milestones that passed at any point stay passed — this correctly
+        handles transient states like open dialogs.
 
-        This gives GRPO gradient signal even when no task fully completes:
-        an agent that passes 3/5 milestones gets reward 0.6 vs 0.0 for
-        one that passes 0/5.
+        Falls back to binary evaluate() if no milestones are defined.
 
         Returns:
             Dense reward score between 0.0 and 1.0.
@@ -496,10 +574,7 @@ class RLEnvironment:
 
         # Try milestone evaluation first
         if self._task_config and self._task_config.milestones:
-            # Bug 5 fix: Take a FRESH screenshot for evaluation instead of
-            # using the cached one from a previous step. The cached screenshot
-            # may be from a different phase (e.g., Phase 1 state leaking into
-            # Phase 3 evaluation) or may not reflect the current desktop state.
+            # Take a FRESH screenshot for the final evaluation pass.
             screenshot = b""
             try:
                 fresh_obs = self._adapter.observe()
@@ -517,13 +592,13 @@ class RLEnvironment:
                 if self._last_obs and self._last_obs.screenshot:
                     screenshot = self._last_obs.screenshot
 
-            server_url = getattr(
-                getattr(self._adapter, "config", None), "server_url", ""
-            ) or ""
+            # Run one final milestone check to catch any end-of-episode
+            # state (e.g., "data is cleared" command checks).
+            self.check_milestones_incremental(screenshot)
 
-            passed, total = self._task_config.evaluate_milestones(
-                screenshot, server_url
-            )
+            total = len(self._task_config.milestones)
+            passed = len(self._milestone_passed)
+
             if total > 0:
                 milestone_score = passed / total
 
@@ -533,8 +608,36 @@ class RLEnvironment:
                 except Exception:
                     binary_score = 0.0
 
+                # If binary eval returned 0.0 (often means /evaluate is
+                # down), fall back to the task config's own checks run
+                # locally via /execute_windows + VLM.
+                if (
+                    binary_score == 0.0
+                    and self._task_config.checks
+                    and screenshot
+                ):
+                    server_url = getattr(
+                        getattr(self._adapter, "config", None),
+                        "server_url", "",
+                    ) or ""
+                    try:
+                        binary_score = (
+                            self._task_config.evaluate_checks_local(
+                                screenshot, server_url,
+                            )
+                        )
+                        if binary_score > 0:
+                            logger.info(
+                                "evaluate_dense: local check fallback "
+                                "returned %.2f", binary_score,
+                            )
+                    except Exception as exc:
+                        logger.debug(
+                            "evaluate_dense: local check fallback "
+                            "failed: %s", exc,
+                        )
+
                 # Use the higher of milestone score and binary score
-                # This way, full task completion (1.0) always beats partial (0.6)
                 score = max(milestone_score, binary_score)
 
                 # Backfill reward on last trajectory step
@@ -546,7 +649,8 @@ class RLEnvironment:
                     self._trajectory[-1].info["milestones_total"] = total
 
                 logger.info(
-                    "Dense evaluation: milestones=%d/%d (%.2f), binary=%.2f, final=%.2f",
+                    "Dense evaluation: milestones=%d/%d (%.2f) [high-water], "
+                    "binary=%.2f, final=%.2f",
                     passed, total, milestone_score, binary_score, score,
                 )
                 return score

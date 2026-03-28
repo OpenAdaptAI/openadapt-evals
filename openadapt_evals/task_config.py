@@ -439,6 +439,46 @@ class TaskConfig:
             return resp.json().get("output", "").strip()
         return ""
 
+    def evaluate_checks_local(
+        self, screenshot: bytes, server_url: str,
+    ) -> float:
+        """Evaluate the task's own ``checks`` without the /evaluate endpoint.
+
+        Uses the same logic as ``evaluate_milestones`` but on the top-level
+        ``evaluate:`` entries.  This is a fallback for when the WAA
+        ``/evaluate`` endpoint is unavailable.
+
+        Returns:
+            1.0 if checks pass (respecting ``combine`` mode), else 0.0.
+        """
+        if not self.checks:
+            return 0.0
+
+        results: list[bool] = []
+        for check in self.checks:
+            try:
+                if check.check == "screenshot":
+                    from openadapt_evals.vlm_evaluator import vlm_judge
+                    success, _ = vlm_judge(screenshot, check.description or "")
+                    results.append(success)
+                elif check.check == "command":
+                    result = self._run_vm_command(check.run or "", server_url)
+                    results.append(
+                        self._check_match(result, check.expect or "", check.match)
+                    )
+                else:
+                    results.append(False)
+            except Exception as exc:
+                logger.warning("evaluate_checks_local: %s", exc)
+                results.append(False)
+
+        if not results:
+            return 0.0
+
+        if self.combine == "or":
+            return 1.0 if any(results) else 0.0
+        return 1.0 if all(results) else 0.0
+
     @staticmethod
     def _check_match(actual: str, expected: str, match_type: str) -> bool:
         """Check if actual matches expected using the specified method."""

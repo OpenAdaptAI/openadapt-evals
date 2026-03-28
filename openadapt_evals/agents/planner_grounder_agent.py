@@ -288,6 +288,39 @@ class PlannerGrounderAgent(BenchmarkAgent):
             )
             return action
 
+        # -- Step 0b: Force keyboard shortcut from demo after extended loop ---
+        # If the planner has ignored anti-loop warnings for 2+ rounds
+        # (6+ consecutive identical actions), bypass the planner entirely
+        # and emit the first unused keyboard shortcut from the demo.
+        if self.demo_guidance and len(self._action_history) >= 6:
+            import re as _re
+
+            recent6 = self._action_history[-6:]
+            instrs6 = []
+            for entry in recent6:
+                m = _re.search(r"\(instruction:\s*(.+)\)\s*$", entry)
+                if m:
+                    instrs6.append(m.group(1).strip())
+            if len(instrs6) == 6 and len(set(instrs6)) == 1:
+                # Extract keyboard shortcuts from demo guidance text
+                shortcuts = _re.findall(
+                    r"\[([a-z+]+)\]", self.demo_guidance, _re.IGNORECASE,
+                )
+                if shortcuts:
+                    # Pick the first shortcut the agent hasn't tried
+                    shortcut = shortcuts[0]
+                    keys = [k.strip() for k in shortcut.split("+")]
+                    logger.warning(
+                        "Anti-loop FORCED OVERRIDE: bypassing planner, "
+                        "emitting keyboard shortcut %r from demo",
+                        shortcut,
+                    )
+                    action = BenchmarkAction(type="key", key=shortcut)
+                    self._action_history.append(
+                        f"KEY({shortcut}) (forced-override: {shortcut})"
+                    )
+                    return action
+
         # -- Step 1: Call planner ------------------------------------------
         planner_output = self._call_planner(observation, task)
 
