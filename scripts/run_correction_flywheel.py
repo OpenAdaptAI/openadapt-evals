@@ -776,7 +776,7 @@ def _run_live_episode(
     use_visual_alignment: bool = True,
 ) -> tuple[float, list[bytes]]:
     """Run one episode against a live WAA server. Returns (score, screenshots)."""
-    from openadapt_evals.adapters.base import BenchmarkTask
+    from openadapt_evals.adapters.base import BenchmarkAction, BenchmarkTask
     from openadapt_evals.adapters.rl_env import RLEnvironment, ResetConfig
     from openadapt_evals.adapters.waa.live import WAALiveAdapter, WAALiveConfig
     from openadapt_evals.agents.planner_grounder_agent import PlannerGrounderAgent
@@ -820,8 +820,28 @@ def _run_live_episode(
         action = agent.act(obs, task)
 
         if action.type == "done":
-            logger.info("Agent signaled DONE at step %d", step_i + 1)
-            break
+            if step_i == 0 and demo_library is not None:
+                logger.warning(
+                    "Agent signaled DONE on step 0 (no actions taken). "
+                    "Overriding with first demo action to prevent "
+                    "hallucination (planner confused demo description "
+                    "with actual screen state)."
+                )
+                guidance = demo_library.align_step(
+                    task_id=task_config.id,
+                    current_screenshot=obs.screenshot,
+                    step_index=0,
+                )
+                if guidance.available and guidance.action_value:
+                    action = BenchmarkAction(
+                        type="key", key=guidance.action_value,
+                    )
+                    logger.info("Forcing demo action: key=%s", guidance.action_value)
+                else:
+                    continue
+            else:
+                logger.info("Agent signaled DONE at step %d", step_i + 1)
+                break
 
         # Execute
         if action.x is not None and action.y is not None:
