@@ -1,6 +1,52 @@
 # CHANGELOG
 
 
+## v0.76.0 (2026-03-28)
+
+### Features
+
+- Trainer telemetry, UI-Venus prompt fix, --grounder-endpoint flag
+  ([#213](https://github.com/OpenAdaptAI/openadapt-evals/pull/213),
+  [`7401262`](https://github.com/OpenAdaptAI/openadapt-evals/commit/7401262267d6588d723f7f82b293fafab2f74f6e))
+
+Trainer telemetry (5 insertion points, all try/except wrapped): - train() start/end: model_name,
+  num_steps, duration, reward_mean - _training_step(): step, task_id, reward_mean, loss, step_time -
+  _collect_rollout(): task_id, num_steps, reward - _save_checkpoint(): step number
+
+DemoExecutor UI-Venus prompt: - Updated _ground_click_http() to use identical prompt format as
+  PlannerGrounderAgent._GROUNDER_PROMPT_BBOX for consistency - Model name hardcoded to
+  UI-Venus-1.5-8B
+
+Flywheel --grounder-endpoint flag: - Added to argparse, passed to both DemoExecutor and
+  _run_live_episode - When set, PlannerGrounderAgent uses HTTP grounder provider
+
+Tests: 12 new tests for DemoExecutor HTTP grounder path
+
+README: Added UI-Venus serving + grounder endpoint docs
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Waaconnection auto-recovery, W&B callbacks, Chrome setup, UI-Venus
+  ([#212](https://github.com/OpenAdaptAI/openadapt-evals/pull/212),
+  [`d5b66fc`](https://github.com/OpenAdaptAI/openadapt-evals/commit/d5b66fc4a7360bcae4a490223759e50f0761b14b))
+
+WAAConnection (infrastructure/waa_connection.py): - SSH tunnel with background watchdog thread (30s
+  health checks) - Auto-recovery on tunnel drop with configurable retries - ensure_healthy() blocks
+  until tunnel is working - Context manager support
+
+W&B callbacks (integrations/wandb_callbacks.py): - wandb_model_loaded: logs model config -
+  wandb_rollout_logger: per-rollout metrics + screenshots - wandb_step_logger: per-step
+  reward/loss/histograms - Ready-to-use with GRPOTrainer callback hooks
+
+Chrome setup (training/standalone/waa_direct.py): - update_browse_history: writes to Chrome History
+  SQLite - chrome_open_tabs / chrome_close_tabs - Integrated into setup_task() dispatch
+
+UI-Venus serving (scripts/serve_ui_venus.sh): - vLLM command for UI-Venus-1.5-8B HTTP endpoint -
+  Compatible with DemoExecutor grounder_endpoint
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.75.0 (2026-03-28)
 
 ### Features
