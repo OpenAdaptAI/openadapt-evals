@@ -1,6 +1,23 @@
 # CHANGELOG
 
 
+## v0.74.1 (2026-03-28)
+
+### Bug Fixes
+
+- Update enrichment tests for new instruction format
+  ([#210](https://github.com/OpenAdaptAI/openadapt-evals/pull/210),
+  [`8ae0654`](https://github.com/OpenAdaptAI/openadapt-evals/commit/8ae06546b24d0583c12856c90a81be066656ed33))
+
+_build_enriched_instruction now returns the description directly (e.g., "save button") instead of
+  prefixing with "Click on" (e.g., "Click on save button"). Coordinates use "approximately at"
+  format. Non-click actions with descriptions use the description.
+
+32/32 enrichment tests pass.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.74.0 (2026-03-28)
 
 ### Features
