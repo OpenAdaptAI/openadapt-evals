@@ -203,6 +203,49 @@ class TestConstrainedDecodingCache:
             for p in params_call
         ), f"SteerableGenerator.__call__ doesn't accept **kwargs: {sig_call}"
 
+    def test_outlines_multimodal_input_format(self) -> None:
+        """Verify outlines TransformersMultiModal accepts list input, not dict.
+
+        This is THE test that catches the input format bug. The trainer
+        must pass [prompt, outlines.Image(pil)] not {"text": ..., "images": ...}.
+
+        TransformersMultiModalTypeAdapter.format_input is a singledispatch
+        that only accepts `list` and `Chat` types. A `dict` raises TypeError.
+        """
+        try:
+            import outlines
+            from outlines.models.transformers import TransformersMultiModalTypeAdapter
+        except ImportError:
+            pytest.skip("outlines not installed")
+
+        # Verify list is a registered dispatch type by checking the
+        # class-level dispatcher registry (singledispatchmethod stores
+        # it on the descriptor, not the bound method).
+        fmt = TransformersMultiModalTypeAdapter.__dict__["format_input"]
+        registry = fmt.dispatcher.registry
+        registered_types = set(registry.keys())
+        assert list in registered_types, (
+            f"list not registered in format_input dispatch: {registered_types}. "
+            f"The trainer passes [prompt, Image(pil)] — this type must be accepted."
+        )
+        assert dict not in registered_types, (
+            "dict is registered in format_input — if this changes, the trainer's "
+            "input format can be simplified back to a dict."
+        )
+
+        # Verify outlines.Image exists and wraps PIL images
+        assert hasattr(outlines, "Image"), "outlines.Image not found"
+        from PIL import Image as PILImage
+        import io
+        test_img = PILImage.new("RGB", (10, 10))
+        # outlines.Image requires .format to be set (loaded from file)
+        buf = io.BytesIO()
+        test_img.save(buf, format="PNG")
+        buf.seek(0)
+        test_img_with_format = PILImage.open(buf)
+        wrapped = outlines.Image(test_img_with_format)
+        assert wrapped is not None
+
     def test_false_sentinel_not_confused_with_none(self) -> None:
         """Regression: False sentinel must return None, not be treated as uninitialized."""
         config = TrainingConfig(constrained_decoding=True)
