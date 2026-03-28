@@ -45,13 +45,48 @@ def policy_gradient_loss(current_logps, old_logps, advantages, epsilon=0.2):
 class GRPOTrainer:
     """Standalone GRPO trainer with direct WAA HTTP integration."""
 
-    def __init__(self, config: TrainingConfig) -> None:
+    def __init__(
+        self,
+        config: TrainingConfig,
+        *,
+        on_model_loaded: Any | None = None,
+        on_before_collect: Any | None = None,
+        on_rollout_complete: Any | None = None,
+        on_step_complete: Any | None = None,
+    ) -> None:
+        """Initialize the trainer.
+
+        Args:
+            config: Training configuration.
+            on_model_loaded: ``(model, processor) -> None``
+                Called after model and processor are loaded but before
+                training starts.  Use for custom setup like enabling
+                gradient checkpointing on specific submodules or
+                attaching hooks.
+            on_before_collect: ``(task_id: str, env: WAADirect) -> None``
+                Called before each rollout group collection.  Use for
+                WAA health checks, tunnel verification, or task-specific
+                setup.
+            on_rollout_complete: ``(rollout: Rollout, index: int) -> None``
+                Called after each individual rollout.  Use for capturing
+                screenshots, thought traces, or per-rollout W&B logging.
+            on_step_complete: ``(step: int, rollouts: list[Rollout], metrics: dict) -> None``
+                Called after each training step with all rollouts and
+                computed metrics (reward_mean, loss, etc.).  Use for
+                W&B step logging, early stopping, or custom eval.
+        """
         self._config = config
         self._model: Any = None
         self._processor: Any = None
         self._optimizer: Any = None
         self._env: WAADirect | None = None
         self._task_configs: dict[str, Any] = {}
+
+        # Callback hooks (all optional, default None = no-op)
+        self._on_model_loaded = on_model_loaded
+        self._on_before_collect = on_before_collect
+        self._on_rollout_complete = on_rollout_complete
+        self._on_step_complete = on_step_complete
 
     # --- Constrained decoding -------------------------------------------
 
@@ -213,6 +248,9 @@ class GRPOTrainer:
         """Collect N rollouts for one GRPO gradient step."""
         assert self._env is not None
 
+        if self._on_before_collect is not None:
+            self._on_before_collect(task_id, self._env)
+
         # Pre-rollout health check: verify WAA is responsive before committing
         # to a full group of rollouts (avoids wasting time on a dead server).
         probe = self._env.probe()
@@ -237,6 +275,8 @@ class GRPOTrainer:
             r = self._collect_rollout(task_id, instruction)
             rollouts.append(r)
             logger.info("Rollout %d: %d steps, reward=%.2f", i + 1, len(r.steps), r.reward)
+            if self._on_rollout_complete is not None:
+                self._on_rollout_complete(r, i)
         return rollouts
 
     def _compute_rollout_loss(self, rollout: Rollout, advantage: float, scale: float) -> float:
@@ -384,6 +424,10 @@ class GRPOTrainer:
             self._config.model_name, load_in_4bit=self._config.load_in_4bit,
             lora_r=self._config.lora_r, lora_alpha=self._config.lora_alpha,
             lora_checkpoint=self._config.lora_checkpoint)
+
+        if self._on_model_loaded is not None:
+            self._on_model_loaded(self._model, self._processor)
+
         self._optimizer = torch.optim.AdamW(
             [p for p in self._model.parameters() if p.requires_grad], lr=self._config.learning_rate)
         self._env = WAADirect(server_url=self._config.server_url, screen_size=self._config.screen_size)
@@ -408,6 +452,10 @@ class GRPOTrainer:
             m.update({"step": step, "task_id": task_id, "elapsed": time.time() - t0, "step_time": time.time() - ts})
             logger.info("Step %d/%d: reward=%.2f loss=%.4f time=%.1fs",
                         step + 1, self._config.num_training_steps, m.get("reward_mean", 0), m.get("loss", 0), m["step_time"])
+
+            if self._on_step_complete is not None:
+                self._on_step_complete(step, rollouts, m)
+
             if (step + 1) % self._config.save_every_steps == 0:
                 self._save_checkpoint(step + 1)
 
