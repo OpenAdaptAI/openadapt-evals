@@ -1,6 +1,34 @@
 # CHANGELOG
 
 
+## v0.73.0 (2026-03-28)
+
+### Features
+
+- Demoexecutor — tiered demo execution replacing planner-guided approach
+  ([#208](https://github.com/OpenAdaptAI/openadapt-evals/pull/208),
+  [`80f1fc5`](https://github.com/OpenAdaptAI/openadapt-evals/commit/80f1fc50451609e7491aee177212da967c42264e))
+
+The DemoGuidedAgent asked a VLM planner to interpret demo guidance appended to the prompt. The
+  planner routinely ignored guidance, looped, hallucinated DONE, and required 9 special-case
+  overrides.
+
+DemoExecutor executes demo steps directly with tiered intelligence: - Tier 1 (deterministic):
+  keyboard/type actions execute directly - Tier 2 (grounder-only): clicks use grounder to find
+  elements - Tier 3 (planner recovery): only for unexpected states [future]
+
+The planner becomes a recovery mechanism, not the primary executor.
+
+For notepad-hello (5 steps): 4 are keyboard/type (deterministic), only 1 needs the grounder. For
+  clear-browsing (3 steps): 2 keyboard, 1 click. The demo drives progress; the planner is no longer
+  in the loop.
+
+Phase 3 of the flywheel now uses DemoExecutor when a demo exists, falling back to the old
+  planner-guided approach only when no demo is available.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.72.9 (2026-03-28)
 
 ### Bug Fixes
