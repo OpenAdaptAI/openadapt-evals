@@ -49,13 +49,24 @@ class DemoExecutor:
         self,
         grounder_model: str = "gpt-4.1-mini",
         grounder_provider: str = "openai",
+        grounder_endpoint: str | None = None,
         planner_model: str = "gpt-4.1-mini",
         planner_provider: str = "openai",
         step_delay: float = 1.0,
         recovery_budget: int = 2,
     ):
+        """Initialize the DemoExecutor.
+
+        Args:
+            grounder_endpoint: HTTP endpoint for a dedicated grounding
+                model (e.g., vLLM serving UI-Venus-1.5-8B). When set,
+                uses the UI-Venus native bbox format for much better
+                click accuracy than a general VLM. Example:
+                ``"http://gpu-box:8080"``
+        """
         self._grounder_model = grounder_model
         self._grounder_provider = grounder_provider
+        self._grounder_endpoint = grounder_endpoint
         self._planner_model = planner_model
         self._planner_provider = planner_provider
         self._step_delay = step_delay
@@ -221,7 +232,69 @@ class DemoExecutor:
         obs: BenchmarkObservation,
         description: str,
     ) -> BenchmarkAction:
-        """Use the grounder VLM to find an element by description."""
+        """Find a UI element by description and return a click action.
+
+        When ``grounder_endpoint`` is set, uses the UI-Venus native bbox
+        format via an OpenAI-compatible HTTP endpoint (vLLM, Ollama, etc.)
+        for much better grounding accuracy than a general VLM.
+
+        Otherwise falls back to a general VLM API call.
+        """
+        if self._grounder_endpoint:
+            return self._ground_click_http(obs, description)
+        return self._ground_click_vlm(obs, description)
+
+    def _ground_click_http(
+        self,
+        obs: BenchmarkObservation,
+        description: str,
+    ) -> BenchmarkAction:
+        """Ground via HTTP endpoint (UI-Venus, UI-TARS, etc.)."""
+        import base64
+        import requests
+
+        endpoint = self._grounder_endpoint.rstrip("/")
+        if not endpoint.endswith("/v1"):
+            endpoint += "/v1"
+        url = f"{endpoint}/chat/completions"
+
+        content = [
+            {"type": "text", "text": f"In the screenshot, locate: {description}"},
+        ]
+        if obs.screenshot:
+            b64 = base64.b64encode(obs.screenshot).decode()
+            content.insert(0, {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{b64}"},
+            })
+
+        try:
+            resp = requests.post(url, json={
+                "model": self._grounder_model,
+                "messages": [{"role": "user", "content": content}],
+                "max_tokens": 128,
+                "temperature": 0.0,
+            }, timeout=60)
+            resp.raise_for_status()
+            raw = resp.json()["choices"][0]["message"]["content"]
+        except Exception as exc:
+            logger.error("HTTP grounder failed: %s", exc)
+            return BenchmarkAction(type="click", x=0.5, y=0.5)
+
+        logger.info("HTTP grounder: %s", raw[:200])
+
+        # Parse [x1,y1,x2,y2] bbox → center click
+        from openadapt_evals.agents.planner_grounder_agent import (
+            PlannerGrounderAgent,
+        )
+        return PlannerGrounderAgent._parse_bbox_to_action(raw)
+
+    def _ground_click_vlm(
+        self,
+        obs: BenchmarkObservation,
+        description: str,
+    ) -> BenchmarkAction:
+        """Ground via general VLM API (gpt-4.1-mini, etc.)."""
         from openadapt_evals.vlm import vlm_call
 
         prompt = (
