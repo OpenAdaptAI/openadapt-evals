@@ -1,6 +1,27 @@
 # CHANGELOG
 
 
+## v0.72.8 (2026-03-28)
+
+### Bug Fixes
+
+- Remove orphaned outputs reference, clean up test suite
+  ([#206](https://github.com/OpenAdaptAI/openadapt-evals/pull/206),
+  [`9966783`](https://github.com/OpenAdaptAI/openadapt-evals/commit/9966783e42e0893e1d894ec0df55f352a4c96163))
+
+Bug: `gen_len = outputs[0].shape[0] - ...` was outside the if/else
+
+block — `outputs` only exists in the unconstrained path, crashing the constrained path with
+  UnboundLocalError.
+
+Test cleanup: removed source-code-grepping tests (brittle, test implementation not behavior). Kept
+  31 tests that verify behavior: - Regex matching (valid/invalid inputs) - DFA quantifier limits -
+  Outlines API contract (imports, dispatch types, image wrapper) - Generator cache sentinel logic -
+  Task rotation (loading, explicit IDs, rotation coverage)
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.72.7 (2026-03-28)
 
 ### Bug Fixes
