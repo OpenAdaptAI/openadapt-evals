@@ -1,6 +1,32 @@
 # CHANGELOG
 
 
+## v0.72.7 (2026-03-28)
+
+### Bug Fixes
+
+- Use list input format for Outlines multimodal generation
+  ([#205](https://github.com/OpenAdaptAI/openadapt-evals/pull/205),
+  [`9c91a54`](https://github.com/OpenAdaptAI/openadapt-evals/commit/9c91a54c8c6d9fd9df88f00d381679c03256f7f7))
+
+TransformersMultiModal.format_input is a singledispatch that only accepts `list` and `Chat` types. A
+  `dict` raises TypeError.
+
+Correct format: [prompt_text, outlines.Image(pil_image)] Wrong format: {"text": prompt, "images":
+  [image]}
+
+Also fixes PIL .format being dropped by .convert("RGB") — outlines.Image requires .format to be set.
+  Restored after conversion.
+
+New test: test_outlines_multimodal_input_format verifies: - list is a registered dispatch type (dict
+  is NOT) - outlines.Image wraps PIL images correctly - This test would have caught both the dict
+  and format bugs
+
+36/36 tests pass in 0.10s.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.72.6 (2026-03-28)
 
 ### Bug Fixes
