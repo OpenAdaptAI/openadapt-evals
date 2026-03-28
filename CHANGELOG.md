@@ -1,6 +1,28 @@
 # CHANGELOG
 
 
+## v0.75.0 (2026-03-28)
+
+### Features
+
+- Demoexecutor supports HTTP grounding endpoint (UI-Venus)
+  ([#211](https://github.com/OpenAdaptAI/openadapt-evals/pull/211),
+  [`6f9531b`](https://github.com/OpenAdaptAI/openadapt-evals/commit/6f9531b401fe74107eb2da7fb0d3835c6117b22c))
+
+Add grounder_endpoint parameter to DemoExecutor for dedicated grounding models (UI-Venus-1.5-8B,
+  UI-TARS) via vLLM/Ollama. Uses the UI-Venus native bbox format [x1,y1,x2,y2] for much better click
+  accuracy than gpt-4.1-mini's general VLM grounding.
+
+Usage: executor = DemoExecutor( grounder_endpoint="http://gpu-box:8080",
+  grounder_model="UI-Venus-1.5-8B", )
+
+Falls back to VLM API grounding when no endpoint is set.
+
+Also adds telemetry events for training, demo execution, corrections.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.74.1 (2026-03-28)
 
 ### Bug Fixes
