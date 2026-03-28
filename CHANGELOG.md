@@ -1,6 +1,34 @@
 # CHANGELOG
 
 
+## v0.72.6 (2026-03-28)
+
+### Bug Fixes
+
+- Use Outlines Generator API instead of logits_processor kwarg
+  ([#204](https://github.com/OpenAdaptAI/openadapt-evals/pull/204),
+  [`aca70a2`](https://github.com/OpenAdaptAI/openadapt-evals/commit/aca70a2e6fecc65ef2284e9264325ba9a0c99ee6))
+
+Outlines v1.2 does NOT work by passing a processor to model.generate(logits_processor=[...]). It
+  uses its own Generator:
+
+model = outlines.from_transformers(hf_model, hf_processor) gen = outlines.Generator(model,
+  outlines.regex(pattern)) output = gen(prompt, max_new_tokens=512)
+
+The Generator wraps the model and handles tokenization, constrained generation, and decoding
+  internally. Prior approach compiled the processor successfully but it was never actually applied
+  to generation.
+
+Also fixes max_tokens → max_new_tokens (transformers kwarg name).
+
+Tests (35, all pass in 0.09s): - test_outlines_api_imports: verifies from_transformers, regex,
+  Generator - test_outlines_regex_compiles: verifies action regex compiles -
+  test_outlines_generator_api_contract: verifies Generator and SteerableGenerator signatures match
+  what the trainer calls - No slow model download — API contract checks only
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.72.5 (2026-03-28)
 
 ### Bug Fixes
