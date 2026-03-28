@@ -134,10 +134,23 @@ Rules:
 
 # Warning injected when repeated identical actions are detected.
 _ANTI_LOOP_WARNING = (
-    "\nWARNING: Your last {n} actions were identical and failed. "
-    "You MUST try a completely different approach: dismiss any dialogs, "
-    "try keyboard shortcuts, or interact with different UI elements. "
+    "\n⚠ WARNING: You are stuck in a loop. Your last {n} actions were "
+    "identical and failed. You MUST try a completely different approach. "
     "Do NOT repeat the same action again.\n"
+)
+
+# Stronger warning that references demo strategy when available.
+_ANTI_LOOP_WARNING_WITH_DEMO = (
+    "\n⚠ WARNING: You are stuck in a loop. Your last {n} actions were "
+    "identical and failed. You MUST try a completely different approach.\n\n"
+    "A demonstration strategy is available (see above). Use it now:\n"
+    "- If the demo mentions keyboard shortcuts (e.g., Ctrl+Shift+Delete, "
+    "Win+R, Alt+F4), USE THEM instead of clicking.\n"
+    "- If the demo suggests a different sequence of steps, follow that "
+    "sequence instead of your current approach.\n"
+    "- Prefer 'key' actions over 'click' actions when stuck — keyboard "
+    "shortcuts bypass UI elements that may be unresponsive or mislocated.\n\n"
+    "Do NOT repeat the same action. Pick a DIFFERENT action type.\n"
 )
 
 # Number of consecutive identical actions that triggers the anti-loop warning.
@@ -563,6 +576,12 @@ class PlannerGrounderAgent(BenchmarkAgent):
         returns an anti-loop warning string to inject into the planner
         prompt. Otherwise returns an empty string.
 
+        When demo guidance is available (``self.demo_guidance`` is non-empty),
+        the warning explicitly directs the planner to use keyboard shortcuts
+        and alternative actions from the demonstration strategy, since the
+        demo often contains fallback approaches (e.g., Ctrl+Shift+Delete)
+        that work when clicking fails.
+
         The comparison uses exact string matching on the instruction
         portion of the history entry (the text after ``(instruction: ``
         and before the closing ``)``).
@@ -595,6 +614,15 @@ class PlannerGrounderAgent(BenchmarkAgent):
                 threshold,
                 instructions[0],
             )
+            # Use the demo-aware warning when demo guidance is available,
+            # so the planner is directed to use keyboard shortcuts and
+            # alternative approaches from the demonstration.
+            if self.demo_guidance:
+                logger.info(
+                    "Anti-loop: demo guidance available, injecting "
+                    "demo-strategy recovery prompt"
+                )
+                return _ANTI_LOOP_WARNING_WITH_DEMO.format(n=threshold)
             return _ANTI_LOOP_WARNING.format(n=threshold)
 
         return ""

@@ -225,9 +225,22 @@ class DemoGuidedAgent(BenchmarkAgent):
         )
 
         # -- Step 3: Augment task instruction ----------------------------------
+        # On step 0, inject the FULL plan overview so the planner sees the
+        # complete strategy.  On subsequent steps, inject a lighter per-step
+        # hint.  The plan overview is always included so the planner can
+        # track progress — it's cheap (a few lines of text).
         augmented_task = task
         if guidance.available:
-            guidance_text = guidance.to_prompt_text()
+            # Always include the plan overview so the planner knows the
+            # overall strategy.
+            plan_overview = self._demo_library.get_plan_overview(task.task_id)
+            step_hint = guidance.to_prompt_text()
+
+            if plan_overview:
+                guidance_text = f"{plan_overview}\n\n{step_hint}"
+            else:
+                guidance_text = step_hint
+
             augmented_task = BenchmarkTask(
                 task_id=task.task_id,
                 instruction=f"{task.instruction}\n\n{guidance_text}",
@@ -237,6 +250,12 @@ class DemoGuidedAgent(BenchmarkAgent):
                 raw_config=task.raw_config,
                 evaluation_spec=task.evaluation_spec,
             )
+
+            # Also set demo_guidance on the base agent so that anti-loop
+            # recovery can reference the strategy (keyboard shortcuts etc.)
+            if plan_overview and hasattr(self._base_agent, "demo_guidance"):
+                self._base_agent.demo_guidance = plan_overview
+
             logger.debug(
                 "Injected demo guidance for step %d (confidence=%.2f)",
                 self._step_index, guidance.confidence,

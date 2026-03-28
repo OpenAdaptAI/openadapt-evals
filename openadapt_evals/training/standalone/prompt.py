@@ -113,8 +113,12 @@ def parse_vlm_output_to_action(
             xf = max(0.0, min(1.0, float(m.group(1))))
             yf = max(0.0, min(1.0, float(m.group(2))))
             return SimpleAction(type="click", x=int(xf * width), y=int(yf * height))
-        except (ValueError, OverflowError):
-            logger.warning("Malformed CLICK coords: x=%s y=%s", m.group(1), m.group(2))
+        except (ValueError, TypeError, OverflowError):
+            # The regex [\d.]+ can match literal "..." from model output
+            # (e.g. CLICK(x=..., y=...)), causing float("...") to raise
+            # ValueError.  Fall through to DONE rather than crashing.
+            logger.warning("Malformed CLICK coords: x=%s y=%s — returning DONE", m.group(1), m.group(2))
+            return SimpleAction(type="done")
 
     # TYPE(text="...")
     m = re.search(r"""TYPE\(text=["']([^"'\\]*(?:\\.[^"'\\]*)*)["']\)""", text, re.IGNORECASE)
