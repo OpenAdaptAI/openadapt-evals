@@ -20,9 +20,49 @@ from openadapt_evals.training.standalone.trainer import GRPOTrainer
 
 
 class TestActionRegex:
-    """Verify the action format regex matches valid actions and rejects junk."""
+    """Verify the Thought/Action format regex matches valid output and rejects junk."""
 
-    regex = GRPOTrainer._ACTION_REGEX
+    full_regex = GRPOTrainer._ACTION_REGEX
+    action_regex = GRPOTrainer._ACTION_RE
+
+    # -- Full Thought/Action format tests --
+
+    @pytest.mark.parametrize(
+        "output",
+        [
+            "Thought: I need to click the start menu.\nAction: CLICK(x=0.50, y=0.30)",
+            "Thought: Type notepad in the search box.\nAction: TYPE(text=\"notepad\")",
+            "Thought: Wait for the UI to load.\nAction: WAIT()",
+            "Thought: The task is complete.\nAction: DONE()",
+            "Thought: Click the Chrome icon on the desktop to open Chrome.\nAction: CLICK(x=0.05, y=0.20)",
+            "Thought: x\nAction: CLICK(x=0.0, y=0.0)",
+        ],
+    )
+    def test_valid_thought_action_matches(self, output: str) -> None:
+        assert re.match(self.full_regex, output), f"Expected match: {output!r}"
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            # No Thought prefix
+            "CLICK(x=0.50, y=0.30)",
+            "Action: CLICK(x=0.50, y=0.30)",
+            # Free-text reasoning without structure
+            "** Let me think about this...",
+            "1. Analyze the user's goal",
+            "The user wants to open Task Manager",
+            "",
+            # Missing Action line
+            "Thought: I should click here.",
+            # Wrong action format
+            "Thought: Click\nAction: click(0.5, 0.3)",
+            "Thought: Click\nAction: CLICK",
+        ],
+    )
+    def test_invalid_text_rejected(self, text: str) -> None:
+        assert not re.match(self.full_regex, text), f"Should NOT match: {text!r}"
+
+    # -- Action-only regex tests (used by parser) --
 
     @pytest.mark.parametrize(
         "action",
@@ -37,22 +77,8 @@ class TestActionRegex:
             "DONE()",
         ],
     )
-    def test_valid_actions_match(self, action: str) -> None:
-        assert re.match(self.regex, action), f"Expected match: {action!r}"
-
-    @pytest.mark.parametrize(
-        "text",
-        [
-            "** Let me think about this...",
-            "1. Analyze the user's goal",
-            "The user wants to open Task Manager",
-            "",
-            "CLICK",
-            "click(0.5, 0.3)",
-        ],
-    )
-    def test_invalid_text_rejected(self, text: str) -> None:
-        assert not re.match(self.regex, text), f"Should NOT match: {text!r}"
+    def test_action_only_regex_matches(self, action: str) -> None:
+        assert re.match(self.action_regex, action), f"Expected match: {action!r}"
 
 
 # ---------------------------------------------------------------------------

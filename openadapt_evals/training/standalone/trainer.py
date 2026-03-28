@@ -90,16 +90,20 @@ class GRPOTrainer:
 
     # --- Constrained decoding -------------------------------------------
 
-    # Regex matching valid action formats.  No free-text prefix — the
-    # model MUST output an action as its very first token.  This is
-    # intentional: constrained decoding forces structured output.
-    # If the model needs chain-of-thought, disable constrained_decoding
-    # and rely on prompt instructions instead.
-    _ACTION_REGEX = (
+    # Regex matching the required Thought/Action format from SYSTEM_PROMPT.
+    # The model gets up to 500 chars of chain-of-thought reasoning, then
+    # MUST output exactly one valid action.  This preserves the model's
+    # ability to reason while guaranteeing parseable output.
+    #
+    # Format:  Thought: <reasoning>\nAction: <action>
+    _ACTION_RE = (
         r"CLICK\(x=0\.\d{1,3},\s*y=0\.\d{1,3}\)"
         r'|TYPE\(text="[^"]{0,200}"\)'
         r"|WAIT\(\)"
         r"|DONE\(\)"
+    )
+    _ACTION_REGEX = (
+        r"Thought: [^\n]{1,500}\nAction: (" + _ACTION_RE + r")"
     )
     # Sentinel: None = not yet attempted, list = success, False = failed
     _constrained_processor_cache: Any = None
