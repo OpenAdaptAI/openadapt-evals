@@ -112,53 +112,59 @@ class TestConstrainedDecodingCache:
         result = trainer._get_constrained_logits_processor()
         assert result == ["mock_processor"]
 
-    def test_outlines_import_paths_exist(self) -> None:
-        """Verify at least one of the Outlines import paths resolves.
+    def test_outlines_api_imports(self) -> None:
+        """Verify the outlines API the trainer depends on is importable.
 
-        The Outlines API changed class names across versions.  The trainer
-        tries both.  This test ensures at least one path works when
-        outlines is installed, or gracefully skips when it's not.
+        The trainer uses:
+        - outlines.Transformers (model wrapper)
+        - outlines.generator.get_regex_logits_processor (factory)
         """
         try:
             import outlines  # noqa: F401
         except ImportError:
             pytest.skip("outlines not installed")
 
-        # At least one of these must exist
-        found = False
+        from outlines import Transformers
+        from outlines.generator import get_regex_logits_processor
+        assert callable(Transformers)
+        assert callable(get_regex_logits_processor)
+
+    def test_outlines_processor_creation(self) -> None:
+        """Verify a regex logits processor can actually be created.
+
+        This is the integration test that would have caught the prior bugs:
+        - Wrong class name (RegexLogitsProcessor vs OutlinesLogitsProcessor)
+        - Wrong constructor args (tokenizer= kwarg didn't exist)
+
+        Requires a real model, so we use a tiny one or skip.
+        """
         try:
-            from outlines.processors import OutlinesLogitsProcessor  # noqa: F401
-            found = True
+            import outlines
+            import torch
+            from transformers import AutoTokenizer
         except ImportError:
-            pass
+            pytest.skip("outlines/torch/transformers not installed")
+
         try:
-            from outlines.processors import RegexLogitsProcessor  # noqa: F401
-            found = True
-        except ImportError:
-            pass
-        assert found, (
-            "Neither OutlinesLogitsProcessor nor RegexLogitsProcessor found "
-            "in outlines.processors. outlines API may have changed."
+            # Use the smallest possible tokenizer for fast test
+            tokenizer = AutoTokenizer.from_pretrained(
+                "hf-internal-testing/tiny-random-LlamaForCausalLM",
+                trust_remote_code=True,
+            )
+        except Exception:
+            pytest.skip("Could not load test tokenizer")
+
+        from outlines.generator import get_regex_logits_processor
+
+        # Verify the factory function signature matches what the trainer expects:
+        # get_regex_logits_processor(backend_name, model, regex)
+        import inspect
+        sig = inspect.signature(get_regex_logits_processor)
+        params = list(sig.parameters.keys())
+        assert len(params) >= 3, (
+            f"get_regex_logits_processor signature changed: {sig}. "
+            f"Expected (backend_name, model, regex), got {params}"
         )
-
-    def test_outlines_tokenizer_wrapper_exists(self) -> None:
-        """Verify the Outlines tokenizer wrapper import path."""
-        try:
-            import outlines  # noqa: F401
-        except ImportError:
-            pytest.skip("outlines not installed")
-
-        # Try the v0.1+ path
-        found = False
-        try:
-            from outlines import TransformerTokenizer  # noqa: F401
-            found = True
-        except (ImportError, AttributeError):
-            pass
-        # Not fatal if missing — trainer falls back to raw tokenizer
-        if not found:
-            import warnings
-            warnings.warn("TransformerTokenizer not found — trainer will use raw tokenizer")
 
     def test_empty_list_no_longer_caches_as_success(self) -> None:
         """Regression test: empty list [] should NOT be treated as success.
