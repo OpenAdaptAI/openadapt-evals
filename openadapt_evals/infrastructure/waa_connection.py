@@ -58,16 +58,28 @@ class WAAConnection:
         max_retries: int = 5,
         retry_delay: int = 5,
     ):
-        import os
+        # Read defaults from pydantic-settings (.env file + env vars)
+        try:
+            from openadapt_evals.config import settings as _s
+        except Exception:
+            _s = None
 
-        # vm_ip / waa_host are interchangeable; env var fallback
-        self.vm_ip = vm_ip or waa_host or os.environ.get("WAA_HOST", "")
+        self.vm_ip = (
+            vm_ip or waa_host
+            or (getattr(_s, "waa_host", None) if _s else None)
+            or ""
+        )
         if not self.vm_ip:
             raise ValueError(
-                "vm_ip is required. Pass it directly or set WAA_HOST env var."
+                "vm_ip required. Pass it directly, set WAA_HOST in .env, "
+                "or set the WAA_HOST environment variable."
             )
-        self.username = username
-        self.ssh_key = waa_key or os.environ.get("WAA_KEY")
+        self.username = username or (
+            getattr(_s, "waa_user", "azureuser") if _s else "azureuser"
+        )
+        self.ssh_key = waa_key or (
+            getattr(_s, "waa_key", None) if _s else None
+        )
         self.local_port = local_port
         self.remote_port = remote_port
         self.eval_local_port = eval_local_port
