@@ -1,6 +1,52 @@
 # CHANGELOG
 
 
+## v0.71.3 (2026-03-28)
+
+### Bug Fixes
+
+- Eval infra, forced keyboard override, Outlines constrained decoding
+  ([#197](https://github.com/OpenAdaptAI/openadapt-evals/pull/197),
+  [`257bc7f`](https://github.com/OpenAdaptAI/openadapt-evals/commit/257bc7f2f3595ed9d350ac8a482efdf805302a05))
+
+* fix: per-step milestone tracking, forced keyboard override, eval infra
+
+Evaluation infrastructure: - Per-step milestone high-water mark: milestones checked after each step,
+  once passed they stay passed. Fixes transient states (open dialogs) being missed by
+  end-of-episode-only evaluation. - evaluate_checks_local() fallback: when /evaluate endpoint is
+  down, uses task config's own command/screenshot checks via /execute_windows - iptables retry loop
+  in start_with_evaluate.sh: ensures port 5050 exemption persists even if DNAT rule is (re)applied
+  later
+
+Anti-loop forced override: - After 6 consecutive identical actions (planner ignoring warnings),
+  bypasses planner entirely and emits first keyboard shortcut from demo guidance (e.g.,
+  Ctrl+Shift+Delete). This breaks click loops where the grounder places clicks incorrectly.
+
+Task setup fixes: - Chrome popup: registry policies, First Run sentinel, launch flags - Single-line
+  PowerShell commands (fixes YAML escaping for /execute_windows) - Redesigned milestones: combined
+  settings/dialog check, evidence-based
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* fix: remove Alt+F4 from demo, add Outlines constrained decoding
+
+Demo fix: - Remove step 4 (Alt+F4 close Chrome) from clear-browsing-data demo. Alt+F4 on desktop
+  triggers Windows Shutdown dialog when Chrome loses focus. The task goal is clearing data, not
+  closing Chrome. - Updated step 2 description to include "Delete from this device" button text
+  (newer Chrome versions changed the label).
+
+Constrained decoding (GRPO trainer): - Add `constrained_decoding` config flag (default False) - When
+  enabled, uses Outlines RegexLogitsProcessor to force model output to match the action format regex
+  (CLICK/TYPE/WAIT/DONE). Eliminates 5-15% of rollouts wasted on unparseable output. - Allows
+  free-form Thought prefix before the action. - DFA compilation cached after first call (~2s
+  one-time cost). - Graceful fallback if outlines not installed. - Added outlines>=0.1.0 to training
+  optional dependencies.
+
+---------
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.71.2 (2026-03-28)
 
 ### Bug Fixes
