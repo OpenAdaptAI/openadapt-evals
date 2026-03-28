@@ -1,6 +1,38 @@
 # CHANGELOG
 
 
+## v0.71.2 (2026-03-28)
+
+### Bug Fixes
+
+- Demo guidance plan overview, anti-loop recovery, GRPO trainer fixes
+  ([#196](https://github.com/OpenAdaptAI/openadapt-evals/pull/196),
+  [`1a8ad93`](https://github.com/OpenAdaptAI/openadapt-evals/commit/1a8ad939368a14a85d6ba1c9d921b3e065dead77))
+
+Flywheel guidance: - Add get_plan_overview() to DemoLibrary: injects full demo strategy (all steps +
+  keyboard shortcuts) instead of one-step-at-a-time guidance - Fix _build_enriched_instruction()
+  producing "Click on Double-click..." and omit fake coordinates from manual demos - DemoGuidedAgent
+  sets demo_guidance on base agent for anti-loop recovery
+
+Anti-loop recovery: - New _ANTI_LOOP_WARNING_WITH_DEMO directs planner to use keyboard shortcuts
+  from demo strategy when stuck clicking unresponsive elements - _check_action_loop() uses
+  demo-aware warning when demo_guidance is set
+
+Chrome popup suppression: - Add registry policy key disabling SpeedComparison in task setup - Launch
+  Chrome with --no-first-run --disable-features=SpeedComparison - Send Escape to dismiss residual
+  popups before closing Chrome
+
+GRPO trainer (standalone): - Add vision_loss_mode config: "exclude" (default), "include",
+  "checkpoint" with warning log when vision tensors stripped from loss computation - Add VRAM
+  recommendations for max_new_tokens (L40S: 512, A100: 1024-2048) - Add truncation warning when
+  output hits max_new_tokens without action - Fix float parsing crash on CLICK(x=..., y=...) literal
+  dots
+
+Validated: flywheel 0.00 -> 0.25 (+0.25) on clear-browsing-data-chrome
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.71.1 (2026-03-27)
 
 ### Bug Fixes
