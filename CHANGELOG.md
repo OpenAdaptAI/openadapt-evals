@@ -1,6 +1,52 @@
 # CHANGELOG
 
 
+## v0.72.5 (2026-03-28)
+
+### Bug Fixes
+
+- Unbounded regex quantifiers prevent Outlines DFA state explosion
+  ([#203](https://github.com/OpenAdaptAI/openadapt-evals/pull/203),
+  [`55c3c5d`](https://github.com/OpenAdaptAI/openadapt-evals/commit/55c3c5df6a50422bcfd666ca6721d6337a3a4d34))
+
+* fix: use outlines v1.2 get_regex_logits_processor API
+
+The outlines v1.2 API requires: 1. Wrapping the HF model+tokenizer in outlines.Transformers 2.
+  Calling get_regex_logits_processor(None, wrapped, regex)
+
+Prior code tried to construct OutlinesLogitsProcessor directly with a tokenizer= kwarg that doesn't
+  exist in v1.2. The error was caught and silently fell back to unconstrained generation.
+
+Tests now verify the ACTUAL API surface (import paths + factory function signature) instead of just
+  checking class names exist. This would have caught all three prior Outlines bugs: - PR #197: wrong
+  class name (RegexLogitsProcessor) - PR #201: wrong constructor (tokenizer= kwarg) - This PR: wrong
+  API pattern (direct constructor vs factory)
+
+33/33 tests pass with outlines 1.2.12 installed.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* fix: use unbounded regex quantifiers to prevent DFA state explosion
+
+Bounded quantifiers like {1,500} create counting DFA states that cross-product with every
+  alternative in the regex. The Thought prefix alone created 1,500 states, exceeding Outlines' 2^31
+  limit.
+
+Changes: - [^\n]{1,500} → [^\n]+ (Thought prefix: 1 state vs 1,500) - [^"]{0,200} → [^"]* (TYPE
+  text: 1 state vs 200) - \d{1,3} → \d+ (coordinates: 1 state vs 3)
+
+max_new_tokens=512 provides the actual length limit. The DFA doesn't need to count characters.
+
+New test: test_no_bounded_quantifiers_in_regex asserts no quantifier in the regex exceeds {N,10},
+  preventing future regressions.
+
+34/34 tests pass.
+
+---------
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.72.4 (2026-03-28)
 
 ### Bug Fixes
