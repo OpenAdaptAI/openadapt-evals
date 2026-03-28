@@ -168,6 +168,14 @@ class WAADirect:
                     )
                 except requests.RequestException as e:
                     logger.warning("Open failed: %s", e)
+            elif etype == "update_browse_history":
+                history = params.get("history", params.get("urls", []))
+                self.update_browse_history(history)
+            elif etype == "chrome_open_tabs":
+                tab_urls = params.get("urls", [])
+                self.chrome_open_tabs(tab_urls)
+            elif etype == "chrome_close_tabs":
+                self.chrome_close_tabs()
         time.sleep(2)
         return True
 
@@ -213,6 +221,103 @@ class WAADirect:
                 logger.warning("clean_desktop error: %s", e)
         time.sleep(2)
         logger.info("Desktop cleanup completed (killed %d app types)", len(kill_apps))
+        return True
+
+    def update_browse_history(self, urls: list[dict]) -> bool:
+        """Write browsing history entries to Chrome's History SQLite DB.
+
+        Args:
+            urls: List of {"url": "https://...", "title": "..."} dicts.
+
+        Returns:
+            True if the command was sent (does not verify DB write).
+        """
+        if not urls:
+            return True
+        row_parts = []
+        for u in urls:
+            url = u["url"]
+            title = u.get("title", "")
+            row_parts.append(
+                f"('{url}', '{title}', "
+                f"strftime('%s','now')*1000000+11644473600000000)"
+            )
+        rows = ", ".join(row_parts)
+        db_path = (
+            "$env:LOCALAPPDATA\\Google\\Chrome\\User Data\\Default\\History"
+        )
+        ps_script = (
+            f'$db = "{db_path}"; '
+            "Stop-Process -Name chrome -Force -ErrorAction SilentlyContinue; "
+            "Start-Sleep -Seconds 1; "
+            f'sqlite3 $db "INSERT INTO urls (url, title, last_visit_time) '
+            f'VALUES {rows};"'
+        )
+        cmd = (
+            "import subprocess; subprocess.run("
+            "['powershell', '-Command', "
+            f"r'''{ps_script}'''], "
+            "capture_output=True, shell=False)"
+        )
+        try:
+            self._session.post(
+                f"{self.server_url}/execute_windows",
+                json={"command": cmd}, timeout=30,
+            )
+        except requests.RequestException as e:
+            logger.warning("update_browse_history error: %s", e)
+            return False
+        return True
+
+    def chrome_open_tabs(self, urls: list[str]) -> bool:
+        """Open multiple Chrome tabs by launching Chrome with URL arguments.
+
+        Args:
+            urls: List of URLs to open as tabs.
+
+        Returns:
+            True if the launch command was sent.
+        """
+        if not urls:
+            return True
+        url_args = " ".join(f'"{u}"' for u in urls)
+        ps_script = f"Start-Process chrome -ArgumentList {url_args}"
+        cmd = (
+            "import subprocess; subprocess.run("
+            "['powershell', '-Command', "
+            f"r'''{ps_script}'''], "
+            "capture_output=True, shell=False)"
+        )
+        try:
+            self._session.post(
+                f"{self.server_url}/execute_windows",
+                json={"command": cmd}, timeout=30,
+            )
+        except requests.RequestException as e:
+            logger.warning("chrome_open_tabs error: %s", e)
+            return False
+        return True
+
+    def chrome_close_tabs(self) -> bool:
+        """Close all Chrome windows via Stop-Process.
+
+        Returns:
+            True if the kill command was sent.
+        """
+        cmd = (
+            "import subprocess; subprocess.run("
+            "['powershell', '-Command', "
+            "'Stop-Process -Name chrome -Force -ErrorAction SilentlyContinue'], "
+            "capture_output=True, shell=False)"
+        )
+        try:
+            self._session.post(
+                f"{self.server_url}/execute_windows",
+                json={"command": cmd}, timeout=30,
+            )
+        except requests.RequestException as e:
+            logger.warning("chrome_close_tabs error: %s", e)
+            return False
         return True
 
     def is_stuck(self, recent: list[bytes], window: int = 3) -> bool:
