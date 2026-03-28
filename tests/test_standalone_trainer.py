@@ -106,98 +106,112 @@ class TestActionRegex:
 class TestConstrainedDecodingCache:
     """Test the caching logic for the Outlines logits processor."""
 
-    def test_cache_starts_as_none(self) -> None:
+    def test_generator_cache_starts_as_none(self) -> None:
         config = TrainingConfig()
         trainer = GRPOTrainer(config)
-        assert trainer._constrained_processor_cache is None
+        assert trainer._outlines_generator is None
 
-    def test_failed_cache_returns_none(self) -> None:
-        """When compilation fails, subsequent calls return None (not [])."""
+    def test_failed_generator_returns_none(self) -> None:
+        """When creation fails, subsequent calls return None."""
         config = TrainingConfig(constrained_decoding=True)
         trainer = GRPOTrainer(config)
-        # Simulate a failed compilation
-        trainer._constrained_processor_cache = False
-        result = trainer._get_constrained_logits_processor()
+        trainer._outlines_generator = False
+        result = trainer._get_outlines_generator()
         assert result is None
 
-    def test_successful_cache_returns_list(self) -> None:
-        """When compilation succeeds, subsequent calls return the list."""
+    def test_successful_generator_returns_cached(self) -> None:
+        """When creation succeeds, subsequent calls return the cached generator."""
         config = TrainingConfig(constrained_decoding=True)
         trainer = GRPOTrainer(config)
-        # Simulate a successful compilation
-        trainer._constrained_processor_cache = ["mock_processor"]
-        result = trainer._get_constrained_logits_processor()
-        assert result == ["mock_processor"]
+        trainer._outlines_generator = "mock_generator"
+        result = trainer._get_outlines_generator()
+        assert result == "mock_generator"
 
     def test_outlines_api_imports(self) -> None:
         """Verify the outlines API the trainer depends on is importable.
 
         The trainer uses:
-        - outlines.Transformers (model wrapper)
-        - outlines.generator.get_regex_logits_processor (factory)
+        - outlines.from_transformers (model wrapper factory)
+        - outlines.regex (constraint factory)
+        - outlines.Generator (generation with constraints)
         """
         try:
             import outlines  # noqa: F401
         except ImportError:
             pytest.skip("outlines not installed")
 
-        from outlines import Transformers
-        from outlines.generator import get_regex_logits_processor
-        assert callable(Transformers)
-        assert callable(get_regex_logits_processor)
+        assert callable(outlines.from_transformers)
+        assert callable(outlines.regex)
+        assert callable(outlines.Generator)
 
-    def test_outlines_processor_creation(self) -> None:
-        """Verify a regex logits processor can actually be created.
+    def test_outlines_regex_compiles(self) -> None:
+        """Verify the action regex can be compiled by Outlines.
 
-        This is the integration test that would have caught the prior bugs:
-        - Wrong class name (RegexLogitsProcessor vs OutlinesLogitsProcessor)
-        - Wrong constructor args (tokenizer= kwarg didn't exist)
-
-        Requires a real model, so we use a tiny one or skip.
+        This catches DFA state explosion (bounded quantifiers) and
+        syntax errors in the regex.
         """
         try:
             import outlines
-            import torch
-            from transformers import AutoTokenizer
         except ImportError:
-            pytest.skip("outlines/torch/transformers not installed")
+            pytest.skip("outlines not installed")
 
+        # This should NOT raise — if it does, the regex is too complex
+        constraint = outlines.regex(GRPOTrainer._ACTION_REGEX)
+        assert constraint is not None
+
+    def test_outlines_generator_api_contract(self) -> None:
+        """Verify the Outlines Generator API contract the trainer depends on.
+
+        Checks that:
+        1. outlines.from_transformers accepts (model, processor) args
+        2. outlines.regex returns an object Generator accepts
+        3. outlines.Generator returns a callable
+        4. The callable accepts (prompt, max_new_tokens=N) kwargs
+
+        Does NOT load a real model (too slow for CI). Instead verifies
+        the API signatures match what the trainer calls.
+        """
         try:
-            # Use the smallest possible tokenizer for fast test
-            tokenizer = AutoTokenizer.from_pretrained(
-                "hf-internal-testing/tiny-random-LlamaForCausalLM",
-                trust_remote_code=True,
-            )
-        except Exception:
-            pytest.skip("Could not load test tokenizer")
+            import outlines
+            import inspect
+        except ImportError:
+            pytest.skip("outlines not installed")
 
-        from outlines.generator import get_regex_logits_processor
-
-        # Verify the factory function signature matches what the trainer expects:
-        # get_regex_logits_processor(backend_name, model, regex)
-        import inspect
-        sig = inspect.signature(get_regex_logits_processor)
+        # 1. from_transformers signature
+        sig = inspect.signature(outlines.from_transformers)
         params = list(sig.parameters.keys())
-        assert len(params) >= 3, (
-            f"get_regex_logits_processor signature changed: {sig}. "
-            f"Expected (backend_name, model, regex), got {params}"
+        assert "model" in params, f"from_transformers missing 'model' param: {params}"
+        assert "tokenizer_or_processor" in params or len(params) >= 2, (
+            f"from_transformers signature changed: {sig}"
         )
 
-    def test_empty_list_no_longer_caches_as_success(self) -> None:
-        """Regression test: empty list [] should NOT be treated as success.
+        # 2. regex returns something
+        constraint = outlines.regex(r"DONE\(\)")
+        assert constraint is not None
 
-        Prior bug: failure cached [] which is truthy for `is not None`,
-        causing subsequent calls to return [] (no processors applied).
-        """
+        # 3. Generator signature
+        sig_gen = inspect.signature(outlines.Generator)
+        params_gen = list(sig_gen.parameters.keys())
+        assert "model" in params_gen, f"Generator missing 'model' param: {params_gen}"
+
+        # 4. SteerableGenerator.__call__ accepts **inference_kwargs
+        from outlines.generator import SteerableGenerator
+        sig_call = inspect.signature(SteerableGenerator.__call__)
+        params_call = list(sig_call.parameters.keys())
+        assert "inference_kwargs" in params_call or any(
+            p.startswith("**") or sig_call.parameters[p].kind == inspect.Parameter.VAR_KEYWORD
+            for p in params_call
+        ), f"SteerableGenerator.__call__ doesn't accept **kwargs: {sig_call}"
+
+    def test_false_sentinel_not_confused_with_none(self) -> None:
+        """Regression: False sentinel must return None, not be treated as uninitialized."""
         config = TrainingConfig(constrained_decoding=True)
         trainer = GRPOTrainer(config)
-        # The old buggy behavior would cache [] on failure
-        # Verify the sentinel is False (not []) for failures
-        trainer._constrained_processor_cache = False
-        assert trainer._get_constrained_logits_processor() is None
-        # And [] is actually a valid success cache (with a processor in it)
-        trainer._constrained_processor_cache = ["real_processor"]
-        assert trainer._get_constrained_logits_processor() == ["real_processor"]
+        trainer._outlines_generator = False
+        assert trainer._get_outlines_generator() is None
+        # A real generator object should be returned as-is
+        trainer._outlines_generator = "real_generator"
+        assert trainer._get_outlines_generator() == "real_generator"
 
 
 # ---------------------------------------------------------------------------
