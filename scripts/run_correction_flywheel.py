@@ -1189,28 +1189,44 @@ def phase3_retry(
         from openadapt_evals.demo_library import DemoLibrary
         demo_library = DemoLibrary(demo_dir)
 
-        # --- Bug 3: Force sequential alignment for short demos ---------------
-        # When the demo has very few steps (< 5), pHash visual alignment
-        # cannot distinguish similar desktop screenshots (e.g., steps 0-2 all
-        # show the same desktop). Use sequential step index alignment instead.
         demo = demo_library.get_demo(task_config.id)
-        use_visual_alignment = True
-        if demo is not None and len(demo.steps) < 5:
-            use_visual_alignment = False
-            logger.info(
-                "Short demo (%d steps < 5): forcing sequential alignment "
-                "instead of pHash visual alignment",
-                len(demo.steps),
+
+        if demo is not None and demo.steps:
+            # Use DemoExecutor: execute demo steps directly with tiered
+            # intelligence. Keyboard/type steps are deterministic, click
+            # steps use the grounder, planner is only for recovery.
+            from openadapt_evals.agents.demo_executor import DemoExecutor
+            from openadapt_evals.adapters.rl_env import RLEnvironment
+            from openadapt_evals.adapters.waa.live import (
+                WAALiveAdapter, WAALiveConfig,
             )
 
-        score, screenshots = _run_live_episode(
-            server_url=server_url,
-            task_config=task_config,
-            demo_library=demo_library,
-            screenshot_dir=ss_dir,
-            use_visual_alignment=use_visual_alignment,
-            **kwargs,
-        )
+            logger.info(
+                "Using DemoExecutor (tiered execution) for %d-step demo",
+                len(demo.steps),
+            )
+            adapter = WAALiveAdapter(WAALiveConfig(server_url=server_url))
+            env = RLEnvironment(adapter, task_config=task_config)
+            executor = DemoExecutor(
+                grounder_model=kwargs.get("grounder_model", "gpt-4.1-mini"),
+                grounder_provider=kwargs.get("grounder_provider", "openai"),
+                planner_model=kwargs.get("planner_model", "gpt-4.1-mini"),
+                planner_provider=kwargs.get("planner_provider", "openai"),
+            )
+            score, screenshots = executor.run(
+                env, demo, task_config, screenshot_dir=ss_dir,
+            )
+        else:
+            # No demo available — fall back to planner-guided episode
+            logger.info("No demo found, falling back to planner-guided episode")
+            score, screenshots = _run_live_episode(
+                server_url=server_url,
+                task_config=task_config,
+                demo_library=demo_library,
+                screenshot_dir=ss_dir,
+                use_visual_alignment=True,
+                **kwargs,
+            )
 
     logger.info("Phase 3 result: score=%.2f, screenshots=%d", score, len(screenshots))
     return score, screenshots
