@@ -1,6 +1,30 @@
 # CHANGELOG
 
 
+## v0.72.2 (2026-03-28)
+
+### Bug Fixes
+
+- Constrained decoding preserves chain-of-thought reasoning
+  ([#200](https://github.com/OpenAdaptAI/openadapt-evals/pull/200),
+  [`d011b2f`](https://github.com/OpenAdaptAI/openadapt-evals/commit/d011b2fcab1a0489ef1e4d3b7d7bc362a6cd64d5))
+
+The Thought/Action format from SYSTEM_PROMPT is now enforced by the constrained decoding regex:
+
+Thought: <up to 500 chars of reasoning>
+
+Action: CLICK(x=0.50, y=0.30)
+
+This gives the model a reasoning budget while guaranteeing parseable output. Prior regex had no
+  prefix (model couldn't reason) or used (.|\n)* (Outlines couldn't compile the DFA).
+
+Also exposes _ACTION_RE (action-only regex) for use by the parser.
+
+Tests updated: 30 pass (was 21).
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.72.1 (2026-03-28)
 
 ### Bug Fixes
