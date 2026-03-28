@@ -126,43 +126,36 @@ class GRPOTrainer:
             return self._constrained_processor_cache
 
         try:
-            # Outlines API changed across versions — try both import paths.
-            # v0.1+: OutlinesLogitsProcessor in outlines.processors
-            # older:  RegexLogitsProcessor in outlines.processors
-            try:
-                from outlines.processors import OutlinesLogitsProcessor as _Processor
-            except ImportError:
-                from outlines.processors import RegexLogitsProcessor as _Processor
+            # Outlines v1.2+ API:
+            # 1. Wrap HF model+tokenizer in outlines.Transformers
+            # 2. Call get_regex_logits_processor(None, wrapped, regex)
+            # The processor is then passed to model.generate(logits_processor=[p])
+            from outlines import Transformers
+            from outlines.generator import get_regex_logits_processor
 
-            # Wrap the HF tokenizer for Outlines.  The class name also
-            # changed: TransformerTokenizer (no 's') in v0.1+.
             raw_tokenizer = (
                 self._processor.tokenizer
                 if hasattr(self._processor, "tokenizer")
                 else self._processor
             )
-            try:
-                from outlines import TransformerTokenizer
-                tokenizer = TransformerTokenizer(raw_tokenizer)
-            except (ImportError, AttributeError):
-                # Older outlines or different API — pass raw tokenizer
-                tokenizer = raw_tokenizer
-
-            processor = _Processor(
+            wrapped_model = Transformers(self._model, raw_tokenizer)
+            processor = get_regex_logits_processor(
+                None,  # use default backend
+                wrapped_model,
                 self._ACTION_REGEX,
-                tokenizer=tokenizer,
             )
             self._constrained_processor_cache = [processor]
             logger.info(
                 "Outlines constrained decoding enabled "
-                "(action format regex compiled successfully, "
-                "processor=%s)", type(processor).__name__,
+                "(regex compiled via %s, processor=%s)",
+                type(wrapped_model).__name__,
+                type(processor).__name__,
             )
             return self._constrained_processor_cache
         except ImportError:
             logger.error(
                 "constrained_decoding=True but 'outlines' is not installed. "
-                "Install with: pip install outlines>=0.1.0"
+                "Install with: uv sync --extra training"
             )
             self._constrained_processor_cache = False
             return None
@@ -170,7 +163,7 @@ class GRPOTrainer:
             logger.error(
                 "Outlines logits processor creation failed: %s. "
                 "Falling back to unconstrained generation. "
-                "Try: pip install -U outlines",
+                "Try: uv pip install -U outlines",
                 exc,
             )
             self._constrained_processor_cache = False
