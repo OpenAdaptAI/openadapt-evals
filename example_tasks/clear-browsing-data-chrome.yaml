@@ -4,11 +4,18 @@ name: "Clear browsing data in Google Chrome"
 id: custom-clear-chrome-data
 
 setup:
+  # Disable "Make Chrome faster" popup via Chrome policy registry key
+  - execute: "powershell -c \"New-Item -Path 'HKLM:\\SOFTWARE\\Policies\\Google\\Chrome' -Force; Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Policies\\Google\\Chrome' -Name 'SpeedComparisonEnabled' -Value 0 -Type DWord\""
+  - sleep: 1
   # Populate Chrome with browsing history so there's data to clear
-  - execute: "powershell -c \"Start-Process chrome 'https://example.com' -WindowStyle Normal\""
+  # Launch with flags to suppress popups (no-first-run, disable SpeedComparison, etc.)
+  - execute: "powershell -c \"Start-Process chrome @('https://example.com', '--no-first-run', '--disable-popup-blocking', '--disable-default-apps', '--disable-features=SpeedComparison')\""
   - sleep: 3
   - execute: "powershell -c \"Start-Process chrome 'https://wikipedia.org'\""
   - sleep: 2
+  # Dismiss any remaining Chrome popups by pressing Escape
+  - execute: "powershell -c \"Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('{ESCAPE}')\""
+  - sleep: 1
   # Close Chrome so the agent starts fresh
   - execute: "powershell -c 'Stop-Process -Name chrome -Force -ErrorAction SilentlyContinue'"
   - sleep: 2

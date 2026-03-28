@@ -202,14 +202,19 @@ class DemoGuidance:
             return ""
 
         lines = [
-            "DEMONSTRATION GUIDANCE:",
+            "DEMONSTRATION GUIDANCE (current step hint):",
             f"  Expected action: {self.action_type}",
         ]
         if self.target_description:
             lines.append(f"  Target: {self.target_description}")
         if self.action_value:
             lines.append(f"  Value: {self.action_value}")
-        lines.append(f"  Instruction: {self.instruction}")
+        # Use description (natural language) rather than
+        # coordinate-based instruction when available.
+        instruction = self.instruction
+        if self.metadata.get("description"):
+            instruction = self.metadata["description"]
+        lines.append(f"  Instruction: {instruction}")
         lines.append(
             "  NOTE: Adapt if the current UI state differs from the demo. "
             "This is guidance, not a rigid script. "
@@ -1533,6 +1538,11 @@ class DemoLibrary:
         if alignment_trace is not None:
             guidance_metadata["alignment_trace"] = asdict(alignment_trace)
 
+        # Pass the step's natural-language description so to_prompt_text()
+        # can prefer it over coordinate-based instruction text.
+        if step.description:
+            guidance_metadata["description"] = step.description
+
         return DemoGuidance(
             available=True,
             step_index=step.step_index,
@@ -1548,6 +1558,46 @@ class DemoLibrary:
             visual_alignment_used=visual_alignment_used,
             visual_distance=visual_distance,
         )
+
+    def get_plan_overview(self, task_id: str) -> str:
+        """Return a high-level strategy overview of the full demo.
+
+        Instead of one step at a time, this gives the planner ALL demo
+        steps as a numbered plan.  The planner can then use this as a
+        strategy reference while making its own decisions based on the
+        actual screenshot.
+
+        Coordinates are intentionally omitted -- the planner should
+        decide WHERE to click based on what it sees, not on hardcoded
+        positions from a demo recorded on a different screen.
+
+        Returns:
+            Multi-line string suitable for injection into the planner
+            prompt, or empty string if no demo exists.
+        """
+        demo = self.get_demo(task_id)
+        if demo is None or not demo.steps:
+            return ""
+
+        lines = [
+            "DEMONSTRATION STRATEGY (from a successful prior execution):",
+            f"This task was previously completed in {len(demo.steps)} steps:",
+        ]
+        for step in demo.steps:
+            # Prefer description (natural language) over action_description
+            label = step.description or step.action_description
+            action_hint = ""
+            if step.action_type == "key" and step.action_value:
+                action_hint = f" [{step.action_value}]"
+            lines.append(f"  {step.step_index + 1}. {label}{action_hint}")
+
+        lines.append("")
+        lines.append(
+            "Use this as a STRATEGY GUIDE. Adapt to the current screen state -- "
+            "skip steps that are already done, and decide click targets based on "
+            "what you actually see, not memorized coordinates."
+        )
+        return "\n".join(lines)
 
     def enrich_demo(
         self,
@@ -1707,13 +1757,17 @@ def _build_enriched_instruction(
 ) -> str:
     """Build a human-readable instruction from a DemoStep.
 
-    When the step has a VLM-generated ``description``, the instruction
-    reads like *"Click on three-dot menu button in Chrome toolbar at
-    approximately (0.960, 0.066)"* instead of the raw
-    ``CLICK(0.960, 0.066)`` notation.
+    When the step has a natural-language ``description``, returns it
+    directly — the description already contains the action verb and
+    target (e.g., *"Double-click Google Chrome icon"*).
 
-    For non-click actions or steps without descriptions, falls back to
-    the original ``action_description``.
+    Coordinates from manual demos (hardcoded placeholders) are omitted
+    because they don't correspond to real screen positions.  For VLM-
+    enriched demos with real screenshots, coordinates are included as
+    approximate hints.
+
+    For steps without descriptions, falls back to the original
+    ``action_description``.
 
     Args:
         step: The demo step to build an instruction for.
@@ -1723,14 +1777,18 @@ def _build_enriched_instruction(
     Returns:
         Human-readable instruction string.
     """
-    if step.description and step.action_type == "click":
-        # Rich instruction with element description
-        if normalized_x is not None and normalized_y is not None:
-            return (
-                f"Click on {step.description} at approximately "
-                f"({normalized_x:.3f}, {normalized_y:.3f})"
-            )
-        return f"Click on {step.description}"
+    if step.description:
+        # If the description already reads as a complete sentence/
+        # instruction (starts with a verb), use it directly.
+        # Only append coordinates when we have real screenshots
+        # (manual demos have empty screenshot_path and fake coords).
+        if step.action_type == "click" and step.screenshot_path:
+            if normalized_x is not None and normalized_y is not None:
+                return (
+                    f"{step.description} (approximately at "
+                    f"({normalized_x:.3f}, {normalized_y:.3f}))"
+                )
+        return step.description
 
     # Fallback: original action description
     return step.action_description

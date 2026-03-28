@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import io
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -105,10 +106,25 @@ class GRPOTrainer:
             decoded = self._processor.decode(
                 outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
             gen_len = outputs[0].shape[0] - inputs["input_ids"].shape[1]
-            if gen_len >= self._config.max_new_tokens - 1:
-                logger.warning("Hit max_new_tokens=%d -- output may be truncated.", self._config.max_new_tokens)
-
             action = parse_vlm_output_to_action(decoded, screen_size=self._config.screen_size)
+
+            if gen_len >= self._config.max_new_tokens - 1:
+                # Output hit the token ceiling. If we also failed to parse a
+                # meaningful action, the truncation is the likely cause.
+                if action.type == "done" and not re.search(r"\bDONE\s*\(\s*\)", decoded, re.IGNORECASE):
+                    logger.warning(
+                        "Output truncated at max_new_tokens=%d without "
+                        "parseable action. Consider increasing max_new_tokens "
+                        "(current GPU VRAM may limit this — see config.py "
+                        "for recommendations).",
+                        self._config.max_new_tokens,
+                    )
+                else:
+                    logger.warning(
+                        "Hit max_new_tokens=%d — output may be truncated "
+                        "(action parsed OK this time).",
+                        self._config.max_new_tokens,
+                    )
             rollout.steps.append(RolloutStep(screenshot=screenshot, action=action, raw_text=decoded))
             if action.type == "done":
                 break
@@ -186,14 +202,63 @@ class GRPOTrainer:
                 continue
 
             full_ids = torch.cat([prompt_inputs["input_ids"], action_ids.to(prompt_inputs["input_ids"].device)], dim=1)
-            # Exclude vision tensors from loss forward pass to avoid OOM.
-            # The vision encoder backward pass is expensive and unnecessary
-            # since we only compute loss on action tokens (past prompt_len).
-            # Proven fix from 7 training runs on L40S GPUs.
+
+            # --- Vision tensor handling during loss computation ---
+            # Current default ("exclude"): strips vision tensors so the
+            # forward pass only sees text embeddings.  This avoids OOM on
+            # L40S-class GPUs (48 GB) because the vision encoder backward
+            # pass is very expensive and unnecessary — we only compute loss
+            # on *action* tokens (past prompt_len).
+            #
+            # Proper fixes (future work):
+            #   1. "include"  – keep vision tensors and let the full
+            #      multimodal forward pass run.  May OOM on < 80 GB VRAM
+            #      without further optimisation.
+            #   2. "checkpoint" – use torch.utils.checkpoint on the vision
+            #      encoder so activations are recomputed during backward
+            #      instead of stored, dramatically cutting peak VRAM.
+            #   3. Cached KV – pre-compute and cache the vision encoder's
+            #      key/value projections per screenshot so we never
+            #      backpropagate through the encoder at all.  Requires
+            #      architecture-specific hooks (e.g. Qwen2-VL cross-attn).
             _VISION_KEYS = {"pixel_values", "pixel_values_videos",
                             "image_grid_thw", "video_grid_thw"}
-            full_inputs = {k: v for k, v in prompt_inputs.items()
-                           if k not in _VISION_KEYS}
+
+            vision_loss_mode = getattr(self._config, "vision_loss_mode", "exclude")
+
+            if vision_loss_mode == "exclude":
+                excluded = _VISION_KEYS & set(prompt_inputs.keys())
+                if excluded and not getattr(self, "_vision_exclude_warned", False):
+                    logger.warning(
+                        "vision_loss_mode='exclude': stripping vision tensors %s "
+                        "from loss forward pass. Log-probs are TEXT-ONLY and do "
+                        "not reflect visual grounding gradients. Set "
+                        "vision_loss_mode='include' or 'checkpoint' once your "
+                        "GPU VRAM allows it.",
+                        sorted(excluded),
+                    )
+                    self._vision_exclude_warned = True
+                full_inputs = {k: v for k, v in prompt_inputs.items()
+                               if k not in _VISION_KEYS}
+            elif vision_loss_mode == "include":
+                if not getattr(self, "_vision_include_warned", False):
+                    logger.info("vision_loss_mode='include': keeping all vision tensors (may OOM).")
+                    self._vision_include_warned = True
+                full_inputs = dict(prompt_inputs)
+            elif vision_loss_mode == "checkpoint":
+                if not getattr(self, "_vision_checkpoint_warned", False):
+                    logger.info("vision_loss_mode='checkpoint': enabling gradient checkpointing on vision encoder.")
+                    self._vision_checkpoint_warned = True
+                    if hasattr(self._model, "visual") and hasattr(self._model.visual, "gradient_checkpointing_enable"):
+                        self._model.visual.gradient_checkpointing_enable()
+                    elif hasattr(self._model, "vision_tower"):
+                        self._model.vision_tower.gradient_checkpointing_enable()
+                    else:
+                        logger.warning("Cannot find vision encoder for gradient checkpointing; falling back to 'include'.")
+                full_inputs = dict(prompt_inputs)
+            else:
+                raise ValueError(f"Unknown vision_loss_mode={vision_loss_mode!r}. Use 'exclude', 'include', or 'checkpoint'.")
+
             full_inputs["input_ids"] = full_ids
             full_inputs["attention_mask"] = torch.ones_like(full_ids)
             full_inputs = {k: v.to(device) for k, v in full_inputs.items()}
