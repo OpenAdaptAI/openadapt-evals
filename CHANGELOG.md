@@ -1,6 +1,25 @@
 # CHANGELOG
 
 
+## v0.72.9 (2026-03-28)
+
+### Bug Fixes
+
+- Override planner DONE hallucination on step 0
+  ([#207](https://github.com/OpenAdaptAI/openadapt-evals/pull/207),
+  [`cfb8285`](https://github.com/OpenAdaptAI/openadapt-evals/commit/cfb8285934a412565f5dda32a5ad7ca2983420f5))
+
+gpt-4.1-mini sees demo guidance describing completed steps and concludes the task is already done
+  without taking any action. On notepad-hello, it claimed "Notepad is already open with Hello World
+  typed" when the screen showed a clean desktop.
+
+Fix: if DONE on step 0 with a demo library, force the first demo
+
+action (e.g., Win+R for notepad, Ctrl+Shift+Delete for Chrome).
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.72.8 (2026-03-28)
 
 ### Bug Fixes
