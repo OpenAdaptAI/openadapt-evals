@@ -1,6 +1,30 @@
 # CHANGELOG
 
 
+## v0.72.1 (2026-03-28)
+
+### Bug Fixes
+
+- Constrained decoding cache bug, task rotation, add trainer tests
+  ([#199](https://github.com/OpenAdaptAI/openadapt-evals/pull/199),
+  [`4ec7d51`](https://github.com/OpenAdaptAI/openadapt-evals/commit/4ec7d5174e1c8420d436af5cc6810b211a85de61))
+
+Constrained decoding: - Remove (.|\n)* prefix from action regex — Outlines can't compile it into a
+  DFA efficiently. Model must output action directly. - Fix cache sentinel: use False for failure
+  (not []) so subsequent calls correctly return None instead of empty logits_processor list. Prior
+  bug: [] cached as "success" → model generated unconstrained. - Upgrade warning to error level for
+  visibility.
+
+Task rotation: - Fix _load_task_configs: check `not task_ids` once BEFORE the loop (was checking
+  inside loop — only first task ever appended).
+
+Tests (21 new): - TestActionRegex: 8 valid actions match, 6 invalid texts rejected -
+  TestConstrainedDecodingCache: sentinel logic, regression for [] bug - TestTaskRotation: all tasks
+  loaded, explicit ids preserved, rotation
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.72.0 (2026-03-28)
 
 ### Features
