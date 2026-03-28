@@ -90,16 +90,18 @@ class GRPOTrainer:
 
     # --- Constrained decoding -------------------------------------------
 
-    # Regex that matches ALL valid action formats.  Allows a free-form
-    # "Thought: ..." prefix (the model's chain-of-thought) followed by
-    # exactly one action.  Outlines converts this to a token-level DFA.
+    # Regex matching valid action formats.  No free-text prefix — the
+    # model MUST output an action as its very first token.  This is
+    # intentional: constrained decoding forces structured output.
+    # If the model needs chain-of-thought, disable constrained_decoding
+    # and rely on prompt instructions instead.
     _ACTION_REGEX = (
-        r"(.|\n)*"  # allow any Thought prefix
-        r"(CLICK\(x=0\.\d{1,3},\s*y=0\.\d{1,3}\)"
+        r"CLICK\(x=0\.\d{1,3},\s*y=0\.\d{1,3}\)"
         r'|TYPE\(text="[^"]{0,200}"\)'
         r"|WAIT\(\)"
-        r"|DONE\(\))"
+        r"|DONE\(\)"
     )
+    # Sentinel: None = not yet attempted, list = success, False = failed
     _constrained_processor_cache: Any = None
 
     def _get_constrained_logits_processor(self) -> list | None:
@@ -107,42 +109,51 @@ class GRPOTrainer:
 
         Returns a ``[LogitsProcessor]`` list suitable for passing to
         ``model.generate(logits_processor=...)``, or ``None`` if Outlines
-        is not installed.
+        is not installed or compilation fails.
 
         The processor is cached after first creation (the DFA compilation
         is expensive — ~2 seconds — but only happens once).
         """
-        if self._constrained_processor_cache is not None:
+        # Already attempted and failed
+        if self._constrained_processor_cache is False:
+            return None
+        # Already compiled successfully
+        if isinstance(self._constrained_processor_cache, list):
             return self._constrained_processor_cache
 
         try:
             from outlines.processors import RegexLogitsProcessor
+            tokenizer = (
+                self._processor.tokenizer
+                if hasattr(self._processor, "tokenizer")
+                else self._processor
+            )
             processor = RegexLogitsProcessor(
                 self._ACTION_REGEX,
-                tokenizer=self._processor.tokenizer
-                if hasattr(self._processor, "tokenizer")
-                else self._processor,
+                tokenizer=tokenizer,
             )
             self._constrained_processor_cache = [processor]
             logger.info(
                 "Outlines constrained decoding enabled "
-                "(action format regex compiled)"
+                "(action format regex compiled successfully)"
             )
             return self._constrained_processor_cache
         except ImportError:
-            logger.warning(
+            logger.error(
                 "constrained_decoding=True but 'outlines' is not installed. "
                 "Install with: pip install outlines>=0.1.0"
             )
-            self._constrained_processor_cache = []  # don't retry
+            self._constrained_processor_cache = False
             return None
         except Exception as exc:
-            logger.warning(
+            logger.error(
                 "Outlines RegexLogitsProcessor creation failed: %s. "
-                "Falling back to unconstrained generation.",
+                "Falling back to unconstrained generation. "
+                "This may be a tokenizer compatibility issue — try "
+                "updating outlines: pip install -U outlines",
                 exc,
             )
-            self._constrained_processor_cache = []
+            self._constrained_processor_cache = False
             return None
 
     # --- Task loading -----------------------------------------------------
@@ -156,9 +167,10 @@ class GRPOTrainer:
         if not task_dir.exists():
             logger.warning("Task dir not found: %s", task_dir)
             return
+        auto_populate = not self._config.task_ids
         for tc in TaskConfig.from_dir(str(task_dir)):
             self._task_configs[tc.id] = tc
-            if not self._config.task_ids:
+            if auto_populate:
                 self._config.task_ids.append(tc.id)
         logger.info("Loaded %d task configs from %s", len(self._task_configs), task_dir)
 
