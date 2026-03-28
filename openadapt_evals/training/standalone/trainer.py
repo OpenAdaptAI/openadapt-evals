@@ -110,68 +110,55 @@ class GRPOTrainer:
     _ACTION_REGEX = (
         r"Thought: [^\n]+\nAction: (" + _ACTION_RE + r")"
     )
-    # Sentinel: None = not yet attempted, list = success, False = failed
-    _constrained_processor_cache: Any = None
+    # Cached outlines Generator (created once, reused for all generate calls)
+    # None = not yet attempted, False = failed, Generator = success
+    _outlines_generator: Any = None
 
-    def _get_constrained_logits_processor(self) -> list | None:
-        """Build an Outlines RegexLogitsProcessor for the action format.
+    def _get_outlines_generator(self) -> Any | None:
+        """Build an Outlines Generator for constrained generation.
 
-        Returns a ``[LogitsProcessor]`` list suitable for passing to
-        ``model.generate(logits_processor=...)``, or ``None`` if Outlines
-        is not installed or compilation fails.
+        Outlines v1.2 uses its own Generator API — NOT model.generate()
+        with a logits_processor kwarg.  The Generator wraps the model and
+        handles tokenization, generation, and decoding internally.
 
-        The processor is cached after first creation (the DFA compilation
-        is expensive — ~2 seconds — but only happens once).
+        Returns the Generator, or None if creation fails.
         """
-        # Already attempted and failed
-        if self._constrained_processor_cache is False:
+        if self._outlines_generator is False:
             return None
-        # Already compiled successfully
-        if isinstance(self._constrained_processor_cache, list):
-            return self._constrained_processor_cache
+        if self._outlines_generator is not None:
+            return self._outlines_generator
 
         try:
-            # Outlines v1.2+ API:
-            # 1. Wrap HF model+tokenizer in outlines.Transformers
-            # 2. Call get_regex_logits_processor(None, wrapped, regex)
-            # The processor is then passed to model.generate(logits_processor=[p])
-            from outlines import Transformers
-            from outlines.generator import get_regex_logits_processor
+            import outlines
 
-            raw_tokenizer = (
-                self._processor.tokenizer
-                if hasattr(self._processor, "tokenizer")
-                else self._processor
+            wrapped_model = outlines.from_transformers(
+                self._model, self._processor,
             )
-            wrapped_model = Transformers(self._model, raw_tokenizer)
-            processor = get_regex_logits_processor(
-                None,  # use default backend
-                wrapped_model,
-                self._ACTION_REGEX,
-            )
-            self._constrained_processor_cache = [processor]
+            constraint = outlines.regex(self._ACTION_REGEX)
+            generator = outlines.Generator(wrapped_model, constraint)
+
+            self._outlines_generator = generator
             logger.info(
                 "Outlines constrained decoding enabled "
-                "(regex compiled via %s, processor=%s)",
+                "(model=%s, regex compiled successfully)",
                 type(wrapped_model).__name__,
-                type(processor).__name__,
             )
-            return self._constrained_processor_cache
+            return generator
         except ImportError:
             logger.error(
                 "constrained_decoding=True but 'outlines' is not installed. "
                 "Install with: uv sync --extra training"
             )
-            self._constrained_processor_cache = False
+            self._outlines_generator = False
             return None
         except Exception as exc:
             logger.error(
-                "Outlines logits processor creation failed: %s. "
+                "Outlines Generator creation failed: %s. "
                 "Falling back to unconstrained generation. "
                 "Try: uv pip install -U outlines",
                 exc,
             )
-            self._constrained_processor_cache = False
+            self._outlines_generator = False
             return None
 
     # --- Task loading -----------------------------------------------------
@@ -221,23 +208,43 @@ class GRPOTrainer:
             else:
                 text_input = messages[-1]["content"]
 
-            inputs = self._processor(text=[text_input], images=[image], return_tensors="pt")
-            inputs = {k: v.to(self._model.device) for k, v in inputs.items()}
-            with torch.no_grad():
-                generate_kwargs: dict[str, Any] = dict(
+            # --- Generation: constrained (Outlines) or unconstrained (HF) ---
+            outlines_gen = (
+                self._get_outlines_generator()
+                if self._config.constrained_decoding
+                else None
+            )
+            if outlines_gen is not None:
+                # Outlines v1.2 Generator API: handles tokenization,
+                # generation, and decoding internally.  For multimodal
+                # models, pass a dict with "text" + image keys.
+                model_input = {"text": text_input, "images": [image]}
+                decoded = outlines_gen(
+                    model_input,
                     max_new_tokens=self._config.max_new_tokens,
                     temperature=self._config.temperature,
-                    do_sample=True,
                 )
-                # Constrained decoding: force output to match the
-                # action format regex, eliminating unparseable output.
-                if self._config.constrained_decoding:
-                    logits_proc = self._get_constrained_logits_processor()
-                    if logits_proc is not None:
-                        generate_kwargs["logits_processor"] = logits_proc
-                outputs = self._model.generate(**inputs, **generate_kwargs)
-            decoded = self._processor.decode(
-                outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
+                gen_len = len(self._processor.tokenizer.encode(
+                    decoded, add_special_tokens=False,
+                )) if decoded else 0
+            else:
+                # Standard HF generate (no constrained decoding)
+                inputs = self._processor(
+                    text=[text_input], images=[image], return_tensors="pt",
+                )
+                inputs = {k: v.to(self._model.device) for k, v in inputs.items()}
+                with torch.no_grad():
+                    outputs = self._model.generate(
+                        **inputs,
+                        max_new_tokens=self._config.max_new_tokens,
+                        temperature=self._config.temperature,
+                        do_sample=True,
+                    )
+                decoded = self._processor.decode(
+                    outputs[0][inputs["input_ids"].shape[1]:],
+                    skip_special_tokens=True,
+                )
+                gen_len = outputs[0].shape[0] - inputs["input_ids"].shape[1]
             gen_len = outputs[0].shape[0] - inputs["input_ids"].shape[1]
             action = parse_vlm_output_to_action(decoded, screen_size=self._config.screen_size)
 
