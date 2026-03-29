@@ -1,6 +1,48 @@
 # CHANGELOG
 
 
+## v0.82.0 (2026-03-29)
+
+### Features
+
+- Vlmmodelwrapper — multimodal compatibility layer for TRL
+  ([#251](https://github.com/OpenAdaptAI/openadapt-evals/pull/251),
+  [`fa26d55`](https://github.com/OpenAdaptAI/openadapt-evals/commit/fa26d553d05e6bcae1f41191d52375331888095e))
+
+* feat: VLMModelWrapper — multimodal compatibility layer for TRL
+
+TRL's GRPOTrainer calls model.forward(input_ids=...) during training without pixel_values. VLMs need
+  pixel_values to produce meaningful logits. Without them, the model is blind and generates garbage.
+
+VLMModelWrapper caches vision tensors during rollout generation (when we have the images) and
+  injects them during TRL's forward pass. This is the standard adapter pattern — 120 lines, no TRL
+  internals modified.
+
+- vlm_wrapper.py: VLMModelWrapper with cache_vision_inputs + forward - trl_wrapper.py: wraps model
+  before passing to GRPOTrainer - trl_rollout.py: calls cache_vision_inputs before model.generate -
+  9 tests covering injection, delegation, cache behavior, warnings
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* test: add e2e tests for VLM+TRL pipeline and wrapper integration
+
+5 e2e tests (@pytest.mark.heavy, CPU-only, skipped in CI): - test_generation_sees_pixel_values:
+  model not blind during rollout - test_trl_forward_gets_cached_pixel_values: wrapper injects into
+  TRL - test_output_format_not_garbage: prompt has DSL format guidance -
+  test_no_thinking_tokens_in_template: no <think> in chat template - test_vision_changes_logits:
+  pixel_values actually affect logits
+
+2 integration tests (light, runs in CI): - test_wrapper_used_in_train_source: VLMModelWrapper in
+  trl_wrapper - test_generate_fn_calls_cache_vision_inputs: cache call in rollout
+
+Each test maps to a bug class from the March 29 session. Together they prevent the entire class of
+  multimodal TRL failures before they reach the customer.
+
+---------
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.81.9 (2026-03-29)
 
 ### Bug Fixes
