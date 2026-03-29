@@ -1,6 +1,66 @@
 # CHANGELOG
 
 
+## v0.81.4 (2026-03-29)
+
+### Bug Fixes
+
+- Add truncation warning to TRL generate paths
+  ([#242](https://github.com/OpenAdaptAI/openadapt-evals/pull/242),
+  [`e71ed9f`](https://github.com/OpenAdaptAI/openadapt-evals/commit/e71ed9fe17168524963b564aa050bb4d4d4d305e))
+
+Add a truncation check after both generation paths (Outlines constrained and HF unconstrained) in
+  generate_fn. When the output length reaches max_new_tokens - 1, a warning is logged suggesting to
+  increase max_new_tokens or enable constrained_decoding. This helps diagnose cases where the model
+  generates excessively long reasoning that gets cut off before producing a parseable action.
+
+Also replaced the tautological truncation tests in test_trl_robustness.py (which reimplemented the
+  check logic inline) with tests that exercise the actual generate_fn code path by calling it
+  through the rollout function with mocked torch and model.generate.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Use training-appropriate evaluate timeouts instead of reordering eval
+  ([#246](https://github.com/OpenAdaptAI/openadapt-evals/pull/246),
+  [`114ad0e`](https://github.com/OpenAdaptAI/openadapt-evals/commit/114ad0e8bdc33c35a966ba820ad958fba4269550))
+
+Reverts the evaluate_dense reordering from #245 (local-first was too aggressive — skipped binary
+  eval entirely, losing the signal when 5050 IS available).
+
+The actual fix: set evaluate_timeout=15s and evaluate_retries=1 on the WAALiveAdapter in the TRL
+  wrapper. The evaluate_dense logic stays correct (try binary first, local fallback, take max).
+  Training speed comes from fast failure, not from skipping evaluation paths.
+
+- Benchmarking: 180s timeout, 3 retries (thorough, one-shot) - Training: 15s timeout, 1 retry (fast
+  feedback, thousands of evals)
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Testing
+
+- Add 10 TRL parity tests for deprecation readiness
+  ([#241](https://github.com/OpenAdaptAI/openadapt-evals/pull/241),
+  [`6a38956`](https://github.com/OpenAdaptAI/openadapt-evals/commit/6a38956f3da2776701b0b92b94134609e83f4d4d))
+
+Adds tests/test_trl_parity.py with 25 test cases covering the 10 areas identified in
+  docs/STANDALONE_VS_TRL_COMPARISON.md as needed before the standalone GRPO trainer can be
+  deprecated:
+
+1. Constrained decoding — Outlines generator build + ACTION_REGEX 2. Constrained decoding
+  ImportError — returns None, not silent success 3. Prompt format identity — TRL imports
+  SYSTEM_PROMPT from standalone 4. DSL round-trip parsing — CLICK, TYPE, WAIT, DONE via
+  parse_action_json 5. Thought-prefix parsing — "Thought: ...\nAction: DSL" format 6. Unsloth
+  loading — FastVisionModel.from_pretrained + get_peft_model 7. LoRA checkpoint resume —
+  lora_checkpoint passed through config 8. HookBridge on_step_complete — callback fires with correct
+  args 9. HookBridge unused hooks — on_before_collect/on_rollout_complete stored 10. _AgentOutput
+  schema — Pydantic validation, JSON schema, roundtrip
+
+All tests are light (no torch/transformers/trl imports), use unittest.mock, and pass with [dev] deps
+  only.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.81.3 (2026-03-29)
 
 ### Bug Fixes
