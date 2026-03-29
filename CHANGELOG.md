@@ -1,6 +1,31 @@
 # CHANGELOG
 
 
+## v0.82.1 (2026-03-29)
+
+### Bug Fixes
+
+- Vlmmodelwrapper PEFT isinstance compatibility for TRL validation
+  ([#252](https://github.com/OpenAdaptAI/openadapt-evals/pull/252),
+  [`7879dee`](https://github.com/OpenAdaptAI/openadapt-evals/commit/7879deef1bc1a50ae3292b3f9861a6a9c5910ac6))
+
+TRL's validate_quantization_for_training() uses isinstance(model, PeftModel) to check for adapters.
+  The wrapper hid the PeftModel, causing: "You cannot perform fine-tuning on purely quantized
+  models."
+
+Fix: dynamically create a combined class inheriting from both
+
+VLMModelWrapper and the wrapped model's type. This makes isinstance() pass while keeping our
+  forward/generate/cache methods via MRO.
+
+Tests added: - test_peft_attributes_delegated: peft_config accessible through wrapper -
+  test_hasattr_peft_config: hasattr() works for TRL's checks - test_isinstance_peft_model:
+  isinstance(wrapper, PeftModel) == True - test_wrapper_passes_peft_validation (e2e): full TRL
+  validation sim - test_wrapper_preserves_trainable_parameters (e2e): optimizer setup
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.82.0 (2026-03-29)
 
 ### Features
