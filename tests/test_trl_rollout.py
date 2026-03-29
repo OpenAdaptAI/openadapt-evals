@@ -281,3 +281,157 @@ class TestMakeWaaRolloutFunc:
             func(["Open Notepad", "Create folder"], trainer)
 
         assert captured_task_ids == ["notepad-1", "folder-1"]
+
+
+# ---------------------------------------------------------------------------
+# Rollout callback tests
+# ---------------------------------------------------------------------------
+
+
+class TestRolloutCallbacks:
+    """Verify on_before_collect and on_rollout_complete fire from rollout_func."""
+
+    def test_on_before_collect_fires(self):
+        """on_before_collect is called with (task_id, env) before each episode."""
+        adapter = _make_mock_adapter(steps_to_done=1)
+        tc = _make_task_config()
+
+        before_calls = []
+
+        def on_before(task_id, env):
+            before_calls.append({"task_id": task_id, "env_type": type(env).__name__})
+
+        func = make_waa_rollout_func(
+            adapter=adapter,
+            task_configs=[tc],
+            max_steps=3,
+            on_before_collect=on_before,
+        )
+
+        trainer = _make_mock_trainer()
+        trainer.args.num_generations = 2
+
+        from openadapt_evals.training import trl_rollout
+
+        def mock_run(env, gfn, instr, tid, ms):
+            from openadapt_evals.adapters.rl_env import ResetConfig
+            env.reset(config=ResetConfig(task_id=tid))
+            env.step(BenchmarkAction(type="done"))
+            return [1], [2], [-0.1], 0.5
+
+        with patch.object(trl_rollout, "_run_episode", side_effect=mock_run):
+            func(["Test task"], trainer)
+
+        # 1 prompt x 2 generations = 2 calls
+        assert len(before_calls) == 2
+        assert before_calls[0]["task_id"] == "test-task"
+        assert before_calls[0]["env_type"] == "RLEnvironment"
+
+    def test_on_rollout_complete_fires(self):
+        """on_rollout_complete receives reward and gen_idx after each episode."""
+        adapter = _make_mock_adapter(steps_to_done=1)
+        tc = _make_task_config()
+
+        complete_calls = []
+
+        def on_complete(rollout, index):
+            complete_calls.append({"rollout": rollout, "index": index})
+
+        func = make_waa_rollout_func(
+            adapter=adapter,
+            task_configs=[tc],
+            max_steps=3,
+            on_rollout_complete=on_complete,
+        )
+
+        trainer = _make_mock_trainer()
+        trainer.args.num_generations = 2
+
+        from openadapt_evals.training import trl_rollout
+
+        def mock_run(env, gfn, instr, tid, ms):
+            from openadapt_evals.adapters.rl_env import ResetConfig
+            env.reset(config=ResetConfig(task_id=tid))
+            env.step(BenchmarkAction(type="done"))
+            return [1], [2], [-0.1], 0.75
+
+        with patch.object(trl_rollout, "_run_episode", side_effect=mock_run):
+            func(["Test task"], trainer)
+
+        assert len(complete_calls) == 2
+
+        r0 = complete_calls[0]["rollout"]
+        assert r0["prompt"] == "Test task"
+        assert r0["task_id"] == "test-task"
+        assert r0["reward"] == 0.75
+        assert r0["gen_idx"] == 0
+        assert complete_calls[0]["index"] == 0
+
+        assert complete_calls[1]["rollout"]["gen_idx"] == 1
+        assert complete_calls[1]["index"] == 1
+
+    def test_callbacks_optional(self):
+        """Rollout works fine when callbacks are None (default)."""
+        adapter = _make_mock_adapter(steps_to_done=1)
+        tc = _make_task_config()
+
+        func = make_waa_rollout_func(
+            adapter=adapter,
+            task_configs=[tc],
+            max_steps=3,
+            on_before_collect=None,
+            on_rollout_complete=None,
+        )
+
+        trainer = _make_mock_trainer()
+        trainer.args.num_generations = 1
+
+        from openadapt_evals.training import trl_rollout
+
+        def mock_run(env, gfn, instr, tid, ms):
+            from openadapt_evals.adapters.rl_env import ResetConfig
+            env.reset(config=ResetConfig(task_id=tid))
+            env.step(BenchmarkAction(type="done"))
+            return [1], [2], [-0.1], 0.5
+
+        with patch.object(trl_rollout, "_run_episode", side_effect=mock_run):
+            result = func(["Test task"], trainer)
+
+        assert len(result["env_reward"]) == 1
+        assert result["env_reward"][0] == 0.5
+
+    def test_broken_callback_does_not_crash_training(self):
+        """A callback that raises should be caught and logged, not crash."""
+        adapter = _make_mock_adapter(steps_to_done=1)
+        tc = _make_task_config()
+
+        def exploding_before(task_id, env):
+            raise ValueError("Boom in before_collect!")
+
+        def exploding_complete(rollout, index):
+            raise RuntimeError("Boom in rollout_complete!")
+
+        func = make_waa_rollout_func(
+            adapter=adapter,
+            task_configs=[tc],
+            max_steps=3,
+            on_before_collect=exploding_before,
+            on_rollout_complete=exploding_complete,
+        )
+
+        trainer = _make_mock_trainer()
+        trainer.args.num_generations = 1
+
+        from openadapt_evals.training import trl_rollout
+
+        def mock_run(env, gfn, instr, tid, ms):
+            from openadapt_evals.adapters.rl_env import ResetConfig
+            env.reset(config=ResetConfig(task_id=tid))
+            env.step(BenchmarkAction(type="done"))
+            return [1], [2], [-0.1], 0.5
+
+        with patch.object(trl_rollout, "_run_episode", side_effect=mock_run):
+            result = func(["Test task"], trainer)
+
+        assert len(result["env_reward"]) == 1
+        assert result["env_reward"][0] == 0.5

@@ -166,6 +166,8 @@ class GRPOTrainer:
             constrained_decoding=getattr(self._config, "constrained_decoding", False),
             max_new_tokens=self._config.max_new_tokens,
             temperature=self._config.temperature,
+            on_before_collect=self._on_before_collect,
+            on_rollout_complete=self._on_rollout_complete,
         )
 
         # --- Reward ---
@@ -185,25 +187,25 @@ class GRPOTrainer:
         except ImportError:
             pass
 
-        if any([self._on_before_collect, self._on_rollout_complete,
-                self._on_step_complete]):
+        # on_before_collect and on_rollout_complete are passed directly to
+        # make_waa_rollout_func (above) because TRL has no pre-rollout
+        # callback. Only on_step_complete maps to TRL's on_step_end.
+        if self._on_step_complete:
             try:
                 from transformers import TrainerCallback
 
                 class HookBridge(TrainerCallback):
-                    def __init__(self, hooks):
-                        self._hooks = hooks
+                    def __init__(self, on_step_complete):
+                        self._on_step_complete = on_step_complete
 
                     def on_step_end(self, args, state, control, **kwargs):
-                        fn = self._hooks.get("on_step_complete")
-                        if fn:
-                            fn(state.global_step, [], kwargs.get("metrics", {}))
+                        if self._on_step_complete:
+                            self._on_step_complete(
+                                state.global_step, [],
+                                kwargs.get("metrics", {}),
+                            )
 
-                callbacks.append(HookBridge({
-                    "on_before_collect": self._on_before_collect,
-                    "on_rollout_complete": self._on_rollout_complete,
-                    "on_step_complete": self._on_step_complete,
-                }))
+                callbacks.append(HookBridge(self._on_step_complete))
             except ImportError:
                 pass
 
