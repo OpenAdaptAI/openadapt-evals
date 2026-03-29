@@ -1,0 +1,250 @@
+{
+  "schema_version": "0.1",
+  "task_id": "04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS",
+  "instruction": "In a new sheet with 4 headers \"Year\", \"CA changes\", \"FA changes\", and \"OA changes\", calculate the annual changes for the Current Assets, Fixed Assets, and Other Assets columns. Set the results as percentage type.",
+  "source": "recorded",
+  "annotator": {
+    "provider": "openai",
+    "model": "gpt-4.1-mini"
+  },
+  "recording_meta": {
+    "platform": "windows",
+    "screen_px": null,
+    "source": "waa_api_recording",
+    "raw_step_count": 21,
+    "annotated_step_count": 21
+  },
+  "steps": [
+    {
+      "step_index": 0,
+      "timestamp_ms": null,
+      "observation": "The BEFORE image shows the LibreOffice Calc application with a spreadsheet named 'SmallBalanceSheet.xlsx' open. The visible sheet is 'Sheet1'. The sheet displays a balance sheet table with columns labeled 'Year', 'Current Assets', 'Fixed Assets', 'Other Assets', 'Assets', 'Current Liabilities', 'Long-term Liabilities', 'Owner's Equity', and 'Liabilities & Owner's Equity'. The data spans rows 1 to 7, with financial values in currency format. The red marker indicates a click on the 'Sheet2' tab at the bottom left of the window, next to the 'Sheet1' tab. Other visible UI elements include the formula bar, toolbar with formatting options, and the row and column headers.",
+      "intent": "The user intends to create a new sheet to calculate and display the annual percentage changes for Current Assets, Fixed Assets, and Other Assets.",
+      "action": "The user clicked on the 'Sheet2' tab at the bottom left of the window, as indicated by the red marker.",
+      "action_raw": "(user action at step 1)",
+      "action_px": null,
+      "result_observation": "The active sheet changed from 'Sheet1' to 'Sheet2', displaying a blank spreadsheet with no data or headers.",
+      "expected_result": "The screen should show a new blank sheet named 'Sheet2' ready for data entry, with the cursor active in cell A1, allowing the user to start entering the headers 'Year', 'CA changes', 'FA changes', and 'OA changes'."
+    },
+    {
+      "step_index": 1,
+      "timestamp_ms": null,
+      "observation": "The application is LibreOffice Calc, displaying a blank spreadsheet named 'Sheet2'. The window shows the standard toolbar at the top with icons for file operations, formatting, and functions. The sheet tabs are visible at the bottom left, with 'Sheet2' currently active. The spreadsheet grid is empty, with columns labeled A to N and rows numbered 1 to 25 visible. The red marker is on the 'Sheet2' tab.",
+      "intent": "The user is preparing to enter headers for a new sheet to calculate annual changes in asset values.",
+      "action": "The user clicked on the cell A1 in 'Sheet2' and typed the header 'Year', as indicated by the red marker.",
+      "action_raw": "(user action at step 2)",
+      "action_px": null,
+      "result_observation": "The cell A1 in 'Sheet2' now contains the text 'Year', indicating the start of entering headers for the new sheet.",
+      "expected_result": "The screen should show the 'Sheet2' tab active with the cell A1 containing the header 'Year', ready for the user to continue entering the other headers 'CA changes', 'FA changes', and 'OA changes' in adjacent cells."
+    },
+    {
+      "step_index": 2,
+      "timestamp_ms": null,
+      "observation": "The application visible is LibreOffice Calc with the file 'SmallBalanceSheet.xlsx' open. The current sheet is 'Sheet2', visible in the tab bar at the bottom. The spreadsheet grid is displayed with columns labeled A to N and rows numbered 1 to 25 visible. The formula bar is visible below the toolbar, showing the content of the selected cell. The toolbar contains standard spreadsheet editing icons and formatting options. The red marker indicates a click on cell B1.",
+      "intent": "The user is entering the second header 'CA changes' to label the column for Current Assets changes in the new sheet.",
+      "action": "The user clicked on cell B1 and typed the header 'CA changes', as indicated by the red marker.",
+      "action_raw": "(user action at step 3)",
+      "action_px": null,
+      "result_observation": "Cell B1 now contains the text 'CA changes', indicating the second header has been entered next to 'Year' in cell A1. The rest of the sheet remains empty.",
+      "expected_result": "The sheet should display the first two headers in the first row: 'Year' in cell A1 and 'CA changes' in cell B1, ready for the user to continue entering the remaining headers 'FA changes' and 'OA changes' in cells C1 and D1 respectively."
+    },
+    {
+      "step_index": 3,
+      "timestamp_ms": null,
+      "observation": "The application is LibreOffice Calc, visible from the window title 'SmallBalanceSheet.xlsx \u2014 LibreOffice Calc'. The current sheet is 'Sheet2', as shown by the tab at the bottom. The visible area shows a blank spreadsheet with only two headers entered in the first row: 'Year' in cell A1 and 'CA changes' in cell B1. The toolbar with formatting options is visible at the top, and the formula bar shows the content of the selected cell. The red marker is on cell C1, indicating the next interaction target.",
+      "intent": "The user is adding the next header 'FA changes' to prepare the sheet for calculating annual changes in Fixed Assets.",
+      "action": "The user clicked on cell C1 and typed the header 'FA changes', as indicated by the red marker on cell C1.",
+      "action_raw": "(user action at step 4)",
+      "action_px": null,
+      "result_observation": "Cell C1 now contains the text 'FA changes', adding the third header next to 'CA changes' in cell B1. The rest of the sheet remains empty, with only the first row partially filled with headers.",
+      "expected_result": "The screen should show the first row with three headers: 'Year' in A1, 'CA changes' in B1, and 'FA changes' in C1, ready for the user to continue adding the next header and data."
+    },
+    {
+      "step_index": 4,
+      "timestamp_ms": null,
+      "observation": "The application is LibreOffice Calc, displaying a spreadsheet named 'SmallBalanceSheet.xlsx'. The current sheet is 'Sheet2'. The visible UI elements include the formula bar below the toolbar, the column headers (A, B, C, D, etc.), the row numbers on the left, and the first row of the sheet containing headers. The headers visible are 'Year' in cell A1, 'CA changes' in cell B1, and the user is currently typing 'FA changes' in cell C1, indicated by the red marker on cell C1.",
+      "intent": "The user is adding the third header 'FA changes' to label the column for Fixed Assets annual changes in the new sheet.",
+      "action": "The user clicked on cell C1 and typed the header text 'FA changes', as shown by the red marker on cell C1.",
+      "action_raw": "(user action at step 5)",
+      "action_px": null,
+      "result_observation": "Cell C1 now contains the text 'FA changes', completing the third header next to 'CA changes' in cell B1. The rest of the sheet remains empty except for the first row partially filled with headers.",
+      "expected_result": "The screen should show the first row with the headers 'Year' in A1, 'CA changes' in B1, 'FA changes' in C1, and the next header 'OA changes' typed or ready to be typed in D1, preparing the sheet for entering annual percentage changes for the three asset categories."
+    },
+    {
+      "step_index": 5,
+      "timestamp_ms": null,
+      "observation": "The application is LibreOffice Calc, displaying a spreadsheet named SmallBalanceSheet.xlsx. The current sheet is 'Sheet2'. The visible UI elements include the formula bar below the toolbar, the column headers A to N, the row headers 1 to 25, and the first row containing headers: 'Year' in cell A1, 'CA changes' in B1, 'FA changes' in C1, and 'OA changes' in D1. The rest of the sheet is empty. The red marker is on cell A2.",
+      "intent": "The user is entering the first year value to start populating the 'Year' column for calculating annual changes.",
+      "action": "The user clicked on the cell labeled 'Year' in the second row (cell A2), as indicated by the red marker, and typed '2015'.",
+      "action_raw": "(user action at step 6)",
+      "action_px": null,
+      "result_observation": "Cell A2 now contains the text '2015'. The rest of the sheet remains unchanged with headers in the first row and empty cells elsewhere.",
+      "expected_result": "The spreadsheet should show '2015' entered in cell A2 under the 'Year' header, ready for further data entry in the adjacent columns."
+    },
+    {
+      "step_index": 6,
+      "timestamp_ms": null,
+      "observation": "The application is LibreOffice Calc, displaying a spreadsheet named 'SmallBalanceSheet.xlsx'. The current sheet is 'Sheet2'. The visible area shows columns A to D and rows 1 to 25 approximately. The first row contains headers: 'Year' in cell A1, 'CA changes' in B1, 'FA changes' in C1, and 'OA changes' in D1. The second row has '2015' typed in cell A2. The red marker is on cell A2, indicating user interaction there. The toolbar with formatting options is visible at the top, and the sheet tabs are at the bottom.",
+      "intent": "The user is entering the starting year '2015' to begin populating the 'Year' column for calculating annual asset changes.",
+      "action": "The user clicked on the cell labeled 'Year' in the second row (cell A2) and typed '2015', as indicated by the red marker.",
+      "action_raw": "(user action at step 7)",
+      "action_px": null,
+      "result_observation": "Cell A2 now contains the text '2015'. No other cells have changed; the rest of the sheet remains empty except for the headers in the first row.",
+      "expected_result": "The screen should show '2015' entered in cell A2 under the 'Year' header, with the headers 'Year', 'CA changes', 'FA changes', and 'OA changes' visible in the first row, and all other cells empty."
+    },
+    {
+      "step_index": 7,
+      "timestamp_ms": null,
+      "observation": "The application is LibreOffice Calc, displaying a spreadsheet named 'SmallBalanceSheet.xlsx'. The current sheet is 'Sheet2'. The visible area shows columns A to D and rows 1 to about 25. The first row contains headers: 'Year' in A1, 'CA changes' in B1, 'FA changes' in C1, and 'OA changes' in D1. The second row has '2015' entered in cell A2. The red marker is on cell A3, which is currently being edited with the text '2016'. The toolbar and formula bar are visible at the top, and the sheet tabs are visible at the bottom.",
+      "intent": "The user is entering the next year value in the 'Year' column to prepare for calculating annual changes for asset categories.",
+      "action": "The user clicked on the cell labeled 'Year' in the third row (cell A3) and typed '2016', as indicated by the red marker.",
+      "action_raw": "(user action at step 8)",
+      "action_px": null,
+      "result_observation": "Cell A3 now contains the text '2016'. The rest of the sheet remains unchanged with headers in the first row and '2015' in A2.",
+      "expected_result": "The screen should show the 'Year' column with '2015' in A2 and '2016' in A3, with the cursor ready for further input or navigation to the next cell."
+    },
+    {
+      "step_index": 8,
+      "timestamp_ms": null,
+      "observation": "The application is LibreOffice Calc, displaying a spreadsheet named 'SmallBalanceSheet.xlsx'. The current sheet is 'Sheet2'. Visible UI elements include the formula bar at the top, the column headers A to D with headers 'Year', 'CA changes', 'FA changes', and 'OA changes' in row 1, and the first few rows of data under these headers. The cells in column A show years starting with '2015' in A2 and '2016' in A3. The red marker is on cell A3, which is currently selected.",
+      "intent": "The user is entering the year '2016' in the 'Year' column to continue listing years for calculating annual asset changes.",
+      "action": "The user clicked on the cell labeled 'Year' in the third row (cell A3) and typed '2016', as indicated by the red marker.",
+      "action_raw": "(user action at step 9)",
+      "action_px": null,
+      "result_observation": "Cell A3 now contains the text '2016'. The rest of the sheet remains unchanged with headers in the first row and '2015' in A2.",
+      "expected_result": "The cell A3 should contain the year '2016' entered by the user, continuing the sequence of years under the 'Year' header, with no other changes to the sheet."
+    },
+    {
+      "step_index": 9,
+      "timestamp_ms": null,
+      "observation": "The application is LibreOffice Calc, visible in the window title bar. The current sheet is 'Sheet2', as indicated by the tab at the bottom. The visible area shows a small table starting at cell A1 with headers 'Year', 'CA changes', 'FA changes', and 'OA changes' in cells A1 to D1. Below the 'Year' header, the years 2015 and 2016 are visible in cells A2 and A3 respectively. The red marker highlights cell A3, where the user has just clicked. The toolbar with formatting options is visible at the top, and the formula bar shows the content of the selected cell.",
+      "intent": "The user is entering sequential years to prepare the table for calculating annual changes in assets.",
+      "action": "The user clicked on the cell labeled 'Year' in the third row (cell A3) and typed '2016', as indicated by the red marker.",
+      "action_raw": "(user action at step 10)",
+      "action_px": null,
+      "result_observation": "Cell A3 now contains the text '2016', extending the list of years under the 'Year' header. The rest of the sheet remains unchanged with headers in the first row and '2015' in A2.",
+      "expected_result": "The screen should display the 'Year' column with '2015' in A2 and '2016' in A3, ready for further year entries and calculations in the adjacent columns."
+    },
+    {
+      "step_index": 10,
+      "timestamp_ms": null,
+      "observation": "The application is LibreOffice Calc, displaying a spreadsheet named 'SmallBalanceSheet.xlsx'. The current sheet is 'Sheet2'. The visible area shows columns A to D and rows 1 to 25 approximately. The first row contains headers: 'Year' in A1, 'CA changes' in B1, 'FA changes' in C1, and 'OA changes' in D1. Under the 'Year' header, years 2015 to 2019 are listed in cells A2 to A6. The red marker is on cell A3, which contains the year '2016'. The toolbar with formatting options is visible at the top, and the sheet tabs are at the bottom.",
+      "intent": "The user is entering the year '2016' to extend the list of years for calculating annual changes in assets.",
+      "action": "The user clicked on the cell labeled 'Year' in the third row (cell A3) and typed '2016', as indicated by the red marker.",
+      "action_raw": "(user action at step 11)",
+      "action_px": null,
+      "result_observation": "Cell A3 now contains the text '2016', extending the list of years under the 'Year' header. The rest of the sheet remains unchanged with headers in the first row and years 2015, 2017, 2018, and 2019 in cells A2, A4, A5, and A6 respectively.",
+      "expected_result": "The screen should show the 'Year' column with the years 2015, 2016, 2017, 2018, and 2019 listed consecutively from cells A2 to A6, with the headers 'Year', 'CA changes', 'FA changes', and 'OA changes' in the first row. No other changes should be visible yet."
+    },
+    {
+      "step_index": 11,
+      "timestamp_ms": null,
+      "observation": "The application is LibreOffice Calc with a spreadsheet named SmallBalanceSheet.xlsx open. The current sheet is Sheet2, visible at the bottom tab. The visible area shows columns A to D and rows 1 to 25 approximately. The first row contains headers: 'Year' in A1, 'CA changes' in B1, 'FA changes' in C1, and 'OA changes' in D1. The 'Year' column lists years 2015, 2016, 2017, 2018, and 2019 in cells A2 to A6. Cell B2 contains a formula starting with '=(Sheet1.B3-Sheet1.B2)/Sheet1.B2'. The red marker is on cell A3, which currently contains the year '2016'. The formula bar shows the formula in cell B2. The toolbar and formula bar are visible at the top.",
+      "intent": "The user is entering the year '2016' in the 'Year' column to extend the list of years for calculating annual changes in assets.",
+      "action": "The user clicked on the cell labeled 'Year' in the third row (cell A3) and typed '2016', as indicated by the red marker.",
+      "action_raw": "(user action at step 12)",
+      "action_px": null,
+      "result_observation": "Cell A3 now contains the text '2016', extending the list of years under the 'Year' header. The rest of the sheet remains unchanged with headers in the first row and years 2015, 2017, 2018, and 2019 in cells A2, A4, A5, and A6 respectively. The formula in B2 remains visible but unchanged.",
+      "expected_result": "The screen should show the 'Year' column with the years 2015, 2016, 2017, 2018, and 2019 listed consecutively in cells A2 to A6. The headers 'Year', 'CA changes', 'FA changes', and 'OA changes' remain in the first row. The formula for calculating annual changes should be ready to be copied or extended to other rows for the new year entries."
+    },
+    {
+      "step_index": 12,
+      "timestamp_ms": null,
+      "observation": "The application is LibreOffice Calc displaying a spreadsheet named SmallBalanceSheet.xlsx. The current sheet is 'Sheet2'. The visible area shows columns A to D and rows 1 to 9. The first row contains headers: 'Year' in A1, 'CA changes' in B1, 'FA changes' in C1, and 'OA changes' in D1. The 'Year' column lists years 2015, 2016, 2017, 2018, and 2019 in cells A2 to A6. Cell B2 contains a decimal number representing a calculated value. The red marker is on cell A3, which contains the year '2016'. The formula bar shows a formula in cell B2 calculating the percentage change for Current Assets.",
+      "intent": "The user is entering the year 2016 in the 'Year' column to continue listing years for which annual changes in assets will be calculated.",
+      "action": "The user clicked on the cell labeled 'Year' in the third row (cell A3) and typed '2016', as indicated by the red marker.",
+      "action_raw": "(user action at step 13)",
+      "action_px": null,
+      "result_observation": "Cell A3 now contains the text '2016', extending the list of years under the 'Year' header. The rest of the sheet remains unchanged with headers in the first row and years 2015, 2017, 2018, and 2019 in cells A2, A4, A5, and A6 respectively. The formula in B2 remains visible but unchanged.",
+      "expected_result": "The screen should show the 'Year' column with the years 2015, 2016, 2017, 2018, and 2019 listed consecutively from cells A2 to A6, with the headers and other columns unchanged."
+    },
+    {
+      "step_index": 13,
+      "timestamp_ms": null,
+      "observation": "The application is LibreOffice Calc with the file SmallBalanceSheet.xlsx open. The current sheet is 'Sheet2'. The visible area shows a table starting at cell A1 with headers 'Year', 'CA changes', 'FA changes', and 'OA changes'. The years 2015, 2016, 2017, 2018, and 2019 are listed in column A from rows 2 to 6. Column B contains calculated values for 'CA changes' from rows 2 to 6, with the formula visible in the formula bar for cell B2. The cursor is positioned in cell C3, which is empty. The red marker is on cell A3 labeled '2016'. The toolbar and formula bar are visible at the top, and the sheet tabs are visible at the bottom.",
+      "intent": "The user is entering the year 2016 to extend the list of years for calculating annual changes in asset categories.",
+      "action": "The user clicked on the cell labeled 'Year' in the third row (cell A3) and typed '2016', as indicated by the red marker.",
+      "action_raw": "(user action at step 14)",
+      "action_px": null,
+      "result_observation": "Cell A3 now contains the text '2016', extending the list of years under the 'Year' header. The rest of the sheet remains unchanged with headers in the first row and years 2015, 2017, 2018, and 2019 in cells A2, A4, A5, and A6 respectively. The formula in B2 remains visible but unchanged.",
+      "expected_result": "The screen should show the year 2016 correctly entered in cell A3, with the years listed sequentially in column A. The headers remain in row 1, and the formulas for calculating annual changes should be ready to be entered or extended in columns B, C, and D."
+    },
+    {
+      "step_index": 14,
+      "timestamp_ms": null,
+      "observation": "The application is LibreOffice Calc with the file 'SmallBalanceSheet.xlsx' open. The active sheet is 'Sheet2'. The visible area shows a small table with headers in row 1: 'Year' in column A, 'CA changes' in column B, 'FA changes' in column C, and 'OA changes' in column D. The years 2015, 2016, 2017, 2018, and 2019 are listed in column A from rows 2 to 6. Column B contains decimal values representing 'CA changes' for each year. Column C has a negative decimal value in cell C2 and the cell C3 is selected with a red marker indicating user interaction. The formula bar is visible but empty. The toolbar and menu bar of LibreOffice Calc are visible at the top.",
+      "intent": "The user is entering the year '2016' in the 'Year' column to extend the list of years for calculating annual changes in assets.",
+      "action": "The user clicked on the cell labeled 'Year' in the third row (cell A3) and typed '2016', as indicated by the red marker.",
+      "action_raw": "(user action at step 15)",
+      "action_px": null,
+      "result_observation": "Cell A3 now contains the text '2016', extending the list of years under the 'Year' header. The rest of the sheet remains unchanged with headers in the first row and years 2015, 2017, 2018, and 2019 in cells A2, A4, A5, and A6 respectively. The formula in B2 remains visible but unchanged.",
+      "expected_result": "The screen should show the 'Year' column with the years 2015, 2016, 2017, 2018, and 2019 listed consecutively from cells A2 to A6. The headers 'CA changes', 'FA changes', and 'OA changes' remain in row 1 with their respective data columns below. The cell A3 should display '2016' confirming the year entry."
+    },
+    {
+      "step_index": 15,
+      "timestamp_ms": null,
+      "observation": "The application is LibreOffice Calc displaying a spreadsheet named SmallBalanceSheet.xlsx. The active sheet is 'Sheet2'. The visible area shows columns A to D and rows 1 to 7. The first row contains headers: 'Year' in A1, 'CA changes' in B1, 'FA changes' in C1, and 'OA changes' in D1. Below the headers, years 2015, 2016, 2017, 2018, and 2019 are listed in column A from A2 to A6. Column B contains decimal values representing 'CA changes' for these years. Column C has some negative decimal values under 'FA changes', with the cell C3 currently selected. Column D header 'OA changes' is visible but no data is entered yet. The formula bar shows a formula referencing cells from 'Sheet1'. The red marker indicates a click on cell A3 labeled '2016'. The toolbar and formula bar are visible at the top, and the sheet tabs and status bar are visible at the bottom.",
+      "intent": "The user is entering the year '2016' in the 'Year' column to extend the list of years for calculating annual changes in assets.",
+      "action": "The user clicked on the cell labeled 'Year' in the third row (cell A3) and typed '2016', as indicated by the red marker.",
+      "action_raw": "(user action at step 16)",
+      "action_px": null,
+      "result_observation": "Cell A3 now contains the text '2016', extending the list of years under the 'Year' header. The rest of the sheet remains unchanged with headers in the first row and years 2015, 2017, 2018, and 2019 in cells A2, A4, A5, and A6 respectively. The formula in B2 remains visible but unchanged.",
+      "expected_result": "The screen should show the 'Year' column with the year '2016' correctly entered in cell A3, maintaining the sequence of years. The headers and other columns should remain unchanged, ready for further data entry or formula application for annual changes."
+    },
+    {
+      "step_index": 16,
+      "timestamp_ms": null,
+      "observation": "The application is LibreOffice Calc, displaying a spreadsheet named SmallBalanceSheet.xlsx. The current sheet is 'Sheet2'. The visible UI elements include the formula bar showing a formula for cell C2, column headers A to D with headers 'Year', 'CA changes', 'FA changes', and 'OA changes', rows 1 to 7 visible with data filled in columns A to C, and the red marker indicating a click on cell A3 labeled '2016'.",
+      "intent": "The user is entering the year '2016' to extend the list of years for calculating annual asset changes.",
+      "action": "The user clicked on the cell labeled 'Year' in the third row (cell A3) and typed '2016', as indicated by the red marker.",
+      "action_raw": "(user action at step 17)",
+      "action_px": null,
+      "result_observation": "Cell A3 now contains the text '2016', extending the list of years under the 'Year' header. The rest of the sheet remains unchanged with headers in the first row and years 2015, 2017, 2018, and 2019 in cells A2, A4, A5, and A6 respectively. The formula in B2 remains visible but unchanged.",
+      "expected_result": "The screen should show the 'Year' column with the new entry '2016' in cell A3, correctly positioned between 2015 and 2017, maintaining the order of years. The other columns and formulas remain unchanged."
+    },
+    {
+      "step_index": 17,
+      "timestamp_ms": null,
+      "observation": "The application is LibreOffice Calc with the file SmallBalanceSheet.xlsx open. The active sheet is 'Sheet2'. The visible area shows a small table with headers in row 1: 'Year' in A1, 'CA changes' in B1, 'FA changes' in C1, and 'OA changes' in D1. Below the headers, years 2015, 2016, 2017, 2018, and 2019 are listed in column A (cells A2 to A6). Columns B and C contain decimal values representing percentage changes for Current Assets and Fixed Assets respectively. Column D has a negative decimal value in D2 and the cell D3 is selected and empty. The red marker indicates a click on cell A3, which contains the year '2016'. The formula bar is visible but empty for the selected cell.",
+      "intent": "The user is entering the year '2016' in the 'Year' column to extend the list of years for calculating annual asset changes.",
+      "action": "The user clicked on the cell labeled 'Year' in the third row (cell A3) and typed '2016', as indicated by the red marker.",
+      "action_raw": "(user action at step 18)",
+      "action_px": null,
+      "result_observation": "Cell A3 now contains the text '2016', extending the list of years under the 'Year' header. The rest of the sheet remains unchanged with headers in the first row and years 2015, 2017, 2018, and 2019 in cells A2, A4, A5, and A6 respectively. The formula in B2 remains visible but unchanged.",
+      "expected_result": "The screen should display the 'Year' column with the years 2015, 2016, 2017, 2018, and 2019 listed consecutively from cells A2 to A6. The headers 'CA changes', 'FA changes', and 'OA changes' remain in row 1 with their respective data below. The cell A3 should show '2016' as entered, confirming the year has been added correctly."
+    },
+    {
+      "step_index": 18,
+      "timestamp_ms": null,
+      "observation": "The application is LibreOffice Calc with the file SmallBalanceSheet.xlsx open. The active sheet is Sheet2, visible in the tab bar at the bottom. The sheet displays a table with headers in row 1: 'Year' in column A, 'CA changes' in column B, 'FA changes' in column C, and 'OA changes' in column D. The years 2015, 2016, 2017, 2018, and 2019 are listed in column A from rows 2 to 6. Columns B and C contain decimal values representing changes, and column D has a single negative decimal value in cell D2. The red marker indicates a click on cell A3, which contains the year '2016'. The formula bar shows a formula in cell D2 referencing Sheet1 cells.",
+      "intent": "The user is entering the year '2016' in the 'Year' column to extend the list of years for calculating annual changes in assets.",
+      "action": "The user clicked on the cell labeled 'Year' in the third row (cell A3) and typed '2016', as indicated by the red marker.",
+      "action_raw": "(user action at step 19)",
+      "action_px": null,
+      "result_observation": "Cell A3 now contains the text '2016', extending the list of years under the 'Year' header. The rest of the sheet remains unchanged with headers in the first row and years 2015, 2017, 2018, and 2019 in cells A2, A4, A5, and A6 respectively. The formula in B2 remains visible but unchanged.",
+      "expected_result": "The screen should show the year '2016' correctly entered in cell A3 under the 'Year' header, maintaining the sequence of years in column A. The rest of the data and formulas in the sheet should remain intact and visible."
+    },
+    {
+      "step_index": 19,
+      "timestamp_ms": null,
+      "observation": "The application is LibreOffice Calc displaying a spreadsheet named SmallBalanceSheet.xlsx. The current sheet is 'Sheet2'. The visible area shows columns A to D and rows 1 to 25. The first row contains headers: 'Year' in A1, 'CA changes' in B1, 'FA changes' in C1, and 'OA changes' in D1. Below the headers, years 2015, 2016, 2017, 2018, and 2019 are listed in column A from A2 to A6. Columns B, C, and D contain decimal values representing changes. The red marker is on cell A3, which currently contains the text '2016'. The formula bar is visible but empty. The toolbar and menu bar are visible at the top.",
+      "intent": "The user is entering the year '2016' in the 'Year' column to extend the list of years for calculating annual changes in assets.",
+      "action": "The user clicked on the cell labeled 'Year' in the third row (cell A3) and typed '2016', as indicated by the red marker.",
+      "action_raw": "(user action at step 20)",
+      "action_px": null,
+      "result_observation": "Cell A3 now contains the text '2016', extending the list of years under the 'Year' header. The rest of the sheet remains unchanged with headers in the first row and years 2015, 2017, 2018, and 2019 in cells A2, A4, A5, and A6 respectively. The formula in B2 remains visible but unchanged.",
+      "expected_result": "The screen should show the 'Year' column with the year '2016' correctly entered in cell A3, maintaining the sequence of years for the annual changes calculation. The headers and data in columns B, C, and D should remain visible and unchanged."
+    },
+    {
+      "step_index": 20,
+      "timestamp_ms": null,
+      "observation": "The application is LibreOffice Calc displaying a spreadsheet named SmallBalanceSheet.xlsx. The current sheet is 'Sheet2'. The visible area shows columns A to D and rows 1 to 7. The first row contains headers: 'Year' in A1, 'CA changes' in B1, 'FA changes' in C1, and 'OA changes' in D1. Below the headers, years 2015, 2016, 2017, 2018, and 2019 are listed in column A from A2 to A6. Columns B, C, and D contain decimal values representing changes for each year. The formula bar shows a formula for cell B2. The red marker is on cell A3 labeled '2016'. The toolbar above shows various formatting and editing options.",
+      "intent": "The user is entering the year '2016' in the 'Year' column to extend the list of years for calculating annual changes in assets.",
+      "action": "The user clicked on the cell labeled '2016' in the 'Year' column (cell A3) as indicated by the red marker and typed '2016'.",
+      "action_raw": "(user action at step 21)",
+      "action_px": null,
+      "result_observation": "Cell A3 now contains the text '2016', extending the list of years under the 'Year' header. The rest of the sheet remains unchanged with headers in the first row and years 2015, 2017, 2018, and 2019 in cells A2, A4, A5, and A6 respectively. The formula in B2 remains visible but unchanged.",
+      "expected_result": "The 'Year' column should list the years 2015, 2016, 2017, 2018, and 2019 in cells A2 through A6 respectively, with corresponding annual change values in columns B, C, and D. The data should be ready for further formatting or calculations."
+    }
+  ]
+}

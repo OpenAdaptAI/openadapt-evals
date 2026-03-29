@@ -1,0 +1,36 @@
+{
+  "task_id": "0e763496-b6bb-4508-a427-fad0b6c3e195-WOS",
+  "instruction": "Change the font to \"Times New Roman\" throughout the text.",
+  "num_steps": 3,
+  "steps": [
+    {
+      "action_hint": null,
+      "suggested_step": "Press Ctrl+A to select all text in the document.",
+      "step_was_refined": false
+    },
+    {
+      "action_hint": null,
+      "suggested_step": "Click the font dropdown in the toolbar (currently showing \"Georgia\").",
+      "step_was_refined": false
+    },
+    {
+      "action_hint": null,
+      "suggested_step": "Type \"Times New Roman\" and press Enter.",
+      "step_was_refined": false
+    }
+  ],
+  "step_plans": [
+    {
+      "at_step_idx": 0,
+      "trigger": "initial",
+      "steps": [
+        "Press Ctrl+A to select all text in the document.",
+        "Click the font dropdown in the toolbar (currently showing \"Georgia\").",
+        "Type \"Times New Roman\" and press Enter."
+      ]
+    }
+  ],
+  "server_url": "http://localhost:5001",
+  "recorded_at": "2026-03-04T21:34:43.107090+00:00",
+  "recording_complete": true
+}

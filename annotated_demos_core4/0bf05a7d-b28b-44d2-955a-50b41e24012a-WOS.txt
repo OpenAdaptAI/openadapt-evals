@@ -1,0 +1,37 @@
+DEMONSTRATION:
+Goal: I would like to pad all the numbers in the 'Old ID' column with zeros in front, to fill them up to seven digits in the 'New 7 Digit ID' column.
+
+Step 1:
+  [Screen: The application visible is LibreOffice Calc with a spreadsheet named 'Customers_New_7digit_Id.xlsx' open.]
+  [Action: The user clicked on the cell labeled 'New 7 Digit ID' in row 2 (cell D2), as indicated by the red marker.]
+  [Result: The cell D2 is now selected and active, ready for input. The cursor is blinking inside the formula bar, indicating that the user can start typing a formula or value.]
+
+Step 2:
+  [Screen: The application is LibreOffice Calc, displaying a spreadsheet named 'Customers_New_7digit_Id.xlsx'.]
+  [Action: The user clicked on the cell labeled 'New 7 Digit ID' in row 2 (cell D2), as indicated by the red marker.]
+  [Result: The cell D2 is now selected and active, ready for input. The cursor is blinking inside the formula bar, indicating that the user can start typing a formula or value.]
+
+Step 3:
+  [Screen: The application is LibreOffice Calc, displaying a spreadsheet named 'Customers_New_7digit_Id.xlsx'.]
+  [Action: The user clicked on the cell labeled 'New 7 Digit ID' in row 3 (cell D3), as indicated by the red marker.]
+  [Result: The cell D3 is now selected and active, with the cursor blinking inside the formula bar, ready for input. The previous cell D2 remains filled with the zero-padded value '0000076'.]
+
+Step 4:
+  [Screen: The application is LibreOffice Calc, displaying a spreadsheet named 'Customers_New_7digit_Id.xlsx'.]
+  [Action: The user clicked on the cell labeled 'New 7 Digit ID' in row 3 (cell D3), as indicated by the red marker.]
+  [Result: The selection moved from cell D2 to cell D3, and cell D3 is now active with the cursor blinking inside the formula bar, ready for input. The formula bar still shows the formula =TEXT(C2, "0000000") but the cell D3 is empty and ready for the formula to be entered or copied.]
+
+Step 5:
+  [Screen: The application visible is LibreOffice Calc with a spreadsheet named 'Customers_New_7digit_Id.xlsx' open.]
+  [Action: The user clicked on the cell labeled 'New 7 Digit ID' in row 3 (cell D3), as indicated by the red marker.]
+  [Result: The selection moved from cell D2 to cell D3. Cell D3 is now active with the cursor blinking inside the formula bar, ready for input. The formula bar still shows the formula =TEXT(C2, "0000000"), but the cell D3 itself is empty and ready for the formula to be entered or copied.]
+
+Step 6:
+  [Screen: The application visible is LibreOffice Calc with a spreadsheet named 'Customers_New_7digit_Id.xlsx' open.]
+  [Action: The user clicked on the cell labeled 'New 7 Digit ID' in row 3 (cell D3), as indicated by the red marker.]
+  [Result: The selection moved from cell D2 to cell D3. Cell D3 is now active with the cursor blinking inside the formula bar, ready for input. The formula bar still shows the formula =TEXT(C2, "0000000"), but the cell D3 itself is empty and ready for the formula to be entered or copied.]
+
+Step 7:
+  [Screen: The BEFORE image shows LibreOffice Calc with the 'Format Cells' dialog open, centered on the screen.]
+  [Action: The user clicked the 'OK' button in the 'Format Cells' dialog, as indicated by the red marker in the AFTER image.]
+  [Result: The AFTER image shows the 'Format Cells' dialog closed. The spreadsheet now displays the 'New 7 Digit ID' column (column D) filled with numbers padded with leading zeros to seven digits, corresponding to the 'Old ID' values in column C. The cell range D2:D30 remains selected, and the formula bar shows the formula =TEXT(C30, "0000000").]

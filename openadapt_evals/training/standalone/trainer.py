@@ -452,12 +452,27 @@ class GRPOTrainer:
 
         self._optimizer.zero_grad()
         n = len(valid)
-        total = sum(self._compute_rollout_loss(r, a, 1.0 / n) for r, a in valid)
-        torch.nn.utils.clip_grad_norm_(
+        losses = []
+        for r, a in valid:
+            l = self._compute_rollout_loss(r, a, 1.0 / n)
+            losses.append(l)
+        grad_norm = torch.nn.utils.clip_grad_norm_(
             [p for p in self._model.parameters() if p.requires_grad], max_norm=1.0)
         self._optimizer.step()
-        return {"reward_mean": reward_mean, "loss": total / max(n, 1),
-                "skipped": False, "num_rollouts": len(rollouts), "num_gradient_terms": n}
+
+        avg_loss = sum(losses) / max(n, 1)
+        abs_loss = sum(abs(l) for l in losses) / max(n, 1)
+
+        return {
+            "reward_mean": reward_mean,
+            "loss": avg_loss,
+            "loss_abs": abs_loss,
+            "grad_norm": grad_norm.item() if hasattr(grad_norm, "item") else float(grad_norm),
+            "advantages": [a for _, a in valid],
+            "skipped": False,
+            "num_rollouts": len(rollouts),
+            "num_gradient_terms": n,
+        }
 
     def _save_checkpoint(self, step: int) -> str:
         ckpt = Path(self._config.output_dir) / f"step_{step}"
@@ -523,8 +538,16 @@ class GRPOTrainer:
             m = self._training_step(rollouts)
             m.update({"step": step, "task_id": task_id, "elapsed": time.time() - t0, "step_time": time.time() - ts})
             last_reward_mean = m.get("reward_mean")
-            logger.info("Step %d/%d: reward=%.2f loss=%.4f time=%.1fs",
-                        step + 1, self._config.num_training_steps, m.get("reward_mean", 0), m.get("loss", 0), m["step_time"])
+            logger.info(
+                "Step %d/%d: reward=%.2f loss=%+.2e |loss|=%.2e grad_norm=%.4f adv=%s time=%.1fs",
+                step + 1, self._config.num_training_steps,
+                m.get("reward_mean", 0),
+                m.get("loss", 0),
+                m.get("loss_abs", 0),
+                m.get("grad_norm", 0),
+                [f"{a:+.2f}" for a in m.get("advantages", [])],
+                m["step_time"],
+            )
 
             try:
                 track_training_step(

@@ -1,0 +1,14 @@
+{
+  "task_id": "custom-clear-chrome-data",
+  "step_description": "Clear browsing data in Google Chrome",
+  "failure_screenshot_path": "",
+  "failure_explanation": "Agent failed without demo guidance",
+  "correction_step": {
+    "think": "Use the demo to guide the agent",
+    "action": "Follow demonstration steps",
+    "expect": "Task completed successfully"
+  },
+  "timestamp": "2026-03-28T14:01:31.521158+00:00",
+  "run_id": "",
+  "entry_id": "b14f244f30ab"
+}
