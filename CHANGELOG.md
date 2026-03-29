@@ -1,6 +1,37 @@
 # CHANGELOG
 
 
+## v0.81.1 (2026-03-29)
+
+### Bug Fixes
+
+- Set per_device_train_batch_size to match dataset size
+  ([#240](https://github.com/OpenAdaptAI/openadapt-evals/pull/240),
+  [`048796c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/048796c020a474293758ff8a95ed6ef520f41fbf))
+
+* fix: set per_device_train_batch_size to match dataset size
+
+TRL's default per_device_train_batch_size=8, but with 1-3 tasks the dataset is too small to form a
+  single batch. TRL computes 0 steps and exits with "There seems not to be a single sample in your
+  epoch_iterator".
+
+Fix: set batch_size=n_tasks when building default GRPOConfig. When the
+
+user provides their own trl_config, warn if batch_size > dataset size.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* fix: use batch_size=1 instead of n_tasks to avoid OOM with many tasks
+
+batch_size=n_tasks could OOM on GPU with many tasks. batch_size=1 is safer and matches the
+  standalone trainer behavior (one task per step, rotating through tasks via epochs). Each step
+  still does num_generations rollouts, so learning signal is preserved.
+
+---------
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.81.0 (2026-03-29)
 
 ### Features
