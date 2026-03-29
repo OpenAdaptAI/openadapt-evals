@@ -1,6 +1,44 @@
 # CHANGELOG
 
 
+## v0.76.3 (2026-03-29)
+
+### Bug Fixes
+
+- Vision_loss_mode checkpoint/include attention mask mismatch
+  ([#217](https://github.com/OpenAdaptAI/openadapt-evals/pull/217),
+  [`0617226`](https://github.com/OpenAdaptAI/openadapt-evals/commit/06172262ad5a91a2d7aa156b71f004b55b8b4c00))
+
+Qwen3's vision-language merge changes internal sequence length (e.g., 1305 raw tokens → 1202
+  post-merge). The trainer was constructing attention_mask from input_ids shape (1305), causing
+  IndexError when the model expected post-merge shape (1202).
+
+Two fixes: 1. Only set explicit attention_mask for "exclude" mode (text-only). For "include" and
+  "checkpoint" modes, let the model construct its own mask internally after the vision merge.
+
+2. Slice action logits from the END of the output sequence (not from prompt_len offset) when vision
+  tensors are present, because the output sequence length differs from input_ids length after merge.
+
+Crash was: IndexError: The shape of the mask [1305] at index 0 does not match the shape of the
+  indexed tensor [1202] at index 0
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Documentation
+
+- Comprehensive correction flywheel validation report
+  ([#216](https://github.com/OpenAdaptAI/openadapt-evals/pull/216),
+  [`150a5dd`](https://github.com/OpenAdaptAI/openadapt-evals/commit/150a5dd5476fd90a1b7efcc80f3f0b40b7754da6))
+
+Documents the 0.00 → 1.00 result on notepad-hello: - Full experiment methodology (baseline vs
+  DemoExecutor) - Execution trace with timestamps and tier breakdown - Comparison of planner-guided
+  vs DemoExecutor architecture - All 11 flywheel runs with scores and failure analysis -
+  Clear-browsing analysis (0.25 ceiling = grounder accuracy) - Implications and reproduction
+  instructions
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.76.2 (2026-03-28)
 
 ### Bug Fixes
