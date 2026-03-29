@@ -1,6 +1,30 @@
 # CHANGELOG
 
 
+## v0.77.0 (2026-03-29)
+
+### Features
+
+- Make openadapt-ml an optional dependency (Phase 0b)
+  ([#218](https://github.com/OpenAdaptAI/openadapt-evals/pull/218),
+  [`2615c26`](https://github.com/OpenAdaptAI/openadapt-evals/commit/2615c26b9c694f7c058b72601b93cfbce7eaa66c))
+
+Move openadapt-ml from core dependencies to [ml] optional extra. pip install openadapt-evals now
+  completes in ~30 seconds (no torch). pip install openadapt-evals[ml] gets the full ML stack.
+
+Changes: - pyproject.toml: openadapt-ml removed from deps, added as [ml] extra - trace_export.py:
+  guard top-level openadapt_ml.schema import with try/except (only file with unguarded import) - 20
+  guardrail tests verify core modules import without ml: standalone trainer, DemoExecutor,
+  DemoLibrary, TaskConfig, telemetry, WAAConnection, RLEnvironment, BenchmarkAction all work without
+  ml - Client import pattern tested: GRPOTrainer, TrainingConfig, WAAConnection, wandb_callbacks,
+  TaskConfig, DemoLibrary
+
+The [training] extra still pulls in openadapt-ml[training] for users who need the full RL training
+  stack.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.76.3 (2026-03-29)
 
 ### Bug Fixes
