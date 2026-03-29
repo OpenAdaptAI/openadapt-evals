@@ -1,6 +1,24 @@
 # CHANGELOG
 
 
+## v0.78.1 (2026-03-29)
+
+### Bug Fixes
+
+- Remove 307 accidentally committed data files, update .gitignore
+  ([`ee1ceb9`](https://github.com/OpenAdaptAI/openadapt-evals/commit/ee1ceb9bd20b37d8f742c7b9a3657f8a59a8155f))
+
+PR #227 accidentally committed local experiment data via git add -A: - flywheel_results/ (224
+  screenshots + JSON) - .claude/worktrees/ (31 agent gitlinks) - annotated_demos/ (16 files) -
+  eval_results/ (11 screenshots) - grpo_output/ (1 file) - demos/*/synthetic_correction/
+  (placeholder PNGs) - .beads/ (SQLite database)
+
+All removed from tracking. .gitignore updated to prevent reoccurrence. No sensitive data was exposed
+  (confirmed via tidy scan).
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.78.0 (2026-03-29)
 
 ### Features
