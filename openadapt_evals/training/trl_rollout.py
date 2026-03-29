@@ -533,6 +533,16 @@ def make_waa_rollout_func(
                 # return empty logprobs. TRL recomputes logprobs from
                 # the model during the training step anyway.
                 logprobs: list[float] = []
+
+                # Truncation warning — detect when output was cut off
+                if len(completion_ids) >= max_new_tokens - 1:
+                    logger.warning(
+                        "Generation hit max_new_tokens=%d. Output may be "
+                        "truncated. If actions are unparseable, increase "
+                        "max_new_tokens or enable constrained_decoding.",
+                        max_new_tokens,
+                    )
+
                 return decoded, completion_ids, logprobs
 
             # --- Standard HF generate path (unconstrained) ---
@@ -566,6 +576,15 @@ def make_waa_rollout_func(
 
             # Decode text
             text = processor.decode(completion_ids, skip_special_tokens=True)
+
+            # Truncation warning — detect when output was cut off
+            if len(completion_ids) >= max_new_tokens - 1:
+                logger.warning(
+                    "Generation hit max_new_tokens=%d. Output may be "
+                    "truncated. If actions are unparseable, increase "
+                    "max_new_tokens or enable constrained_decoding.",
+                    max_new_tokens,
+                )
 
             return text, completion_ids, logprobs
 

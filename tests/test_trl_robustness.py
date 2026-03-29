@@ -421,96 +421,168 @@ class TestStuckDetection:
 
 
 class TestTruncationWarning:
-    """Tests for truncation warning in generate_fn."""
+    """Tests for truncation warning in generate_fn.
 
-    def test_truncation_warning_logged(self, caplog):
-        """Output hitting max_new_tokens without 'done' triggers warning."""
+    These tests exercise the ACTUAL truncation check in generate_fn by
+    calling it through _run_episode. The mock_run calls the real gfn()
+    (the closure created by make_waa_rollout_func) with mocked torch and
+    PIL so the truncation check in trl_rollout.py is exercised — not
+    reimplemented in the test.
+    """
+
+    def test_truncation_warning_logged_hf_path(self, caplog):
+        """HF generate path: output hitting max_new_tokens triggers warning.
+
+        We intercept _run_episode, call gfn (the real generate_fn),
+        and mock model.generate to return max_new_tokens tokens so the
+        truncation check fires.
+        """
+        import io as _io
+        from PIL import Image
+        from openadapt_evals.training import trl_rollout
+
         adapter = _make_mock_adapter()
+        max_new_tokens = 10
         func = make_waa_rollout_func(
             adapter,
-            max_steps=3,
-            max_new_tokens=10,
+            max_steps=1,
+            max_new_tokens=max_new_tokens,
             screenshot_retries=1,
             screenshot_retry_delay=0,
         )
         trainer = _make_mock_trainer(num_generations=1)
 
-        from openadapt_evals.training import trl_rollout
+        # Create a real small PNG so PIL.Image.open succeeds inside generate_fn
+        img = Image.new("RGB", (10, 10), color="red")
+        buf = _io.BytesIO()
+        img.save(buf, format="PNG")
+        valid_png = buf.getvalue()
+
+        # Make adapter return a real PNG for the health check
+        adapter.observe.return_value = BenchmarkObservation(
+            screenshot=valid_png, raw_observation={},
+        )
+
+        # Build a mock torch module with the pieces generate_fn needs
+        mock_torch = MagicMock()
+        mock_torch.no_grad.return_value.__enter__ = MagicMock(return_value=None)
+        mock_torch.no_grad.return_value.__exit__ = MagicMock(return_value=False)
+
+        # model.generate returns prompt(5) + completion(10) tokens
+        prompt_len = 5
+        fake_completion = list(range(max_new_tokens))  # 10 tokens >= 10-1
+        fake_seq = MagicMock()
+        fake_seq.__getitem__ = lambda self, idx: MagicMock(
+            tolist=lambda: fake_completion,
+        )
+        mock_gen_output = MagicMock()
+        mock_gen_output.sequences = [fake_seq]
+        mock_gen_output.scores = []
+        trainer.model.generate.return_value = mock_gen_output
+
+        # Mock processor to return inputs with known prompt length
+        mock_inputs = MagicMock()
+        mock_input_ids = MagicMock()
+        mock_input_ids.shape = [1, prompt_len]
+        mock_inputs.__getitem__ = lambda self, key: (
+            mock_input_ids if key == "input_ids" else MagicMock()
+        )
+        mock_inputs.to.return_value = mock_inputs
+        trainer.processing_class.return_value = mock_inputs
+        trainer.processing_class.apply_chat_template.return_value = "fake prompt"
+        trainer.processing_class.decode.return_value = '{"type": "done"}'
 
         def mock_run(env, gfn, instr, tid, ms, stuck_threshold=3):
+            """Call the REAL generate_fn with mocked torch."""
             from openadapt_evals.adapters.rl_env import ResetConfig
             env.reset(config=ResetConfig(task_id=tid))
 
-            # Mock the generate path to simulate truncation
-            from PIL import Image
-            import io as _io
+            with patch.dict("sys.modules", {"torch": mock_torch}):
+                text, ids, lps = gfn(valid_png, "test instruction")
 
-            # Create a real small PNG for PIL to open
-            img = Image.new("RGB", (10, 10), color="red")
-            buf = _io.BytesIO()
-            img.save(buf, format="PNG")
-            valid_png = buf.getvalue()
-
-            # Patch the model to return max_new_tokens - 1 tokens
-            # with nonsensical text that doesn't contain "done"
-            mock_outputs = MagicMock()
-            mock_seqs = MagicMock()
-            mock_seqs.__getitem__ = lambda self, idx: MagicMock(
-                tolist=lambda: list(range(9)),  # 9 tokens = max_new_tokens - 1
-            )
-            mock_outputs.sequences = [mock_seqs[0]]
-            mock_outputs.scores = []
-
-            mock_inputs = MagicMock()
-            mock_inputs.__getitem__ = lambda self, key: MagicMock(shape=[1, 5])
-
-            # Simulate truncation: call generate_fn, intercept at model level
-            # For simplicity, we'll directly test the truncation check logic
-            # by calling parse_action_json on truncated output
-            text_with_no_done = "I was thinking about clicking the butt"
-            completion_ids = list(range(9))  # 9 >= 10-1 triggers check
-
-            if len(completion_ids) >= 10 - 1:  # max_new_tokens - 1
-                action = parse_action_json(text_with_no_done)
-                if action.type == "done" and "done" not in text_with_no_done.lower():
-                    import logging as _logging
-                    _logging.getLogger("openadapt_evals.training.trl_rollout").warning(
-                        "Output truncated at %d tokens without parseable "
-                        "action. Consider increasing max_new_tokens "
-                        "(current: %d) or checking VRAM.",
-                        len(completion_ids),
-                        10,
-                    )
-
-            return [1], [2], [-0.1], 0.0
+            return [1], ids, lps, 0.0
 
         with caplog.at_level(logging.WARNING, logger="openadapt_evals.training.trl_rollout"):
             with patch.object(trl_rollout, "_run_episode", side_effect=mock_run):
                 func(["Test task"], trainer)
 
-        assert any("truncated" in r.message.lower() for r in caplog.records), (
-            f"Expected truncation warning in logs, got: {[r.message for r in caplog.records]}"
+        assert any("generation hit max_new_tokens" in r.message.lower() for r in caplog.records), (
+            f"Expected truncation warning from generate_fn, got: "
+            f"{[r.message for r in caplog.records]}"
         )
 
-    def test_truncation_no_warning_for_done(self, caplog):
-        """Output says 'done' and hits limit -- no truncation warning."""
-        text_with_done = '{"type": "done"} I am done now'
-        completion_ids = list(range(9))
-        max_new_tokens = 10
+    def test_no_truncation_warning_when_short(self, caplog):
+        """HF generate path: short output does NOT trigger warning."""
+        import io as _io
+        from PIL import Image
+        from openadapt_evals.training import trl_rollout
 
-        # Simulate the truncation check
-        if len(completion_ids) >= max_new_tokens - 1:
-            action = parse_action_json(text_with_done)
-            # "done" IS in text.lower(), so this should NOT fire
-            if action.type == "done" and "done" not in text_with_done.lower():
-                logging.getLogger("openadapt_evals.training.trl_rollout").warning(
-                    "Output truncated"
-                )
+        adapter = _make_mock_adapter()
+        max_new_tokens = 256
+        func = make_waa_rollout_func(
+            adapter,
+            max_steps=1,
+            max_new_tokens=max_new_tokens,
+            screenshot_retries=1,
+            screenshot_retry_delay=0,
+        )
+        trainer = _make_mock_trainer(num_generations=1)
 
-        # No warning should have been logged
+        img = Image.new("RGB", (10, 10), color="red")
+        buf = _io.BytesIO()
+        img.save(buf, format="PNG")
+        valid_png = buf.getvalue()
+
+        adapter.observe.return_value = BenchmarkObservation(
+            screenshot=valid_png, raw_observation={},
+        )
+
+        mock_torch = MagicMock()
+        mock_torch.no_grad.return_value.__enter__ = MagicMock(return_value=None)
+        mock_torch.no_grad.return_value.__exit__ = MagicMock(return_value=False)
+
+        # Short completion — only 3 tokens, well below max_new_tokens
+        prompt_len = 5
+        fake_completion = list(range(3))
+        fake_seq = MagicMock()
+        fake_seq.__getitem__ = lambda self, idx: MagicMock(
+            tolist=lambda: fake_completion,
+        )
+        mock_gen_output = MagicMock()
+        mock_gen_output.sequences = [fake_seq]
+        mock_gen_output.scores = []
+        trainer.model.generate.return_value = mock_gen_output
+
+        mock_inputs = MagicMock()
+        mock_input_ids = MagicMock()
+        mock_input_ids.shape = [1, prompt_len]
+        mock_inputs.__getitem__ = lambda self, key: (
+            mock_input_ids if key == "input_ids" else MagicMock()
+        )
+        mock_inputs.to.return_value = mock_inputs
+        trainer.processing_class.return_value = mock_inputs
+        trainer.processing_class.apply_chat_template.return_value = "fake prompt"
+        trainer.processing_class.decode.return_value = '{"type": "done"}'
+
+        def mock_run(env, gfn, instr, tid, ms, stuck_threshold=3):
+            from openadapt_evals.adapters.rl_env import ResetConfig
+            env.reset(config=ResetConfig(task_id=tid))
+
+            with patch.dict("sys.modules", {"torch": mock_torch}):
+                text, ids, lps = gfn(valid_png, "test instruction")
+
+            return [1], ids, lps, 0.0
+
+        with caplog.at_level(logging.WARNING, logger="openadapt_evals.training.trl_rollout"):
+            with patch.object(trl_rollout, "_run_episode", side_effect=mock_run):
+                func(["Test task"], trainer)
+
         assert not any(
-            "truncated" in r.message.lower()
+            "generation hit max_new_tokens" in r.message.lower()
             for r in caplog.records
+        ), (
+            f"Should NOT see truncation warning for short output, got: "
+            f"{[r.message for r in caplog.records]}"
         )
 
 
