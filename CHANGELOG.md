@@ -1,6 +1,30 @@
 # CHANGELOG
 
 
+## v0.81.6 (2026-03-29)
+
+### Bug Fixes
+
+- Use build_agent_messages for TRL prompt + fix 4x over-generation
+  ([#247](https://github.com/OpenAdaptAI/openadapt-evals/pull/247),
+  [`1d94899`](https://github.com/OpenAdaptAI/openadapt-evals/commit/1d948996a117b8d9a20430e28ed631fb8361b8cc))
+
+Two critical fixes:
+
+1. Garbage output root cause: TRL constructed user messages differently from the standalone trainer.
+  Standalone wraps instruction with "Goal:" prefix, format guidance, and {"type": "image"}
+  placeholder. TRL passed raw instruction text. Now imports build_agent_messages from
+  standalone.prompt so both paths produce identical messages.
+
+2. 4x over-generation: batch_size=num_gen with padded dataset caused 4 identical prompts × 4
+  generations = 16 rollouts (standalone does 4). Now: batch_size=1, generation_batch_size=num_gen.
+  One unique prompt per step with num_gen rollouts. No dataset padding needed.
+
+Also adds one-time prompt logging for operator verification.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.81.5 (2026-03-29)
 
 ### Bug Fixes
