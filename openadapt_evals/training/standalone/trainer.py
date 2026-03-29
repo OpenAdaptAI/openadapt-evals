@@ -206,7 +206,20 @@ class GRPOTrainer:
                 logger.info("Stuck at step %d", step_idx)
                 break
 
-            image = Image.open(io.BytesIO(screenshot))
+            try:
+                image = Image.open(io.BytesIO(screenshot))
+            except (SyntaxError, OSError) as img_err:
+                logger.warning(
+                    "Corrupt screenshot at step %d, retrying: %s",
+                    step_idx, img_err,
+                )
+                time.sleep(2)
+                try:
+                    screenshot = self._env.screenshot()
+                    image = Image.open(io.BytesIO(screenshot))
+                except Exception:
+                    logger.error("Screenshot retry also failed, skipping step")
+                    break
             if image.mode != "RGB":
                 image = image.convert("RGB")
                 # .convert() drops .format; restore it for outlines.Image
