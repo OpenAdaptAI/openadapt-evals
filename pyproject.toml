@@ -89,8 +89,10 @@ viewer = [
     "flask-cors>=4.0.0",
 ]
 wandb = [
-    # Weights & Biases for experiment tracking
+    # Weights & Biases for experiment tracking + Weave agent tracing
     "wandb>=0.16.0",
+    # Weave: LLM/agent tracing with auto-patched OpenAI/Anthropic clients
+    "weave>=0.50.0",
 ]
 training = [
     # Perceptual hashing for planner cache (falls back to MD5 if not installed)

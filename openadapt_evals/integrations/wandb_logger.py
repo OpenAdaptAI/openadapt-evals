@@ -135,6 +135,14 @@ class WandbLogger:
             benchmark = self.config.get("benchmark", "eval")
             self.name = f"{benchmark}_{model_id}_{timestamp}"
 
+        # Initialize Weave tracing alongside W&B — auto-patches
+        # OpenAI/Anthropic clients for VLM call tracing.
+        try:
+            from openadapt_evals.integrations.weave_integration import weave_init
+            weave_init(self.project)
+        except Exception:
+            pass
+
         self._run = wandb.init(
             project=self.project,
             entity=self.entity,

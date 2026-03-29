@@ -16,6 +16,13 @@ from pathlib import Path
 _DEFAULT_TIMEOUT = 120  # seconds — prevents indefinite hangs on API calls
 
 
+try:
+    from openadapt_evals.integrations.weave_integration import weave_op
+except ImportError:
+    weave_op = lambda fn: fn  # noqa: E731
+
+
+@weave_op
 def vlm_call(
     prompt: str,
     *,
