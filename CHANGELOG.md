@@ -1,6 +1,37 @@
 # CHANGELOG
 
 
+## v0.81.0 (2026-03-29)
+
+### Features
+
+- Add DiagnosticsCallback and TRL robustness tests
+  ([#238](https://github.com/OpenAdaptAI/openadapt-evals/pull/238),
+  [`d7896d5`](https://github.com/OpenAdaptAI/openadapt-evals/commit/d7896d562135366fce600bba9e5b342699b3ee09))
+
+- Add DiagnosticsCallback to trl_callbacks.py: logs loss, |loss|, grad_norm, reward in scientific
+  notation (matches standalone trainer diagnostic output) - Register DiagnosticsCallback in
+  trl_wrapper.py alongside TelemetryCallback - Add test_trl_robustness.py: 19 tests covering health
+  check, corrupt screenshot retry, stuck detection, truncation warning, diagnostics callback, and
+  empty rollout result shape
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Add openadapt-types dependency and _AgentOutput schema
+  ([#239](https://github.com/OpenAdaptAI/openadapt-evals/pull/239),
+  [`fb7e87f`](https://github.com/OpenAdaptAI/openadapt-evals/commit/fb7e87f5a728bb0a05226765d5440a273de6f7b2))
+
+- Add openadapt-types>=0.1.0 to core dependencies (canonical action schema for the OpenAdapt
+  ecosystem — Pydantic v2, lightweight) - Add _AgentOutput Pydantic model for future Outlines JSON
+  schema constrained decoding (currently unused — default is DSL regex) - Does NOT change the system
+  prompt (DSL format, matching #236 fix)
+
+The _AgentOutput model enables switching to outlines.json(model, schema) once models are SFT'd on
+  JSON format. For now, DSL regex remains default.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.80.2 (2026-03-29)
 
 ### Bug Fixes
