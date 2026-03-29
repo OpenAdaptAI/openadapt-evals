@@ -328,3 +328,56 @@ class TestTRLE2E:
             "Either the model ignores vision inputs or the wrapper "
             "isn't injecting them. Training will produce zero gradient."
         )
+
+    def test_wrapper_passes_peft_validation(self):
+        """VLMModelWrapper passes TRL's PEFT/quantization validation.
+
+        TRL checks isinstance(model, PeftModel) to verify adapters are
+        attached to quantized models. The wrapper must pass this check.
+        Without it: ValueError: "You cannot perform fine-tuning on purely
+        quantized models. Please attach trainable adapters."
+        """
+        torch = pytest.importorskip("torch")
+
+        try:
+            from peft import PeftModel
+        except ImportError:
+            pytest.skip("peft not installed")
+
+        from openadapt_evals.training.vlm_wrapper import VLMModelWrapper
+
+        # Create a mock PeftModel (has peft_config, active_adapter, etc.)
+        model = MagicMock(spec=PeftModel)
+        model.peft_config = {"default": MagicMock()}
+        model.active_adapter = "default"
+        model.parameters.return_value = iter([torch.zeros(1, requires_grad=True)])
+
+        wrapper = VLMModelWrapper(model)
+
+        # The critical check TRL performs
+        assert isinstance(wrapper, PeftModel), (
+            "isinstance(wrapper, PeftModel) must be True. "
+            "TRL rejects quantized models without PEFT adapters."
+        )
+        assert hasattr(wrapper, "peft_config"), (
+            "wrapper must expose peft_config for TRL validation."
+        )
+
+    def test_wrapper_preserves_trainable_parameters(self):
+        """VLMModelWrapper exposes trainable parameters for the optimizer.
+
+        TRL needs model.parameters() to set up the optimizer. The wrapper
+        must delegate this to the wrapped model.
+        """
+        torch = pytest.importorskip("torch")
+        from openadapt_evals.training.vlm_wrapper import VLMModelWrapper
+
+        model, _ = self._make_tiny_vlm_and_processor()
+        wrapper = VLMModelWrapper(model)
+
+        # Verify parameters are accessible and trainable
+        params = list(wrapper.parameters())
+        assert len(params) > 0, "Wrapper must expose model parameters"
+        assert any(p.requires_grad for p in params), (
+            "At least some parameters must require grad for training"
+        )

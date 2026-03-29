@@ -50,6 +50,47 @@ class VLMModelWrapper:
         object.__setattr__(self, "_cache_hits", 0)
         object.__setattr__(self, "_cache_misses", 0)
 
+        # --- PEFT / quantization compatibility ---
+        # TRL's validate_quantization_for_training() checks for PEFT via:
+        #   1. isinstance(model, PeftModel) — fails because wrapper isn't PeftModel
+        #   2. hasattr(model, "peft_config") — works via our __getattr__
+        #   3. Checking model.is_quantized / model.quantization_method
+        #
+        # The isinstance check is the blocker. We solve it by making the
+        # wrapper's __class__ inherit from the wrapped model's type, so
+        # isinstance(wrapper, PeftModel) returns True.
+        try:
+            from peft import PeftModel
+            if isinstance(model, PeftModel):
+                # Create a new class that inherits from BOTH our wrapper
+                # and the actual model class. This makes isinstance work
+                # while keeping our forward/generate/cache methods.
+                combined = type(
+                    "VLMPeftModelWrapper",
+                    (VLMModelWrapper, type(model)),
+                    {
+                        # Ensure our methods take priority (MRO)
+                        "forward": VLMModelWrapper.forward,
+                        "generate": VLMModelWrapper.generate,
+                        "__call__": VLMModelWrapper.__call__,
+                        "cache_vision_inputs": VLMModelWrapper.cache_vision_inputs,
+                        "__getattr__": VLMModelWrapper.__getattr__,
+                    },
+                )
+                object.__setattr__(self, "__class__", combined)
+                logger.info(
+                    "VLMModelWrapper: PEFT isinstance compatibility enabled "
+                    "(wrapped model is %s)", type(model).__name__,
+                )
+        except ImportError:
+            pass
+        except Exception as exc:
+            # If dynamic class fails, fall back to attribute-level compat
+            logger.warning(
+                "VLMModelWrapper: PEFT isinstance setup failed: %s. "
+                "Falling back to attribute-level compatibility.", exc,
+            )
+
     def cache_vision_inputs(self, inputs: dict[str, Any]) -> None:
         """Cache vision tensors from a processor output dict.
 
