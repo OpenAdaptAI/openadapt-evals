@@ -356,126 +356,79 @@ class GRPOTrainer:
 
         for step in valid:
             try:
-                image = Image.open(io.BytesIO(step.screenshot)).convert("RGB")
+                image = Image.open(io.BytesIO(step.screenshot))
             except Exception:
                 continue
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+                image.format = "PNG"
             messages = build_agent_messages(rollout.instruction, include_image=True)
             action_text = step.raw_text or format_action_as_text(step.action, self._config.screen_size)
 
             if hasattr(self._processor, "apply_chat_template"):
-                text_input = self._processor.apply_chat_template(
+                prompt_text = self._processor.apply_chat_template(
                     messages, tokenize=False, add_generation_prompt=True)
             else:
-                text_input = messages[-1]["content"]
+                prompt_text = messages[-1]["content"]
 
-            prompt_inputs = self._processor(text=[text_input], images=[image], return_tensors="pt")
-            prompt_len = prompt_inputs["input_ids"].shape[1]
-            inner_tok = getattr(self._processor, "tokenizer", self._processor)
-            action_ids = inner_tok(action_text, return_tensors="pt", add_special_tokens=False)["input_ids"]
-            if action_ids.shape[1] <= 0:
-                continue
-
-            full_ids = torch.cat([prompt_inputs["input_ids"], action_ids.to(prompt_inputs["input_ids"].device)], dim=1)
-
-            # --- Vision tensor handling during loss computation ---
-            # Current default ("exclude"): strips vision tensors so the
-            # forward pass only sees text embeddings.  This avoids OOM on
-            # L40S-class GPUs (48 GB) because the vision encoder backward
-            # pass is very expensive and unnecessary — we only compute loss
-            # on *action* tokens (past prompt_len).
+            # --- Vision-safe loss computation ---
             #
-            # Proper fixes (future work):
-            #   1. "include"  – keep vision tensors and let the full
-            #      multimodal forward pass run.  May OOM on < 80 GB VRAM
-            #      without further optimisation.
-            #   2. "checkpoint" – use torch.utils.checkpoint on the vision
-            #      encoder so activations are recomputed during backward
-            #      instead of stored, dramatically cutting peak VRAM.
-            #   3. Cached KV – pre-compute and cache the vision encoder's
-            #      key/value projections per screenshot so we never
-            #      backpropagate through the encoder at all.  Requires
-            #      architecture-specific hooks (e.g. Qwen2-VL cross-attn).
+            # Process the FULL text (prompt + action) through the processor
+            # as a single unit.  This ensures the model's vision merge
+            # operates on consistent input.
+            #
+            # WHY: The old approach processed prompt alone, then manually
+            # concatenated action_ids onto input_ids.  This created a
+            # frankenstein input where pixel_values were sized for the
+            # prompt but input_ids included action tokens.  Qwen3's vision
+            # merge changed internal sequence length, causing attention
+            # mask mismatches (crash on step 5 intermittently).
+            #
+            # NOW: processor(prompt + action, image) produces consistent
+            # input_ids + pixel_values + attention_mask.  The model's
+            # forward pass handles vision merge correctly.
+
+            vision_loss_mode = getattr(self._config, "vision_loss_mode", "exclude")
             _VISION_KEYS = {"pixel_values", "pixel_values_videos",
                             "image_grid_thw", "video_grid_thw"}
 
-            vision_loss_mode = getattr(self._config, "vision_loss_mode", "exclude")
+            inner_tok = getattr(self._processor, "tokenizer", self._processor)
+            action_ids = inner_tok(action_text, add_special_tokens=False, return_tensors="pt")["input_ids"]
+            n_action = action_ids.shape[1]
+            if n_action <= 0:
+                continue
+
+            full_text = prompt_text + action_text
+            full_inputs = self._processor(
+                text=[full_text], images=[image], return_tensors="pt",
+            )
 
             if vision_loss_mode == "exclude":
-                excluded = _VISION_KEYS & set(prompt_inputs.keys())
+                excluded = _VISION_KEYS & set(full_inputs.keys())
                 if excluded and not getattr(self, "_vision_exclude_warned", False):
                     logger.warning(
-                        "vision_loss_mode='exclude': stripping vision tensors %s "
-                        "from loss forward pass. Log-probs are TEXT-ONLY and do "
-                        "not reflect visual grounding gradients. Set "
-                        "vision_loss_mode='include' or 'checkpoint' once your "
-                        "GPU VRAM allows it.",
+                        "vision_loss_mode='exclude': stripping vision tensors %s",
                         sorted(excluded),
                     )
                     self._vision_exclude_warned = True
-                full_inputs = {k: v for k, v in prompt_inputs.items()
+                full_inputs = {k: v for k, v in full_inputs.items()
                                if k not in _VISION_KEYS}
-            elif vision_loss_mode == "include":
-                if not getattr(self, "_vision_include_warned", False):
-                    logger.info("vision_loss_mode='include': keeping all vision tensors (may OOM).")
-                    self._vision_include_warned = True
-                full_inputs = dict(prompt_inputs)
             elif vision_loss_mode == "checkpoint":
                 if not getattr(self, "_vision_checkpoint_warned", False):
-                    logger.info("vision_loss_mode='checkpoint': enabling gradient checkpointing on vision encoder.")
+                    logger.info("vision_loss_mode='checkpoint': gradient checkpointing on vision encoder.")
                     self._vision_checkpoint_warned = True
                     if hasattr(self._model, "visual") and hasattr(self._model.visual, "gradient_checkpointing_enable"):
                         self._model.visual.gradient_checkpointing_enable()
                     elif hasattr(self._model, "vision_tower"):
                         self._model.vision_tower.gradient_checkpointing_enable()
-                    else:
-                        logger.warning("Cannot find vision encoder for gradient checkpointing; falling back to 'include'.")
-                full_inputs = dict(prompt_inputs)
-            else:
-                raise ValueError(f"Unknown vision_loss_mode={vision_loss_mode!r}. Use 'exclude', 'include', or 'checkpoint'.")
-
-            full_inputs["input_ids"] = full_ids
-
-            # Only set attention_mask for "exclude" mode (text-only forward).
-            # For "include" and "checkpoint" modes, vision tensors are present
-            # and Qwen3's vision-language merge changes the internal sequence
-            # length (e.g., 1305 input tokens → 1202 post-merge).  An
-            # explicit attention_mask sized to input_ids will mismatch.
-            # Let the model construct its own mask internally.
-            if vision_loss_mode == "exclude":
-                full_inputs["attention_mask"] = torch.ones_like(full_ids)
+            # "include" mode: keep all tensors as-is
 
             full_inputs = {k: v.to(device) for k, v in full_inputs.items()}
+            outputs = self._model(**full_inputs)
 
-            n_action = action_ids.shape[1]
-
-            # Forward pass with fallback: if include/checkpoint mode crashes
-            # due to Qwen3's vision merge changing sequence length (attention
-            # mask mismatch), retry with exclude mode for this step.
-            try:
-                outputs = self._model(**full_inputs)
-                if vision_loss_mode == "exclude":
-                    al = outputs.logits[:, prompt_len - 1: prompt_len - 1 + n_action, :]
-                else:
-                    seq_len = outputs.logits.shape[1]
-                    al = outputs.logits[:, seq_len - n_action - 1: seq_len - 1, :]
-            except (IndexError, RuntimeError) as fwd_err:
-                if vision_loss_mode != "exclude":
-                    logger.warning(
-                        "Vision forward pass failed (%s), retrying with "
-                        "exclude mode for this step: %s",
-                        vision_loss_mode, fwd_err,
-                    )
-                    fallback_inputs = {
-                        k: v for k, v in prompt_inputs.items()
-                        if k not in _VISION_KEYS
-                    }
-                    fallback_inputs["input_ids"] = full_ids
-                    fallback_inputs["attention_mask"] = torch.ones_like(full_ids)
-                    fallback_inputs = {k: v.to(device) for k, v in fallback_inputs.items()}
-                    outputs = self._model(**fallback_inputs)
-                    al = outputs.logits[:, prompt_len - 1: prompt_len - 1 + n_action, :]
-                else:
-                    raise
+            # Action logits are the last n_action positions in the output
+            seq_len = outputs.logits.shape[1]
+            al = outputs.logits[:, seq_len - n_action - 1: seq_len - 1, :]
 
             lp = torch.nn.functional.log_softmax(al, dim=-1)
             action_token_ids = action_ids.to(device)
