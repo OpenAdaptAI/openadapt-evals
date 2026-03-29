@@ -1,6 +1,21 @@
 # CHANGELOG
 
 
+## v0.78.2 (2026-03-29)
+
+### Bug Fixes
+
+- Remove remaining 125 tracked data files (waa_recordings, .beads)
+  ([`d000f5d`](https://github.com/OpenAdaptAI/openadapt-evals/commit/d000f5d78af487ef2ea0a2e6d168c39fb06c92a0))
+
+These were committed before PR #227 and missed in the first cleanup. waa_recordings/ contains WAA
+  experiment screenshots (PNGs). .beads/ contains a SQLite database for local tooling.
+
+Both are already in .gitignore from the prior cleanup commit.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.78.1 (2026-03-29)
 
 ### Bug Fixes
