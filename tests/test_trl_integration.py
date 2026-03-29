@@ -239,3 +239,58 @@ class TestTelemetryCallback:
         with patch("openadapt_evals.telemetry.capture_event"):
             cb.on_train_begin(args, state, control)
             cb.on_step_end(args, state, control)
+
+
+# ---------------------------------------------------------------------------
+# Wrapper callback passthrough tests
+# ---------------------------------------------------------------------------
+
+
+class TestWrapperPassesCallbacks:
+    """Verify GRPOTrainer passes on_before_collect and on_rollout_complete
+    through to make_waa_rollout_func, not into HookBridge."""
+
+    def test_wrapper_passes_callbacks_to_rollout_func(self):
+        """Verify on_before_collect and on_rollout_complete are forwarded
+        to make_waa_rollout_func as keyword arguments.
+
+        Since train() has local imports of heavy dependencies (datasets, trl,
+        torch), we verify by inspecting the source code of train() to confirm
+        the kwargs are passed. This avoids needing GPU/torch in CI.
+        """
+        from openadapt_evals.training.trl_wrapper import GRPOTrainer
+        from openadapt_evals.training.standalone.config import TrainingConfig
+        import inspect
+
+        before_fn = lambda task_id, env: None
+        complete_fn = lambda rollout, index: None
+
+        trainer = GRPOTrainer(
+            TrainingConfig(task_dir="tasks/"),
+            on_before_collect=before_fn,
+            on_rollout_complete=complete_fn,
+        )
+
+        # 1. Verify the stored callbacks match what was passed.
+        assert trainer._on_before_collect is before_fn
+        assert trainer._on_rollout_complete is complete_fn
+
+        # 2. Verify train() source passes callbacks to make_waa_rollout_func.
+        source = inspect.getsource(GRPOTrainer.train)
+        assert "on_before_collect=self._on_before_collect" in source, (
+            "train() must pass on_before_collect to make_waa_rollout_func"
+        )
+        assert "on_rollout_complete=self._on_rollout_complete" in source, (
+            "train() must pass on_rollout_complete to make_waa_rollout_func"
+        )
+
+        # 3. Verify HookBridge no longer stores these callbacks.
+        hookbridge_section = source.split("class HookBridge")[1].split(
+            "callbacks.append"
+        )[0] if "class HookBridge" in source else ""
+        assert "on_before_collect" not in hookbridge_section, (
+            "HookBridge should not store on_before_collect"
+        )
+        assert "on_rollout_complete" not in hookbridge_section, (
+            "HookBridge should not store on_rollout_complete"
+        )

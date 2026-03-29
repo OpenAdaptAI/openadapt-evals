@@ -87,7 +87,7 @@ logger = logging.getLogger(__name__)
 from openadapt_evals.training.standalone.prompt import SYSTEM_PROMPT  # noqa: E402
 
 # ---------------------------------------------------------------------------
-# Constrained decoding regex — ported from standalone trainer
+# Constrained decoding regex -- ported from standalone trainer
 # ---------------------------------------------------------------------------
 # Matches the ``Thought: <reasoning>\nAction: <action>`` format.
 # All repetitions use unbounded quantifiers (+, *) instead of bounded ({1,N})
@@ -106,12 +106,12 @@ ACTION_REGEX = r"Thought: [^\n]+\nAction: (" + _ACTION_RE + r")"
 # ---------------------------------------------------------------------------
 # When the model is SFT'd on JSON format (not DSL), switch constrained
 # decoding to: outlines.json(model, _AgentOutput) instead of regex.
-# This is NOT the default — the default uses DSL regex (ACTION_REGEX).
+# This is NOT the default -- the default uses DSL regex (ACTION_REGEX).
 class _AgentOutput(BaseModel):
     """Pydantic schema for Outlines JSON-mode constrained decoding.
 
     Use with: ``outlines.json(model, _AgentOutput)`` once the model has
-    been SFT'd on JSON action format. Currently unused — default is DSL
+    been SFT'd on JSON action format. Currently unused -- default is DSL
     regex via ACTION_REGEX.
     """
 
@@ -349,7 +349,7 @@ def _run_episode(
         if step_result.done:
             break
 
-    # Evaluate — dense rewards if milestones, binary otherwise
+    # Evaluate -- dense rewards if milestones, binary otherwise
     reward = env.evaluate_dense()
 
     return prompt_ids, all_completion_ids, all_logprobs, reward
@@ -365,6 +365,8 @@ def make_waa_rollout_func(
     screenshot_retries: int = 3,
     screenshot_retry_delay: float = 1.0,
     stuck_threshold: int = 3,
+    on_before_collect: Optional[Callable] = None,
+    on_rollout_complete: Optional[Callable] = None,
 ) -> Callable:
     """Create a TRL-compatible rollout_func for WAA environments.
 
@@ -389,6 +391,14 @@ def make_waa_rollout_func(
         stuck_threshold: Number of consecutive identical screenshots before
             breaking an episode early. Set to 0 to disable stuck detection.
             Ported from the standalone trainer's WAADirect.is_stuck().
+        on_before_collect: ``(task_id, env) -> None`` callback fired before
+            each episode begins. Useful for health checks, logging, or
+            pre-rollout setup. A raised exception is caught and logged as
+            a warning (does not abort the episode).
+        on_rollout_complete: ``(rollout, index) -> None`` callback fired
+            after each episode completes. ``rollout`` is a dict with keys
+            ``prompt``, ``task_id``, ``reward``, ``gen_idx``. A raised
+            exception is caught and logged as a warning.
 
     Returns:
         A callable suitable for GRPOTrainer(rollout_func=...).
@@ -423,10 +433,6 @@ def make_waa_rollout_func(
         num_generations = getattr(trainer.args, "num_generations", 8)
 
         # --- Pre-rollout health check (P0) ---
-        # Verify WAA server is responsive before committing GPU time to a
-        # full batch of rollouts. Ported from standalone trainer's
-        # _collect_group() which calls probe() before each group.
-        # Skip for mock adapters (unittest.mock.MagicMock or WAAMockAdapter).
         _mod = getattr(type(adapter), "__module__", "") or ""
         _name = type(adapter).__name__.lower()
         _is_mock = "mock" in _name or "mock" in _mod
@@ -470,10 +476,6 @@ def make_waa_rollout_func(
             """Generate action tokens from screenshot + instruction."""
             from PIL import Image
 
-            # --- Corrupt screenshot retry (P0) ---
-            # On Azure VMs with QEMU, ~1-5% of screenshots are corrupt.
-            # Retry with a brief delay rather than crashing the entire
-            # rollout. Ported from standalone trainer's _collect_rollout().
             img = None
             for attempt in range(screenshot_retries):
                 try:
@@ -507,7 +509,6 @@ def make_waa_rollout_func(
                 ]},
             ]
 
-            # Tokenize with processor
             import torch
 
             text_input = processor.apply_chat_template(
@@ -524,22 +525,16 @@ def make_waa_rollout_func(
                     max_new_tokens=max_new_tokens,
                     temperature=temperature,
                 )
-                # Tokenize the decoded text to get token IDs
                 inner_tok = getattr(processor, "tokenizer", processor)
                 completion_ids = inner_tok.encode(
                     decoded, add_special_tokens=False,
                 )
-                # Outlines does not return per-token logprobs, so we
-                # return empty logprobs. TRL recomputes logprobs from
-                # the model during the training step anyway.
                 logprobs: list[float] = []
 
-                # Truncation warning — detect when output was cut off
                 if len(completion_ids) >= max_new_tokens - 1:
                     logger.warning(
                         "Generation hit max_new_tokens=%d. Output may be "
-                        "truncated. If actions are unparseable, increase "
-                        "max_new_tokens or enable constrained_decoding.",
+                        "truncated.",
                         max_new_tokens,
                     )
 
@@ -551,7 +546,6 @@ def make_waa_rollout_func(
                 return_tensors="pt", padding=True,
             ).to(device)
 
-            # Generate
             with torch.no_grad():
                 outputs = model.generate(
                     **inputs,
@@ -562,11 +556,9 @@ def make_waa_rollout_func(
                     output_scores=True,
                 )
 
-            # Extract completion tokens (everything after prompt)
             prompt_len = inputs["input_ids"].shape[1]
             completion_ids = outputs.sequences[0][prompt_len:].tolist()
 
-            # Compute per-token logprobs from scores
             logprobs = []
             if hasattr(outputs, "scores") and outputs.scores:
                 for i, score in enumerate(outputs.scores):
@@ -574,28 +566,35 @@ def make_waa_rollout_func(
                     if i < len(completion_ids):
                         logprobs.append(probs[completion_ids[i]].item())
 
-            # Decode text
             text = processor.decode(completion_ids, skip_special_tokens=True)
 
-            # Truncation warning — detect when output was cut off
             if len(completion_ids) >= max_new_tokens - 1:
                 logger.warning(
                     "Generation hit max_new_tokens=%d. Output may be "
-                    "truncated. If actions are unparseable, increase "
-                    "max_new_tokens or enable constrained_decoding.",
+                    "truncated.",
                     max_new_tokens,
                 )
 
             return text, completion_ids, logprobs
 
         for prompt in prompts:
-            # Find matching task config
             tc = config_map.get(prompt)
 
             for gen_idx in range(num_generations):
                 env = RLEnvironment(adapter, task_config=tc)
 
                 task_id = tc.id if tc else "default"
+
+                # --- on_before_collect callback ---
+                if on_before_collect is not None:
+                    try:
+                        on_before_collect(task_id, env)
+                    except Exception as exc:
+                        logger.warning(
+                            "on_before_collect callback raised for "
+                            "task_id=%s gen=%d: %s",
+                            task_id, gen_idx, exc,
+                        )
 
                 try:
                     p_ids, c_ids, lps, reward = _run_episode(
@@ -607,6 +606,25 @@ def make_waa_rollout_func(
                         prompt[:50], gen_idx, exc,
                     )
                     p_ids, c_ids, lps, reward = [], [], [], 0.0
+
+                # --- on_rollout_complete callback ---
+                if on_rollout_complete is not None:
+                    try:
+                        on_rollout_complete(
+                            {
+                                "prompt": prompt,
+                                "task_id": task_id,
+                                "reward": reward,
+                                "gen_idx": gen_idx,
+                            },
+                            gen_idx,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "on_rollout_complete callback raised for "
+                            "task_id=%s gen=%d: %s",
+                            task_id, gen_idx, exc,
+                        )
 
                 all_prompt_ids.append(p_ids)
                 all_completion_ids.append(c_ids)
