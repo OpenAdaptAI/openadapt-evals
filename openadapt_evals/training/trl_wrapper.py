@@ -91,7 +91,13 @@ class GRPOTrainer:
 
         # --- Model (from our config) ---
         if getattr(self._config, "use_unsloth", False):
-            from unsloth import FastVisionModel
+            try:
+                from unsloth import FastVisionModel
+            except ImportError:
+                raise ImportError(
+                    "use_unsloth=True but unsloth is not installed. "
+                    "Install with: pip install openadapt-evals[unsloth]"
+                ) from None
             logger.info("Loading with Unsloth: %s", self._config.model_name)
             model, processor = FastVisionModel.from_pretrained(
                 self._config.model_name,

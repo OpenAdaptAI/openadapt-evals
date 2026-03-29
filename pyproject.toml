@@ -95,14 +95,20 @@ wandb = [
     "weave>=0.50.0",
 ]
 training = [
+    # TRL for GRPO/PPO training with rollout_func
+    "trl>=0.17.0",
+    # Unsloth: 90% VRAM reduction for VLM RL training
+    "unsloth",
+    # HF datasets for TRL training dataset
+    "datasets>=2.14.0",
+    # Constrained decoding for GRPO (forces valid action format output)
+    "outlines>=0.1.0",
     # Perceptual hashing for planner cache (falls back to MD5 if not installed)
     "imagehash>=4.3.0",
     # CLIP embeddings for visual similarity
     "open-clip-torch>=2.20.0",
     # Heavy ML deps for openadapt-ml training
     "openadapt-ml[training]>=0.11.0",
-    # Constrained decoding for GRPO (forces valid action format output)
-    "outlines>=0.1.0",
 ]
 verl = [
     # veRL: Volcano Engine Reinforcement Learning for LLMs
