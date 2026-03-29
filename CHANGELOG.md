@@ -1,6 +1,24 @@
 # CHANGELOG
 
 
+## v0.81.9 (2026-03-29)
+
+### Bug Fixes
+
+- Patch chat_template to remove <think> tags at the source
+  ([#250](https://github.com/OpenAdaptAI/openadapt-evals/pull/250),
+  [`c1d3588`](https://github.com/OpenAdaptAI/openadapt-evals/commit/c1d35883851ad111f049167051e71e9a44e7819d))
+
+Stripping <think> from rendered text was insufficient — TRL or the processor may re-apply the
+  template, re-inserting the tags. The fix: patch processor.chat_template and
+  processor.tokenizer.chat_template on first rollout call, removing <think>/<think> from the Jinja
+  template itself. This ensures no code path can re-insert thinking mode.
+
+Also strips </think> (was missed in #249).
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.81.8 (2026-03-29)
 
 ### Bug Fixes
