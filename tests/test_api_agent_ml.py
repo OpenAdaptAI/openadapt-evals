@@ -2,8 +2,11 @@
 
 import pytest
 
+pytestmark = pytest.mark.heavy
+openadapt_ml_benchmarks = pytest.importorskip("openadapt_ml.benchmarks")
+APIBenchmarkAgent = openadapt_ml_benchmarks.APIBenchmarkAgent
+
 from openadapt_evals import BenchmarkAction, BenchmarkObservation, BenchmarkTask
-from openadapt_ml.benchmarks import APIBenchmarkAgent
 
 
 class TestAPIBenchmarkAgentParsing:

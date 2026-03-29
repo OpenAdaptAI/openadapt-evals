@@ -152,6 +152,13 @@ openadapt-ml = { path = "../openadapt-ml", editable = true }
 [tool.hatch.build.targets.wheel]
 packages = ["openadapt_evals", "scripts"]
 
+[tool.pytest.ini_options]
+markers = [
+    "heavy: requires ML deps (torch, transformers, trl, openadapt-ml) — skipped in light CI",
+    "gpu: requires GPU hardware",
+    "vm: requires a running WAA VM",
+]
+
 [tool.ruff]
 line-length = 100
 

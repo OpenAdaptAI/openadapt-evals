@@ -25,8 +25,22 @@ jobs:
       - name: Install dependencies
         run: uv sync --extra dev --no-sources
 
+      - name: Guard against bare heavy imports in tests
+        run: |
+          # Fail CI if any test file has a bare top-level import of a heavy package.
+          # Heavy packages must use pytest.importorskip() at module level.
+          if grep -rn '^import \(torch\|transformers\|trl\|datasets\|unsloth\|accelerate\|peft\|bitsandbytes\)\b' tests/ || \
+             grep -rn '^from \(torch\|transformers\|trl\|datasets\|unsloth\|accelerate\|peft\|bitsandbytes\|openadapt_ml\)\b' tests/; then
+            echo ""
+            echo "ERROR: Found bare top-level import of heavy package in tests."
+            echo "Use pytest.importorskip() instead. Example:"
+            echo '  torch = pytest.importorskip("torch")'
+            echo '  openadapt_ml = pytest.importorskip("openadapt_ml")'
+            exit 1
+          fi
+
       - name: Run tests
         run: |
           uv run --no-sources pytest tests/ -q \
-            --ignore=tests/test_api_agent_ml.py \
+            -m "not heavy and not gpu and not vm" \
             -k "not (test_demo_format_and_persistence or test_synthetic_demos)"

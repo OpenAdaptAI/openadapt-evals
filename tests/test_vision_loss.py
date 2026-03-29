@@ -14,7 +14,9 @@ from unittest.mock import MagicMock, patch
 import io
 
 import pytest
-import torch
+
+pytestmark = pytest.mark.heavy
+torch = pytest.importorskip("torch")
 
 
 # ---------------------------------------------------------------------------
