@@ -398,3 +398,53 @@ class TestComputeRolloutLossIntegration:
 
         assert "pixel_values" not in captured, "exclude mode should strip pixel_values"
         assert "image_grid_thw" not in captured, "exclude mode should strip image_grid_thw"
+
+    def test_training_step_diagnostics(self, mock_processor, tiny_png):
+        """Training step with reward variance produces diagnostic metrics.
+
+        With 2 rollouts and rewards [0, 1], advantages are symmetric
+        [-1, +1]. Per-rollout gradients may cancel (grad_norm≈0) because
+        both rollouts saw the same input. This is expected with N=2.
+        With more rollouts (N≥4), gradients would be asymmetric.
+
+        The key assertion: loss_abs > 0 (each rollout contributes
+        non-zero loss even though the sum cancels).
+        """
+        from openadapt_evals.training.standalone.trainer import GRPOTrainer
+        from openadapt_evals.training.standalone.config import TrainingConfig
+        from openadapt_evals.training.standalone.waa_direct import Rollout, RolloutStep
+
+        config = TrainingConfig(vision_loss_mode="exclude")
+        trainer = GRPOTrainer(config)
+        trainer._processor = mock_processor
+        trainer._config = config
+        model = self._make_tiny_model()
+        trainer._model = model
+        trainer._optimizer = torch.optim.AdamW(
+            [p for p in model.parameters() if p.requires_grad], lr=1e-3,
+        )
+
+        def make_rollout(reward):
+            step = RolloutStep(
+                screenshot=tiny_png,
+                action=MagicMock(type="click", x=0.5, y=0.3),
+                raw_text="CLICK(x=0.50, y=0.30)", reward=0.0,
+            )
+            return Rollout(
+                task_id="test", instruction="Click the button",
+                steps=[step], reward=reward,
+            )
+
+        rollouts = [make_rollout(0.0), make_rollout(1.0)]
+        metrics = trainer._training_step(rollouts)
+
+        # With 2 symmetric rollouts, grad_norm may be ≈0 (gradients cancel).
+        # But absolute loss must be > 0 (each rollout contributes non-zero loss).
+        assert metrics["loss_abs"] > 0, (
+            f"|loss| should be > 0, got {metrics['loss_abs']}"
+        )
+        assert not metrics["skipped"], "Should not skip with reward variance"
+        assert len(metrics["advantages"]) == 2, "Should have 2 advantage values"
+        # Advantages should be symmetric: one positive, one negative
+        advs = metrics["advantages"]
+        assert advs[0] * advs[1] < 0, f"Advantages should have opposite signs: {advs}"
