@@ -4,25 +4,26 @@ OpenAdapt collects anonymous usage telemetry to understand how the tools are use
 
 ## Disabling telemetry
 
-Add one line to your `.env` file:
+### Option 1: `pyproject.toml` (recommended for teams)
+
+Add to your project's `pyproject.toml`:
+
+```toml
+[tool.openadapt]
+telemetry = false
+```
+
+Commit this to your repo. Every developer who clones the repo has telemetry disabled automatically — no per-user setup, no environment variables, no `.env` files.
+
+This is the recommended approach for enterprises and teams.
+
+### Option 2: `.env` file (single user)
 
 ```env
 DO_NOT_TRACK=1
 ```
 
-That's it. All telemetry is disabled globally — no events are sent, no background threads are started, no network connections are made.
-
-This works across all OpenAdapt packages (openadapt-evals, openadapt-ml, openadapt-capture) because they all check this variable before sending any data.
-
-### Alternative
-
-```env
-OPENADAPT_TELEMETRY_ENABLED=false
-```
-
-Both `DO_NOT_TRACK=1` and `OPENADAPT_TELEMETRY_ENABLED=false` have the same effect. `DO_NOT_TRACK` follows the [Console Do Not Track](https://consoledonottrack.com/) standard used by Homebrew, Gatsby, Next.js, and other OSS projects.
-
-### Environment variable (no .env file)
+### Option 3: Environment variable
 
 ```bash
 export DO_NOT_TRACK=1
@@ -33,6 +34,23 @@ Or per-command:
 ```bash
 DO_NOT_TRACK=1 python scripts/train_trl_grpo.py --task-dir tasks/ ...
 ```
+
+### Option 4: `OPENADAPT_TELEMETRY_ENABLED`
+
+```env
+OPENADAPT_TELEMETRY_ENABLED=false
+```
+
+All four options have the same effect. `DO_NOT_TRACK` follows the [Console Do Not Track](https://consoledonottrack.com/) standard. The `pyproject.toml` approach follows the Python ecosystem convention used by ruff, black, pytest, and mypy.
+
+### Priority order
+
+The first match wins:
+
+1. `DO_NOT_TRACK=1` — always checked first
+2. `OPENADAPT_TELEMETRY_ENABLED=false` — explicit override
+3. `[tool.openadapt] telemetry = false` in `pyproject.toml` — project-level
+4. CI detection — telemetry off by default in CI
 
 ## What we collect
 
