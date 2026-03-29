@@ -1,6 +1,24 @@
 # CHANGELOG
 
 
+## v0.82.3 (2026-03-29)
+
+### Bug Fixes
+
+- Also patch model.generate() to inject cached pixel_values
+  ([#254](https://github.com/OpenAdaptAI/openadapt-evals/pull/254),
+  [`9612019`](https://github.com/OpenAdaptAI/openadapt-evals/commit/96120198f5cd413675b37c6752fe0f2c79dae78e))
+
+forward() patch handles training logprob recomputation, but TRL also calls
+  model.generate(input_ids=...) without pixel_values. HF's generate() uses
+  prepare_inputs_for_generation() which builds a fresh kwargs dict — cached pixel_values in
+  forward() aren't enough because generate() needs them at the top level to pass them through.
+
+Now patches BOTH forward() and generate() on the model instance.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.82.2 (2026-03-29)
 
 ### Bug Fixes
