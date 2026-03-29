@@ -222,3 +222,69 @@ class TestDenseRewards:
         # Should use load_task_from_json since task_config matches
         assert env._current_task is not None
         assert env._current_task.task_id == "test-001"
+
+
+class TestEvaluateDenseEvalOrder:
+    """Verify evaluate_dense tries binary first, local fallback second.
+
+    Training speed comes from the adapter's timeout config (15s for training
+    vs 180s for benchmarking), NOT from skipping the binary eval path.
+    Both evaluation methods are tried, and the max score is used.
+    """
+
+    def test_binary_eval_called_first(self):
+        """Binary evaluate() is always called when milestones exist."""
+        adapter = _make_adapter()
+        check = TaskCheck(check="command", run="echo 1", expect="1", match="exact")
+        task_config = _make_task_config(
+            milestones=[Milestone(name="Step done", check=check)],
+        )
+        task_config.checks = [check]
+
+        env = RLEnvironment(adapter, task_config=task_config)
+        env.reset(config=ResetConfig(task_id="test-001"))
+
+        with patch.object(task_config, "evaluate_checks_local", return_value=1.0):
+            env.evaluate_dense()
+
+        # Binary eval was called (returns 0.0 from mock default)
+        adapter.evaluate.assert_called_once()
+
+    def test_local_fallback_when_binary_returns_zero(self):
+        """Local checks run as fallback when binary returns 0.0."""
+        adapter = _make_adapter()
+        check = TaskCheck(check="command", run="echo 1", expect="1", match="exact")
+        task_config = _make_task_config(
+            milestones=[Milestone(name="Step done", check=check)],
+        )
+        task_config.checks = [check]
+
+        env = RLEnvironment(adapter, task_config=task_config)
+        env.reset(config=ResetConfig(task_id="test-001"))
+
+        with patch.object(task_config, "evaluate_checks_local", return_value=1.0) as mock_local:
+            score = env.evaluate_dense()
+
+        mock_local.assert_called_once()
+        assert score >= 1.0
+
+    def test_local_not_called_when_binary_succeeds(self):
+        """Local checks are skipped when binary eval returns > 0."""
+        adapter = _make_adapter()
+        adapter.evaluate.return_value = BenchmarkResult(
+            task_id="test-001", success=True, score=0.75,
+        )
+        check = TaskCheck(check="command", run="echo 1", expect="1", match="exact")
+        task_config = _make_task_config(
+            milestones=[Milestone(name="Step done", check=check)],
+        )
+        task_config.checks = [check]
+
+        env = RLEnvironment(adapter, task_config=task_config)
+        env.reset(config=ResetConfig(task_id="test-001"))
+
+        with patch.object(task_config, "evaluate_checks_local") as mock_local:
+            score = env.evaluate_dense()
+
+        mock_local.assert_not_called()
+        assert score >= 0.75

@@ -531,10 +531,12 @@ def make_waa_rollout_func(
                 )
                 logprobs: list[float] = []
 
+                # Truncation warning — detect when output was cut off
                 if len(completion_ids) >= max_new_tokens - 1:
                     logger.warning(
                         "Generation hit max_new_tokens=%d. Output may be "
-                        "truncated.",
+                        "truncated. If actions are unparseable, increase "
+                        "max_new_tokens or enable constrained_decoding.",
                         max_new_tokens,
                     )
 
@@ -568,10 +570,12 @@ def make_waa_rollout_func(
 
             text = processor.decode(completion_ids, skip_special_tokens=True)
 
+            # Truncation warning — detect when output was cut off
             if len(completion_ids) >= max_new_tokens - 1:
                 logger.warning(
                     "Generation hit max_new_tokens=%d. Output may be "
-                    "truncated.",
+                    "truncated. If actions are unparseable, increase "
+                    "max_new_tokens or enable constrained_decoding.",
                     max_new_tokens,
                 )
 

@@ -602,15 +602,18 @@ class RLEnvironment:
             if total > 0:
                 milestone_score = passed / total
 
-                # Also try binary evaluation if available
+                # Try binary evaluation (remote /evaluate endpoint).
+                # Speed depends on adapter's evaluate_timeout config:
+                # - Benchmarking: 180s timeout, 3 retries (thorough)
+                # - Training: 15s timeout, 1 retry (fast feedback)
+                # The TRL wrapper sets training-appropriate timeouts.
                 try:
                     binary_score = self.evaluate()
                 except Exception:
                     binary_score = 0.0
 
-                # If binary eval returned 0.0 (often means /evaluate is
-                # down), fall back to the task config's own checks run
-                # locally via /execute_windows + VLM.
+                # If binary eval returned 0.0 (endpoint down or task
+                # failed), try local evaluation via task config checks.
                 if (
                     binary_score == 0.0
                     and self._task_config.checks

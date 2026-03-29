@@ -1,6 +1,49 @@
 # CHANGELOG
 
 
+## v0.81.3 (2026-03-29)
+
+### Bug Fixes
+
+- Try local eval before slow /evaluate endpoint in evaluate_dense
+  ([#245](https://github.com/OpenAdaptAI/openadapt-evals/pull/245),
+  [`3b8c1c2`](https://github.com/OpenAdaptAI/openadapt-evals/commit/3b8c1c2b6317a693fec2e97cf8aa459205f1be4d))
+
+51% of TRL training time wasted on 5050 evaluate timeouts (180s × 3 retries = 9 min per evaluation).
+  The local evaluation via evaluate_checks_local takes ~5s.
+
+Fix: when task config has checks defined, try local eval FIRST. Only
+
+fall through to the slow /evaluate endpoint when no local checks exist. This eliminates the 9-minute
+  timeout for custom YAML tasks that define their own checks.
+
+Before: evaluate() [9 min] → if 0.0 → local [5s]
+
+After: local [5s] → if no checks → evaluate() [9 min]
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
+## v0.81.2 (2026-03-29)
+
+### Bug Fixes
+
+- Batch_size must be multiple of num_generations, pad dataset if needed
+  ([#244](https://github.com/OpenAdaptAI/openadapt-evals/pull/244),
+  [`d6e1b5b`](https://github.com/OpenAdaptAI/openadapt-evals/commit/d6e1b5bff59d672e5ec74126d35302f852ffe09a))
+
+TRL requires generation_batch_size % num_generations == 0. With batch_size=1 and num_generations=4,
+  TRL rejects it. Fix:
+
+1. Set per_device_train_batch_size = num_generations (minimum valid) 2. Pad dataset by repeating
+  tasks if len(dataset) < batch_size
+
+With 1 task and num_generations=4: dataset padded to 4 rows, batch_size=4, generation_batch_size=4,
+  4 % 4 == 0 ✓
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.81.1 (2026-03-29)
 
 ### Bug Fixes
