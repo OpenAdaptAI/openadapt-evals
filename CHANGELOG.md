@@ -1,6 +1,60 @@
 # CHANGELOG
 
 
+## v0.80.0 (2026-03-29)
+
+### Documentation
+
+- Pyproject.toml telemetry for enterprises
+  ([#233](https://github.com/OpenAdaptAI/openadapt-evals/pull/233),
+  [`ad9844b`](https://github.com/OpenAdaptAI/openadapt-evals/commit/ad9844bcfdd86c3ebab55181ccacc9bf9382f9a2))
+
+- Telemetry guide (disable with DO_NOT_TRACK=1)
+  ([#232](https://github.com/OpenAdaptAI/openadapt-evals/pull/232),
+  [`a4c1316`](https://github.com/OpenAdaptAI/openadapt-evals/commit/a4c131687a2f6c658fda93c19bbed3e0cafacea1))
+
+* fix: TelemetryCallback __bases__ crash + 12 TRL integration tests
+
+The dynamic __bases__ assignment to inject TrainerCallback as a base class fails in Python:
+  "deallocator differs from object". Fixed by creating a proper subclass at definition time instead.
+
+12 new tests: - Mock rollout_func: correct keys, count, reward variance - Config separation:
+  TrainingConfig has no TRL fields, wrapper accepts trl_config - Wrapper construction: all callback
+  combinations, trl_config passthrough - TelemetryCallback: importable, fires events
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* docs: telemetry guide — how to disable globally with one line
+
+DO_NOT_TRACK=1 in .env disables all telemetry. Already supported, just needed documentation. Covers
+  what we collect, what we don't, privacy scrubbing, CI behavior, and source code links.
+
+---------
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Features
+
+- Add TRL + Unsloth to [training] extra
+  ([#234](https://github.com/OpenAdaptAI/openadapt-evals/pull/234),
+  [`b403c2a`](https://github.com/OpenAdaptAI/openadapt-evals/commit/b403c2aea21703b1bae9ab02b49263dcd8aef4b2))
+
+* docs: pyproject.toml telemetry for enterprises
+
+* feat: add TRL, Unsloth, datasets to [training] extra
+
+pip install openadapt-evals[training] now includes everything needed for GRPO training: TRL,
+  Unsloth, datasets, outlines.
+
+Clear error if use_unsloth=True but unsloth somehow not installed.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.79.2 (2026-03-29)
 
 ### Bug Fixes
