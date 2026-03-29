@@ -1,6 +1,50 @@
 # CHANGELOG
 
 
+## v0.77.5 (2026-03-29)
+
+### Bug Fixes
+
+- Diagnostic logging (loss scientific notation, grad_norm, advantages)
+  ([#227](https://github.com/OpenAdaptAI/openadapt-evals/pull/227),
+  [`74fd646`](https://github.com/OpenAdaptAI/openadapt-evals/commit/74fd6466bcd22a203e7e1ff1ba7a6a787355f75f))
+
+loss=0.0000 was misleading: %.4f truncation + symmetric advantages canceling. Now logs loss in
+  scientific notation, absolute loss per rollout, gradient norm, and per-rollout advantages.
+
+13 vision loss tests (was 12). New test verifies loss_abs > 0 and advantages are symmetric with
+  reward variance.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Testing
+
+- Synthetic vision-merge model proves fix correctness
+  ([#226](https://github.com/OpenAdaptAI/openadapt-evals/pull/226),
+  [`2355d53`](https://github.com/OpenAdaptAI/openadapt-evals/commit/2355d53ae7de4e1823b742377122550e498ec9f2))
+
+VisionMergeModel mimics Qwen2.5/3.5-VL: replaces placeholder tokens with N visual features, changing
+  sequence length. 4 new tests:
+
+- test_manual_concat_crashes: OLD approach → IndexError (mask mismatch) -
+  test_unified_processor_works: NEW approach → correct post-merge shape - test_no_vision_no_merge:
+  no pixel_values → no merge → mask safe - test_exclude_strips_vision: exclude mode → no
+  pixel_values → safe
+
+Architecture-agnostic. 12/12 pass in 0.05s.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+- Vision loss computation tests (8 tests)
+  ([#225](https://github.com/OpenAdaptAI/openadapt-evals/pull/225),
+  [`b488794`](https://github.com/OpenAdaptAI/openadapt-evals/commit/b488794027dffd04d24a3dc352d5ad24a3cc61e9))
+
+Would have caught the Qwen3 vision merge crash before shipping. 8/8 pass in 0.07s, no GPU, uses real
+  tiny nn.Module.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.77.4 (2026-03-29)
 
 ### Bug Fixes
