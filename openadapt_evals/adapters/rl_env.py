@@ -602,24 +602,18 @@ class RLEnvironment:
             if total > 0:
                 milestone_score = passed / total
 
-                # Also try binary evaluation if available
-                try:
-                    binary_score = self.evaluate()
-                except Exception:
-                    binary_score = 0.0
+                # Try LOCAL evaluation FIRST (fast, ~5s) when we have
+                # task config checks. This avoids the 9+ minute timeout
+                # when the /evaluate endpoint (port 5050) is unresponsive.
+                # Only fall back to binary evaluate() if local eval fails
+                # or no local checks are defined.
+                binary_score = 0.0
+                server_url = getattr(
+                    getattr(self._adapter, "config", None),
+                    "server_url", "",
+                ) or ""
 
-                # If binary eval returned 0.0 (often means /evaluate is
-                # down), fall back to the task config's own checks run
-                # locally via /execute_windows + VLM.
-                if (
-                    binary_score == 0.0
-                    and self._task_config.checks
-                    and screenshot
-                ):
-                    server_url = getattr(
-                        getattr(self._adapter, "config", None),
-                        "server_url", "",
-                    ) or ""
+                if self._task_config.checks and screenshot:
                     try:
                         binary_score = (
                             self._task_config.evaluate_checks_local(
@@ -628,14 +622,24 @@ class RLEnvironment:
                         )
                         if binary_score > 0:
                             logger.info(
-                                "evaluate_dense: local check fallback "
-                                "returned %.2f", binary_score,
+                                "evaluate_dense: local checks returned %.2f "
+                                "(skipping slow /evaluate endpoint)",
+                                binary_score,
                             )
                     except Exception as exc:
                         logger.debug(
-                            "evaluate_dense: local check fallback "
-                            "failed: %s", exc,
+                            "evaluate_dense: local check failed: %s", exc,
                         )
+
+                # Only try the slow /evaluate endpoint if local eval
+                # returned 0.0 AND no local checks were available.
+                # This is the path that causes 9+ min timeouts when
+                # port 5050 is down.
+                if binary_score == 0.0 and not self._task_config.checks:
+                    try:
+                        binary_score = self.evaluate()
+                    except Exception:
+                        binary_score = 0.0
 
                 # Use the higher of milestone score and binary score
                 score = max(milestone_score, binary_score)
