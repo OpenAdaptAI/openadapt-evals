@@ -415,6 +415,7 @@ def make_waa_rollout_func(
     # Outlines generator is created lazily on first rollout call
     # (needs the trainer's model and processor which aren't available yet).
     _outlines_state: dict[str, Any] = {"generator": None, "attempted": False}
+    _prompt_logged: list[bool] = [False]  # log the prompt once for diagnostics
 
     def rollout_func(prompts: list[str], trainer: Any) -> dict[str, list]:
         """TRL GRPOTrainer rollout function.
@@ -501,19 +502,29 @@ def make_waa_rollout_func(
                         )
                         return "done", [], []
 
-            messages = [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": [
-                    {"type": "image", "image": img},
-                    {"type": "text", "text": instruction},
-                ]},
-            ]
+            # Use the SAME message construction as the standalone trainer.
+            # This includes the "Goal:" prefix, format guidance, and the
+            # correct {"type": "image"} tag format that Qwen processors expect.
+            # Without this, the model sees just the raw instruction text and
+            # produces degenerate output (e.g., "# # # # # # #").
+            from openadapt_evals.training.standalone.prompt import build_agent_messages
+
+            messages = build_agent_messages(instruction, include_image=True)
 
             import torch
 
             text_input = processor.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=True
             )
+
+            # Log the prompt on first call so operators can verify
+            # the correct format is being used (DSL, not JSON).
+            if not _prompt_logged[0]:
+                _prompt_logged[0] = True
+                logger.info(
+                    "TRL rollout prompt (first 300 chars of text_input): %.300s",
+                    text_input,
+                )
 
             # --- Constrained decoding path (Outlines) ---
             if outlines_gen is not None:
