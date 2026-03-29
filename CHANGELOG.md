@@ -1,6 +1,24 @@
 # CHANGELOG
 
 
+## v0.79.2 (2026-03-29)
+
+### Bug Fixes
+
+- Telemetrycallback __bases__ crash + 12 TRL integration tests
+  ([#231](https://github.com/OpenAdaptAI/openadapt-evals/pull/231),
+  [`ac2df2f`](https://github.com/OpenAdaptAI/openadapt-evals/commit/ac2df2f9d9dece530648a97101e31d0039c1c805))
+
+The dynamic __bases__ assignment to inject TrainerCallback as a base class fails in Python:
+  "deallocator differs from object". Fixed by creating a proper subclass at definition time instead.
+
+12 new tests: - Mock rollout_func: correct keys, count, reward variance - Config separation:
+  TrainingConfig has no TRL fields, wrapper accepts trl_config - Wrapper construction: all callback
+  combinations, trl_config passthrough - TelemetryCallback: importable, fires events
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.79.1 (2026-03-29)
 
 ### Bug Fixes
