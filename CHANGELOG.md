@@ -1,6 +1,29 @@
 # CHANGELOG
 
 
+## v0.77.4 (2026-03-29)
+
+### Bug Fixes
+
+- Proper vision-safe loss — process full text as one unit
+  ([#224](https://github.com/OpenAdaptAI/openadapt-evals/pull/224),
+  [`5413864`](https://github.com/OpenAdaptAI/openadapt-evals/commit/5413864342a71f3cead106d640e5ba6adc5fae95))
+
+Root cause: manually concatenating action_ids onto prompt input_ids created inconsistent input
+  (pixel_values sized for prompt, input_ids includes action tokens). Qwen3's vision merge changes
+  internal sequence length, crashing with attention mask mismatches.
+
+Fix: process prompt_text + action_text as a SINGLE string through the
+
+processor. Produces consistent input_ids, pixel_values, attention_mask. The model handles vision
+  merge correctly on processor output.
+
+Replaces the silent fallback from PR #223 with a proper solution that gives correct vision-aware
+  gradients for ALL steps in ALL modes.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.77.3 (2026-03-29)
 
 ### Bug Fixes
