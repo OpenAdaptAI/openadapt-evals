@@ -1,6 +1,26 @@
 # CHANGELOG
 
 
+## v0.81.2 (2026-03-29)
+
+### Bug Fixes
+
+- Batch_size must be multiple of num_generations, pad dataset if needed
+  ([#244](https://github.com/OpenAdaptAI/openadapt-evals/pull/244),
+  [`d6e1b5b`](https://github.com/OpenAdaptAI/openadapt-evals/commit/d6e1b5bff59d672e5ec74126d35302f852ffe09a))
+
+TRL requires generation_batch_size % num_generations == 0. With batch_size=1 and num_generations=4,
+  TRL rejects it. Fix:
+
+1. Set per_device_train_batch_size = num_generations (minimum valid) 2. Pad dataset by repeating
+  tasks if len(dataset) < batch_size
+
+With 1 task and num_generations=4: dataset padded to 4 rows, batch_size=4, generation_batch_size=4,
+  4 % 4 == 0 ✓
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.81.1 (2026-03-29)
 
 ### Bug Fixes
