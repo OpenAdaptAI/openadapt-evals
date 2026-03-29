@@ -15,9 +15,9 @@ algorithm with live desktop environments via TRL's rollout API.
 
 Constrained decoding (optional):
     When ``constrained_decoding=True``, Outlines is used to force model
-    output to match the ``Thought: ...\nAction: CLICK/TYPE/WAIT/DONE``
-    format. This eliminates 5-15% of wasted rollouts from unparseable
-    VLM output. Requires ``pip install outlines>=0.1.0``.
+    output to match a JSON action schema (preferred) or a JSON-aligned
+    regex fallback. This eliminates 5-15% of wasted rollouts from
+    unparseable VLM output. Requires ``pip install outlines>=0.1.0``.
 
 Usage with TRL:
     from trl import GRPOConfig, GRPOTrainer
@@ -65,45 +65,74 @@ Prior Art:
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import logging
 import re
-from typing import Any, Callable
+import time
+from typing import Any, Callable, Optional
+
+from pydantic import BaseModel
 
 from openadapt_evals.adapters.base import BenchmarkAction, BenchmarkObservation
 from openadapt_evals.adapters.rl_env import RLEnvironment, ResetConfig
 
 logger = logging.getLogger(__name__)
 
-# System prompt matching openadapt-ml's agent format
+# ---------------------------------------------------------------------------
+# System prompt -- JSON format with reasoning field
+# ---------------------------------------------------------------------------
+# Unified JSON format that aligns with openadapt-types Action schema.
+# The prompt requests a reasoning field (chain-of-thought) plus a structured
+# action, all in a single JSON object.
 SYSTEM_PROMPT = (
     "You are a desktop automation agent. Given a screenshot and task instruction, "
-    "output the next action as JSON: "
-    '{"type": "click"|"type"|"key"|"scroll"|"done", '
-    '"x": 0.0-1.0, "y": 0.0-1.0, "text": "...", "key": "..."}'
+    "output your reasoning and next action as JSON.\n\n"
+    "Format:\n"
+    '{"reasoning": "brief explanation", "type": "click"|"type"|"key"|"scroll"|"wait"|"done", '
+    '"x": 0.0-1.0, "y": 0.0-1.0, "text": "...", "key": "..."}\n\n'
+    "Coordinates are normalized: x=0.0 is left edge, x=1.0 is right edge, "
+    "y=0.0 is top edge, y=1.0 is bottom edge."
 )
 
+
 # ---------------------------------------------------------------------------
-# Constrained decoding regex — ported from standalone trainer
+# Pydantic schema for Outlines JSON-mode constrained decoding
 # ---------------------------------------------------------------------------
-# Matches the ``Thought: <reasoning>\nAction: <action>`` format.
-# All repetitions use unbounded quantifiers (+, *) instead of bounded ({1,N})
-# to avoid DFA state explosion in Outlines.
-_ACTION_RE = (
-    r"CLICK\(x=0\.\d+,\s*y=0\.\d+\)"
-    r'|TYPE\(text="[^"]*"\)'
-    r"|WAIT\(\)"
-    r"|DONE\(\)"
+
+
+class _AgentOutput(BaseModel):
+    """Schema for Outlines JSON-mode constrained decoding."""
+
+    reasoning: str
+    type: str  # click, type, key, scroll, wait, done
+    x: Optional[float] = None
+    y: Optional[float] = None
+    text: Optional[str] = None
+    key: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# JSON-aligned regex fallback for constrained decoding
+# ---------------------------------------------------------------------------
+# Matches JSON action objects. Used when Outlines JSON schema mode is not
+# available. All repetitions use unbounded quantifiers (+, *) instead of
+# bounded ({1,N}) to avoid DFA state explosion in Outlines.
+ACTION_REGEX = (
+    r'\{"reasoning": "[^"]*", "type": "(?:click|type|key|scroll|wait|done)"'
+    r'(?:, "x": \d+\.\d+, "y": \d+\.\d+)?'
+    r'(?:, "text": "[^"]*")?'
+    r'(?:, "key": "[^"]*")?'
+    r"\}"
 )
-ACTION_REGEX = r"Thought: [^\n]+\nAction: (" + _ACTION_RE + r")"
 
 
 def _build_outlines_generator(model: Any, processor: Any) -> Any | None:
     """Build an Outlines Generator for constrained generation.
 
-    Outlines v1.2 uses its own Generator API. The Generator wraps the model
-    and handles tokenization, generation, and decoding internally.
+    Prefers JSON schema mode (more robust than regex). Falls back to
+    regex-based constrained decoding if JSON schema mode is not available.
 
     Args:
         model: The HuggingFace model (may be a PEFT model).
@@ -116,10 +145,28 @@ def _build_outlines_generator(model: Any, processor: Any) -> Any | None:
         import outlines
 
         wrapped_model = outlines.from_transformers(model, processor)
+
+        # Prefer JSON schema mode (more robust than regex)
+        try:
+            constraint = outlines.json(_AgentOutput)
+            generator = outlines.Generator(wrapped_model, constraint)
+            logger.info(
+                "Outlines JSON schema constrained decoding enabled for TRL rollout "
+                "(model=%s)",
+                type(wrapped_model).__name__,
+            )
+            return generator
+        except Exception as json_exc:
+            logger.warning(
+                "Outlines JSON schema mode failed (%s), falling back to regex.",
+                json_exc,
+            )
+
+        # Fall back to regex
         constraint = outlines.regex(ACTION_REGEX)
         generator = outlines.Generator(wrapped_model, constraint)
         logger.info(
-            "Outlines constrained decoding enabled for TRL rollout "
+            "Outlines regex constrained decoding enabled for TRL rollout "
             "(model=%s, regex compiled successfully)",
             type(wrapped_model).__name__,
         )
@@ -140,46 +187,107 @@ def _build_outlines_generator(model: Any, processor: Any) -> Any | None:
 
 
 def parse_action_json(text: str) -> BenchmarkAction:
-    """Parse a VLM output string into a BenchmarkAction.
+    r"""Parse a VLM output string into a BenchmarkAction.
 
-    Handles common VLM quirks: thinking tokens before JSON, markdown
-    code fences, extra text after JSON.
+    Handles multiple formats:
+    1. JSON objects (primary): ``{"type": "click", "x": 0.5, "y": 0.3}``
+    2. DSL format (fallback for backward compatibility with existing checkpoints):
+       ``CLICK(x=0.50, y=0.30)``, ``TYPE(text="hello")``, ``WAIT()``, ``DONE()``
+
+    Also handles common VLM quirks: thinking tokens before JSON, markdown
+    code fences, extra text after JSON, ``Thought: ...\nAction: ...`` format.
 
     Args:
         text: Raw VLM output text.
 
     Returns:
-        BenchmarkAction parsed from the JSON.
+        BenchmarkAction parsed from the output.
     """
     # Strip thinking tokens / markdown
-    text = text.strip()
-    text = re.sub(r"```json\s*", "", text)
-    text = re.sub(r"```\s*$", "", text)
+    stripped = text.strip()
+    stripped = re.sub(r"```json\s*", "", stripped)
+    stripped = re.sub(r"```\s*$", "", stripped)
 
-    # Find the first JSON object
-    match = re.search(r"\{[^{}]*\}", text)
-    if not match:
-        logger.warning("No JSON found in VLM output: %s", text[:100])
-        return BenchmarkAction(type="done")
+    # --- JSON parsing (primary path) ---
+    match = re.search(r"\{[^{}]*\}", stripped)
+    if match:
+        try:
+            data = json.loads(match.group())
+        except json.JSONDecodeError:
+            data = None
 
-    try:
-        data = json.loads(match.group())
-    except json.JSONDecodeError:
-        logger.warning("Invalid JSON in VLM output: %s", match.group()[:100])
-        return BenchmarkAction(type="done")
+        if data is not None and "type" in data:
+            action_type = data.get("type", "done")
+            if action_type not in ("click", "type", "key", "scroll", "wait", "done", "noop"):
+                logger.warning("Unknown action type '%s', treating as done", action_type)
+                action_type = "done"
 
-    action_type = data.get("type", "done")
-    if action_type not in ("click", "type", "key", "scroll", "done", "noop"):
-        logger.warning("Unknown action type '%s', treating as done", action_type)
-        action_type = "done"
+            return BenchmarkAction(
+                type=action_type,
+                x=data.get("x"),
+                y=data.get("y"),
+                text=data.get("text"),
+                key=data.get("key"),
+            )
 
-    return BenchmarkAction(
-        type=action_type,
-        x=data.get("x"),
-        y=data.get("y"),
-        text=data.get("text"),
-        key=data.get("key"),
+    # --- DSL fallback for backward compatibility with existing checkpoints ---
+    # Handles: CLICK(x=0.50, y=0.30), TYPE(text="..."), WAIT(), DONE()
+
+    # Extract from "Action: ..." format
+    action_line = text
+    action_match = re.search(r"Action:\s*(.+)", text, re.IGNORECASE)
+    if action_match:
+        action_line = action_match.group(1).strip()
+
+    click_m = re.search(
+        r"CLICK\(x=(-?[\d.]+),\s*y=(-?[\d.]+)\)", action_line, re.IGNORECASE
     )
+    if click_m:
+        try:
+            x = max(0.0, min(1.0, float(click_m.group(1))))
+            y = max(0.0, min(1.0, float(click_m.group(2))))
+            return BenchmarkAction(type="click", x=x, y=y)
+        except (ValueError, TypeError):
+            pass
+
+    type_m = re.search(r"TYPE\(text=[\"']([^\"']*)[\"']\)", action_line, re.IGNORECASE)
+    if type_m:
+        return BenchmarkAction(type="type", text=type_m.group(1))
+
+    if re.search(r"\bWAIT\s*\(\s*\)", action_line, re.IGNORECASE):
+        return BenchmarkAction(type="wait")
+    if re.search(r"\bDONE\s*\(\s*\)", action_line, re.IGNORECASE):
+        return BenchmarkAction(type="done")
+
+    # If nothing parsed, return done
+    logger.warning("No JSON or DSL found in VLM output: %s", text[:100])
+    return BenchmarkAction(type="done")
+
+
+def _empty_rollout_result(
+    prompts: list[str],
+    num_generations: int,
+) -> dict[str, list]:
+    """Return a zero-reward rollout result with the correct dict shape.
+
+    Used when the WAA server is unreachable or unhealthy so that TRL receives
+    a consistent output structure (empty token lists, zero rewards) instead of
+    crashing.
+
+    Args:
+        prompts: List of prompt strings from the trainer.
+        num_generations: Number of generations per prompt.
+
+    Returns:
+        Dict with prompt_ids, completion_ids, logprobs, env_reward -- all zeroed.
+    """
+    total = len(prompts) * num_generations
+    return {
+        "prompt_ids": [[] for _ in range(total)],
+        "completion_ids": [[] for _ in range(total)],
+        "logprobs": [[] for _ in range(total)],
+        "env_reward": [0.0] * total,
+    }
 
 
 def _run_episode(
@@ -188,6 +296,7 @@ def _run_episode(
     task_instruction: str,
     task_id: str,
     max_steps: int,
+    stuck_threshold: int = 3,
 ) -> tuple[list[int], list[int], list[float], float]:
     """Run a single episode and return token-level data + reward.
 
@@ -197,6 +306,8 @@ def _run_episode(
         task_instruction: Natural language task description.
         task_id: Task ID for reset.
         max_steps: Maximum steps per episode.
+        stuck_threshold: Number of consecutive identical screenshots before
+            breaking the episode early. Set to 0 to disable stuck detection.
 
     Returns:
         Tuple of (prompt_ids, completion_ids, logprobs, reward).
@@ -206,9 +317,27 @@ def _run_episode(
     all_completion_ids: list[int] = []
     all_logprobs: list[float] = []
     prompt_ids: list[int] = []
+    recent_hashes: list[str] = []
 
     for step in range(max_steps):
         screenshot = obs.screenshot or b""
+
+        # --- Stuck detection ---
+        if stuck_threshold > 0:
+            screenshot_hash = hashlib.md5(screenshot).hexdigest()
+            recent_hashes.append(screenshot_hash)
+            if len(recent_hashes) > stuck_threshold:
+                recent_hashes.pop(0)
+            if (
+                len(recent_hashes) == stuck_threshold
+                and len(set(recent_hashes)) == 1
+            ):
+                logger.warning(
+                    "Stuck detected: %d identical screenshots in a row. "
+                    "Breaking episode early.",
+                    stuck_threshold,
+                )
+                break
 
         # Generate action from VLM
         action_text, token_ids, logprobs = generate_fn(screenshot, task_instruction)
@@ -247,7 +376,7 @@ def _run_episode(
         if step_result.done:
             break
 
-    # Evaluate — dense rewards if milestones, binary otherwise
+    # Evaluate -- dense rewards if milestones, binary otherwise
     reward = env.evaluate_dense()
 
     return prompt_ids, all_completion_ids, all_logprobs, reward
@@ -260,6 +389,9 @@ def make_waa_rollout_func(
     constrained_decoding: bool = False,
     max_new_tokens: int = 256,
     temperature: float = 1.0,
+    screenshot_retries: int = 3,
+    screenshot_retry_delay: float = 1.0,
+    stuck_threshold: int = 3,
 ) -> Callable:
     """Create a TRL-compatible rollout_func for WAA environments.
 
@@ -272,10 +404,15 @@ def make_waa_rollout_func(
             dataset should have a matching task_config by name or index.
         max_steps: Maximum steps per episode.
         constrained_decoding: If True, use Outlines to constrain generation
-            to the ``Thought: ...\nAction: CLICK/TYPE/WAIT/DONE`` format.
-            Requires ``pip install outlines>=0.1.0``.
+            to valid JSON action format. Requires ``pip install outlines>=0.1.0``.
         max_new_tokens: Maximum tokens per generation step.
         temperature: Sampling temperature for generation.
+        screenshot_retries: Number of retry attempts when a screenshot is
+            corrupt (cannot be opened by PIL).
+        screenshot_retry_delay: Seconds to sleep between screenshot retry
+            attempts.
+        stuck_threshold: Number of consecutive identical screenshots before
+            breaking an episode early. Set to 0 to disable stuck detection.
 
     Returns:
         A callable suitable for GRPOTrainer(rollout_func=...).
@@ -309,6 +446,27 @@ def make_waa_rollout_func(
 
         num_generations = getattr(trainer.args, "num_generations", 8)
 
+        # --- Pre-rollout health check ---
+        try:
+            health_obs = adapter.observe()
+            screenshot = getattr(health_obs, "screenshot", None)
+            if screenshot is None or len(screenshot) < 100:
+                logger.warning(
+                    "WAA server health check failed (screenshot=%s bytes) "
+                    "-- returning zero rewards for %d prompts",
+                    len(screenshot) if screenshot else 0,
+                    len(prompts),
+                )
+                return _empty_rollout_result(prompts, num_generations)
+        except Exception as exc:
+            logger.warning(
+                "WAA server unreachable: %s -- returning zero rewards for "
+                "%d prompts",
+                exc,
+                len(prompts),
+            )
+            return _empty_rollout_result(prompts, num_generations)
+
         # Lazy-init Outlines generator on first call
         if constrained_decoding and not _outlines_state["attempted"]:
             _outlines_state["attempted"] = True
@@ -327,11 +485,31 @@ def make_waa_rollout_func(
             """Generate action tokens from screenshot + instruction."""
             from PIL import Image
 
-            # Build multimodal input
-            img = Image.open(io.BytesIO(screenshot_bytes))
-            if img.mode != "RGB":
-                img = img.convert("RGB")
-                img.format = "PNG"
+            # --- Corrupt screenshot retry ---
+            img = None
+            for attempt in range(screenshot_retries):
+                try:
+                    img = Image.open(io.BytesIO(screenshot_bytes))
+                    if img.mode != "RGB":
+                        img = img.convert("RGB")
+                        img.format = "PNG"
+                    break
+                except Exception as exc:
+                    if attempt < screenshot_retries - 1:
+                        logger.warning(
+                            "Corrupt screenshot (attempt %d/%d): %s",
+                            attempt + 1,
+                            screenshot_retries,
+                            exc,
+                        )
+                        time.sleep(screenshot_retry_delay)
+                    else:
+                        logger.error(
+                            "Screenshot corrupt after %d attempts, "
+                            "returning DONE action",
+                            screenshot_retries,
+                        )
+                        return "done", [], []
 
             messages = [
                 {"role": "system", "content": SYSTEM_PROMPT},

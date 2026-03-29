@@ -15,6 +15,8 @@ from openadapt_evals.adapters.base import (
 )
 from openadapt_evals.task_config import Milestone, TaskCheck, TaskConfig
 from openadapt_evals.training.trl_rollout import (
+    ACTION_REGEX,
+    _AgentOutput,
     make_waa_rollout_func,
     parse_action_json,
 )
@@ -76,6 +78,142 @@ class TestParseActionJson:
         action = parse_action_json('{"type": "noop"}')
         assert action.type == "noop"
 
+    # --- DSL fallback tests ---
+
+    def test_parse_action_json_dsl_click(self):
+        """DSL CLICK(x=0.5, y=0.3) parses to BenchmarkAction click."""
+        action = parse_action_json("CLICK(x=0.50, y=0.30)")
+        assert action.type == "click"
+        assert action.x == 0.5
+        assert action.y == 0.3
+
+    def test_parse_action_json_dsl_type(self):
+        """DSL TYPE(text="hello") parses to BenchmarkAction type."""
+        action = parse_action_json('TYPE(text="hello")')
+        assert action.type == "type"
+        assert action.text == "hello"
+
+    def test_parse_action_json_dsl_wait(self):
+        """DSL WAIT() parses to BenchmarkAction wait."""
+        action = parse_action_json("WAIT()")
+        assert action.type == "wait"
+
+    def test_parse_action_json_dsl_done(self):
+        """DSL DONE() parses to BenchmarkAction done."""
+        action = parse_action_json("DONE()")
+        assert action.type == "done"
+
+    def test_parse_action_json_dsl_with_thought(self):
+        """Thought/Action format with DSL parses correctly."""
+        text = "Thought: I need to click the start menu\nAction: CLICK(x=0.50, y=0.30)"
+        action = parse_action_json(text)
+        assert action.type == "click"
+        assert action.x == 0.5
+        assert action.y == 0.3
+
+    def test_parse_action_json_with_reasoning(self):
+        """JSON with reasoning field parses correctly."""
+        text = '{"reasoning": "clicking the button", "type": "click", "x": 0.5, "y": 0.3}'
+        action = parse_action_json(text)
+        assert action.type == "click"
+        assert action.x == 0.5
+        assert action.y == 0.3
+
+    def test_parse_action_json_wait_type(self):
+        """JSON with wait type parses correctly."""
+        action = parse_action_json('{"type": "wait"}')
+        assert action.type == "wait"
+
+
+# ---------------------------------------------------------------------------
+# ACTION_REGEX tests
+# ---------------------------------------------------------------------------
+
+
+class TestActionRegex:
+    def test_action_regex_matches_click_json(self):
+        """ACTION_REGEX matches a valid JSON click action."""
+        import re
+
+        text = '{"reasoning": "click the button", "type": "click", "x": 0.50, "y": 0.30}'
+        assert re.fullmatch(ACTION_REGEX, text) is not None
+
+    def test_action_regex_matches_type_json(self):
+        """ACTION_REGEX matches a valid JSON type action."""
+        import re
+
+        text = '{"reasoning": "type hello", "type": "type", "text": "hello"}'
+        assert re.fullmatch(ACTION_REGEX, text) is not None
+
+    def test_action_regex_matches_done_json(self):
+        """ACTION_REGEX matches a valid JSON done action."""
+        import re
+
+        text = '{"reasoning": "task complete", "type": "done"}'
+        assert re.fullmatch(ACTION_REGEX, text) is not None
+
+    def test_action_regex_matches_wait_json(self):
+        """ACTION_REGEX matches a valid JSON wait action."""
+        import re
+
+        text = '{"reasoning": "waiting for load", "type": "wait"}'
+        assert re.fullmatch(ACTION_REGEX, text) is not None
+
+
+# ---------------------------------------------------------------------------
+# _AgentOutput schema tests
+# ---------------------------------------------------------------------------
+
+
+class TestAgentOutputSchema:
+    def test_agent_output_schema_valid_click(self):
+        """_AgentOutput validates a click action correctly."""
+        output = _AgentOutput(
+            reasoning="clicking the submit button",
+            type="click",
+            x=0.5,
+            y=0.3,
+        )
+        assert output.type == "click"
+        assert output.x == 0.5
+        assert output.y == 0.3
+        assert output.text is None
+        assert output.key is None
+
+    def test_agent_output_schema_valid_type(self):
+        """_AgentOutput validates a type action correctly."""
+        output = _AgentOutput(
+            reasoning="typing into search box",
+            type="type",
+            text="hello world",
+        )
+        assert output.type == "type"
+        assert output.text == "hello world"
+
+    def test_agent_output_schema_valid_done(self):
+        """_AgentOutput validates a done action correctly."""
+        output = _AgentOutput(
+            reasoning="task is complete",
+            type="done",
+        )
+        assert output.type == "done"
+
+    def test_agent_output_schema_json_roundtrip(self):
+        """_AgentOutput serializes to JSON and back correctly."""
+        import json
+
+        output = _AgentOutput(
+            reasoning="click button",
+            type="click",
+            x=0.5,
+            y=0.3,
+        )
+        data = json.loads(output.model_dump_json())
+        assert data["reasoning"] == "click button"
+        assert data["type"] == "click"
+        assert data["x"] == 0.5
+        assert data["y"] == 0.3
+
 
 # ---------------------------------------------------------------------------
 # make_waa_rollout_func tests
@@ -85,6 +223,11 @@ class TestParseActionJson:
 def _make_mock_adapter(steps_to_done=3):
     adapter = MagicMock()
     call_count = {"n": 0}
+
+    _fake_obs = BenchmarkObservation(
+        screenshot=b"\x89PNG\r\n\x1a\n" + b"\x00" * 100,
+        raw_observation={},
+    )
 
     def mock_step(action):
         call_count["n"] += 1
@@ -99,10 +242,9 @@ def _make_mock_adapter(steps_to_done=3):
         )
 
     adapter.step.side_effect = mock_step
-    adapter.reset.return_value = BenchmarkObservation(
-        screenshot=b"\x89PNG\r\n\x1a\n" + b"\x00" * 100,
-        raw_observation={},
-    )
+    adapter.reset.return_value = _fake_obs
+    # observe() is called by the pre-rollout health check
+    adapter.observe.return_value = _fake_obs
     adapter.load_task.return_value = BenchmarkTask(
         task_id="test-task", instruction="Test", domain="desktop"
     )
