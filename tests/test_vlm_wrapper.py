@@ -144,3 +144,92 @@ class TestVLMModelWrapper:
         # Cache is None (no vision keys) — forward logs warning
         wrapper.forward(input_ids="ids")
         assert "pixel_values" not in model.last_forward_kwargs
+
+
+# ---------------------------------------------------------------------------
+# Real e2e test with a tiny torch model (requires torch — skipped in CI)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.heavy
+class TestVLMModelWrapperE2E:
+    """End-to-end test with real torch tensors.
+
+    Verifies that cached pixel_values flow through the wrapper's forward
+    pass and produce different logits than a blind forward (no images).
+    Requires torch — skipped in CI via @pytest.mark.heavy.
+    """
+
+    @staticmethod
+    def _make_tiny_vlm():
+        """Build a minimal VLM that uses pixel_values in its forward pass."""
+        torch = pytest.importorskip("torch")
+        import torch.nn as nn
+
+        class TinyVLM(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.embed = nn.Embedding(100, 16)
+                self.vision_proj = nn.Linear(3, 16)
+                self.head = nn.Linear(16, 100)
+
+            def forward(self, input_ids, pixel_values=None, **kwargs):
+                h = self.embed(input_ids)
+                if pixel_values is not None:
+                    # Add vision signal to the first position
+                    vis = self.vision_proj(pixel_values.mean(dim=(-2, -1)))
+                    h[:, 0, :] += vis.unsqueeze(1).squeeze(1)
+                logits = self.head(h)
+
+                class Out:
+                    pass
+                out = Out()
+                out.logits = logits
+                return out
+
+            def generate(self, **kwargs):
+                return self(kwargs["input_ids"], pixel_values=kwargs.get("pixel_values"))
+
+        return TinyVLM()
+
+    def test_forward_with_cached_pixel_values_changes_logits(self):
+        """Cached pixel_values produce different logits than blind forward."""
+        torch = pytest.importorskip("torch")
+        model = self._make_tiny_vlm()
+        wrapper = VLMModelWrapper(model)
+
+        input_ids = torch.tensor([[1, 2, 3, 4, 5]])
+        pixel_values = torch.randn(1, 3, 10, 10)
+
+        # Forward WITHOUT vision (blind)
+        out_blind = wrapper.forward(input_ids=input_ids)
+        logits_blind = out_blind.logits.detach().clone()
+
+        # Cache vision inputs
+        wrapper.cache_vision_inputs({"pixel_values": pixel_values})
+
+        # Forward WITH cached vision (TRL's training step)
+        out_vision = wrapper.forward(input_ids=input_ids)
+        logits_vision = out_vision.logits.detach()
+
+        # Logits should be different when vision is present
+        assert not torch.allclose(logits_blind, logits_vision, atol=1e-6), (
+            "Logits with cached pixel_values should differ from blind logits. "
+            "If they're the same, the wrapper isn't injecting vision inputs."
+        )
+
+    def test_cache_survives_multiple_forward_calls(self):
+        """Cached pixel_values are reused across multiple forward calls."""
+        torch = pytest.importorskip("torch")
+        model = self._make_tiny_vlm()
+        wrapper = VLMModelWrapper(model)
+
+        input_ids = torch.tensor([[1, 2, 3]])
+        pixel_values = torch.randn(1, 3, 10, 10)
+        wrapper.cache_vision_inputs({"pixel_values": pixel_values})
+
+        out1 = wrapper.forward(input_ids=input_ids)
+        out2 = wrapper.forward(input_ids=input_ids)
+
+        # Both should get the same vision-augmented logits
+        assert torch.allclose(out1.logits, out2.logits, atol=1e-6)
