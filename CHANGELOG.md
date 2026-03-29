@@ -1,6 +1,30 @@
 # CHANGELOG
 
 
+## v0.78.0 (2026-03-29)
+
+### Features
+
+- Weave (W&B) integration for LLM/agent tracing
+  ([#228](https://github.com/OpenAdaptAI/openadapt-evals/pull/228),
+  [`6d9fcb7`](https://github.com/OpenAdaptAI/openadapt-evals/commit/6d9fcb704e0ea0d4f1e7d2beff927a64e2676d48))
+
+Weave auto-patches OpenAI and Anthropic clients after weave.init(), giving automatic tracing of
+  every VLM call with prompts, responses, costs, and latency in hierarchical trace trees.
+
+Integration points: - vlm_call() — @weave_op: all planner/grounder/evaluator calls traced -
+  vlm_judge() — @weave_op: milestone evaluation traced - DemoExecutor.run() + _execute_step() —
+  @weave_op: episode trace tree - PlannerGrounderAgent.act() + _call_planner() — @weave_op: agent
+  decisions - WandbLogger.init() — calls weave_init() alongside wandb.init()
+
+When weave is not installed, all decorators are zero-cost passthrough. weave>=0.50.0 added to
+  [wandb] optional extra.
+
+76/76 tests pass.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.77.5 (2026-03-29)
 
 ### Bug Fixes
