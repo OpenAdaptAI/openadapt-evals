@@ -1,6 +1,27 @@
 # CHANGELOG
 
 
+## v0.81.7 (2026-03-29)
+
+### Bug Fixes
+
+- Comprehensive prompt diagnostics for debugging garbage output
+  ([#248](https://github.com/OpenAdaptAI/openadapt-evals/pull/248),
+  [`8e3bc45`](https://github.com/OpenAdaptAI/openadapt-evals/commit/8e3bc45097231e35060c30e0064753c4dea527d1))
+
+Adds detailed one-time logging to help debug the persistent garbage output issue:
+
+1. Raw messages (role, content types, text preview) before chat template 2. Full rendered text_input
+  (2000 chars, not 300) 3. Image metadata (mode, size, format) 4. Generation config (max_new_tokens,
+  temperature, constrained, model type) 5. First generation output (500 chars + token count) 6.
+  Input tensor shapes (input_ids, attention_mask, pixel_values, image_grid_thw)
+
+The tensor shape logging is critical: if pixel_values is MISSING, the model isn't seeing the
+  screenshot — which would explain degenerate output regardless of prompt correctness.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.81.6 (2026-03-29)
 
 ### Bug Fixes
