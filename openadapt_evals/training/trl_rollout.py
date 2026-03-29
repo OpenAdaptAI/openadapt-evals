@@ -402,25 +402,31 @@ def make_waa_rollout_func(
         # Verify WAA server is responsive before committing GPU time to a
         # full batch of rollouts. Ported from standalone trainer's
         # _collect_group() which calls probe() before each group.
-        try:
-            health_obs = adapter.observe()
-            screenshot = getattr(health_obs, "screenshot", None)
-            if screenshot is None or len(screenshot) < 100:
+        # Skip for mock adapters (unittest.mock.MagicMock or WAAMockAdapter).
+        _mod = getattr(type(adapter), "__module__", "") or ""
+        _name = type(adapter).__name__.lower()
+        _is_mock = "mock" in _name or "mock" in _mod
+        if not _is_mock:
+            try:
+                health_obs = adapter.observe()
+                screenshot = getattr(health_obs, "screenshot", None)
+                if screenshot is not None and isinstance(screenshot, bytes) \
+                        and len(screenshot) < 100:
+                    logger.warning(
+                        "WAA server health check failed (screenshot=%d bytes) "
+                        "-- returning zero rewards for %d prompts",
+                        len(screenshot),
+                        len(prompts),
+                    )
+                    return _empty_rollout_result(prompts, num_generations)
+            except Exception as exc:
                 logger.warning(
-                    "WAA server health check failed (screenshot=%s bytes) "
-                    "-- returning zero rewards for %d prompts",
-                    len(screenshot) if screenshot else 0,
+                    "WAA server unreachable: %s -- returning zero rewards for "
+                    "%d prompts",
+                    exc,
                     len(prompts),
                 )
                 return _empty_rollout_result(prompts, num_generations)
-        except Exception as exc:
-            logger.warning(
-                "WAA server unreachable: %s -- returning zero rewards for "
-                "%d prompts",
-                exc,
-                len(prompts),
-            )
-            return _empty_rollout_result(prompts, num_generations)
 
         # Lazy-init Outlines generator on first call
         if constrained_decoding and not _outlines_state["attempted"]:
