@@ -1,9 +1,0 @@
-{
-  "task": "Open Windows Notepad (the built-in text editor, NOT VS Code or any browser) using the Start menu or Win+R run dialog, then type Hello World",
-  "timestamp": "2026-03-28T20:41:26.676821+00:00",
-  "attempt_score": 0.0,
-  "retry_score": 0.0,
-  "improvement": 0.0,
-  "flywheel_working": false,
-  "baseline_model": "gpt-5.4-mini"
-}

@@ -1,9 +1,0 @@
-{
-  "task": "Clear browsing data in Google Chrome",
-  "timestamp": "2026-03-27T19:14:41.127883+00:00",
-  "attempt_score": 0.0,
-  "retry_score": 0.25,
-  "improvement": 0.25,
-  "flywheel_working": true,
-  "baseline_model": "gpt-5.4-mini"
-}
