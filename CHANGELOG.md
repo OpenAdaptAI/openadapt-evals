@@ -1,6 +1,30 @@
 # CHANGELOG
 
 
+## v0.77.3 (2026-03-29)
+
+### Bug Fixes
+
+- Vision loss forward pass falls back to exclude on crash
+  ([#223](https://github.com/OpenAdaptAI/openadapt-evals/pull/223),
+  [`d348f1b`](https://github.com/OpenAdaptAI/openadapt-evals/commit/d348f1b6bca44cc4d94ccff0695351b9f90c6ed1))
+
+Qwen3's vision-language merge changes internal sequence length unpredictably. Both include and
+  checkpoint modes crash intermittently with attention mask mismatches (mask too large OR too small
+  depending on generated sequence length).
+
+Fix: catch IndexError/RuntimeError from the vision forward pass and
+
+retry with exclude mode (text-only, no vision tensors) for that step. Training never crashes — some
+  steps get vision-aware gradients, some get text-only gradients, but all steps contribute to
+  learning.
+
+This is the pragmatic fix. The proper fix (capturing logits during generation to avoid re-forward
+  entirely) is future work.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.77.2 (2026-03-29)
 
 ### Bug Fixes
