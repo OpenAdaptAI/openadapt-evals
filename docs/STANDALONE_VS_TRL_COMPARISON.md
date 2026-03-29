@@ -107,6 +107,21 @@ These features must be ported before the standalone trainer can be removed:
 
 The standalone trainer uses DSL (`CLICK(x=0.50, y=0.30)`), the TRL path uses JSON (`{"type":"click","x":0.5,"y":0.3}`). These must be unified.
 
+### Finding: openadapt-types Already Solves This
+
+`openadapt-types` (PyPI, v0.1.0) is the **canonical action schema** for the OpenAdapt ecosystem. It explicitly converges:
+1. `openadapt_ml.schema.episode.Action` (24-type enum)
+2. `openadapt_evals.adapters.base.BenchmarkAction` (string-typed dataclass)
+3. `omnimcp.types.ActionDecision` (element_id-based)
+
+Key types:
+- `ActionType` enum: 21 action types (click, type, key, scroll, drag, wait, done, etc.)
+- `ActionTarget`: 3 grounding strategies: `node_id` > `description` > `(x, y)` coordinates
+- `Action`: Pydantic v2 model with `reasoning` field (chain-of-thought), `raw` field (lossless)
+- `ActionResult`: Execution outcome with error taxonomy
+
+Since `Action` is a Pydantic v2 model, `Action.model_json_schema()` works directly with Outlines JSON schema constrained decoding — no fragile regex needed.
+
 ### Options
 
 | Option | Pros | Cons |
@@ -114,27 +129,37 @@ The standalone trainer uses DSL (`CLICK(x=0.50, y=0.30)`), the TRL path uses JSO
 | **A: Standardize JSON** | Universal parsing, Outlines JSON schema, eval agent alignment | Client trained on DSL, more tokens |
 | **B: Standardize DSL** | Fewer tokens, battle-tested | Fragile regex parsing, non-standard, eval agents use JSON |
 | **C: Support both** | No migration | Two parsers, format mismatch risk during training/eval |
-| **D: JSON with thought** | Standard parsing, chain-of-thought preserved, Outlines schema support | Migration needed from DSL |
+| **D: Import openadapt-types, JSON canonical, accept DSL** | Single source of truth, Outlines JSON schema, backward-compatible parsing | Adds a dependency (lightweight: pydantic only) |
 
 ### Recommendation: Option D
 
-Use JSON with embedded thought:
+Use `openadapt_types.Action` as the canonical format. Accept DSL input for backward compatibility.
+
+**JSON output format** (what the model produces):
 ```json
-{"thought": "I need to click the button", "action": {"type": "click", "x": 0.50, "y": 0.30}}
+{"type": "click", "target": {"x": 0.50, "y": 0.30, "is_normalized": true}, "reasoning": "I need to click the button"}
 ```
 
 **Why:**
-- Outlines can constrain via `outlines.json(model, ActionSchema)` (Pydantic model) instead of fragile regex. More robust.
-- Eval agents (PlannerGrounder, DemoExecutor) already output JSON. Same format everywhere.
-- Chain-of-thought is preserved in the `thought` field (important for credit assignment in RL).
-- `parse_vlm_output_to_action()` already handles both DSL and JSON input. Accept DSL for backward compatibility, always produce JSON going forward.
-- Client's existing DSL checkpoints still work (parser accepts DSL), but new training uses JSON.
+- **Already exists.** No new schema to design or maintain.
+- **Outlines JSON schema.** `outlines.json(model, Action)` directly from Pydantic model — replaces fragile regex.
+- **Eval agent alignment.** PlannerGrounder, DemoExecutor already output JSON.
+- **Chain-of-thought.** `reasoning` field preserves thought for credit assignment in RL.
+- **Backward-compatible.** Add a parser that accepts DSL → `Action` for existing checkpoints.
+- **Lightweight.** Only dependency is pydantic (already in openadapt-evals).
 
-**Migration path:**
-1. TRL rollout already uses JSON (no change).
-2. Update constrained decoding from `outlines.regex(pattern)` to `outlines.json(model, ActionSchema)`.
-3. Standalone trainer's parser already accepts both formats (no change needed).
-4. New training configs default to JSON format.
+### Known inconsistency in trl_rollout.py
+
+The current `trl_rollout.py` has an **internal contradiction**: the system prompt asks for JSON format, but `ACTION_REGEX` constrains to DSL format. If constrained decoding is on, the model produces DSL but `parse_action_json()` expects JSON. This must be fixed.
+
+### Migration path
+
+1. Add `openadapt-types` to openadapt-evals core dependencies.
+2. Fix `trl_rollout.py`: align system prompt + constrained decoding to `Action` JSON schema.
+3. Add universal parser to `openadapt-types`: DSL string → `Action`, JSON string → `Action`.
+4. Add `BenchmarkAction.to_action()` / `Action.to_benchmark_action()` converters.
+5. Standalone trainer's `parse_vlm_output_to_action()` already accepts both DSL and JSON — no change needed.
+6. New training configs default to JSON via `openadapt-types`.
 
 ## Bottom Line
 
