@@ -1,6 +1,34 @@
 # CHANGELOG
 
 
+## v0.77.1 (2026-03-29)
+
+### Bug Fixes
+
+- Add PyYAML to core dependencies ([#220](https://github.com/OpenAdaptAI/openadapt-evals/pull/220),
+  [`0d0616e`](https://github.com/OpenAdaptAI/openadapt-evals/commit/0d0616e71699897f2d83c744e8c17c6337529695))
+
+PyYAML was a transitive dependency via openadapt-ml. Now that ml is optional (PR #218), yaml import
+  fails in CI. TaskConfig uses yaml directly — it must be a core dep.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Chores
+
+- Phase 0a dead code cleanup + fix corrupt screenshot crash
+  ([#219](https://github.com/OpenAdaptAI/openadapt-evals/pull/219),
+  [`a8a004d`](https://github.com/OpenAdaptAI/openadapt-evals/commit/a8a004d517ba1cb664503d8b6af6d5d7037a7ee3))
+
+Dead code removed: - scripts/core4_eval.py — trial-specific runner, superseded by run_full_eval.py -
+  scripts/core4_lane.py — same
+
+Corrupt screenshot fix: - _collect_rollout catches SyntaxError/OSError from PIL when WAA returns
+  truncated PNG data (HTTP 200 but corrupt body) - Retries screenshot once after 2s delay -
+  Previously crashed the entire training run
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.77.0 (2026-03-29)
 
 ### Features
