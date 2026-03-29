@@ -211,8 +211,23 @@ class GRPOTrainer:
                 pass
 
         # --- TRL config: use provided or build sensible defaults ---
+        # CRITICAL: per_device_train_batch_size must be <= len(dataset).
+        # TRL default is 8, but with 1-3 tasks the dataset is tiny.
+        # If batch_size > dataset_size, TRL computes 0 steps and exits
+        # with "There seems not to be a single sample in your epoch_iterator".
+        n_tasks = len(task_configs)
+
         if self._trl_config is not None:
             trl_config = self._trl_config
+            # Warn if user-provided config has batch_size > dataset
+            bs = getattr(trl_config, "per_device_train_batch_size", 8)
+            if bs > n_tasks:
+                logger.warning(
+                    "per_device_train_batch_size=%d > dataset size=%d. "
+                    "TRL will compute 0 steps and exit immediately. "
+                    "Set per_device_train_batch_size=%d or add more tasks.",
+                    bs, n_tasks, n_tasks,
+                )
         else:
             trl_config = GRPOConfig(
                 output_dir=self._config.output_dir,
@@ -225,6 +240,9 @@ class GRPOTrainer:
                 bf16=True,
                 loss_type="grpo",
                 num_train_epochs=1,
+                # Match batch size to dataset: with few tasks (common in
+                # RL training), the default of 8 causes 0 steps.
+                per_device_train_batch_size=n_tasks,
             )
 
         # --- Train ---
