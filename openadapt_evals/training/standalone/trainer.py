@@ -484,6 +484,12 @@ class GRPOTrainer:
     def train(self) -> str:
         """Run GRPO training loop. Returns path to final checkpoint."""
         import torch
+
+        logger.warning(
+            "The standalone GRPO trainer is deprecated. Use scripts/train_trl_grpo.py "
+            "with TRL's GRPOTrainer instead. See docs/eval_results/ for migration guide."
+        )
+
         self._load_task_configs()
         if not self._config.task_ids:
             raise ValueError("No task IDs. Provide --task-dir with YAML configs or set task_ids.")

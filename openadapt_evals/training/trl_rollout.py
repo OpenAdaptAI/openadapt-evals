@@ -13,6 +13,12 @@ advantage estimation from multiple rollouts of the same prompt, as
 introduced in the DeepSeek-Math work. This module integrates that
 algorithm with live desktop environments via TRL's rollout API.
 
+Constrained decoding (optional):
+    When ``constrained_decoding=True``, Outlines is used to force model
+    output to match the ``Thought: ...\nAction: CLICK/TYPE/WAIT/DONE``
+    format. This eliminates 5-15% of wasted rollouts from unparseable
+    VLM output. Requires ``pip install outlines>=0.1.0``.
+
 Usage with TRL:
     from trl import GRPOConfig, GRPOTrainer
     from openadapt_evals.training.trl_rollout import make_waa_rollout_func
@@ -21,6 +27,7 @@ Usage with TRL:
         adapter=WAALiveAdapter(WAALiveConfig(server_url="http://localhost:5001")),
         task_configs=TaskConfig.from_dir("./tasks/"),
         max_steps=15,
+        constrained_decoding=True,
     )
 
     trainer = GRPOTrainer(
@@ -76,6 +83,60 @@ SYSTEM_PROMPT = (
     '{"type": "click"|"type"|"key"|"scroll"|"done", '
     '"x": 0.0-1.0, "y": 0.0-1.0, "text": "...", "key": "..."}'
 )
+
+# ---------------------------------------------------------------------------
+# Constrained decoding regex — ported from standalone trainer
+# ---------------------------------------------------------------------------
+# Matches the ``Thought: <reasoning>\nAction: <action>`` format.
+# All repetitions use unbounded quantifiers (+, *) instead of bounded ({1,N})
+# to avoid DFA state explosion in Outlines.
+_ACTION_RE = (
+    r"CLICK\(x=0\.\d+,\s*y=0\.\d+\)"
+    r'|TYPE\(text="[^"]*"\)'
+    r"|WAIT\(\)"
+    r"|DONE\(\)"
+)
+ACTION_REGEX = r"Thought: [^\n]+\nAction: (" + _ACTION_RE + r")"
+
+
+def _build_outlines_generator(model: Any, processor: Any) -> Any | None:
+    """Build an Outlines Generator for constrained generation.
+
+    Outlines v1.2 uses its own Generator API. The Generator wraps the model
+    and handles tokenization, generation, and decoding internally.
+
+    Args:
+        model: The HuggingFace model (may be a PEFT model).
+        processor: The HuggingFace processor/tokenizer.
+
+    Returns:
+        An Outlines Generator, or None if creation fails.
+    """
+    try:
+        import outlines
+
+        wrapped_model = outlines.from_transformers(model, processor)
+        constraint = outlines.regex(ACTION_REGEX)
+        generator = outlines.Generator(wrapped_model, constraint)
+        logger.info(
+            "Outlines constrained decoding enabled for TRL rollout "
+            "(model=%s, regex compiled successfully)",
+            type(wrapped_model).__name__,
+        )
+        return generator
+    except ImportError:
+        logger.error(
+            "constrained_decoding=True but 'outlines' is not installed. "
+            "Install with: pip install outlines>=0.1.0"
+        )
+        return None
+    except Exception as exc:
+        logger.error(
+            "Outlines Generator creation failed: %s. "
+            "Falling back to unconstrained generation.",
+            exc,
+        )
+        return None
 
 
 def parse_action_json(text: str) -> BenchmarkAction:
@@ -196,6 +257,9 @@ def make_waa_rollout_func(
     adapter: Any,
     task_configs: list | None = None,
     max_steps: int = 15,
+    constrained_decoding: bool = False,
+    max_new_tokens: int = 256,
+    temperature: float = 1.0,
 ) -> Callable:
     """Create a TRL-compatible rollout_func for WAA environments.
 
@@ -207,6 +271,11 @@ def make_waa_rollout_func(
         task_configs: List of TaskConfig objects. Each prompt in the training
             dataset should have a matching task_config by name or index.
         max_steps: Maximum steps per episode.
+        constrained_decoding: If True, use Outlines to constrain generation
+            to the ``Thought: ...\nAction: CLICK/TYPE/WAIT/DONE`` format.
+            Requires ``pip install outlines>=0.1.0``.
+        max_new_tokens: Maximum tokens per generation step.
+        temperature: Sampling temperature for generation.
 
     Returns:
         A callable suitable for GRPOTrainer(rollout_func=...).
@@ -219,6 +288,10 @@ def make_waa_rollout_func(
         for tc in task_configs:
             config_map[tc.name] = tc
             config_map[tc.id] = tc
+
+    # Outlines generator is created lazily on first rollout call
+    # (needs the trainer's model and processor which aren't available yet).
+    _outlines_state: dict[str, Any] = {"generator": None, "attempted": False}
 
     def rollout_func(prompts: list[str], trainer: Any) -> dict[str, list]:
         """TRL GRPOTrainer rollout function.
@@ -236,6 +309,15 @@ def make_waa_rollout_func(
 
         num_generations = getattr(trainer.args, "num_generations", 8)
 
+        # Lazy-init Outlines generator on first call
+        if constrained_decoding and not _outlines_state["attempted"]:
+            _outlines_state["attempted"] = True
+            _outlines_state["generator"] = _build_outlines_generator(
+                model, processor,
+            )
+
+        outlines_gen = _outlines_state["generator"] if constrained_decoding else None
+
         all_prompt_ids = []
         all_completion_ids = []
         all_logprobs = []
@@ -247,6 +329,10 @@ def make_waa_rollout_func(
 
             # Build multimodal input
             img = Image.open(io.BytesIO(screenshot_bytes))
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+                img.format = "PNG"
+
             messages = [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": [
@@ -261,6 +347,29 @@ def make_waa_rollout_func(
             text_input = processor.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=True
             )
+
+            # --- Constrained decoding path (Outlines) ---
+            if outlines_gen is not None:
+                import outlines
+
+                model_input = [text_input, outlines.Image(img)]
+                decoded = outlines_gen(
+                    model_input,
+                    max_new_tokens=max_new_tokens,
+                    temperature=temperature,
+                )
+                # Tokenize the decoded text to get token IDs
+                inner_tok = getattr(processor, "tokenizer", processor)
+                completion_ids = inner_tok.encode(
+                    decoded, add_special_tokens=False,
+                )
+                # Outlines does not return per-token logprobs, so we
+                # return empty logprobs. TRL recomputes logprobs from
+                # the model during the training step anyway.
+                logprobs: list[float] = []
+                return decoded, completion_ids, logprobs
+
+            # --- Standard HF generate path (unconstrained) ---
             inputs = processor(
                 text=[text_input], images=[img],
                 return_tensors="pt", padding=True,
@@ -270,9 +379,9 @@ def make_waa_rollout_func(
             with torch.no_grad():
                 outputs = model.generate(
                     **inputs,
-                    max_new_tokens=256,
+                    max_new_tokens=max_new_tokens,
                     do_sample=True,
-                    temperature=1.0,
+                    temperature=temperature,
                     return_dict_in_generate=True,
                     output_scores=True,
                 )

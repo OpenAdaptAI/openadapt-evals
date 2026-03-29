@@ -1,7 +1,16 @@
 #!/usr/bin/env python3
 """End-to-end GRPO training script using TRL + Unsloth + WAA.
 
-One command to train a VLM desktop agent with dense milestone rewards:
+This is the **recommended** path for GRPO training of VLM desktop agents.
+It replaces the standalone trainer (``openadapt_evals.training.standalone``)
+with TRL's battle-tested ``GRPOTrainer``, adding:
+
+- Outlines constrained decoding (``--constrained-decoding``)
+- Configurable vision loss mode (``--vision-loss-mode``)
+- Automatic telemetry via ``TelemetryCallback``
+- Optional Weave tracing (``--weave-project``)
+
+Examples:
 
     # With real WAA VM:
     python scripts/train_trl_grpo.py \
@@ -10,23 +19,34 @@ One command to train a VLM desktop agent with dense milestone rewards:
         --model Qwen/Qwen2.5-VL-3B-Instruct \
         --output ./grpo_output
 
-    # Mock mode (no VM, no GPU — validates pipeline):
+    # Mock mode (no VM, no GPU -- validates pipeline):
     python scripts/train_trl_grpo.py \
         --task-dir ./example_tasks \
         --mock \
         --output ./grpo_output_mock
 
-    # With Unsloth (recommended for GPU training):
+    # With Unsloth + constrained decoding:
     python scripts/train_trl_grpo.py \
         --task-dir ./example_tasks \
         --server-url http://localhost:5001 \
         --model Qwen/Qwen2.5-VL-7B-Instruct \
         --use-unsloth \
+        --constrained-decoding \
+        --output ./grpo_output
+
+    # With Weave tracing:
+    python scripts/train_trl_grpo.py \
+        --task-dir ./example_tasks \
+        --server-url http://localhost:5001 \
+        --model Qwen/Qwen2.5-VL-7B-Instruct \
+        --weave-project openadapt-grpo \
         --output ./grpo_output
 
 Requirements:
     pip install openadapt-evals trl>=0.17
-    pip install unsloth  # optional, for VRAM efficiency
+    pip install unsloth          # optional, for VRAM efficiency
+    pip install outlines>=0.1.0  # optional, for constrained decoding
+    pip install weave             # optional, for Weave tracing
 """
 
 from __future__ import annotations
@@ -157,6 +177,30 @@ def create_mock_rollout_func(task_configs):
     return mock_rollout_func
 
 
+def _init_weave(project: str | None) -> bool:
+    """Initialize Weave tracing if a project name is provided.
+
+    Returns True if Weave was initialized successfully.
+    """
+    if not project:
+        return False
+    try:
+        from openadapt_evals.integrations.weave_integration import weave_init
+
+        weave_init(project)
+        logger.info("Weave tracing enabled: project=%s", project)
+        return True
+    except ImportError:
+        logger.warning(
+            "Weave tracing requested but 'weave' is not installed. "
+            "Install with: pip install weave"
+        )
+        return False
+    except Exception as exc:
+        logger.warning("Weave initialization failed: %s", exc)
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Train a VLM desktop agent with TRL GRPO + dense rewards"
@@ -220,6 +264,36 @@ def main():
         help="Use vLLM for generation (faster, requires vllm installed)",
     )
 
+    # Constrained decoding
+    parser.add_argument(
+        "--constrained-decoding", action="store_true",
+        help=(
+            "Use Outlines to constrain generation to the "
+            "'Thought: ...\\nAction: CLICK/TYPE/WAIT/DONE' format. "
+            "Eliminates 5-15%% of rollouts wasted on unparseable output. "
+            "Requires: pip install outlines>=0.1.0"
+        ),
+    )
+
+    # Vision loss mode
+    parser.add_argument(
+        "--vision-loss-mode",
+        default="exclude",
+        choices=["exclude", "include", "checkpoint"],
+        help=(
+            "How to handle vision tensors during the loss backward pass. "
+            "'exclude' (default): strip vision tensors, text-only log-probs "
+            "(safe on <=48GB GPUs). "
+            "'include': keep vision tensors, full multimodal backward "
+            "(may OOM on <80GB). "
+            "'checkpoint': gradient-checkpoint the vision encoder to cut "
+            "peak VRAM. "
+            "NOTE: TRL handles VLM tensors natively in the forward pass; "
+            "this flag controls the rollout_func's generation behavior and "
+            "is passed as metadata for telemetry tracking."
+        ),
+    )
+
     # Reward
     parser.add_argument(
         "--reward-fn", default="env",
@@ -227,7 +301,21 @@ def main():
         help="Reward function: env (milestone rewards only) or env+length (penalize long episodes)",
     )
 
+    # Telemetry & tracing
+    parser.add_argument(
+        "--no-telemetry", action="store_true",
+        help="Disable automatic telemetry callback",
+    )
+    parser.add_argument(
+        "--weave-project", default=None,
+        help="Weave project name for tracing (e.g., 'openadapt-grpo'). "
+             "Requires: pip install weave",
+    )
+
     args = parser.parse_args()
+
+    # --- Initialize Weave tracing (before any model loading) ---
+    _init_weave(args.weave_project)
 
     # --- Load task configs ---
     from openadapt_evals.task_config import TaskConfig
@@ -252,7 +340,7 @@ def main():
 
     # --- Mock mode ---
     if args.mock:
-        logger.info("=== MOCK MODE — validating pipeline without VM/GPU ===")
+        logger.info("=== MOCK MODE -- validating pipeline without VM/GPU ===")
 
         rollout_func = create_mock_rollout_func(task_configs)
 
@@ -315,6 +403,8 @@ def main():
             adapter=adapter,
             task_configs=task_configs,
             max_steps=args.max_steps,
+            constrained_decoding=args.constrained_decoding,
+            max_new_tokens=args.max_completion_length,
         )
 
     # Create reward function
@@ -330,6 +420,24 @@ def main():
             max_len = args.max_completion_length
             return [-0.1 * (len(c) / max_len) for c in completions]
         reward_funcs.append(length_penalty)
+
+    # --- Build callbacks ---
+    callbacks = []
+
+    # Telemetry callback (auto-enabled unless --no-telemetry)
+    if not args.no_telemetry:
+        try:
+            from openadapt_evals.integrations.trl_callbacks import TelemetryCallback
+
+            callbacks.append(TelemetryCallback(
+                model_name=args.model,
+                task_count=len(task_configs),
+                constrained_decoding=args.constrained_decoding,
+                vision_loss_mode=args.vision_loss_mode,
+            ))
+            logger.info("Telemetry callback enabled")
+        except Exception as exc:
+            logger.warning("Failed to create TelemetryCallback: %s", exc)
 
     # Configure training
     from trl import GRPOConfig, GRPOTrainer
@@ -361,6 +469,7 @@ def main():
         train_dataset=dataset,
         reward_funcs=reward_funcs,
         rollout_func=rollout_func,
+        callbacks=callbacks if callbacks else None,
     )
 
     logger.info("=== Starting GRPO training ===")
@@ -368,6 +477,10 @@ def main():
     logger.info("  Tasks: %d", len(task_configs))
     logger.info("  Group size: %d", args.num_generations)
     logger.info("  Loss type: %s", args.loss_type)
+    logger.info("  Constrained decoding: %s", args.constrained_decoding)
+    logger.info("  Vision loss mode: %s", args.vision_loss_mode)
+    logger.info("  Telemetry: %s", "disabled" if args.no_telemetry else "enabled")
+    logger.info("  Weave tracing: %s", args.weave_project or "disabled")
     logger.info("  Output: %s", args.output)
 
     trainer.train()
