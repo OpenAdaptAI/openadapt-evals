@@ -67,6 +67,11 @@ from openadapt_evals.agents.base import (
     format_accessibility_tree,
 )
 
+try:
+    from openadapt_evals.integrations.weave_integration import weave_op
+except ImportError:
+    weave_op = lambda fn: fn  # noqa: E731
+
 if TYPE_CHECKING:
     from openadapt_evals.training.planner_cache import PlannerCache
     from openadapt_evals.training.trajectory_logger import PlannerTrajectoryLogger
@@ -257,6 +262,7 @@ class PlannerGrounderAgent(BenchmarkAgent):
             grounder_provider,
         )
 
+    @weave_op
     def act(
         self,
         observation: BenchmarkObservation,
@@ -660,6 +666,7 @@ class PlannerGrounderAgent(BenchmarkAgent):
 
         return ""
 
+    @weave_op
     def _call_planner(
         self,
         observation: BenchmarkObservation,

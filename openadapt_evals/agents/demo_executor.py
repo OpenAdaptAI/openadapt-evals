@@ -30,6 +30,11 @@ from typing import Any
 from openadapt_evals.adapters.base import BenchmarkAction, BenchmarkObservation
 from openadapt_evals.demo_library import Demo, DemoStep
 
+try:
+    from openadapt_evals.integrations.weave_integration import weave_op
+except ImportError:
+    weave_op = lambda fn: fn  # noqa: E731
+
 logger = logging.getLogger(__name__)
 
 
@@ -72,6 +77,7 @@ class DemoExecutor:
         self._step_delay = step_delay
         self._recovery_budget = recovery_budget
 
+    @weave_op
     def run(
         self,
         env,  # RLEnvironment
@@ -176,6 +182,7 @@ class DemoExecutor:
 
         return score, screenshots
 
+    @weave_op
     def _execute_step(
         self,
         step: DemoStep,

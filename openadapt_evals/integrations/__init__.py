@@ -3,6 +3,7 @@
 This module provides integrations with:
 - Weights & Biases (wandb) for experiment tracking and report generation
 - W&B callback functions for the standalone GRPO trainer
+- Weave (W&B) for LLM/agent execution tracing
 """
 
 from openadapt_evals.integrations.wandb_logger import WandbLogger
@@ -33,9 +34,18 @@ except ImportError:
     generate_demo_report = None
     _REPORTS_AVAILABLE = False
 
+# Weave tracing (optional — no-op when weave not installed)
+try:
+    from openadapt_evals.integrations.weave_integration import weave_init, weave_op
+except ImportError:
+    weave_init = None
+    weave_op = None
+
 __all__ = [
     "WandbLogger",
     "WandbReportGenerator",
+    "weave_init",
+    "weave_op",
     "wandb_model_loaded",
     "wandb_rollout_logger",
     "wandb_step_logger",

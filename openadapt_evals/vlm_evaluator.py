@@ -42,6 +42,13 @@ Respond in this exact JSON format:
 Respond with ONLY the JSON object."""
 
 
+try:
+    from openadapt_evals.integrations.weave_integration import weave_op
+except ImportError:
+    weave_op = lambda fn: fn  # noqa: E731
+
+
+@weave_op
 def vlm_judge(
     screenshot: bytes,
     description: str,
