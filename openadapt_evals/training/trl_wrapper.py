@@ -81,6 +81,28 @@ class GRPOTrainer:
         task_configs = []
         if self._config.task_dir:
             task_configs = TaskConfig.from_dir(self._config.task_dir)
+
+        # Filter by task_ids if specified — without this, ALL tasks from
+        # task_dir end up in the TRL dataset regardless of what the user
+        # requested. This was a critical bug: config had task_ids=["X"]
+        # but TRL was running unrelated tasks.
+        if getattr(self._config, "task_ids", None):
+            allowed = set(self._config.task_ids)
+            filtered = [tc for tc in task_configs if tc.id in allowed or tc.name in allowed]
+            if filtered:
+                task_configs = filtered
+                logger.info(
+                    "Filtered tasks by task_ids: %d/%d tasks selected",
+                    len(filtered), len(task_configs) + len(filtered) - len(filtered),
+                )
+            else:
+                logger.warning(
+                    "task_ids=%s matched no tasks from task_dir=%s. "
+                    "Available: %s. Using all tasks.",
+                    self._config.task_ids, self._config.task_dir,
+                    [tc.id for tc in task_configs],
+                )
+
         if not task_configs:
             raise ValueError("No tasks. Set task_dir in TrainingConfig.")
 

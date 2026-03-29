@@ -169,7 +169,7 @@ class TestMakeWaaRolloutFunc:
 
         original_run = trl_rollout._run_episode
 
-        def mock_run_episode(env, generate_fn, instruction, task_id, max_steps):
+        def mock_run_episode(env, generate_fn, instruction, task_id, max_steps, **kwargs):
             """Simplified episode that doesn't need a real model."""
             from openadapt_evals.adapters.rl_env import ResetConfig
 
@@ -270,7 +270,7 @@ class TestMakeWaaRolloutFunc:
 
         captured_task_ids = []
 
-        def capture_run(env, gfn, instr, tid, ms):
+        def capture_run(env, gfn, instr, tid, ms, **kwargs):
             captured_task_ids.append(tid)
             from openadapt_evals.adapters.rl_env import ResetConfig
             env.reset(config=ResetConfig(task_id=tid))
