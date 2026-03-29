@@ -417,6 +417,7 @@ def make_waa_rollout_func(
     _outlines_state: dict[str, Any] = {"generator": None, "attempted": False}
     _prompt_logged: list[bool] = [False]  # log the prompt once for diagnostics
     _output_logged: list[bool] = [False]  # log first generation output
+    _template_patched: list[bool] = [False]  # patch chat template once
 
     def rollout_func(prompts: list[str], trainer: Any) -> dict[str, list]:
         """TRL GRPOTrainer rollout function.
@@ -430,6 +431,27 @@ def make_waa_rollout_func(
         """
         processor = trainer.processing_class
         model = trainer.model
+
+        # --- Disable Qwen3.5 thinking mode at the template level ---
+        # Qwen3.5's chat template inserts <think> which produces opaque
+        # reasoning tokens instead of DSL actions. Stripping from the
+        # rendered text is insufficient because TRL or the processor may
+        # re-apply the template. The fix: patch the template itself so
+        # <think> is never inserted, regardless of who calls it.
+        if not _template_patched[0]:
+            _template_patched[0] = True
+            for obj in [processor, getattr(processor, "tokenizer", None)]:
+                if obj is None:
+                    continue
+                tpl = getattr(obj, "chat_template", None)
+                if tpl and "<think>" in tpl:
+                    patched = tpl.replace("<think>", "").replace("</think>", "")
+                    obj.chat_template = patched
+                    logger.info(
+                        "Patched chat_template on %s to remove <think>/<think> "
+                        "tags (disables Qwen3.5 thinking mode)",
+                        type(obj).__name__,
+                    )
         device = next(model.parameters()).device
 
         num_generations = getattr(trainer.args, "num_generations", 8)
@@ -532,10 +554,16 @@ def make_waa_rollout_func(
                     messages, **chat_kwargs,
                 )
 
-            # Belt-and-suspenders: strip <think> tag if it slipped through
-            if "<think>" in text_input:
-                logger.info("Stripping <think> tag from prompt to disable thinking mode")
-                text_input = text_input.replace("<think>\n", "").replace("<think>", "")
+            # Belt-and-suspenders: strip thinking tags if they slipped through
+            if "<think>" in text_input or "</think>" in text_input:
+                logger.info("Stripping <think>/<think> tags from rendered prompt")
+                text_input = (
+                    text_input
+                    .replace("<think>\n", "")
+                    .replace("<think>", "")
+                    .replace("</think>\n", "")
+                    .replace("</think>", "")
+                )
 
             # Comprehensive prompt diagnostics on first call.
             # This logs everything needed to debug prompt construction:
