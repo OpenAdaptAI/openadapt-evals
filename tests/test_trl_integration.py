@@ -301,22 +301,19 @@ class TestWrapperPassesCallbacks:
 # ---------------------------------------------------------------------------
 
 
-class TestVLMModelWrapperIntegration:
-    """Verify VLMModelWrapper is wired into the TRL training pipeline."""
+class TestVLMPatchIntegration:
+    """Verify VLM model patching is wired into the TRL training pipeline."""
 
-    def test_wrapper_used_in_train_source(self):
-        """trl_wrapper.train() wraps the model in VLMModelWrapper."""
+    def test_patch_used_in_train_source(self):
+        """trl_wrapper.train() patches the model for VLM compatibility."""
         import inspect
         from openadapt_evals.training import trl_wrapper
 
         source = inspect.getsource(trl_wrapper.GRPOTrainer.train)
-        assert "VLMModelWrapper" in source, (
-            "GRPOTrainer.train() must wrap the model in VLMModelWrapper "
-            "before passing to TRL. Without this, TRL's forward pass "
-            "won't have pixel_values and the VLM will be blind."
-        )
-        assert "vlm_wrapper" in source.lower() or "VLMModelWrapper(model)" in source, (
-            "train() must create VLMModelWrapper(model) to wrap the model."
+        assert "patch_model_for_trl" in source, (
+            "GRPOTrainer.train() must call patch_model_for_trl(model) "
+            "to patch forward() for pixel_values injection. Without this, "
+            "TRL's forward pass won't have pixel_values and the VLM will be blind."
         )
 
     def test_generate_fn_calls_cache_vision_inputs(self):

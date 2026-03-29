@@ -367,6 +367,7 @@ def make_waa_rollout_func(
     stuck_threshold: int = 3,
     on_before_collect: Optional[Callable] = None,
     on_rollout_complete: Optional[Callable] = None,
+    cache_vision_fn: Optional[Callable] = None,
 ) -> Callable:
     """Create a TRL-compatible rollout_func for WAA environments.
 
@@ -645,7 +646,11 @@ def make_waa_rollout_func(
 
             # Cache vision inputs so the VLMModelWrapper can inject
             # pixel_values during TRL's training forward pass.
-            if hasattr(model, "cache_vision_inputs"):
+            # Cache vision inputs so the patched forward() can inject
+            # pixel_values during TRL's training step and generate() calls.
+            if cache_vision_fn is not None:
+                cache_vision_fn(dict(inputs.items()) if hasattr(inputs, "items") else inputs)
+            elif hasattr(model, "cache_vision_inputs"):
                 model.cache_vision_inputs(inputs)
 
             with torch.no_grad():

@@ -147,13 +147,14 @@ class GRPOTrainer:
         if self._on_model_loaded:
             self._on_model_loaded(model, processor)
 
-        # --- Wrap model for TRL multimodal compatibility ---
-        # TRL's GRPOTrainer calls model.forward(input_ids=...) during the
-        # training step without pixel_values. VLMs need pixel_values to
-        # produce meaningful logits. The wrapper caches vision inputs from
-        # our rollout generation and injects them into TRL's forward pass.
-        from openadapt_evals.training.vlm_wrapper import VLMModelWrapper
-        vlm_wrapper = VLMModelWrapper(model)
+        # --- Patch model for TRL multimodal compatibility ---
+        # TRL's GRPOTrainer calls model.forward(input_ids=...) and
+        # model.generate(input_ids=...) without pixel_values. VLMs need
+        # pixel_values. We patch the model's forward() directly on the
+        # instance so it survives TRL/Accelerate unwrapping (which strips
+        # wrapper classes). The cache_fn is passed to rollout_func.
+        from openadapt_evals.training.vlm_wrapper import patch_model_for_trl
+        cache_vision_fn = patch_model_for_trl(model)
 
         # --- Rollout function (from our config) ---
         from openadapt_evals.adapters.waa.live import WAALiveAdapter, WAALiveConfig
@@ -176,6 +177,7 @@ class GRPOTrainer:
             temperature=self._config.temperature,
             on_before_collect=self._on_before_collect,
             on_rollout_complete=self._on_rollout_complete,
+            cache_vision_fn=cache_vision_fn,
         )
 
         # --- Reward ---
@@ -268,7 +270,7 @@ class GRPOTrainer:
 
         # --- Train ---
         trainer = _TRLTrainer(
-            model=vlm_wrapper,
+            model=model,
             processing_class=processor,
             args=trl_config,
             train_dataset=dataset,
