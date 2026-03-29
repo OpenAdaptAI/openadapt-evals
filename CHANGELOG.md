@@ -1,6 +1,35 @@
 # CHANGELOG
 
 
+## v0.77.2 (2026-03-29)
+
+### Bug Fixes
+
+- Add numpy to dev dependencies for CI
+  ([#221](https://github.com/OpenAdaptAI/openadapt-evals/pull/221),
+  [`6a0374a`](https://github.com/OpenAdaptAI/openadapt-evals/commit/6a0374a25c4ea4e0b3808ac9cc0780ee89a7f087))
+
+test_workflow_models.py and workflow pipeline import numpy directly. Was transitive via
+  openadapt-ml, now needed as dev dep.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+### Testing
+
+- Demoexecutor e2e tests with mock WAA environment
+  ([#222](https://github.com/OpenAdaptAI/openadapt-evals/pull/222),
+  [`8e6f685`](https://github.com/OpenAdaptAI/openadapt-evals/commit/8e6f685e94a61425df3e563623ece79690c7e44a))
+
+12 tests covering the full DemoExecutor pipeline: - Keyboard-only demo: 3 steps execute in order,
+  all Tier 1 - Mixed demo: click uses grounder, keyboard bypasses it - Evaluation: dense score with
+  milestones, binary without - Telemetry: start/completed events with tier counts - Edge cases:
+  empty demo, missing values, unknown action types
+
+All tests use MockEnv (no WAA server, no HTTP, no API keys). 12/12 pass in 0.05s.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.77.1 (2026-03-29)
 
 ### Bug Fixes
