@@ -514,9 +514,28 @@ def make_waa_rollout_func(
 
             import torch
 
-            text_input = processor.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
+            # Disable thinking mode: Qwen3.5's chat template inserts
+            # <think> which activates internal reasoning tokens (the
+            # "# # # # #" garbage). We need DSL output, not thinking.
+            # Try enable_thinking=False first; if not supported, strip
+            # <think> from the rendered text.
+            chat_kwargs = dict(
+                tokenize=False, add_generation_prompt=True,
             )
+            try:
+                text_input = processor.apply_chat_template(
+                    messages, enable_thinking=False, **chat_kwargs,
+                )
+            except TypeError:
+                # Older processor doesn't support enable_thinking kwarg
+                text_input = processor.apply_chat_template(
+                    messages, **chat_kwargs,
+                )
+
+            # Belt-and-suspenders: strip <think> tag if it slipped through
+            if "<think>" in text_input:
+                logger.info("Stripping <think> tag from prompt to disable thinking mode")
+                text_input = text_input.replace("<think>\n", "").replace("<think>", "")
 
             # Comprehensive prompt diagnostics on first call.
             # This logs everything needed to debug prompt construction:
