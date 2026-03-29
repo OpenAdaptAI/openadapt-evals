@@ -446,24 +446,38 @@ class GRPOTrainer:
 
             full_inputs = {k: v.to(device) for k, v in full_inputs.items()}
 
-            outputs = self._model(**full_inputs)
-
-            # For "exclude" mode, logits shape matches input_ids (no vision merge).
-            # For "include"/"checkpoint", Qwen3's vision merge changes the
-            # sequence length.  Slice action logits from the END of the
-            # output sequence (action tokens are always last).
             n_action = action_ids.shape[1]
-            if vision_loss_mode == "exclude":
-                al = outputs.logits[:, prompt_len - 1: prompt_len - 1 + n_action, :]
-            else:
-                # Post-merge: total output length differs from input_ids length.
-                # Action tokens are the last n_action tokens in the sequence.
-                seq_len = outputs.logits.shape[1]
-                al = outputs.logits[:, seq_len - n_action - 1: seq_len - 1, :]
+
+            # Forward pass with fallback: if include/checkpoint mode crashes
+            # due to Qwen3's vision merge changing sequence length (attention
+            # mask mismatch), retry with exclude mode for this step.
+            try:
+                outputs = self._model(**full_inputs)
+                if vision_loss_mode == "exclude":
+                    al = outputs.logits[:, prompt_len - 1: prompt_len - 1 + n_action, :]
+                else:
+                    seq_len = outputs.logits.shape[1]
+                    al = outputs.logits[:, seq_len - n_action - 1: seq_len - 1, :]
+            except (IndexError, RuntimeError) as fwd_err:
+                if vision_loss_mode != "exclude":
+                    logger.warning(
+                        "Vision forward pass failed (%s), retrying with "
+                        "exclude mode for this step: %s",
+                        vision_loss_mode, fwd_err,
+                    )
+                    fallback_inputs = {
+                        k: v for k, v in prompt_inputs.items()
+                        if k not in _VISION_KEYS
+                    }
+                    fallback_inputs["input_ids"] = full_ids
+                    fallback_inputs["attention_mask"] = torch.ones_like(full_ids)
+                    fallback_inputs = {k: v.to(device) for k, v in fallback_inputs.items()}
+                    outputs = self._model(**fallback_inputs)
+                    al = outputs.logits[:, prompt_len - 1: prompt_len - 1 + n_action, :]
+                else:
+                    raise
 
             lp = torch.nn.functional.log_softmax(al, dim=-1)
-
-            # Gather log-probs for the actual action token IDs
             action_token_ids = action_ids.to(device)
             tlp = lp.gather(2, action_token_ids.unsqueeze(-1)).squeeze(-1)
             slp = tlp.sum()
