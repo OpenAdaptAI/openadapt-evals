@@ -1,6 +1,28 @@
 # CHANGELOG
 
 
+## v0.79.0 (2026-03-29)
+
+### Features
+
+- Trl GRPOTrainer migration with drop-in Python wrapper
+  ([#229](https://github.com/OpenAdaptAI/openadapt-evals/pull/229),
+  [`f7d840c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/f7d840c1089e403a01256de8db18e1b2af32de87))
+
+TRL integration: - Outlines constrained decoding ported to rollout_func - TelemetryCallback maps to
+  our telemetry events - train_trl_grpo.py: --constrained-decoding, --weave-project, --no-telemetry
+  - README: TRL training section with 4 usage examples
+
+Drop-in Python wrapper (trl_wrapper.py): - Same API as standalone trainer: TrainingConfig + 4
+  callback hooks - Internally uses TRL GRPOTrainer + rollout_func - Client code doesn't change: from
+  openadapt_evals.training.trl_wrapper import GRPOTrainer trainer = GRPOTrainer(config,
+  on_step_complete=my_logger) trainer.train()
+
+Standalone trainer: - Deprecated with warning (not removed) - Falls back if TRL not installed
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.78.2 (2026-03-29)
 
 ### Bug Fixes
