@@ -1,6 +1,25 @@
 # CHANGELOG
 
 
+## v0.82.2 (2026-03-29)
+
+### Bug Fixes
+
+- Patch model.forward() directly instead of wrapper class
+  ([#253](https://github.com/OpenAdaptAI/openadapt-evals/pull/253),
+  [`0f381b1`](https://github.com/OpenAdaptAI/openadapt-evals/commit/0f381b1c6ff0de3c2ff2e9f89cde91542df71e2f))
+
+TRL unwraps models via Accelerate, stripping wrapper classes. The fix: patch forward() on the model
+  instance itself. This survives unwrapping.
+
+- patch_model_for_trl(model) → returns cache_fn - cache_fn(inputs) caches pixel_values from
+  processor output - Patched forward() injects cached pixel_values when TRL omits them - Patched
+  __call__ also injects (covers all call paths) - trl_wrapper passes original model to TRL (not a
+  wrapper) - cache_vision_fn passed through to rollout_func
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.82.1 (2026-03-29)
 
 ### Bug Fixes
