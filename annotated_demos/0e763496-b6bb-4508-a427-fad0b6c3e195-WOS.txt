@@ -1,0 +1,17 @@
+DEMONSTRATION:
+Goal: Change the font to "Times New Roman" throughout the text.
+
+Step 1:
+  [Screen: The application is LibreOffice Writer, displaying a document named 'Dublin_Zoo_Intro.docx'.]
+  [Action: The user clicked on the font dropdown menu labeled 'Georgia', as indicated by the red marker.]
+  [Result: The font dropdown menu is now empty (no font name displayed), and the text in the document is highlighted in blue indicating it is selected. No font change has occurred yet.]
+
+Step 2:
+  [Screen: The application is LibreOffice Writer, editing a document named 'Dublin_Zoo_Intro.docx'.]
+  [Action: The user clicked on the font dropdown menu (currently empty) as indicated by the red marker to open the list of available fonts.]
+  [Result: The font dropdown menu expanded to show a list of available fonts, but no font has been selected yet. The selected text remains highlighted in blue, and the font name field remains empty.]
+
+Step 3:
+  [Screen: The application is LibreOffice Writer with the document 'Dublin_Zoo_Intro.docx' open.]
+  [Action: The user clicked on the font dropdown menu (indicated by the red marker) to select a font from the list.]
+  [Result: The font dropdown menu now shows 'Times New Roman' as the selected font. However, the selected text in the document is no longer visible (the page is scrolled to a blank area), and the text highlight is still present but on an empty line, indicating the font change was applied but the view changed.]

@@ -1,0 +1,63 @@
+{
+  "schema_version": "0.1",
+  "task_id": "70745df8-f2f5-42bd-8074-fbc10334fcc5-2-WOS",
+  "instruction": "Can you delay VS Code autoSave for 1000 milliseconds?",
+  "source": "recorded",
+  "annotator": {
+    "provider": "openai",
+    "model": "gpt-4.1-mini"
+  },
+  "recording_meta": {
+    "platform": "windows",
+    "screen_px": null,
+    "source": "waa_api_recording",
+    "raw_step_count": 4,
+    "annotated_step_count": 4
+  },
+  "steps": [
+    {
+      "step_index": 0,
+      "timestamp_ms": null,
+      "observation": "The application is Visual Studio Code with a Python file 'test.py' open in the editor. The left sidebar shows icons for Explorer, Search, Source Control, Run and Debug, and Extensions. The editor window displays Python code for a bubble sort function, with lines 2 to 9 highlighted. The bottom left corner shows the gear icon for settings. A red marker indicates a click on the gear icon. The status bar at the bottom shows 'Restricted Mode' and other file details.",
+      "intent": "The user is trying to open the settings menu to modify the autoSave delay in VS Code.",
+      "action": "The user clicked on the gear icon (Settings) in the bottom left corner of the VS Code window, as indicated by the red marker.",
+      "action_raw": "(user action at step 1)",
+      "action_px": null,
+      "result_observation": "After clicking the gear icon, a context menu appeared above it with options including Command Palette, Profiles, Settings, Extensions, Keyboard Shortcuts, Snippets, Tasks, Themes, and Backup and Sync Settings.",
+      "expected_result": "The settings context menu should appear after clicking the gear icon, allowing the user to select 'Settings' to proceed with changing the autoSave delay."
+    },
+    {
+      "step_index": 1,
+      "timestamp_ms": null,
+      "observation": "The application visible is Visual Studio Code. The current panel is a context menu opened above the gear icon in the bottom left corner of the window. Key UI elements visible include: 1) The gear icon (Settings) in the bottom left corner with a red marker indicating interaction, 2) The context menu with options such as Command Palette, Profiles, Settings, Extensions, Keyboard Shortcuts, Snippets, Tasks, Themes, and Backup and Sync Settings, 3) The main editor area showing a Python file named test.py with bubble_sort function code, 4) The sidebar on the left with icons for Explorer, Search, Source Control, Run and Debug, Extensions, 5) The status bar at the bottom showing Restricted Mode and other info, 6) The top menu bar with File, Edit, Selection, View, Go, etc.",
+      "intent": "The user is opening the Settings menu to access and modify the autoSave configuration in VS Code.",
+      "action": "The user clicked on the 'Settings' option in the context menu above the gear icon, as indicated by the red marker.",
+      "action_raw": "(user action at step 2)",
+      "action_px": null,
+      "result_observation": "The main editor area changed from showing the Python code file to displaying the Settings tab. The Settings tab shows a search bar at the top, a sidebar on the left with categories like Commonly Used, Text Editor, Workbench, etc., and the main content area showing 'Commonly Used' settings including 'Editor: Font Size', 'Editor: Format On Save', and 'Files: Auto Save' with a dropdown currently set to 'off'.",
+      "expected_result": "After clicking 'Settings', the screen should display the Settings tab with a search bar, navigation sidebar, and the settings content area where the user can search for and modify settings such as autoSave delay."
+    },
+    {
+      "step_index": 2,
+      "timestamp_ms": null,
+      "observation": "The application is Visual Studio Code with the 'Settings' tab open. The main panel shows the 'Commonly Used' settings category with options like 'Editor: Font Size', 'Editor: Format On Save', and 'Files: Auto Save' dropdown set to 'off'. The left sidebar displays categories such as Text Editor, Workbench, Window, Features, Application, Security, and Extensions. A search bar is visible at the top of the settings panel. The red marker indicates a click on the 'Files: Auto Save' dropdown menu.",
+      "intent": "The user is trying to configure the auto save delay setting to control how long VS Code waits before automatically saving changes.",
+      "action": "The user clicked on the 'Files: Auto Save' dropdown menu as indicated by the red marker.",
+      "action_raw": "(user action at step 3)",
+      "action_px": null,
+      "result_observation": "The settings panel changed to show a search result for 'autosavedelay' with a single setting 'Files: Auto Save Delay'. The setting description explains it controls the delay in milliseconds before an editor with unsaved changes is saved automatically. The input box for the delay value is set to '1000'. The left sidebar now shows 'Text Editor (1)' indicating a filtered view.",
+      "expected_result": "After this action, the screen should display the 'Files: Auto Save Delay' setting with an input box allowing the user to set the delay in milliseconds, currently set to 1000, confirming the delay is configured as intended."
+    },
+    {
+      "step_index": 3,
+      "timestamp_ms": null,
+      "observation": "The BEFORE image shows the Visual Studio Code application window with the 'Settings' panel open. The search bar at the top contains the text 'autosavedelay'. Below it, a single setting 'Files: Auto Save Delay' is visible with a description and an input box containing the value '1000'. On the left sidebar, the 'Text Editor (1)' section is expanded, showing 'Files (1)'. The top menu bar includes options like File, Edit, Selection, View, Go, and others. The red marker is on the 'Files: Auto Save Delay' input box.",
+      "intent": "The user is trying to set or confirm the delay for VS Code's auto-save feature to 1000 milliseconds.",
+      "action": "The user clicked on the 'Files: Auto Save Delay' input box as indicated by the red marker.",
+      "action_raw": "(user action at step 4)",
+      "action_px": null,
+      "result_observation": "In the AFTER image, the 'Files: Auto Save Delay' input box remains focused with the value '1000'. However, a red error notification appears at the bottom right corner stating 'Unable to write into user settings. Please open the user settings to correct errors/warnings in it and try again.' with an 'Open Settings' button. The rest of the UI remains the same.",
+      "expected_result": "After clicking the 'Files: Auto Save Delay' input box, the user should be able to edit the value without error, and the setting should save successfully without any error notifications."
+    }
+  ]
+}

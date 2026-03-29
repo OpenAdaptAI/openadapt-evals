@@ -1,0 +1,60 @@
+{
+  "task_id": "0bf05a7d-b28b-44d2-955a-50b41e24012a-WOS",
+  "instruction": "I would like to pad all the numbers in the 'Old ID' column with zeros in front, to fill them up to seven digits in the 'New 7 Digit ID' column.",
+  "num_steps": 7,
+  "steps": [
+    {
+      "action_hint": null,
+      "suggested_step": "Click cell D2.",
+      "step_was_refined": false
+    },
+    {
+      "action_hint": null,
+      "suggested_step": "Type the formula: =TEXT(C2;\"0000000\") and press Enter.",
+      "step_was_refined": false
+    },
+    {
+      "action_hint": null,
+      "suggested_step": "Click cell D2 to select it.",
+      "step_was_refined": false
+    },
+    {
+      "action_hint": null,
+      "suggested_step": "Drag the fill handle (small square at bottom-right corner of cell D2) down to cell D21 to fill the formula for all rows.",
+      "step_was_refined": false
+    },
+    {
+      "action_hint": null,
+      "suggested_step": "Select cells D2 to D21.",
+      "step_was_refined": false
+    },
+    {
+      "action_hint": null,
+      "suggested_step": "Right-click the selection, choose Format Cells.",
+      "step_was_refined": false
+    },
+    {
+      "action_hint": null,
+      "suggested_step": "In the Format Cells window, ensure Category is set to Text, click OK.",
+      "step_was_refined": false
+    }
+  ],
+  "step_plans": [
+    {
+      "at_step_idx": 0,
+      "trigger": "initial",
+      "steps": [
+        "Click cell D2.",
+        "Type the formula: =TEXT(C2;\"0000000\") and press Enter.",
+        "Click cell D2 to select it.",
+        "Drag the fill handle (small square at bottom-right corner of cell D2) down to cell D21 to fill the formula for all rows.",
+        "Select cells D2 to D21.",
+        "Right-click the selection, choose Format Cells.",
+        "In the Format Cells window, ensure Category is set to Text, click OK."
+      ]
+    }
+  ],
+  "server_url": "http://localhost:5001",
+  "recorded_at": "2026-03-04T21:28:33.941845+00:00",
+  "recording_complete": true
+}
