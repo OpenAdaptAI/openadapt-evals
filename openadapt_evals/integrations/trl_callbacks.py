@@ -1,17 +1,24 @@
-"""TRL TrainerCallback implementations for telemetry and Weave tracing.
+"""TRL TrainerCallback implementations for telemetry, diagnostics, and Weave tracing.
 
 Provides callbacks that integrate with TRL's GRPOTrainer to automatically
-track training events via our telemetry system and optionally log to Weave.
+track training events via our telemetry system, emit rich diagnostic logs
+matching the standalone trainer output, and optionally log to Weave.
 
 Usage::
 
     from trl import GRPOConfig, GRPOTrainer
-    from openadapt_evals.integrations.trl_callbacks import TelemetryCallback
+    from openadapt_evals.integrations.trl_callbacks import (
+        DiagnosticsCallback,
+        TelemetryCallback,
+    )
 
     trainer = GRPOTrainer(
         model=model,
         args=config,
-        callbacks=[TelemetryCallback(model_name="Qwen/Qwen2.5-VL-7B-Instruct")],
+        callbacks=[
+            TelemetryCallback(model_name="Qwen/Qwen2.5-VL-7B-Instruct"),
+            DiagnosticsCallback(),
+        ],
         ...
     )
     trainer.train()
@@ -161,6 +168,42 @@ class TelemetryCallback:
             logger.debug("Telemetry on_train_end failed: %s", exc)
 
 
+class DiagnosticsCallback:
+    """Rich training diagnostics matching standalone trainer output.
+
+    Emits per-step log lines with loss, |loss|, grad_norm, and reward in the
+    same format as the standalone GRPOTrainer. This makes it easy for operators
+    to monitor TRL-based training runs with the same tooling (grep, dashboards)
+    used for the standalone path.
+
+    All values are read from TRL's ``state.log_history``. If a metric is
+    missing, it defaults to 0.0.
+    """
+
+    def on_step_end(
+        self,
+        args: Any,
+        state: Any,
+        control: Any,
+        **kwargs: Any,
+    ) -> None:
+        """Log diagnostic metrics at the end of each training step."""
+        if not state.log_history:
+            return
+        latest = state.log_history[-1]
+        loss = latest.get("loss", 0.0)
+        grad_norm = latest.get("grad_norm", 0.0)
+        reward = latest.get("reward", latest.get("reward_mean", 0.0))
+        logger.info(
+            "Step %d: loss=%+.2e |loss|=%.2e grad_norm=%.4f reward=%.4f",
+            state.global_step,
+            loss,
+            abs(loss),
+            grad_norm,
+            reward,
+        )
+
+
 # Register as a TrainerCallback subclass at import time so TRL recognizes it.
 # If transformers is installed, wrap with proper inheritance.
 # We can't patch __bases__ after the fact (Python doesn't allow it when
@@ -172,7 +215,12 @@ try:
         """TelemetryCallback with proper TrainerCallback inheritance."""
         pass
 
-    # Replace the module-level name so imports get the subclass
+    class _DiagnosticsCallbackWithBase(_TrainerCallback, DiagnosticsCallback):
+        """DiagnosticsCallback with proper TrainerCallback inheritance."""
+        pass
+
+    # Replace the module-level names so imports get the subclasses
     TelemetryCallback = _TelemetryCallbackWithBase  # type: ignore[misc]
+    DiagnosticsCallback = _DiagnosticsCallbackWithBase  # type: ignore[misc]
 except ImportError:
-    pass  # TelemetryCallback works as duck-typed callback without inheritance
+    pass  # Callbacks work as duck-typed without inheritance

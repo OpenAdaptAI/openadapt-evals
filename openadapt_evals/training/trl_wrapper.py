@@ -170,8 +170,12 @@ class GRPOTrainer:
         callbacks = []
 
         try:
-            from openadapt_evals.integrations.trl_callbacks import TelemetryCallback
+            from openadapt_evals.integrations.trl_callbacks import (
+                DiagnosticsCallback,
+                TelemetryCallback,
+            )
             callbacks.append(TelemetryCallback())
+            callbacks.append(DiagnosticsCallback())
         except ImportError:
             pass
 
