@@ -1,6 +1,25 @@
 # CHANGELOG
 
 
+## v0.81.8 (2026-03-29)
+
+### Bug Fixes
+
+- Disable Qwen3.5 thinking mode in TRL generation
+  ([#249](https://github.com/OpenAdaptAI/openadapt-evals/pull/249),
+  [`5a2bf7f`](https://github.com/OpenAdaptAI/openadapt-evals/commit/5a2bf7f7d6dc262608fba994b02cfbce50eaa811))
+
+Root cause of persistent garbage output: Qwen3.5-9B's chat template inserts <think> which activates
+  internal reasoning mode. The model produces opaque thinking tokens (# # # # #) instead of DSL
+  actions.
+
+Fix: pass enable_thinking=False to apply_chat_template. Falls back to
+
+stripping <think> from rendered text if the kwarg is not supported.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.81.7 (2026-03-29)
 
 ### Bug Fixes
