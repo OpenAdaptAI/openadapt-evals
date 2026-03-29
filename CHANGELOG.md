@@ -1,6 +1,45 @@
 # CHANGELOG
 
 
+## v0.80.2 (2026-03-29)
+
+### Bug Fixes
+
+- Critical TRL trainer bugs — wrong prompt, ignored task_ids, DSL parsing
+  ([#236](https://github.com/OpenAdaptAI/openadapt-evals/pull/236),
+  [`de515b8`](https://github.com/OpenAdaptAI/openadapt-evals/commit/de515b8cde49ffd0e08a0097f9857c042d4c017a))
+
+* fix: critical TRL trainer bugs — wrong prompt, ignored task_ids, DSL parsing
+
+Three bugs reported from client testing the TRL path:
+
+1. Garbage output: TRL used a JSON system prompt but the model was SFT'd on DSL format
+  (Thought/Action). Now imports SYSTEM_PROMPT from the standalone trainer so both paths use the
+  identical prompt.
+
+2. task_ids ignored: trl_wrapper loaded ALL tasks from task_dir into the TRL dataset, ignoring
+  TrainingConfig.task_ids. Now filters task_configs by task_ids when specified (matching by id or
+  name).
+
+3. parse_action_json only handled JSON: constrained decoding produces DSL (CLICK(x=0.5, y=0.3)), but
+  the parser only tried JSON. Now falls back to DSL regex parsing, keeping fractional coordinates
+  for pixel_action.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* fix: configurable system_prompt, loud Outlines failure, mock-safe health check
+
+- Add system_prompt parameter to make_waa_rollout_func (default = DSL prompt from standalone
+  trainer). Users can override if they SFT on a different format. - Log the system prompt at startup
+  for debugging. - Make Outlines failure loud: ImportError raises instead of silent fallback. Other
+  failures log CRITICAL warning. - Fix health check to skip mock adapters (unittest.mock.MagicMock).
+  - Fix test mocks to accept **kwargs for stuck_threshold.
+
+---------
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.80.1 (2026-03-29)
 
 ### Bug Fixes
