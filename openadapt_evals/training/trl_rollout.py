@@ -643,6 +643,11 @@ def make_waa_rollout_func(
                 return_tensors="pt", padding=True,
             ).to(device)
 
+            # Cache vision inputs so the VLMModelWrapper can inject
+            # pixel_values during TRL's training forward pass.
+            if hasattr(model, "cache_vision_inputs"):
+                model.cache_vision_inputs(inputs)
+
             with torch.no_grad():
                 outputs = model.generate(
                     **inputs,

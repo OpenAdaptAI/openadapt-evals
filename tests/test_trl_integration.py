@@ -294,3 +294,39 @@ class TestWrapperPassesCallbacks:
         assert "on_rollout_complete" not in hookbridge_section, (
             "HookBridge should not store on_rollout_complete"
         )
+
+
+# ---------------------------------------------------------------------------
+# VLMModelWrapper integration
+# ---------------------------------------------------------------------------
+
+
+class TestVLMModelWrapperIntegration:
+    """Verify VLMModelWrapper is wired into the TRL training pipeline."""
+
+    def test_wrapper_used_in_train_source(self):
+        """trl_wrapper.train() wraps the model in VLMModelWrapper."""
+        import inspect
+        from openadapt_evals.training import trl_wrapper
+
+        source = inspect.getsource(trl_wrapper.GRPOTrainer.train)
+        assert "VLMModelWrapper" in source, (
+            "GRPOTrainer.train() must wrap the model in VLMModelWrapper "
+            "before passing to TRL. Without this, TRL's forward pass "
+            "won't have pixel_values and the VLM will be blind."
+        )
+        assert "vlm_wrapper" in source.lower() or "VLMModelWrapper(model)" in source, (
+            "train() must create VLMModelWrapper(model) to wrap the model."
+        )
+
+    def test_generate_fn_calls_cache_vision_inputs(self):
+        """generate_fn caches vision inputs on the wrapper before generating."""
+        import inspect
+        from openadapt_evals.training import trl_rollout
+
+        source = inspect.getsource(trl_rollout.make_waa_rollout_func)
+        assert "cache_vision_inputs" in source, (
+            "generate_fn must call model.cache_vision_inputs(inputs) before "
+            "model.generate() so the VLMModelWrapper can inject pixel_values "
+            "during TRL's training forward pass."
+        )
