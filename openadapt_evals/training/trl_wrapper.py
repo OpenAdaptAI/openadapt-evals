@@ -1,18 +1,31 @@
-"""Drop-in TRL-backed GRPOTrainer with the same API as the standalone trainer.
+"""TRL-backed GRPO trainer with clean config separation.
 
-Usage (identical to standalone trainer):
+Our TrainingConfig handles OpenAdapt-specific concerns (WAA server,
+task loading, constrained decoding, callbacks). TRL's GRPOConfig
+handles training concerns (learning rate, loss type, batch size).
+No duplication — each config owns its domain.
 
+Usage:
+    from trl import GRPOConfig
     from openadapt_evals.training.trl_wrapper import GRPOTrainer
     from openadapt_evals.training.standalone.config import TrainingConfig
 
     trainer = GRPOTrainer(
-        TrainingConfig(model_name="Qwen/Qwen3.5-9B", task_dir="tasks/"),
+        TrainingConfig(
+            task_dir="tasks/",
+            server_url="http://localhost:5001",
+            constrained_decoding=True,
+        ),
+        trl_config=GRPOConfig(
+            output_dir="./checkpoints",
+            loss_type="dapo",
+            num_generations=4,
+            learning_rate=5e-6,
+            bf16=True,
+        ),
         on_step_complete=my_logger,
     )
     trainer.train()
-
-Internally uses TRL's GRPOTrainer + rollout_func. Falls back to the
-standalone trainer if TRL is not installed.
 """
 
 from __future__ import annotations
@@ -24,22 +37,33 @@ logger = logging.getLogger(__name__)
 
 
 class GRPOTrainer:
-    """TRL-backed GRPO trainer with the standalone trainer's API.
+    """TRL-backed GRPO trainer.
 
-    Same constructor signature: TrainingConfig + 4 callback hooks.
-    Same train() → str return (checkpoint path).
+    Args:
+        config: Our TrainingConfig — WAA server, task_dir, model loading,
+            constrained decoding. Handles everything OpenAdapt-specific.
+        trl_config: TRL's GRPOConfig — learning rate, loss type, batch
+            size, gradient accumulation, vLLM, W&B reporting. Passed
+            directly to TRL with zero translation. Optional — sensible
+            defaults are used if omitted.
+        on_model_loaded: ``(model, processor) -> None``
+        on_before_collect: ``(task_id, env) -> None``
+        on_rollout_complete: ``(rollout, index) -> None``
+        on_step_complete: ``(step, rollouts, metrics) -> None``
     """
 
     def __init__(
         self,
         config,
         *,
+        trl_config=None,
         on_model_loaded=None,
         on_before_collect=None,
         on_rollout_complete=None,
         on_step_complete=None,
     ):
         self._config = config
+        self._trl_config = trl_config
         self._on_model_loaded = on_model_loaded
         self._on_before_collect = on_before_collect
         self._on_rollout_complete = on_rollout_complete
@@ -47,21 +71,16 @@ class GRPOTrainer:
 
     def train(self) -> str:
         """Run GRPO training via TRL. Returns path to final checkpoint."""
-        from pathlib import Path
-
         from datasets import Dataset
         from trl import GRPOConfig, GRPOTrainer as _TRLTrainer
 
         from openadapt_evals.task_config import TaskConfig
         from openadapt_evals.training.trl_rollout import make_waa_rollout_func
 
-        # Load tasks
+        # --- Tasks (from our config) ---
         task_configs = []
         if self._config.task_dir:
             task_configs = TaskConfig.from_dir(self._config.task_dir)
-        if self._config.task_ids and not task_configs:
-            logger.warning("task_ids set but no task_dir — using task_ids as prompts")
-
         if not task_configs:
             raise ValueError("No tasks. Set task_dir in TrainingConfig.")
 
@@ -70,20 +89,22 @@ class GRPOTrainer:
             "task_id": [tc.id for tc in task_configs],
         })
 
-        # Load model
-        try:
+        # --- Model (from our config) ---
+        if getattr(self._config, "use_unsloth", False):
             from unsloth import FastVisionModel
             logger.info("Loading with Unsloth: %s", self._config.model_name)
             model, processor = FastVisionModel.from_pretrained(
                 self._config.model_name,
                 load_in_4bit=self._config.load_in_4bit,
+                fast_inference=True,
+                gpu_memory_utilization=0.6,
             )
             model = FastVisionModel.get_peft_model(
                 model, r=self._config.lora_r, lora_alpha=self._config.lora_alpha,
                 target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
                                 "gate_proj", "up_proj", "down_proj"],
             )
-        except ImportError:
+        else:
             from openadapt_evals.training.standalone.model_loader import (
                 load_model_and_processor,
             )
@@ -92,16 +113,17 @@ class GRPOTrainer:
                 load_in_4bit=self._config.load_in_4bit,
                 lora_r=self._config.lora_r,
                 lora_alpha=self._config.lora_alpha,
-                lora_checkpoint=self._config.lora_checkpoint,
+                lora_checkpoint=getattr(self._config, "lora_checkpoint", None),
             )
 
         if self._on_model_loaded:
             self._on_model_loaded(model, processor)
 
-        # Create rollout function
+        # --- Rollout function (from our config) ---
         from openadapt_evals.adapters.waa.live import WAALiveAdapter, WAALiveConfig
         adapter = WAALiveAdapter(WAALiveConfig(
             server_url=self._config.server_url,
+            evaluate_url=getattr(self._config, "evaluate_url", None),
         ))
         rollout_func = make_waa_rollout_func(
             adapter=adapter,
@@ -112,21 +134,19 @@ class GRPOTrainer:
             temperature=self._config.temperature,
         )
 
-        # Reward function
+        # --- Reward ---
         def env_reward_fn(completions, **kwargs):
             return kwargs.get("env_reward", [0.0] * len(completions))
 
-        # Build callbacks
+        # --- Callbacks ---
         callbacks = []
 
-        # Telemetry callback
         try:
             from openadapt_evals.integrations.trl_callbacks import TelemetryCallback
             callbacks.append(TelemetryCallback())
         except ImportError:
             pass
 
-        # Map our callback hooks to TRL TrainerCallback
         if any([self._on_before_collect, self._on_rollout_complete,
                 self._on_step_complete]):
             try:
@@ -137,11 +157,9 @@ class GRPOTrainer:
                         self._hooks = hooks
 
                     def on_step_end(self, args, state, control, **kwargs):
-                        if self._hooks.get("on_step_complete"):
-                            metrics = kwargs.get("metrics", {})
-                            self._hooks["on_step_complete"](
-                                state.global_step, [], metrics,
-                            )
+                        fn = self._hooks.get("on_step_complete")
+                        if fn:
+                            fn(state.global_step, [], kwargs.get("metrics", {}))
 
                 callbacks.append(HookBridge({
                     "on_before_collect": self._on_before_collect,
@@ -151,28 +169,33 @@ class GRPOTrainer:
             except ImportError:
                 pass
 
-        # Weave tracing
-        try:
-            from openadapt_evals.integrations.weave_integration import weave_init
-            weave_init("openadapt-evals")
-        except Exception:
-            pass
+        # --- Weave tracing ---
+        weave_project = getattr(self._config, "weave_project", "")
+        if weave_project:
+            try:
+                from openadapt_evals.integrations.weave_integration import weave_init
+                weave_init(weave_project)
+            except Exception:
+                pass
 
-        # TRL config
-        output_dir = self._config.output_dir
-        trl_config = GRPOConfig(
-            output_dir=output_dir,
-            num_generations=self._config.num_rollouts_per_step,
-            max_completion_length=self._config.max_new_tokens,
-            num_train_epochs=1,
-            max_steps=self._config.num_training_steps,
-            learning_rate=self._config.learning_rate,
-            save_steps=self._config.save_every_steps,
-            logging_steps=1,
-            bf16=True,
-            loss_type="grpo",
-        )
+        # --- TRL config: use provided or build sensible defaults ---
+        if self._trl_config is not None:
+            trl_config = self._trl_config
+        else:
+            trl_config = GRPOConfig(
+                output_dir=self._config.output_dir,
+                num_generations=self._config.num_rollouts_per_step,
+                max_completion_length=self._config.max_new_tokens,
+                max_steps=self._config.num_training_steps,
+                learning_rate=self._config.learning_rate,
+                save_steps=self._config.save_every_steps,
+                logging_steps=1,
+                bf16=True,
+                loss_type="grpo",
+                num_train_epochs=1,
+            )
 
+        # --- Train ---
         trainer = _TRLTrainer(
             model=model,
             processing_class=processor,
@@ -184,13 +207,13 @@ class GRPOTrainer:
         )
 
         logger.info(
-            "Starting TRL GRPO training: model=%s tasks=%d rollouts=%d steps=%d",
+            "Starting TRL GRPO: model=%s tasks=%d output=%s loss=%s",
             self._config.model_name, len(task_configs),
-            self._config.num_rollouts_per_step, self._config.num_training_steps,
+            trl_config.output_dir, trl_config.loss_type,
         )
 
         trainer.train()
-        trainer.save_model(output_dir)
+        trainer.save_model(trl_config.output_dir)
 
-        logger.info("Training complete. Checkpoint: %s", output_dir)
-        return output_dir
+        logger.info("Training complete. Checkpoint: %s", trl_config.output_dir)
+        return trl_config.output_dir

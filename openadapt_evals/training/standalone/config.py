@@ -42,6 +42,7 @@ class TrainingConfig:
     constrained_decoding: bool = False
 
     server_url: str = "http://localhost:5001"
+    evaluate_url: str | None = None
     task_ids: list[str] = field(default_factory=list)
     task_dir: str | None = None
     screen_size: tuple[int, int] = (1920, 1080)
@@ -51,3 +52,8 @@ class TrainingConfig:
     save_every_steps: int = 50
     output_dir: str = "checkpoints/grpo"
     eval_model: str = "gpt-4.1-mini"
+
+    # Use Unsloth for 90% VRAM reduction (requires pip install unsloth)
+    use_unsloth: bool = False
+    # Weave project for LLM tracing (empty = disabled)
+    weave_project: str = ""
