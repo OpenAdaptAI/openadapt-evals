@@ -217,7 +217,94 @@ class TestActionLogitSlicing:
 
 
 # ---------------------------------------------------------------------------
-# Test 3: _compute_rollout_loss integration
+# Test 3: Synthetic vision-merging model (reproduces Qwen crash)
+# ---------------------------------------------------------------------------
+
+
+class TestVisionMergeCrash:
+    """Reproduce the Qwen vision merge crash with a synthetic model.
+
+    Qwen2.5-VL and Qwen3.5-VL replace image placeholder tokens with
+    visual features of a DIFFERENT count, changing internal sequence
+    length. If attention_mask is sized for pre-merge input_ids, crash.
+    """
+
+    @staticmethod
+    def _make_vision_merge_model(vocab_size=200, placeholder_id=50, n_visual_features=7):
+        import torch.nn as nn
+
+        class VisionMergeModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.embed = nn.Embedding(vocab_size, 16)
+                self.visual_embed = nn.Parameter(torch.randn(n_visual_features, 16))
+                self.head = nn.Linear(16, vocab_size)
+                self._ph = placeholder_id
+                self._nv = n_visual_features
+
+            def forward(self, input_ids, attention_mask=None, pixel_values=None, **kw):
+                h = self.embed(input_ids)
+                if pixel_values is not None:
+                    mask = input_ids[0] == self._ph
+                    n_ph = mask.sum().item()
+                    if n_ph > 0:
+                        keep = h[:, ~mask, :]
+                        vis = self.visual_embed.unsqueeze(0)
+                        idx = mask.nonzero(as_tuple=True)[0][0].item()
+                        h = torch.cat([keep[:, :idx, :], vis, keep[:, idx:, :]], dim=1)
+                if attention_mask is not None and attention_mask.shape[1] != h.shape[1]:
+                    raise IndexError(
+                        f"The shape of the mask [{attention_mask.shape[1]}] at index 0 "
+                        f"does not match the shape of the indexed tensor [{h.shape[1]}] at index 0"
+                    )
+
+                class Out:
+                    pass
+                out = Out()
+                out.logits = self.head(h)
+                return out
+
+        return VisionMergeModel()
+
+    def test_manual_concat_crashes(self):
+        """OLD approach: cat(prompt_ids, action_ids) + mask → crashes."""
+        model = self._make_vision_merge_model()
+        prompt_ids = torch.tensor([[10, 50, 50, 50, 20, 30]])
+        action_ids = torch.tensor([[40, 41]])
+        full_ids = torch.cat([prompt_ids, action_ids], dim=1)
+        mask = torch.ones_like(full_ids)
+        pv = torch.randn(1, 3, 10, 10)
+
+        with pytest.raises(IndexError, match="shape of the mask"):
+            model(input_ids=full_ids, attention_mask=mask, pixel_values=pv)
+
+    def test_unified_processor_works(self):
+        """NEW approach: no explicit mask → model handles merge."""
+        model = self._make_vision_merge_model()
+        full_ids = torch.tensor([[10, 50, 50, 50, 20, 30, 40, 41]])
+        pv = torch.randn(1, 3, 10, 10)
+
+        out = model(input_ids=full_ids, pixel_values=pv)
+        # 8 - 3 placeholders + 7 features = 12
+        assert out.logits.shape[1] == 12
+
+    def test_no_vision_no_merge(self):
+        """Without pixel_values, no merge, mask matches."""
+        model = self._make_vision_merge_model()
+        ids = torch.tensor([[10, 50, 50, 50, 20]])
+        out = model(input_ids=ids, attention_mask=torch.ones_like(ids))
+        assert out.logits.shape[1] == 5
+
+    def test_exclude_strips_vision(self):
+        """Exclude mode: no pixel_values passed, mask is safe."""
+        model = self._make_vision_merge_model()
+        ids = torch.tensor([[10, 50, 50, 50, 20, 30, 40, 41]])
+        out = model(input_ids=ids, attention_mask=torch.ones_like(ids))
+        assert out.logits.shape[1] == 8
+
+
+# ---------------------------------------------------------------------------
+# Test 4: _compute_rollout_loss integration
 # ---------------------------------------------------------------------------
 
 
