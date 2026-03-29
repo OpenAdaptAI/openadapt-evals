@@ -1,6 +1,44 @@
 # CHANGELOG
 
 
+## v0.81.5 (2026-03-29)
+
+### Bug Fixes
+
+- Wire on_before_collect and on_rollout_complete callbacks through rollout_func
+  ([#243](https://github.com/OpenAdaptAI/openadapt-evals/pull/243),
+  [`fc40bf4`](https://github.com/OpenAdaptAI/openadapt-evals/commit/fc40bf40784482a20a49600dd95b151b1342d6b7))
+
+* fix: add truncation warning to TRL generate paths
+
+Add a truncation check after both generation paths (Outlines constrained and HF unconstrained) in
+  generate_fn. When the output length reaches max_new_tokens - 1, a warning is logged suggesting to
+  increase max_new_tokens or enable constrained_decoding. This helps diagnose cases where the model
+  generates excessively long reasoning that gets cut off before producing a parseable action.
+
+Also replaced the tautological truncation tests in test_trl_robustness.py (which reimplemented the
+  check logic inline) with tests that exercise the actual generate_fn code path by calling it
+  through the rollout function with mocked torch and model.generate.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* fix: wire on_before_collect and on_rollout_complete callbacks through rollout_func
+
+The GRPOTrainer wrapper accepted on_before_collect and on_rollout_complete callbacks but silently
+  ignored them. HookBridge stored them but only implemented on_step_end (for on_step_complete). TRL
+  has no pre-rollout callback event, so these must fire from within make_waa_rollout_func.
+
+Changes: - Add on_before_collect and on_rollout_complete params to make_waa_rollout_func - Fire
+  on_before_collect(task_id, env) before each episode - Fire on_rollout_complete(rollout_dict,
+  gen_idx) after each episode - Wrap both in try/except so broken callbacks cannot crash training -
+  Pass callbacks from GRPOTrainer.train() to make_waa_rollout_func - Remove these two callbacks from
+  HookBridge (keep only on_step_complete)
+
+---------
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.81.4 (2026-03-29)
 
 ### Bug Fixes
