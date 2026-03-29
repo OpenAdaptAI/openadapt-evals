@@ -3311,13 +3311,14 @@ wheels = [
 
 [[package]]
 name = "openadapt-evals"
-version = "0.80.0"
+version = "0.80.2"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
     { name = "httpx" },
     { name = "openadapt-consilium" },
     { name = "openadapt-telemetry" },
+    { name = "openadapt-types" },
     { name = "openai" },
     { name = "pillow" },
     { name = "pydantic-settings" },
@@ -3429,6 +3430,7 @@ requires-dist = [
     { name = "openadapt-ml", extras = ["training"], marker = "extra == 'training'", specifier = ">=0.11.0" },
     { name = "openadapt-retrieval", marker = "extra == 'retrieval'", specifier = ">=0.1.0" },
     { name = "openadapt-telemetry", specifier = ">=0.2.0" },
+    { name = "openadapt-types", specifier = ">=0.1.0" },
     { name = "openai", specifier = ">=1.0.0" },
     { name = "outlines", marker = "extra == 'dev'", specifier = ">=0.1.0" },
     { name = "outlines", marker = "extra == 'training'", specifier = ">=0.1.0" },
@@ -3511,6 +3513,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/90/36/f6874f4b303b050908009991168568e4e46bcb641b0b528c8c277903ba99/openadapt_telemetry-0.2.0.tar.gz", hash = "sha256:b34f6e323654af2d9ef6d68d1f46a7d7b41f74ee40547f8882d9fc1895b75ded", size = 31813 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/18/5c/7d5c802610f37d5f48b1d1f55e5406fb672b69f8339ba9055416016bf3c9/openadapt_telemetry-0.2.0-py3-none-any.whl", hash = "sha256:64d3e638dde99a0ce6a0735d191da18a9b321dc11965dcb80137ff9948d55a42", size = 22691 },
+]
+
+[[package]]
+name = "openadapt-types"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/33/97/47fce6b5e296b4fe5a627ce59fc87de40619c216e8102f91357299b3bbda/openadapt_types-0.1.0.tar.gz", hash = "sha256:e2b62b00c5a9a3769b81aa74cafc8ac2f358d6956aef2e950cb966f24f621ddc", size = 43269 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2e/8f/bf543b8351694cbc4bd5d34ef96ecfe8eb16e1fbf8da3584f8fe799c67e5/openadapt_types-0.1.0-py3-none-any.whl", hash = "sha256:2de4868ad1de6392ab0e1fc0239f7a3e00db804ea5f9a7309294700f4a3e0387", size = 15280 },
 ]
 
 [[package]]

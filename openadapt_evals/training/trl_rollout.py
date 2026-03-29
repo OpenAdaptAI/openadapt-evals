@@ -71,7 +71,9 @@ import json
 import logging
 import re
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Optional
+
+from pydantic import BaseModel
 
 from openadapt_evals.adapters.base import BenchmarkAction, BenchmarkObservation
 from openadapt_evals.adapters.rl_env import RLEnvironment, ResetConfig
@@ -97,6 +99,28 @@ _ACTION_RE = (
     r"|DONE\(\)"
 )
 ACTION_REGEX = r"Thought: [^\n]+\nAction: (" + _ACTION_RE + r")"
+
+
+# ---------------------------------------------------------------------------
+# JSON schema for future Outlines JSON-mode constrained decoding
+# ---------------------------------------------------------------------------
+# When the model is SFT'd on JSON format (not DSL), switch constrained
+# decoding to: outlines.json(model, _AgentOutput) instead of regex.
+# This is NOT the default — the default uses DSL regex (ACTION_REGEX).
+class _AgentOutput(BaseModel):
+    """Pydantic schema for Outlines JSON-mode constrained decoding.
+
+    Use with: ``outlines.json(model, _AgentOutput)`` once the model has
+    been SFT'd on JSON action format. Currently unused — default is DSL
+    regex via ACTION_REGEX.
+    """
+
+    reasoning: str
+    type: str  # click, type, key, scroll, wait, done
+    x: Optional[float] = None
+    y: Optional[float] = None
+    text: Optional[str] = None
+    key: Optional[str] = None
 
 
 def _build_outlines_generator(model: Any, processor: Any) -> Any | None:
