@@ -1,6 +1,39 @@
 # CHANGELOG
 
 
+## v0.80.1 (2026-03-29)
+
+### Bug Fixes
+
+- Add triple-layer CI protection against heavy import failures
+  ([#235](https://github.com/OpenAdaptAI/openadapt-evals/pull/235),
+  [`7a202c9`](https://github.com/OpenAdaptAI/openadapt-evals/commit/7a202c9d93341ff29258c03c00c6d29e9786fbc5))
+
+* fix: add triple-layer CI protection against heavy import failures
+
+- Add pytest markers (heavy, gpu, vm) to pyproject.toml - Guard test_vision_loss.py with
+  importorskip("torch") + @heavy marker - Guard test_api_agent_ml.py with
+  importorskip("openadapt_ml") + @heavy marker - Add CI lint step that fails on bare top-level
+  imports of heavy packages - Replace ad-hoc --ignore with marker-based deselection (-m "not heavy")
+  - Add comprehensive standalone vs TRL trainer comparison doc
+
+Triple protection: markers (intentional categorization), importorskip (graceful skip), lint guard
+  (preventive). This prevents the class of CI failure where a test imports torch/transformers at
+  module level.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+* docs: update comparison with openadapt-types finding
+
+openadapt-types already provides the canonical Action schema (Pydantic v2) that converges
+  BenchmarkAction, openadapt-ml Action, and omnimcp types. Recommendation: import from
+  openadapt-types instead of creating new schemas.
+
+---------
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.80.0 (2026-03-29)
 
 ### Documentation
