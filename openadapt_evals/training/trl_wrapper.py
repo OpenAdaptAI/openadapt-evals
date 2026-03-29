@@ -211,33 +211,33 @@ class GRPOTrainer:
                 pass
 
         # --- TRL config: use provided or build sensible defaults ---
-        # CRITICAL: per_device_train_batch_size must be <= len(dataset).
-        # TRL default is 8, but RL task datasets are typically 1-10 tasks.
-        # If batch_size > dataset_size, TRL computes 0 steps and exits
-        # with "There seems not to be a single sample in your epoch_iterator".
+        # TRL constraints on batch sizing:
+        #   1. per_device_train_batch_size must be <= len(dataset)
+        #   2. generation_batch_size must be divisible by num_generations
+        #   3. generation_batch_size defaults to per_device_train_batch_size
         #
-        # We set batch_size=1 (not n_tasks) because:
-        # - Each step already does num_generations rollouts per sample
-        # - batch_size=n_tasks with many tasks could OOM on GPU
-        # - batch_size=1 matches the standalone trainer (one task per step,
-        #   rotating through tasks via epochs)
+        # Therefore: per_device_train_batch_size must be a MULTIPLE of
+        # num_generations AND <= len(dataset). The minimum valid value is
+        # num_generations itself. If the dataset is smaller, we pad it
+        # by repeating tasks to reach at least that size.
+        num_gen = self._config.num_rollouts_per_step
         n_tasks = len(task_configs)
 
         if self._trl_config is not None:
             trl_config = self._trl_config
-            # Warn if user-provided config has batch_size > dataset
             bs = getattr(trl_config, "per_device_train_batch_size", 8)
-            if bs > n_tasks:
+            ng = getattr(trl_config, "num_generations", num_gen)
+            if bs % ng != 0:
                 logger.warning(
-                    "per_device_train_batch_size=%d > dataset size=%d. "
-                    "TRL will compute 0 steps and exit immediately. "
-                    "Set per_device_train_batch_size=1 or add more tasks.",
-                    bs, n_tasks,
+                    "per_device_train_batch_size=%d is not divisible by "
+                    "num_generations=%d. TRL will reject this. "
+                    "Set per_device_train_batch_size=%d.",
+                    bs, ng, ng,
                 )
         else:
             trl_config = GRPOConfig(
                 output_dir=self._config.output_dir,
-                num_generations=self._config.num_rollouts_per_step,
+                num_generations=num_gen,
                 max_completion_length=self._config.max_new_tokens,
                 max_steps=self._config.num_training_steps,
                 learning_rate=self._config.learning_rate,
@@ -246,11 +246,28 @@ class GRPOTrainer:
                 bf16=True,
                 loss_type="grpo",
                 num_train_epochs=1,
-                # batch_size=1: each step processes one task with
-                # num_generations rollouts. Tasks rotate via epochs.
-                # Default of 8 causes "0 steps" with small task sets.
-                per_device_train_batch_size=1,
+                # batch_size = num_generations: TRL requires
+                # batch_size % num_generations == 0. This is the
+                # minimum valid value. Each step processes
+                # batch_size prompts × num_generations rollouts each.
+                per_device_train_batch_size=num_gen,
             )
+
+        # Pad dataset if needed: TRL needs len(dataset) >= batch_size.
+        # With 1 task and batch_size=4, we repeat the task 4 times.
+        # Each row triggers the same rollout_func, so repeats are fine
+        # for RL (same task, many rollouts = more learning signal).
+        bs = getattr(trl_config, "per_device_train_batch_size", num_gen)
+        if len(dataset) < bs:
+            import math
+            repeats = math.ceil(bs / len(dataset))
+            logger.info(
+                "Padding dataset from %d to %d rows (repeating tasks %dx) "
+                "to meet per_device_train_batch_size=%d",
+                len(dataset), len(dataset) * repeats, repeats, bs,
+            )
+            padded = {k: v * repeats for k, v in dataset.to_dict().items()}
+            dataset = Dataset.from_dict(padded)
 
         # --- Train ---
         trainer = _TRLTrainer(
