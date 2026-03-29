@@ -152,6 +152,12 @@ class GRPOTrainer:
         adapter = WAALiveAdapter(WAALiveConfig(
             server_url=self._config.server_url,
             evaluate_url=getattr(self._config, "evaluate_url", None),
+            # Training-appropriate timeouts: fail fast, don't block the
+            # training loop. Benchmark defaults (180s, 3 retries) are for
+            # one-shot evaluation where thoroughness matters. Training does
+            # thousands of evaluations where speed matters.
+            evaluate_timeout=15.0,
+            evaluate_retries=1,
         ))
         rollout_func = make_waa_rollout_func(
             adapter=adapter,
