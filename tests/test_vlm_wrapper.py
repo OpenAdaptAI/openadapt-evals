@@ -145,6 +145,52 @@ class TestVLMModelWrapper:
         wrapper.forward(input_ids="ids")
         assert "pixel_values" not in model.last_forward_kwargs
 
+    def test_peft_attributes_delegated(self):
+        """PEFT attributes are accessible through the wrapper."""
+        model = _FakeModel()
+        model.peft_config = {"default": "lora_config"}
+        model.active_adapter = "default"
+        wrapper = VLMModelWrapper(model)
+
+        assert wrapper.peft_config == {"default": "lora_config"}
+        assert wrapper.active_adapter == "default"
+
+    def test_hasattr_peft_config(self):
+        """hasattr(wrapper, 'peft_config') returns True when model has it."""
+        model = _FakeModel()
+        model.peft_config = {"default": "config"}
+        wrapper = VLMModelWrapper(model)
+
+        assert hasattr(wrapper, "peft_config"), (
+            "hasattr(wrapper, 'peft_config') must return True for TRL's "
+            "validate_quantization_for_training() to pass."
+        )
+
+    def test_hasattr_peft_config_false_when_missing(self):
+        """hasattr(wrapper, 'peft_config') returns False when model lacks it."""
+        model = _FakeModel()
+        wrapper = VLMModelWrapper(model)
+
+        assert not hasattr(wrapper, "peft_config")
+
+    def test_isinstance_peft_model(self):
+        """isinstance(wrapper, PeftModel) works when PEFT is available."""
+        try:
+            from peft import PeftModel
+        except ImportError:
+            pytest.skip("peft not installed")
+
+        # Create a mock that isinstance recognizes as PeftModel
+        model = MagicMock(spec=PeftModel)
+        model.peft_config = {"default": "config"}
+        wrapper = VLMModelWrapper(model)
+
+        assert isinstance(wrapper, PeftModel), (
+            "isinstance(wrapper, PeftModel) must return True. "
+            "TRL's validation uses isinstance to detect PEFT adapters. "
+            "Without this, TRL rejects quantized models."
+        )
+
 
 # ---------------------------------------------------------------------------
 # Real e2e test with a tiny torch model (requires torch — skipped in CI)
