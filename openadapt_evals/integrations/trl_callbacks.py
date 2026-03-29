@@ -162,16 +162,17 @@ class TelemetryCallback:
 
 
 # Register as a TrainerCallback subclass at import time so TRL recognizes it.
-# If transformers is not installed, the class still works as a plain object
-# (the callback methods are called by name, not by inheritance check in recent
-# TRL versions).
+# If transformers is installed, wrap with proper inheritance.
+# We can't patch __bases__ after the fact (Python doesn't allow it when
+# deallocators differ), so we create a subclass instead.
 try:
     from transformers import TrainerCallback as _TrainerCallback
 
-    # Dynamically add TrainerCallback as a base class
-    TelemetryCallback.__bases__ = (_TrainerCallback,) + TelemetryCallback.__bases__
+    class _TelemetryCallbackWithBase(_TrainerCallback, TelemetryCallback):
+        """TelemetryCallback with proper TrainerCallback inheritance."""
+        pass
+
+    # Replace the module-level name so imports get the subclass
+    TelemetryCallback = _TelemetryCallbackWithBase  # type: ignore[misc]
 except ImportError:
-    logger.debug(
-        "transformers not installed; TelemetryCallback will work as a "
-        "duck-typed callback but won't inherit from TrainerCallback"
-    )
+    pass  # TelemetryCallback works as duck-typed callback without inheritance
