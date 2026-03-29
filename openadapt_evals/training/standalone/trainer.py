@@ -421,13 +421,38 @@ class GRPOTrainer:
                 raise ValueError(f"Unknown vision_loss_mode={vision_loss_mode!r}. Use 'exclude', 'include', or 'checkpoint'.")
 
             full_inputs["input_ids"] = full_ids
-            full_inputs["attention_mask"] = torch.ones_like(full_ids)
+
+            # Only set attention_mask for "exclude" mode (text-only forward).
+            # For "include" and "checkpoint" modes, vision tensors are present
+            # and Qwen3's vision-language merge changes the internal sequence
+            # length (e.g., 1305 input tokens → 1202 post-merge).  An
+            # explicit attention_mask sized to input_ids will mismatch.
+            # Let the model construct its own mask internally.
+            if vision_loss_mode == "exclude":
+                full_inputs["attention_mask"] = torch.ones_like(full_ids)
+
             full_inputs = {k: v.to(device) for k, v in full_inputs.items()}
 
             outputs = self._model(**full_inputs)
-            al = outputs.logits[:, prompt_len - 1: prompt_len - 1 + action_ids.shape[1], :]
+
+            # For "exclude" mode, logits shape matches input_ids (no vision merge).
+            # For "include"/"checkpoint", Qwen3's vision merge changes the
+            # sequence length.  Slice action logits from the END of the
+            # output sequence (action tokens are always last).
+            n_action = action_ids.shape[1]
+            if vision_loss_mode == "exclude":
+                al = outputs.logits[:, prompt_len - 1: prompt_len - 1 + n_action, :]
+            else:
+                # Post-merge: total output length differs from input_ids length.
+                # Action tokens are the last n_action tokens in the sequence.
+                seq_len = outputs.logits.shape[1]
+                al = outputs.logits[:, seq_len - n_action - 1: seq_len - 1, :]
+
             lp = torch.nn.functional.log_softmax(al, dim=-1)
-            tlp = lp.gather(2, full_ids[:, prompt_len: prompt_len + action_ids.shape[1]].unsqueeze(-1).to(device)).squeeze(-1)
+
+            # Gather log-probs for the actual action token IDs
+            action_token_ids = action_ids.to(device)
+            tlp = lp.gather(2, action_token_ids.unsqueeze(-1)).squeeze(-1)
             slp = tlp.sum()
             adv = torch.tensor(advantage, device=device, dtype=slp.dtype)
             loss = policy_gradient_loss(slp.unsqueeze(0), slp.detach().unsqueeze(0), adv.unsqueeze(0))
