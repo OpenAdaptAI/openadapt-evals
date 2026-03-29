@@ -59,6 +59,8 @@ dev = [
     "fire>=0.5.0",
     # Constrained decoding tests need outlines
     "outlines>=0.1.0",
+    # Required by test_workflow_models and workflow pipeline
+    "numpy>=1.24.0",
 ]
 waa = [
     # Windows Agent Arena dependencies
