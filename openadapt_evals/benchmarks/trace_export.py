@@ -59,16 +59,27 @@ from openadapt_evals.benchmarks.viewer import (
     load_benchmark_summary,
     load_task_results,
 )
-from openadapt_ml.schema import (
-    Action,
-    ActionType,
-    BenchmarkSource,
-    Coordinates,
-    Episode,
-    Observation,
-    Step,
-    save_episode,
-)
+try:
+    from openadapt_ml.schema import (
+        Action,
+        ActionType,
+        BenchmarkSource,
+        Coordinates,
+        Episode,
+        Observation,
+        Step,
+        save_episode,
+    )
+except ImportError:
+    # openadapt-ml not installed — trace export requires it
+    Action = None  # type: ignore[assignment, misc]
+    ActionType = None  # type: ignore[assignment, misc]
+    BenchmarkSource = None  # type: ignore[assignment, misc]
+    Coordinates = None  # type: ignore[assignment, misc]
+    Episode = None  # type: ignore[assignment, misc]
+    Observation = None  # type: ignore[assignment, misc]
+    Step = None  # type: ignore[assignment, misc]
+    save_episode = None  # type: ignore[assignment, misc]
 
 logger = logging.getLogger(__name__)
 

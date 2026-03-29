@@ -41,10 +41,14 @@ dependencies = [
     "anthropic>=0.76.0",
     "openadapt-consilium>=0.3.2",
     "openadapt-telemetry>=0.2.0",
-    "openadapt-ml>=0.11.0",
 ]
 
 [project.optional-dependencies]
+ml = [
+    # VLM adapters, schema, baselines from openadapt-ml
+    # Required for: PolicyAgent, BaselineAgent, trace_export, Qwen3VLAgent
+    "openadapt-ml>=0.11.0",
+]
 dev = [
     "pytest>=8.0.0",
     "pytest-mock>=3.12.0",
