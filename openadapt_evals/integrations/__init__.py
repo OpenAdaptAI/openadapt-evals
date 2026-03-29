@@ -4,6 +4,7 @@ This module provides integrations with:
 - Weights & Biases (wandb) for experiment tracking and report generation
 - W&B callback functions for the standalone GRPO trainer
 - Weave (W&B) for LLM/agent execution tracing
+- TRL TrainerCallback for telemetry during GRPO training
 """
 
 from openadapt_evals.integrations.wandb_logger import WandbLogger
@@ -19,6 +20,7 @@ from openadapt_evals.integrations.fixtures import (
     generate_median_case_data,
     Scenario,
 )
+from openadapt_evals.integrations.trl_callbacks import TelemetryCallback
 
 # Import report generator (may fail if wandb reports API not available)
 try:
@@ -42,6 +44,7 @@ except ImportError:
     weave_op = None
 
 __all__ = [
+    "TelemetryCallback",
     "WandbLogger",
     "WandbReportGenerator",
     "weave_init",

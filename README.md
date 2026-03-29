@@ -196,6 +196,44 @@ python scripts/run_full_eval.py \
 
 The endpoint uses the UI-Venus native bounding-box prompt format (`[x1,y1,x2,y2]`) and is compatible with vLLM, Ollama, or any OpenAI-compatible server. Both `DemoExecutor` and `PlannerGrounderAgent` use the same prompt format for consistency.
 
+### GRPO training with TRL (recommended)
+
+The recommended path for RL training of VLM desktop agents uses TRL's `GRPOTrainer` with dense milestone rewards from WAA environments. This replaces the standalone GRPO trainer with a battle-tested implementation that supports Unsloth, vLLM, constrained decoding, and automatic telemetry.
+
+```bash
+# Basic training against a live WAA VM
+python scripts/train_trl_grpo.py \
+    --task-dir ./example_tasks \
+    --server-url http://localhost:5001 \
+    --model Qwen/Qwen2.5-VL-7B-Instruct \
+    --output ./grpo_output
+
+# With Unsloth (2x VRAM efficiency) + constrained decoding
+python scripts/train_trl_grpo.py \
+    --task-dir ./example_tasks \
+    --server-url http://localhost:5001 \
+    --model Qwen/Qwen2.5-VL-7B-Instruct \
+    --use-unsloth \
+    --constrained-decoding \
+    --output ./grpo_output
+
+# Mock mode (validates full pipeline without VM or GPU)
+python scripts/train_trl_grpo.py \
+    --task-dir ./example_tasks \
+    --mock \
+    --output ./grpo_output_mock
+
+# With Weave tracing for experiment tracking
+python scripts/train_trl_grpo.py \
+    --task-dir ./example_tasks \
+    --server-url http://localhost:5001 \
+    --model Qwen/Qwen2.5-VL-7B-Instruct \
+    --weave-project openadapt-grpo \
+    --output ./grpo_output
+```
+
+Key flags: `--constrained-decoding` (Outlines regex, eliminates unparseable output), `--vision-loss-mode` (exclude/include/checkpoint), `--weave-project` (Weave tracing), `--use-vllm` (faster generation), `--loss-type` (grpo/dapo/dr_grpo).
+
 ### Parallel evaluation
 
 ```bash
