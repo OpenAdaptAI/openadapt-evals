@@ -1,6 +1,30 @@
 # CHANGELOG
 
 
+## v0.79.1 (2026-03-29)
+
+### Bug Fixes
+
+- Clean config separation — our config + TRL's config, no duplication
+  ([#230](https://github.com/OpenAdaptAI/openadapt-evals/pull/230),
+  [`1c23f0b`](https://github.com/OpenAdaptAI/openadapt-evals/commit/1c23f0b0082040580ea37f1e56e82e53fe1cc766))
+
+TrainingConfig owns OpenAdapt concerns: model, task_dir, server_url, constrained_decoding,
+  max_new_tokens, use_unsloth, weave_project.
+
+TRL's GRPOConfig owns training concerns: loss_type, learning_rate, batch_size,
+  gradient_accumulation, vLLM, bf16, W&B reporting.
+
+The wrapper accepts both via trl_config kwarg:
+
+trainer = GRPOTrainer( TrainingConfig(task_dir="tasks/", constrained_decoding=True),
+  trl_config=GRPOConfig(loss_type="dapo", num_generations=4), on_step_complete=my_logger, )
+
+If trl_config is omitted, sensible defaults are built from TrainingConfig.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.79.0 (2026-03-29)
 
 ### Features
