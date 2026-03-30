@@ -457,7 +457,18 @@ class GRPOTrainer:
             l = self._compute_rollout_loss(r, a, 1.0 / n)
             losses.append(l)
         grad_norm = torch.nn.utils.clip_grad_norm_(
-            [p for p in self._model.parameters() if p.requires_grad], max_norm=1.0)
+            [p for p in self._model.parameters() if p.requires_grad],
+            max_norm=self._config.max_grad_norm,
+        )
+        gn = grad_norm.item() if hasattr(grad_norm, "item") else float(grad_norm)
+        if gn > 10 * self._config.max_grad_norm:
+            logger.warning(
+                "grad_norm=%.1f is %.0fx the clip threshold (%.1f). "
+                "Gradients are dominated by clipping, not learning signal. "
+                "Consider lowering learning_rate (current: %.1e).",
+                gn, gn / self._config.max_grad_norm,
+                self._config.max_grad_norm, self._config.learning_rate,
+            )
         self._optimizer.step()
 
         avg_loss = sum(losses) / max(n, 1)
@@ -485,9 +496,10 @@ class GRPOTrainer:
         """Run GRPO training loop. Returns path to final checkpoint."""
         import torch
 
-        logger.warning(
-            "The standalone GRPO trainer is deprecated. Use scripts/train_trl_grpo.py "
-            "with TRL's GRPOTrainer instead. See docs/eval_results/ for migration guide."
+        logger.info(
+            "Using standalone GRPO trainer. This is the production training "
+            "path for VLM agents with dynamic screenshots. TRL migration "
+            "pending multimodal environment_factory support (TRL PR #5323)."
         )
 
         self._load_task_configs()
