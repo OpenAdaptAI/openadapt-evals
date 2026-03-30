@@ -1,6 +1,30 @@
 # CHANGELOG
 
 
+## v0.82.4 (2026-03-30)
+
+### Bug Fixes
+
+- Configurable max_grad_norm, lower default lr, remove premature deprecation
+  ([#255](https://github.com/OpenAdaptAI/openadapt-evals/pull/255),
+  [`321dcea`](https://github.com/OpenAdaptAI/openadapt-evals/commit/321dceac303d61a416b25ca9624dedc1b3a90da9))
+
+Three changes based on client training results (grad_norm=101, 0.00 eval delta):
+
+1. Add max_grad_norm to TrainingConfig (was hardcoded to 1.0). When grad_norm >> max_grad_norm,
+  gradients are clipped to a near-random direction — training makes no progress despite non-zero
+  loss. Now warns when grad_norm > 10x the clip threshold.
+
+2. Lower default learning_rate from 5e-6 to 1e-6. With grad_norm=101 and lr=5e-6, effective step
+  size overshoots. lr=1e-6 with max_grad_norm=1.0 gives stable updates.
+
+3. Remove "standalone trainer is deprecated" warning. It was premature — TRL's rollout_func doesn't
+  support multimodal VLMs (issue #5120). The standalone trainer is the production training path
+  until TRL PR #5323 merges.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.82.3 (2026-03-29)
 
 ### Bug Fixes
