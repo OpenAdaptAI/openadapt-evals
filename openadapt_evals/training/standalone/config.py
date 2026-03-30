@@ -47,7 +47,12 @@ class TrainingConfig:
     task_dir: str | None = None
     screen_size: tuple[int, int] = (1920, 1080)
     stuck_window: int = 3
-    learning_rate: float = 5e-6
+    learning_rate: float = 1e-6
+    # Maximum gradient norm for clipping. Critical for stable training:
+    # grad_norm > 100 means gradients are dominated by clipping direction
+    # (effectively random) rather than the actual gradient signal. Lower
+    # values (0.5-1.0) stabilize training at the cost of slower learning.
+    max_grad_norm: float = 1.0
     num_training_steps: int = 1000
     save_every_steps: int = 50
     output_dir: str = "checkpoints/grpo"
