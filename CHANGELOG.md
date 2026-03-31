@@ -1,6 +1,30 @@
 # CHANGELOG
 
 
+## v0.85.0 (2026-03-31)
+
+### Features
+
+- Ocr text anchoring (Tier 1.5a) for grounding cascade
+  ([#259](https://github.com/OpenAdaptAI/openadapt-evals/pull/259),
+  [`aa797dd`](https://github.com/OpenAdaptAI/openadapt-evals/commit/aa797dd2c01ce6803cf81b7f1a16464dcb05cad7))
+
+Add Phase 5 text anchoring on top of Phase 4 state narrowing:
+
+- grounding.py: run_ocr() with pytesseract (optional dep, graceful fallback), ground_by_text() with
+  tiered scoring (exact/case-insensitive/ substring/fuzzy) and nearby-text proximity boost, plus
+  helper functions _char_overlap_ratio, _bbox_center, _bbox_distance.
+
+- demo_executor.py: _try_text_anchoring() method inserted before VLM grounder calls for
+  click/double_click actions. Returns action if best OCR candidate scores > 0.85, otherwise falls
+  through to Tier 2.
+
+- tests/test_text_anchoring.py: 21 tests covering all scoring tiers, proximity boost, edge cases,
+  and graceful pytesseract fallback. All tests use mocked OCR results (no pytesseract required).
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.84.0 (2026-03-31)
 
 ### Features
