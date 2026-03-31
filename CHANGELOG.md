@@ -1,6 +1,35 @@
 # CHANGELOG
 
 
+## v0.84.0 (2026-03-31)
+
+### Features
+
+- State narrowing and transition verification for grounding cascade
+  ([#257](https://github.com/OpenAdaptAI/openadapt-evals/pull/257),
+  [`e22b404`](https://github.com/OpenAdaptAI/openadapt-evals/commit/e22b404cd6ebd618a06c5a9748315d2a6ecd910e))
+
+Phase 4 of the grounding cascade — detect "wrong screen" before grounding and verify state changes
+  after clicking.
+
+Added to grounding.py: - check_state_preconditions(): verifies window title, nearby text, and
+  surrounding labels match expectations before grounding a click. Skips gracefully when no OCR
+  function is provided (Phase 5). - verify_transition(): checks disappearance_text, appearance_text,
+  and window_title_change against post-click screenshot via OCR. Modal detection deferred (logged,
+  not enforced). - _text_present(): case-insensitive substring matching helper.
+
+Integrated into DemoExecutor.run(): - Pre-click: calls check_state_preconditions for
+  click/double_click steps with a grounding_target. Observational only (warns, proceeds). -
+  Post-click: calls verify_transition after action dispatch. Observational only (warns, proceeds).
+
+Tests (26 new): - 11 tests for check_state_preconditions (no-OCR, no-expectations, window title
+  match/mismatch, nearby text, surrounding labels, case insensitivity, combined checks) - 11 tests
+  for verify_transition (no-expectations, no-OCR, appearance/disappearance, window title change,
+  modal skip, combined scenarios) - 4 tests for GroundingTarget round-trip serialization
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.83.0 (2026-03-31)
 
 ### Features
