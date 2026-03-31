@@ -29,7 +29,13 @@ from typing import Any
 
 from openadapt_evals.adapters.base import BenchmarkAction, BenchmarkObservation
 from openadapt_evals.demo_library import Demo, DemoStep
-from openadapt_evals.grounding import check_state_preconditions, verify_transition
+from openadapt_evals.grounding import (
+    GroundingTarget,
+    check_state_preconditions,
+    ground_by_text,
+    run_ocr,
+    verify_transition,
+)
 
 try:
     from openadapt_evals.integrations.weave_integration import weave_op
@@ -219,6 +225,79 @@ class DemoExecutor:
 
         return score, screenshots
 
+    def _try_text_anchoring(
+        self,
+        screenshot: bytes,
+        step: DemoStep,
+    ) -> BenchmarkAction | None:
+        """Attempt to ground a click via OCR text anchoring (Tier 1.5a).
+
+        Creates a :class:`GroundingTarget` from the step and runs OCR-based
+        text matching.  If the best candidate scores above ``0.85``, returns
+        a click action at those coordinates.  Otherwise returns ``None`` so
+        the caller falls through to the VLM grounder (Tier 2).
+
+        Args:
+            screenshot: Current screenshot PNG bytes.
+            step: The demo step being executed.
+
+        Returns:
+            A :class:`BenchmarkAction` if text anchoring succeeds with high
+            confidence, or ``None`` to fall through.
+        """
+        # Build target from step's grounding_target or description
+        if step.grounding_target is not None and isinstance(
+            step.grounding_target, GroundingTarget
+        ):
+            target = step.grounding_target
+        else:
+            description = step.description or step.target_description
+            if not description:
+                description = step.action_description
+            if not description:
+                return None
+            target = GroundingTarget(description=description)
+
+        if not target.description:
+            return None
+
+        # Run OCR and text grounding
+        ocr_results = run_ocr(screenshot)
+        if not ocr_results:
+            logger.debug("Tier 1.5a: no OCR results, falling through to VLM")
+            return None
+
+        candidates = ground_by_text(screenshot, target, ocr_results=ocr_results)
+        if not candidates:
+            logger.debug(
+                "Tier 1.5a: no text matches for %r, falling through to VLM",
+                target.description,
+            )
+            return None
+
+        best = candidates[0]
+        if best.local_score > 0.85:
+            logger.info(
+                "Tier 1.5a (text anchor): %r matched %r at %s (score=%.2f)",
+                target.description,
+                best.matched_text,
+                best.point,
+                best.local_score,
+            )
+            return BenchmarkAction(
+                type="click",
+                x=best.point[0],
+                y=best.point[1],
+                raw_action={"tier": 1.5, "source": "ocr_text_anchor"},
+            )
+
+        logger.debug(
+            "Tier 1.5a: best score %.2f < 0.85 for %r, falling through",
+            best.local_score,
+            target.description,
+        )
+        return None
+
     @weave_op
     def _execute_step(
         self,
@@ -228,6 +307,7 @@ class DemoExecutor:
         """Produce an action for a demo step using tiered intelligence.
 
         Tier 1: keyboard/type -> direct execution (no VLM).
+        Tier 1.5a: click -> OCR text anchoring (cheap, no VLM).
         Tier 2: click -> grounder finds element by description.
         Tier 3: recovery -> planner reasons about unexpected state.
         """
@@ -250,6 +330,12 @@ class DemoExecutor:
             return BenchmarkAction(type="type", text=text, raw_action={"tier": 1})
 
         if step.action_type == "click":
+            # Tier 1.5a: try OCR text anchoring first
+            if obs.screenshot:
+                text_action = self._try_text_anchoring(obs.screenshot, step)
+                if text_action is not None:
+                    return text_action
+
             # Tier 2: grounder finds element by description
             description = step.description or step.target_description
             if not description:
@@ -258,6 +344,17 @@ class DemoExecutor:
             return self._ground_click(obs, description)
 
         if step.action_type == "double_click":
+            # Tier 1.5a: try OCR text anchoring first
+            if obs.screenshot:
+                text_action = self._try_text_anchoring(obs.screenshot, step)
+                if text_action is not None:
+                    return BenchmarkAction(
+                        type="double_click",
+                        x=text_action.x,
+                        y=text_action.y,
+                        raw_action=text_action.raw_action,
+                    )
+
             description = step.description or step.target_description
             logger.info("Tier 2 (grounder): double-click %s", description)
             action = self._ground_click(obs, description)
