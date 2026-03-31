@@ -4,9 +4,9 @@ Executes demo steps directly instead of asking a VLM planner to
 interpret them. The planner is only consulted as a recovery mechanism
 when the expected screen state doesn't match.
 
-Tier 1 (deterministic): keyboard shortcuts, typing — execute directly.
-Tier 2 (grounder-only): clicks — grounder finds element by description.
-Tier 3 (planner recovery): unexpected state — planner reasons about
+Tier 1 (deterministic): keyboard shortcuts, typing -- execute directly.
+Tier 2 (grounder-only): clicks -- grounder finds element by description.
+Tier 3 (planner recovery): unexpected state -- planner reasons about
     what to do when the demo doesn't match reality.
 
 Usage:
@@ -29,6 +29,7 @@ from typing import Any
 
 from openadapt_evals.adapters.base import BenchmarkAction, BenchmarkObservation
 from openadapt_evals.demo_library import Demo, DemoStep
+from openadapt_evals.grounding import check_state_preconditions, verify_transition
 
 try:
     from openadapt_evals.integrations.weave_integration import weave_op
@@ -94,7 +95,7 @@ class DemoExecutor:
             screenshot_dir: Optional directory to save screenshots.
 
         Returns:
-            (score, screenshots) — score from evaluate_dense().
+            (score, screenshots) -- score from evaluate_dense().
         """
         from openadapt_evals.adapters.rl_env import ResetConfig
 
@@ -121,12 +122,31 @@ class DemoExecutor:
 
         for i, step in enumerate(demo.steps):
             logger.info(
-                "Demo step %d/%d: %s %s — %s",
+                "Demo step %d/%d: %s %s -- %s",
                 i + 1, len(demo.steps),
                 step.action_type,
                 step.action_value or "",
                 step.description,
             )
+
+            # Phase 4: Pre-click state narrowing
+            if (
+                step.action_type in ("click", "double_click")
+                and step.grounding_target is not None
+                and obs.screenshot
+            ):
+                ok, reason = check_state_preconditions(
+                    obs.screenshot,
+                    step.grounding_target,
+                    ocr_fn=None,
+                )
+                if not ok:
+                    logger.warning(
+                        "Step %d: state precondition failed: %s",
+                        i + 1, reason,
+                    )
+                    # Observational in Phase 4 -- proceed anyway.
+                    # Blocking / state recovery deferred to later phase.
 
             action = self._execute_step(step, obs)
             if action is None:
@@ -143,6 +163,23 @@ class DemoExecutor:
             # Execute the action
             step_result = self._dispatch_action(env, action)
             obs = step_result.observation
+
+            # Phase 4: Post-click transition verification
+            if (
+                step.action_type in ("click", "double_click")
+                and step.grounding_target is not None
+                and obs.screenshot
+            ):
+                ok, reason = verify_transition(
+                    obs.screenshot,
+                    step.grounding_target,
+                    ocr_fn=None,
+                )
+                if not ok:
+                    logger.warning(
+                        "Step %d: transition verification failed: %s",
+                        i + 1, reason,
+                    )
 
             if obs.screenshot:
                 screenshots.append(obs.screenshot)
@@ -190,9 +227,9 @@ class DemoExecutor:
     ) -> BenchmarkAction | None:
         """Produce an action for a demo step using tiered intelligence.
 
-        Tier 1: keyboard/type → direct execution (no VLM).
-        Tier 2: click → grounder finds element by description.
-        Tier 3: recovery → planner reasons about unexpected state.
+        Tier 1: keyboard/type -> direct execution (no VLM).
+        Tier 2: click -> grounder finds element by description.
+        Tier 3: recovery -> planner reasons about unexpected state.
         """
         if step.action_type == "key":
             # Tier 1: deterministic keyboard action
@@ -230,7 +267,7 @@ class DemoExecutor:
                 )
             return action
 
-        # Unknown action type — log and skip
+        # Unknown action type -- log and skip
         logger.warning("Unknown action type %r, skipping", step.action_type)
         return None
 
@@ -306,7 +343,7 @@ class DemoExecutor:
 
         logger.info("HTTP grounder: %s", raw[:200])
 
-        # Parse [x1,y1,x2,y2] bbox → center click
+        # Parse [x1,y1,x2,y2] bbox -> center click
         from openadapt_evals.agents.planner_grounder_agent import (
             PlannerGrounderAgent,
         )
@@ -345,7 +382,7 @@ class DemoExecutor:
 
         if action.type == "done":
             logger.warning(
-                "Grounder could not find %r — returning click at center",
+                "Grounder could not find %r -- returning click at center",
                 description,
             )
             return BenchmarkAction(type="click", x=0.5, y=0.5)
