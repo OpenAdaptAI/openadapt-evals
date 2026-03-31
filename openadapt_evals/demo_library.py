@@ -137,6 +137,11 @@ class DemoStep:
     # enriched.
     description: str = ""
 
+    # Rich grounding target for the cascade architecture.
+    # Populated by ``enrich_grounding_targets()`` or manually.
+    # See docs/design/grounding_cascade_design_v3.md.
+    grounding_target: Any = field(default=None, repr=False)
+
     # Cached perceptual hash for visual similarity alignment.
     # Not serialized to demo.json -- computed lazily by
     # ``_ensure_demo_phashes()``.
@@ -978,6 +983,14 @@ def _demo_to_dict(demo: Demo) -> dict[str, Any]:
     data = asdict(demo)
     for step_dict in data.get("steps", []):
         step_dict.pop("_phash", None)
+        # Serialize GroundingTarget to dict if present
+        gt = step_dict.pop("grounding_target", None)
+        if gt and isinstance(gt, dict):
+            # asdict already converted it; remove empty fields
+            gt = {k: v for k, v in gt.items()
+                  if v is not None and v != "" and v != [] and v != ()}
+            if gt:
+                step_dict["grounding_target"] = gt
         if "metadata" in step_dict and isinstance(step_dict["metadata"], dict):
             step_dict["metadata"].pop("_clip_embedding", None)
             step_dict["metadata"].pop("_openai_embedding", None)
@@ -1261,7 +1274,16 @@ class DemoLibrary:
             try:
                 with open(demo_json) as f:
                     data = json.load(f)
-                steps = [DemoStep(**s) for s in data.pop("steps", [])]
+                raw_steps = data.pop("steps", [])
+                steps = []
+                for s in raw_steps:
+                    # Parse grounding_target dict into GroundingTarget object
+                    gt_data = s.pop("grounding_target", None)
+                    step = DemoStep(**s)
+                    if gt_data and isinstance(gt_data, dict):
+                        from openadapt_evals.grounding import GroundingTarget
+                        step.grounding_target = GroundingTarget.from_dict(gt_data)
+                    steps.append(step)
                 return Demo(steps=steps, **data)
             except (json.JSONDecodeError, TypeError, KeyError) as exc:
                 logger.warning(
