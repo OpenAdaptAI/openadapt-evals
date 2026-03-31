@@ -1,6 +1,28 @@
 # CHANGELOG
 
 
+## v0.83.0 (2026-03-31)
+
+### Features
+
+- Groundingtarget + GroundingCandidate data model for cascade architecture
+  ([#256](https://github.com/OpenAdaptAI/openadapt-evals/pull/256),
+  [`e912b65`](https://github.com/OpenAdaptAI/openadapt-evals/commit/e912b653942424513b4762fdbae8051c0b71c3b3))
+
+Phase 3 of the grounding cascade design (v3):
+
+- grounding.py: GroundingTarget (rich target per click step — description, crop, nearby text, window
+  title, structured transition expectations) and GroundingCandidate (normalized output from each
+  grounding tier) - demo_library.py: DemoStep gains optional grounding_target field,
+  serialization/deserialization handles GroundingTarget objects - Fix demo description: "Clear data"
+  → "Clear now" (actual button text) - Design docs: v1, v2, v3 cascade architecture
+
+GroundingTarget is the foundation for the entire cascade. Every downstream tier (OCR, CLIP,
+  UI-Venus, GPT-5.4) operates on the same rich signal instead of a weak description string.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.82.4 (2026-03-30)
 
 ### Bug Fixes
