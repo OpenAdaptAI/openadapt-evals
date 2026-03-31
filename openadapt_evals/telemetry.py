@@ -157,13 +157,15 @@ def track_demo_execution(
     score: float | None = None,
     duration_seconds: float | None = None,
     tier1_count: int | None = None,
+    tier15a_count: int | None = None,
     tier2_count: int | None = None,
 ) -> bool:
     return capture_event("demo_execution", {
         "phase": phase, "task_id": task_id,
         "num_steps": num_steps, "score": score,
         "duration_seconds": duration_seconds,
-        "tier1_count": tier1_count, "tier2_count": tier2_count,
+        "tier1_count": tier1_count, "tier15a_count": tier15a_count,
+        "tier2_count": tier2_count,
     })
 
 

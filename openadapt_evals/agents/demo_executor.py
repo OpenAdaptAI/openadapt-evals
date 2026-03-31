@@ -4,9 +4,11 @@ Executes demo steps directly instead of asking a VLM planner to
 interpret them. The planner is only consulted as a recovery mechanism
 when the expected screen state doesn't match.
 
-Tier 1 (deterministic): keyboard shortcuts, typing — execute directly.
-Tier 2 (grounder-only): clicks — grounder finds element by description.
-Tier 3 (planner recovery): unexpected state — planner reasons about
+Tier 1 (deterministic): keyboard shortcuts, typing -- execute directly.
+Tier 1.5a (text anchoring): clicks -- OCR text matching finds element
+    by matching target description against on-screen text ($0, <100ms).
+Tier 2 (grounder-only): clicks -- grounder finds element by description.
+Tier 3 (planner recovery): unexpected state -- planner reasons about
     what to do when the demo doesn't match reality.
 
 Usage:
@@ -29,6 +31,7 @@ from typing import Any
 
 from openadapt_evals.adapters.base import BenchmarkAction, BenchmarkObservation
 from openadapt_evals.demo_library import Demo, DemoStep
+from openadapt_evals.grounding import GroundingTarget, ground_by_text, run_ocr
 
 try:
     from openadapt_evals.integrations.weave_integration import weave_op
@@ -94,19 +97,23 @@ class DemoExecutor:
             screenshot_dir: Optional directory to save screenshots.
 
         Returns:
-            (score, screenshots) — score from evaluate_dense().
+            (score, screenshots) -- score from evaluate_dense().
         """
         from openadapt_evals.adapters.rl_env import ResetConfig
 
         import time as _time
+
         _t0 = _time.time()
         _tier1 = 0
+        _tier15a = 0
         _tier2 = 0
 
         try:
             from openadapt_evals.telemetry import track_demo_execution
+
             track_demo_execution(
-                phase="start", task_id=task_config.id,
+                phase="start",
+                task_id=task_config.id,
                 num_steps=len(demo.steps),
             )
         except Exception:
@@ -121,8 +128,9 @@ class DemoExecutor:
 
         for i, step in enumerate(demo.steps):
             logger.info(
-                "Demo step %d/%d: %s %s — %s",
-                i + 1, len(demo.steps),
+                "Demo step %d/%d: %s %s -- %s",
+                i + 1,
+                len(demo.steps),
                 step.action_type,
                 step.action_value or "",
                 step.description,
@@ -137,6 +145,8 @@ class DemoExecutor:
             tier = (action.raw_action or {}).get("tier", 2)
             if tier == 1:
                 _tier1 += 1
+            elif tier == 1.5:
+                _tier15a += 1
             else:
                 _tier2 += 1
 
@@ -158,7 +168,9 @@ class DemoExecutor:
                 if passed > 0:
                     logger.info(
                         "Step %d: milestones %d/%d (high-water)",
-                        i + 1, passed, total,
+                        i + 1,
+                        passed,
+                        total,
                     )
 
             time.sleep(self._step_delay)
@@ -171,11 +183,16 @@ class DemoExecutor:
 
         try:
             from openadapt_evals.telemetry import track_demo_execution
+
             track_demo_execution(
-                phase="completed", task_id=task_config.id,
-                num_steps=len(demo.steps), score=score,
+                phase="completed",
+                task_id=task_config.id,
+                num_steps=len(demo.steps),
+                score=score,
                 duration_seconds=_time.time() - _t0,
-                tier1_count=_tier1, tier2_count=_tier2,
+                tier1_count=_tier1,
+                tier15a_count=_tier15a,
+                tier2_count=_tier2,
             )
         except Exception:
             pass
@@ -190,9 +207,10 @@ class DemoExecutor:
     ) -> BenchmarkAction | None:
         """Produce an action for a demo step using tiered intelligence.
 
-        Tier 1: keyboard/type → direct execution (no VLM).
-        Tier 2: click → grounder finds element by description.
-        Tier 3: recovery → planner reasons about unexpected state.
+        Tier 1: keyboard/type -> direct execution (no VLM).
+        Tier 1.5a: click -> OCR text anchoring ($0, <100ms).
+        Tier 2: click -> grounder finds element by description.
+        Tier 3: recovery -> planner reasons about unexpected state.
         """
         if step.action_type == "key":
             # Tier 1: deterministic keyboard action
@@ -212,27 +230,109 @@ class DemoExecutor:
             logger.info("Tier 1 (direct): type=%r", text)
             return BenchmarkAction(type="type", text=text, raw_action={"tier": 1})
 
-        if step.action_type == "click":
-            # Tier 2: grounder finds element by description
+        if step.action_type in ("click", "double_click"):
             description = step.description or step.target_description
             if not description:
                 description = step.action_description
+
+            # Tier 1.5a: Text anchoring -- try OCR match before VLM
+            text_action = self._try_text_anchoring(step, obs, description)
+            if text_action is not None:
+                if step.action_type == "double_click" and text_action.type == "click":
+                    return BenchmarkAction(
+                        type="double_click",
+                        x=text_action.x,
+                        y=text_action.y,
+                        raw_action=text_action.raw_action,
+                    )
+                return text_action
+
+            # Fall through to Tier 2: VLM grounder
+            if step.action_type == "double_click":
+                logger.info("Tier 2 (grounder): double-click %s", description)
+                action = self._ground_click(obs, description)
+                if action and action.type == "click":
+                    return BenchmarkAction(
+                        type="double_click",
+                        x=action.x,
+                        y=action.y,
+                    )
+                return action
+
             logger.info("Tier 2 (grounder): %s", description)
             return self._ground_click(obs, description)
 
-        if step.action_type == "double_click":
-            description = step.description or step.target_description
-            logger.info("Tier 2 (grounder): double-click %s", description)
-            action = self._ground_click(obs, description)
-            if action and action.type == "click":
-                return BenchmarkAction(
-                    type="double_click", x=action.x, y=action.y,
-                )
-            return action
-
-        # Unknown action type — log and skip
+        # Unknown action type -- log and skip
         logger.warning("Unknown action type %r, skipping", step.action_type)
         return None
+
+    def _try_text_anchoring(
+        self,
+        step: DemoStep,
+        obs: BenchmarkObservation,
+        description: str,
+    ) -> BenchmarkAction | None:
+        """Tier 1.5a: try to ground a click via OCR text matching.
+
+        Returns a BenchmarkAction if a high-confidence text match is
+        found (local_score > 0.85), otherwise returns None so the
+        caller falls through to the VLM grounder.
+        """
+        if not obs.screenshot or not description:
+            return None
+
+        # Build a GroundingTarget from the step
+        if hasattr(step, "grounding_target") and step.grounding_target is not None:
+            target = step.grounding_target
+        else:
+            target = GroundingTarget(description=description)
+
+        ocr_results = run_ocr(obs.screenshot)
+        if not ocr_results:
+            return None
+
+        candidates = ground_by_text(obs.screenshot, target, ocr_results)
+        if not candidates or candidates[0].local_score <= 0.85:
+            if candidates:
+                logger.debug(
+                    "Tier 1.5a: best OCR match '%s' (score=%.2f) "
+                    "below threshold, falling through to VLM",
+                    candidates[0].matched_text,
+                    candidates[0].local_score,
+                )
+            return None
+
+        best = candidates[0]
+        logger.info(
+            "Tier 1.5a: OCR text match '%s' (score=%.2f), skipping VLM",
+            best.matched_text,
+            best.local_score,
+        )
+
+        # Convert pixel coordinates to normalized fractions.
+        try:
+            import io as _io
+
+            from PIL import Image
+
+            img = Image.open(_io.BytesIO(obs.screenshot))
+            sw, sh = img.size
+        except Exception:
+            logger.warning("Tier 1.5a: could not determine screenshot size")
+            return None
+
+        x_frac = best.point[0] / sw
+        y_frac = best.point[1] / sh
+
+        return BenchmarkAction(
+            type="click",
+            x=x_frac,
+            y=y_frac,
+            raw_action={
+                "tier": 1.5,
+                "ocr_matched_text": best.matched_text,
+            },
+        )
 
     def _ground_click(
         self,
@@ -267,6 +367,7 @@ class DemoExecutor:
         serving ``inclusionAI/UI-Venus-1.5-8B``.
         """
         import base64
+
         import requests
 
         endpoint = self._grounder_endpoint.rstrip("/")
@@ -286,18 +387,25 @@ class DemoExecutor:
         ]
         if obs.screenshot:
             b64 = base64.b64encode(obs.screenshot).decode()
-            content.insert(0, {
-                "type": "image_url",
-                "image_url": {"url": f"data:image/png;base64,{b64}"},
-            })
+            content.insert(
+                0,
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{b64}"},
+                },
+            )
 
         try:
-            resp = requests.post(url, json={
-                "model": "UI-Venus-1.5-8B",
-                "messages": [{"role": "user", "content": content}],
-                "max_tokens": 128,
-                "temperature": 0.0,
-            }, timeout=60)
+            resp = requests.post(
+                url,
+                json={
+                    "model": "UI-Venus-1.5-8B",
+                    "messages": [{"role": "user", "content": content}],
+                    "max_tokens": 128,
+                    "temperature": 0.0,
+                },
+                timeout=60,
+            )
             resp.raise_for_status()
             raw = resp.json()["choices"][0]["message"]["content"]
         except Exception as exc:
@@ -306,10 +414,11 @@ class DemoExecutor:
 
         logger.info("HTTP grounder: %s", raw[:200])
 
-        # Parse [x1,y1,x2,y2] bbox → center click
+        # Parse [x1,y1,x2,y2] bbox -> center click
         from openadapt_evals.agents.planner_grounder_agent import (
             PlannerGrounderAgent,
         )
+
         return PlannerGrounderAgent._parse_bbox_to_action(raw)
 
     def _ground_click_vlm(
@@ -341,11 +450,12 @@ class DemoExecutor:
         )
 
         from openadapt_evals.training.trl_rollout import parse_action_json
+
         action = parse_action_json(raw)
 
         if action.type == "done":
             logger.warning(
-                "Grounder could not find %r — returning click at center",
+                "Grounder could not find %r -- returning click at center",
                 description,
             )
             return BenchmarkAction(type="click", x=0.5, y=0.5)
@@ -358,14 +468,16 @@ class DemoExecutor:
             x, y = float(action.x), float(action.y)
             if 0 <= x <= 1 and 0 <= y <= 1:
                 return env.pixel_action(
-                    x_frac=x, y_frac=y,
+                    x_frac=x,
+                    y_frac=y,
                     action_type=action.type,
                     text=action.text,
                     key=action.key,
                 )
             else:
                 return env.pixel_action(
-                    x=int(x), y=int(y),
+                    x=int(x),
+                    y=int(y),
                     action_type=action.type,
                     text=action.text,
                     key=action.key,
