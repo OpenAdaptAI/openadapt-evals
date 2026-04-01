@@ -349,8 +349,10 @@ def _bbox_distance(
 def run_ocr(screenshot: bytes) -> list[dict]:
     """Run OCR on a screenshot and return detected text regions.
 
-    Uses ``pytesseract`` when available.  If it is not installed, returns
-    an empty list (graceful degradation — callers must handle ``[]``).
+    Tries backends in order:
+    1. GLM-OCR (VLM-based, better accuracy on complex UIs, ``pip install glmocr``)
+    2. pytesseract (traditional OCR, requires system Tesseract binary)
+    3. Returns ``[]`` if neither is available (graceful degradation).
 
     Args:
         screenshot: PNG image bytes.
@@ -359,10 +361,79 @@ def run_ocr(screenshot: bytes) -> list[dict]:
         List of dicts with keys ``"text"``, ``"bbox"`` (``[x1, y1, x2, y2]``),
         and ``"confidence"`` (``0.0``–``1.0``).
     """
+    # --- Try GLM-OCR first (VLM-based, better accuracy) ---
+    results = _run_glm_ocr(screenshot)
+    if results:
+        return results
+
+    # --- Fallback to pytesseract ---
+    results = _run_pytesseract(screenshot)
+    if results:
+        return results
+
+    logger.debug("No OCR backend available (tried glmocr, pytesseract)")
+    return []
+
+
+def _run_glm_ocr(screenshot: bytes) -> list[dict]:
+    """Run GLM-OCR on a screenshot.
+
+    GLM-OCR uses a VLM (CogViT + GLM-0.5B) for semantic text extraction.
+    Returns structured results with bounding boxes.
+
+    Requires: ``pip install glmocr``
+    """
+    try:
+        from glmocr import parse  # type: ignore[import-untyped]
+    except ImportError:
+        return []
+
+    try:
+        import io
+        import tempfile
+        from pathlib import Path
+
+        # GLM-OCR expects a file path, not bytes
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+            f.write(screenshot)
+            tmp_path = f.name
+
+        try:
+            result = parse(tmp_path)
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+
+        # Convert GLM-OCR output to our standard format
+        results: list[dict] = []
+        # GLM-OCR returns structured blocks with text and coordinates
+        for block in getattr(result, "blocks", []):
+            text = getattr(block, "text", "").strip()
+            if not text or len(text) < 2:
+                continue
+            bbox = getattr(block, "bbox", None)
+            if bbox and len(bbox) >= 4:
+                results.append({
+                    "text": text,
+                    "bbox": [int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])],
+                    "confidence": getattr(block, "confidence", 0.9),
+                })
+        if results:
+            logger.info("GLM-OCR extracted %d text regions", len(results))
+        return results
+
+    except Exception as exc:
+        logger.debug("GLM-OCR failed: %s", exc)
+        return []
+
+
+def _run_pytesseract(screenshot: bytes) -> list[dict]:
+    """Run pytesseract OCR on a screenshot.
+
+    Requires: ``pip install pytesseract`` + system Tesseract binary.
+    """
     try:
         import pytesseract  # type: ignore[import-untyped]
     except ImportError:
-        logger.debug("pytesseract not installed — returning empty OCR results")
         return []
 
     try:
@@ -372,7 +443,7 @@ def run_ocr(screenshot: bytes) -> list[dict]:
         image = Image.open(io.BytesIO(screenshot))
         data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
     except Exception as exc:
-        logger.warning("OCR failed: %s", exc)
+        logger.debug("pytesseract failed: %s", exc)
         return []
 
     results: list[dict] = []
@@ -393,6 +464,8 @@ def run_ocr(screenshot: bytes) -> list[dict]:
             "bbox": [x, y, x + w, y + h],
             "confidence": conf / 100.0,
         })
+    if results:
+        logger.info("pytesseract extracted %d text regions", len(results))
     return results
 
 
