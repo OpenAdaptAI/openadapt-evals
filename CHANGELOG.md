@@ -1,6 +1,29 @@
 # CHANGELOG
 
 
+## v0.87.0 (2026-04-01)
+
+### Features
+
+- Demo enrichment pipeline for GroundingTarget data
+  ([#261](https://github.com/OpenAdaptAI/openadapt-evals/pull/261),
+  [`dd01054`](https://github.com/OpenAdaptAI/openadapt-evals/commit/dd01054723fc7b88416c2010691324247dd551cf))
+
+Add two scripts for populating GroundingTarget data on demo click steps:
+
+- enrich_demo_targets.py: Enriches each click step with GroundingTarget metadata (target_type,
+  crop_bbox, click_offset, nearby_text) using OCR when real screenshots are available, or
+  description-derived heuristics when they are not. Idempotent and works offline.
+
+- record_demo_screenshots.py: Replays a demo on a live WAA VM, capturing before/after screenshots at
+  each step, then updates the demo JSON with real screenshot paths for subsequent enrichment.
+
+Both scripts use fire for CLI, handle the existing demo JSON format, and integrate with grounding.py
+  GroundingTarget.to_dict()/from_dict().
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.86.0 (2026-04-01)
 
 ### Features
