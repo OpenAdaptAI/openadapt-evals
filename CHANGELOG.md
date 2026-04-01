@@ -1,6 +1,23 @@
 # CHANGELOG
 
 
+## v0.86.0 (2026-04-01)
+
+### Features
+
+- Add GLM-OCR as primary OCR backend, pytesseract as fallback
+  ([#260](https://github.com/OpenAdaptAI/openadapt-evals/pull/260),
+  [`c66468a`](https://github.com/OpenAdaptAI/openadapt-evals/commit/c66468a07fc98643936572fe75af8cc265a13c95))
+
+run_ocr() now tries backends in order: 1. GLM-OCR (VLM-based, pip install glmocr, better accuracy on
+  complex UIs) 2. pytesseract (traditional OCR, requires system Tesseract binary) 3. Empty list
+  (graceful degradation)
+
+Added [ocr] optional dependency group for glmocr.
+
+Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+
 ## v0.85.0 (2026-03-31)
 
 ### Features
