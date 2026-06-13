@@ -1194,6 +1194,25 @@ def cmd_view(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_tasks(args: argparse.Namespace) -> int:
+    """List available benchmark tasks (mock adapter; no VM required)."""
+    from openadapt_evals.benchmarks import WAAMockAdapter
+
+    domain = getattr(args, "domain", None)
+    adapter = WAAMockAdapter()
+    tasks = adapter.list_tasks(domain=domain)
+
+    if not tasks:
+        scope = f" for domain {domain!r}" if domain else ""
+        print(f"No tasks found{scope}.")
+        return 1
+
+    for task in tasks:
+        print(f"  {task.task_id}  [{task.domain}]  {task.instruction[:70]}")
+    print(f"\nTotal: {len(tasks)} task(s)")
+    return 0
+
+
 def cmd_compare(args: argparse.Namespace) -> int:
     """Generate a comparison viewer for multiple evaluation runs."""
     from openadapt_evals.benchmarks.comparison_viewer import generate_comparison_viewer
