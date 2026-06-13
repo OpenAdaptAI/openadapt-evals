@@ -1,6 +1,27 @@
 # CHANGELOG
 
 
+## v0.87.1 (2026-06-13)
+
+### Bug Fixes
+
+- Implement missing cmd_tasks; add import-integrity guards and release alerting
+  ([#262](https://github.com/OpenAdaptAI/openadapt-evals/pull/262),
+  [`7c05b76`](https://github.com/OpenAdaptAI/openadapt-evals/commit/7c05b76432bd4bc600e31de584fda7891ef1a905))
+
+Ecosystem rollout of the #999 guards (see openadapt-ml#64, OpenAdapt#1002):
+
+- tests/test_import_integrity.py: AST-based phantom-import and phantom-kwarg detection across the
+  whole package, including imports inside function bodies - The new guard immediately found one live
+  bug: `oa evals tasks` (a registered, documented subcommand) imported cmd_tasks from
+  benchmarks/cli.py, which never existed - the command has always crashed with ImportError.
+  Implemented cmd_tasks using the mock adapter (lists 154-task WAA catalog locally, supports
+  --domain, no VM required) - release.yml: file/append a GitHub issue when the release workflow
+  fails, so PyPI cannot silently go stale (openadapt-ml's releases failed silently Mar-Jun 2026)
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com>
+
+
 ## v0.87.0 (2026-04-01)
 
 ### Features
