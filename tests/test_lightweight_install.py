@@ -179,3 +179,60 @@ class TestClientImportPattern:
     def test_benchmark_action_import(self):
         from openadapt_evals.adapters.base import BenchmarkAction
         assert callable(BenchmarkAction)
+
+
+# ---------------------------------------------------------------------------
+# The oa-vm entry point must not import the ML training stack
+# ---------------------------------------------------------------------------
+
+
+class TestVmCliStaysLight:
+    """`oa-vm` (VM lifecycle) must import without the ML/vision stack.
+
+    Regression guard: the ``oa-vm`` console script imports
+    ``openadapt_evals.benchmarks.vm_cli``, which triggers the package
+    ``__init__`` modules. Those used to eagerly import ``agents`` -> transformers
+    / peft, which (a) is dead weight for VM management and (b) crashed ``oa-vm``
+    outright under a NumPy 2 / stale-transformers environment. The package
+    ``__init__``s now resolve those names lazily (PEP 562); this test pins that
+    importing the CLI path pulls in none of the heavy modules.
+
+    Run in a subprocess with a fresh interpreter so that heavy modules imported
+    by other tests in this process cannot mask a regression.
+    """
+
+    def test_importing_vm_cli_does_not_import_ml_stack(self):
+        import subprocess
+
+        heavy = ["transformers", "peft", "torch", "openadapt_evals.agents"]
+        code = (
+            "import sys\n"
+            "import openadapt_evals\n"
+            "import openadapt_evals.benchmarks\n"
+            "import openadapt_evals.benchmarks.vm_cli\n"
+            f"heavy = {heavy!r}\n"
+            "leaked = [m for m in heavy if m in sys.modules]\n"
+            "print('LEAKED:' + ','.join(leaked))\n"
+            "sys.exit(1 if leaked else 0)\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, (
+            "oa-vm import path pulled in heavy modules: "
+            f"{result.stdout.strip()} {result.stderr.strip()}"
+        )
+
+    def test_lazy_public_api_still_resolves(self):
+        # The laziness must not break the re-exported public API.
+        import openadapt_evals as oe
+        from openadapt_evals.adapters import WAAAdapter as direct_adapter
+
+        assert oe.WAAAdapter is direct_adapter  # lazy value is the real object
+        assert callable(oe.compute_metrics)
+        from openadapt_evals.benchmarks import WAAMockAdapter, EvaluationConfig
+
+        assert WAAMockAdapter is not None
+        assert EvaluationConfig is not None
