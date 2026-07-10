@@ -1,6 +1,34 @@
 # CHANGELOG
 
 
+## v0.87.2 (2026-07-10)
+
+### Bug Fixes
+
+- Decouple oa-vm from the ML training stack via lazy package imports
+  ([#263](https://github.com/OpenAdaptAI/openadapt-evals/pull/263),
+  [`dca4ff7`](https://github.com/OpenAdaptAI/openadapt-evals/commit/dca4ff75203752b1d8a1b6de5f94ed24fa18f721))
+
+The oa-vm console script imports openadapt_evals.benchmarks.vm_cli, which triggered the package
+  __init__ modules' eager `from openadapt_evals.agents import ...`. That cascaded into
+  transformers/peft — dead weight for VM lifecycle management, and a hard crash under a NumPy 2 /
+  stale-transformers environment (a module compiled against NumPy 1.x cannot run on NumPy 2.x),
+  which broke `oa-vm` entirely.
+
+Resolve the re-exported public API of openadapt_evals and openadapt_evals.benchmarks lazily (PEP 562
+  module __getattr__), caching each name as a module global on first access. Importing either
+  package is now light and touches no ML/vision dependency; agents/transformers load only when an
+  agent-dependent name is actually used. Public API and object identity are unchanged.
+
+Adds a subprocess regression guard (TestVmCliStaysLight) asserting the oa-vm import path pulls in
+  none of transformers/peft/torch/agents, plus a check that the lazy re-exports still resolve to the
+  real objects.
+
+Claude-Session: https://claude.ai/code/session_01CKrVJJy5jWVCkXAqgUqtqZ
+
+Co-authored-by: Claude Opus 4.8 <noreply@anthropic.com>
+
+
 ## v0.87.1 (2026-06-13)
 
 ### Bug Fixes
