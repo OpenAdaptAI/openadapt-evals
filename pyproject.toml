@@ -42,7 +42,8 @@ dependencies = [
     "pyyaml>=6.0",
     "openadapt-consilium>=0.3.2",
     "openadapt-telemetry>=0.2.0",
-    "openadapt-types>=0.1.0",
+    # Requires the release adding openadapt_types.benchmark (Benchmark* types).
+    "openadapt-types>=0.2.0",
 ]
 
 [project.optional-dependencies]

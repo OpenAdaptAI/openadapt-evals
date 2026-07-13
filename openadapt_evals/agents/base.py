@@ -15,51 +15,19 @@ Example:
 from __future__ import annotations
 
 import re
-from abc import ABC, abstractmethod
 from typing import Any
 
-# Import from adapters for data classes
+# Import data classes + the BenchmarkAgent interface from the canonical schema
+# package (openadapt-types). BenchmarkAgent is re-exported here for backward
+# compatibility with existing ``from openadapt_evals.agents.base import
+# BenchmarkAgent`` imports. The data classes are re-exported by
+# openadapt_evals.adapters.base (also sourced from openadapt-types).
 from openadapt_evals.adapters.base import (
     BenchmarkAction,
     BenchmarkObservation,
     BenchmarkTask,
 )
-
-
-class BenchmarkAgent(ABC):
-    """Abstract interface for agents evaluated on benchmarks.
-
-    Agents must implement the `act` method to receive observations
-    and return actions. The agent can maintain internal state across
-    steps within an episode.
-    """
-
-    @abstractmethod
-    def act(
-        self,
-        observation: BenchmarkObservation,
-        task: BenchmarkTask,
-        history: list[tuple[BenchmarkObservation, BenchmarkAction]] | None = None,
-    ) -> BenchmarkAction:
-        """Given observation and task, return next action.
-
-        Args:
-            observation: Current observation from the environment.
-            task: Task being performed.
-            history: Optional list of previous (observation, action) pairs.
-
-        Returns:
-            Action to execute.
-        """
-        pass
-
-    def reset(self) -> None:
-        """Reset agent state between episodes.
-
-        Called before starting a new task. Override to clear any
-        internal state.
-        """
-        pass
+from openadapt_types import BenchmarkAgent
 
 
 def format_accessibility_tree(tree: dict, indent: int = 0) -> str:
