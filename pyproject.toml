@@ -42,7 +42,8 @@ dependencies = [
     "pyyaml>=6.0",
     "openadapt-consilium>=0.3.2",
     "openadapt-telemetry>=0.2.0",
-    "openadapt-types>=0.1.0",
+    # Requires the release adding openadapt_types.benchmark (Benchmark* types).
+    "openadapt-types>=0.3.0",
 ]
 
 [project.optional-dependencies]
@@ -156,7 +157,6 @@ Documentation = "https://github.com/OpenAdaptAI/openadapt-evals#readme"
 [tool.uv.sources]
 openadapt-consilium = { git = "https://github.com/OpenAdaptAI/openadapt-consilium.git" }
 openadapt-ml = { path = "../openadapt-ml", editable = true }
-openadapt-types = { path = "../openadapt-types", editable = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["openadapt_evals", "scripts"]

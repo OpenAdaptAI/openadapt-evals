@@ -737,3 +737,15 @@ class RLEnvironment:
             score,
         )
         return list(self._trajectory)
+
+
+if TYPE_CHECKING:
+    # Fork B conformance: the concrete RLEnvironment implements the RolloutEnv
+    # Protocol defined in openadapt-ml. openadapt-ml depends on the interface;
+    # openadapt-evals provides this implementation. Guarded by the module-level
+    # TYPE_CHECKING sentinel (False at runtime) so openadapt-ml remains an
+    # optional, non-runtime dependency of openadapt-evals and no import cycle
+    # is introduced.
+    from openadapt_ml.training.grpo.rollout_env import RolloutEnv
+
+    _rollout_env_conformance: type[RolloutEnv] = RLEnvironment
