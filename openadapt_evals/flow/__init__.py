@@ -37,6 +37,13 @@ __all__ = [
     "aggregate_replay_metrics",
     # hybrid agent
     "HybridFlowAgent",
+    # parallels local-VM environment ($0)
+    "ParallelsConfig",
+    "ParallelsSession",
+    "ParallelsTask",
+    "parallels_enabled",
+    "builtin_tasks",
+    "run_parallels_replay",
 ]
 
 _EXPORTS = {
@@ -56,6 +63,12 @@ _EXPORTS = {
         "aggregate_replay_metrics",
     ),
     "HybridFlowAgent": ("openadapt_evals.flow.hybrid_agent", "HybridFlowAgent"),
+    "ParallelsConfig": ("openadapt_evals.flow.parallels_env", "ParallelsConfig"),
+    "ParallelsSession": ("openadapt_evals.flow.parallels_env", "ParallelsSession"),
+    "ParallelsTask": ("openadapt_evals.flow.parallels_env", "ParallelsTask"),
+    "parallels_enabled": ("openadapt_evals.flow.parallels_env", "parallels_enabled"),
+    "builtin_tasks": ("openadapt_evals.flow.parallels_env", "builtin_tasks"),
+    "run_parallels_replay": ("openadapt_evals.flow.parallels_env", "run_parallels_replay"),
 }
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -72,6 +85,14 @@ if TYPE_CHECKING:  # pragma: no cover
         PerTaskReplayMetrics,
         aggregate_replay_metrics,
         run_demonstrate_then_replay,
+    )
+    from openadapt_evals.flow.parallels_env import (
+        ParallelsConfig,
+        ParallelsSession,
+        ParallelsTask,
+        builtin_tasks,
+        parallels_enabled,
+        run_parallels_replay,
     )
 
 

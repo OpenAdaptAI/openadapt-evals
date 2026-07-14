@@ -63,3 +63,29 @@ def test_live_refuses_when_bundle_missing_without_network(capsys):
     err = capsys.readouterr().err
     assert rc == 2
     assert "no compiled bundle" in err.lower()
+
+
+def test_parallels_dry_run_is_zero_dollars(capsys):
+    rc = efw.main(["--env", "parallels", "--mode", "replay", "--tasks", "2"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Parallels LOCAL VM ($0)" in out
+    assert "LOCAL $0 (Parallels)" in out
+    assert "= $0.00" in out
+    assert "OPENADAPT_PARALLELS" in out
+    assert "snapshot -> run -> revert" in out
+
+
+def test_parallels_live_refused_without_optin(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("OPENADAPT_PARALLELS", raising=False)
+    # A present bundle so we pass the missing-bundle gate and reach the opt-in check.
+    bundle = tmp_path / "notepad_write"
+    bundle.mkdir()
+    (bundle / "workflow.json").write_text("{}")
+    rc = efw.main([
+        "--env", "parallels", "--mode", "replay",
+        "--task-ids", "notepad_write", "--bundles", str(tmp_path), "--live",
+    ])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "opt-in" in err.lower()

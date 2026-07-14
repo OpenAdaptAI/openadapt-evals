@@ -99,7 +99,15 @@ def build_guard(args: argparse.Namespace) -> CostGuardConfig:
 
 
 def print_estimate(args: argparse.Namespace, guard: CostGuardConfig) -> dict:
-    """Print + return the cost estimate for the requested N and the full 154."""
+    """Print + return the cost estimate for the requested N and the full 154.
+
+    Parallels is a LOCAL environment: VM cost is $0 (native Apple-Silicon virt);
+    only the hybrid agent-fallback tokens (a cloud API) cost money. WAA is a
+    CLOUD environment: Azure VM-hours + agent tokens.
+    """
+    is_parallels = args.env == "parallels"
+    vm_hourly = 0.0 if is_parallels else args.vm_hourly
+    vm_label = "Local VM (Parallels):" if is_parallels else "Azure VM-hours:      "
     rows = []
     seen = []
     for n in [args.tasks if not args.task_ids else len(
@@ -113,17 +121,18 @@ def print_estimate(args: argparse.Namespace, guard: CostGuardConfig) -> dict:
             mode=args.mode,
             model_name=args.model,
             fallback_rate=args.fallback_rate,
-            vm_hourly=args.vm_hourly,
+            vm_hourly=vm_hourly,
         )
         rows.append(est.as_dict())
 
     print()
     print("=" * 78)
-    print(f"  COST ESTIMATE  (mode={args.mode}, model={MODELS[args.model].name})")
+    env_tag = "LOCAL $0 (Parallels)" if is_parallels else "CLOUD $ (WAA/Azure)"
+    print(f"  COST ESTIMATE  ({env_tag}, mode={args.mode}, model={MODELS[args.model].name})")
     print("=" * 78)
     for r in rows:
         print(f"\n  {r['num_tasks']} tasks:")
-        print(f"    Azure VM-hours:        {r['vm_hours']:.2f}  @ ${r['vm_hourly_usd']}/hr"
+        print(f"    {vm_label}  {r['vm_hours']:.2f} vm-hours @ ${r['vm_hourly_usd']}/hr"
               f"  = ${r['vm_cost_usd']:.2f}")
         print(f"    Agent token cost:      ${r['token_cost_usd']:.2f}"
               f"  (paid tasks={r['paid_tasks']}, {r['agent_steps_per_paid_task']} steps each)")
@@ -154,6 +163,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         description="Evaluate openadapt-flow on WAA (dry-run by default).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    p.add_argument("--env", choices=["waa", "parallels"], default="waa",
+                   help="Environment: 'waa' = CLOUD Azure ($); 'parallels' = "
+                        "LOCAL Apple-Silicon VM ($0, opt-in OPENADAPT_PARALLELS=1).")
     p.add_argument("--mode", choices=["replay", "hybrid"], default="replay")
     p.add_argument("--tasks", type=int, default=10,
                    help="Number of tasks (used for the estimate when --task-ids is absent).")
@@ -185,16 +197,25 @@ def main(argv: Optional[list[str]] = None) -> int:
     guard = build_guard(args)
     plan = build_plan(args)
 
+    is_parallels = args.env == "parallels"
     print()
     print("=" * 78)
-    print(f"  openadapt-flow on WAA  --  mode={args.mode}")
+    env_label = "Parallels LOCAL VM ($0)" if is_parallels else "WAA / Azure CLOUD ($)"
+    print(f"  openadapt-flow on {env_label}  --  mode={args.mode}")
     print("=" * 78)
+    print(f"  environment:         {args.env}")
     print(f"  tasks:               {plan['num_tasks']}")
     print(f"  server-url:          {plan['server_url']}")
     print(f"  bundles-dir:         {plan['bundles_dir']}")
     print(f"  tasks with bundle:   {plan['tasks_with_bundle']}")
     print(f"  tasks MISSING bundle:{plan['tasks_missing_bundle']}"
           + ("  (record + compile first)" if plan["tasks_missing_bundle"] else ""))
+    if is_parallels:
+        from openadapt_evals.flow.parallels_env import PARALLELS_ENV_VAR, parallels_enabled
+
+        print(f"  opt-in gate:         {PARALLELS_ENV_VAR}="
+              f"{'set' if parallels_enabled() else 'UNSET (skipped)'}")
+        print("  snapshot-safe:       snapshot -> run -> revert (never deletes the VM)")
 
     estimate = print_estimate(args, guard)
 
@@ -204,10 +225,16 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     if not args.live:
         print()
-        print("  DRY-RUN: no VM provisioned, no task run, no money spent.")
-        print("  A live run needs: Azure creds + a revived waa-pool VM"
-              " (oa-vm pool-create/pool-wait),")
-        print("  compiled bundles for each task, then re-run with --live.")
+        if is_parallels:
+            print("  DRY-RUN: no VM touched, no money spent.")
+            print("  A local run needs: Parallels + the Win11 VM + openadapt-flow"
+                  " (win_agent, PR #95),")
+            print("  compiled bundles per task, OPENADAPT_PARALLELS=1, then --live. $0.")
+        else:
+            print("  DRY-RUN: no VM provisioned, no task run, no money spent.")
+            print("  A live run needs: Azure creds + a revived waa-pool VM"
+                  " (oa-vm pool-create/pool-wait),")
+            print("  compiled bundles for each task, then re-run with --live.")
         return 0
 
     return _run_live(args, plan, guard)
@@ -226,6 +253,9 @@ def _run_live(args: argparse.Namespace, plan: dict, guard: CostGuardConfig) -> i
     if plan["tasks_missing_bundle"]:
         print("\n  REFUSING --live: some tasks have no compiled bundle.", file=sys.stderr)
         return 2
+
+    if args.env == "parallels":
+        return _run_live_parallels(args, plan, guard)
 
     print(f"\n  Probing WAA server at {args.server_url} ...")
     try:
@@ -264,6 +294,48 @@ def _run_live(args: argparse.Namespace, plan: dict, guard: CostGuardConfig) -> i
           "\n  with evaluate_agent_on_benchmark(agent, WAALiveAdapter(...)). Gated on go.",
           file=sys.stderr)
     return 3
+
+
+def _run_live_parallels(args: argparse.Namespace, plan: dict, guard: CostGuardConfig) -> int:
+    """Execute a LOCAL Parallels run ($0). GATED: opt-in + snapshot-safe.
+
+    Requires ``OPENADAPT_PARALLELS=1``. Snapshots the clean VM state, launches
+    the in-guest win_agent, replays each bundle via the SAME WindowsBackend path
+    as WAA, scores with OUR built-in verifiers, then reverts (never deletes the
+    VM). No cloud, no money. Only the (optional) hybrid agent-fallback tokens
+    cost anything, and those stay under the same guardrails.
+    """
+    from openadapt_evals.flow.parallels_env import (
+        ParallelsConfig,
+        ParallelsTask,
+        parallels_enabled,
+        run_parallels_replay,
+    )
+
+    if not parallels_enabled():
+        print("\n  REFUSING --live (parallels): opt-in gate is off. "
+              "Set OPENADAPT_PARALLELS=1.", file=sys.stderr)
+        return 2
+
+    if args.mode != "replay":
+        print("\n  Parallels --live currently supports the replay mode "
+              "(the compiled arm); hybrid fallback needs a per-step local adapter.",
+              file=sys.stderr)
+        return 3
+
+    config = ParallelsConfig(enabled=True)
+    tasks = [
+        ParallelsTask(
+            task_id=t["task_id"],
+            instruction=t["task_id"],
+            verify=lambda vm: (False, "supply a verifier for custom parallels tasks"),
+            bundle_dir=Path(t["bundle_dir"]),
+        )
+        for t in plan["tasks"]
+    ]
+    metrics, summary = run_parallels_replay(tasks, config, run_root=Path(args.run_root))
+    print(json.dumps({"env": "parallels", "summary": summary}, indent=2))
+    return 0
 
 
 if __name__ == "__main__":
