@@ -212,12 +212,12 @@ def print_results():
     print("## Image Token Calculation")
     w, h = WAA_PARAMS['screenshot_width'], WAA_PARAMS['screenshot_height']
     print(f"   OpenAI (GPT-4o): {openai_image_tokens(w, h)} tokens")
-    print(f"     - Formula: 85 + (170 × tiles), where tiles = ceil(W/512) × ceil(H/512)")
-    print(f"     - 1920x1080 → scaled to 1365x768 → 3×2=6 tiles → 85 + 170×6 = 1,105 tokens")
+    print("     - Formula: 85 + (170 × tiles), where tiles = ceil(W/512) × ceil(H/512)")
+    print("     - 1920x1080 → scaled to 1365x768 → 3×2=6 tiles → 85 + 170×6 = 1,105 tokens")
     print()
     print(f"   Anthropic (Claude): {claude_image_tokens(w, h)} tokens")
-    print(f"     - Formula: (W × H) / 750")
-    print(f"     - 1920x1080 → scaled to 1568×882 → 1,568×882/750 = 1,844 tokens")
+    print("     - Formula: (W × H) / 750")
+    print("     - 1920x1080 → scaled to 1568×882 → 1,568×882/750 = 1,844 tokens")
     print()
 
     # Cost summary table
@@ -276,5 +276,56 @@ def print_results():
         print(f"   {result['model']:<16} ${result['total_cost']:>7.2f} {bar}")
 
 
+def _flow_estimate_main(argv=None) -> int:
+    """Flow-aware estimate: extends the legacy table with the demonstrate-then-
+    replay / hybrid modes and a cost-guarded --dry-run.
+
+    Delegates to :mod:`openadapt_evals.flow.cost` (the canonical cost model) so
+    the numbers match ``scripts/eval_flow_on_waa.py``.
+    """
+    import argparse
+    from pathlib import Path
+    import sys as _sys
+
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from openadapt_evals.flow.cost import MODELS as FLOW_MODELS
+    from openadapt_evals.flow.cost import estimate_flow_waa_cost
+
+    ap = argparse.ArgumentParser(
+        description="WAA cost estimate (legacy vision table, or flow-aware modes)."
+    )
+    ap.add_argument("--tasks", type=int, default=154)
+    ap.add_argument("--mode", choices=["legacy", "replay", "hybrid"], default="legacy")
+    ap.add_argument("--model", choices=sorted(FLOW_MODELS), default="claude-sonnet-4")
+    ap.add_argument("--fallback-rate", type=float, default=0.30)
+    ap.add_argument("--vm-hourly", type=float, default=0.19)
+    ap.add_argument("--dry-run", action="store_true",
+                    help="Print the estimate and exit (never provisions anything).")
+    args = ap.parse_args(argv)
+
+    if args.mode == "legacy":
+        print_results()
+        return 0
+
+    est = estimate_flow_waa_cost(
+        args.tasks, mode=args.mode, model_name=args.model,
+        fallback_rate=args.fallback_rate, vm_hourly=args.vm_hourly,
+    )
+    d = est.as_dict()
+    print(f"mode={d['mode']} tasks={d['num_tasks']} model={d['model']}")
+    print(f"  Azure VM cost:        ${d['vm_cost_usd']:.2f}  ({d['vm_hours']:.2f} vm-hours)")
+    print(f"  Agent token cost:     ${d['token_cost_usd']:.2f}")
+    print(f"  TOTAL:                ${d['total_cost_usd']:.2f}  (${d['cost_per_task_usd']:.4f}/task)")
+    print(f"  Pure-agent baseline:  ${d['baseline_pure_agent_cost_usd']:.2f}")
+    print(f"  Savings vs baseline:  ${d['savings_vs_baseline_usd']:.2f}")
+    if args.dry_run:
+        print("  (dry-run: no VM provisioned, no money spent)")
+    return 0
+
+
 if __name__ == "__main__":
+    import sys as _sys
+    # Backward compatible: no args -> the legacy table. Any flag -> flow-aware.
+    if len(_sys.argv) > 1:
+        raise SystemExit(_flow_estimate_main())
     print_results()

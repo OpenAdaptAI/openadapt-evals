@@ -68,6 +68,13 @@ waa = [
     # Windows Agent Arena dependencies
     "requests>=2.28.0",
 ]
+flow = [
+    # openadapt-flow: the demonstration compiler. Provides WindowsBackend
+    # (WAA /screenshot + /execute_windows contract), Replayer, Workflow, and
+    # run_bench. Only needed to actually replay/compile against a live WAA
+    # server -- the cost model + dry-run are stdlib-only and need no extra.
+    "openadapt-flow>=0.19.1",
+]
 azure = [
     # Azure ML dependencies for distributed WAA evaluation
     "azure-ai-ml>=1.12.0",
@@ -125,7 +132,7 @@ verl = [
     # on PyPI. Install from source: https://github.com/RAGEN-AI/VAGEN
 ]
 all = [
-    "openadapt-evals[dev,waa,azure,aws,retrieval,viewer,wandb]",
+    "openadapt-evals[dev,waa,flow,azure,aws,retrieval,viewer,wandb]",
 ]
 test = [
     "anthropic>=0.76.0",
@@ -142,6 +149,8 @@ oa-vm = "openadapt_evals.benchmarks.vm_cli:main"
 openadapt-train-grpo = "scripts.train_trl_grpo:main"
 openadapt-eval = "scripts.run_full_eval:main"
 openadapt-collect = "scripts.collect_distillation_data:main"
+# Evaluate openadapt-flow on WAA (demonstrate-then-replay + hybrid, dry-run)
+openadapt-eval-flow = "scripts.eval_flow_on_waa:main"
 openadapt-analyze = "openadapt_evals.analysis.cli:main"
 # GPU instance lifecycle (launch, serve, terminate)
 openadapt-gpu = "scripts.gpu_cli:main"
