@@ -1,6 +1,109 @@
 # CHANGELOG
 
 
+## v0.88.0 (2026-07-14)
+
+### Features
+
+- Evaluate openadapt-flow on WAA (demonstrate-then-replay + hybrid-as-agent) with cost-guarded
+  dry-run ([#265](https://github.com/OpenAdaptAI/openadapt-evals/pull/265),
+  [`b95e27d`](https://github.com/OpenAdaptAI/openadapt-evals/commit/b95e27da398662ef7fca5af5a9e13638fa2cbeca))
+
+* feat: evaluate openadapt-flow on WAA (demonstrate-then-replay + hybrid-as-agent) with cost-guarded
+  dry-run
+
+Wire openadapt-flow (the demonstration compiler) into the WAA benchmark harness with two eval modes,
+  both scored by WAA's own task verifier:
+
+- demonstrate-then-replay (openadapt_evals/flow/replay_runner.py): compile ONE demo into a bundle
+  and replay it via openadapt-flow's WindowsBackend against the WAA in-guest /screenshot +
+  /execute_windows server (~0 model calls). Emits per-task WAA-verified success, structural rung
+  fire rate, model calls, wall-clock, and halt/heal events. - hybrid-as-agent
+  (openadapt_evals/flow/hybrid_agent.py): HybridFlowAgent implements BenchmarkAgent so the existing
+  runner can drive it -- compiled replay first, computer-use agent fallback only on a detected halt,
+  gated by a SpendLedger. Directly comparable to a pure agent baseline on the same tasks.
+
+Cost model + hard guardrails (openadapt_evals/flow/cost.py, stdlib-only): per-run $ cap, total $
+  ceiling, per-task token cap, abort-on-repeated-billing -error (mirrors openadapt-flow's
+  SpendLedger; the prior $40-70 uncapped-run incident is why these are mandatory).
+  scripts/eval_flow_on_waa.py is dry-run by default -- prints the plan + cost for N tasks and never
+  provisions Azure, starts a VM, or spends money. waa_cost_estimate.py gains a flow-aware
+  --tasks/--mode/--dry-run path.
+
+openadapt-flow is an optional [flow] extra; all replay/hybrid code lazy-imports it, so the cost
+  model and dry-run work with zero flow dependency and the whole integration is mock/dry-run
+  testable locally (30 new tests, no Azure, no VM).
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+Claude-Session: https://claude.ai/code/session_01CKrVJJy5jWVCkXAqgUqtqZ
+
+* fix: prime a fresh post-replay observation with a no-op WAIT before the hybrid agent's paid
+  fallback
+
+The observation handed to the first fallback act() predates the compiled replay's VM mutations
+  (replay drove the WAA server directly, bypassing the adapter). A no-op WAIT forces the runner to
+  fetch current state before the paid computer-use agent takes its first real step.
+
+* feat: add Parallels local-VM environment ($0) alongside WAA for the flow harness
+
+Adds a LOCAL Parallels environment so the demonstrate-then-replay eval mode runs at $0 against the
+  Parallels Win11 VM (native Apple-Silicon virt) with the SAME runner + metrics as WAA -- for
+  de-risking before spending Azure $.
+
+- openadapt_evals/flow/parallels_env.py: ParallelsSession (snapshot -> run -> revert, never
+  stops/deletes the VM), reuses openadapt-flow's ParallelsVM (prlctl wrapper) + win_agent server (PR
+  #95) via launch_agent; once up it exposes the SAME /screenshot + /execute_windows contract WAA
+  does, so the identical WindowsBackend replay path works unchanged. Parallels supplies the
+  ENVIRONMENT but not WAA's tasks/verifiers -- built-in trivial Notepad/ Calculator tasks +
+  ground-truth in-guest verifiers are supplied here. Opt-in gated (OPENADAPT_PARALLELS=1), skipped
+  by default. - scripts/eval_flow_on_waa.py: --env {waa,parallels}. Parallels dry-run shows $0
+  (local), the opt-in gate status, and the snapshot-safe note; --live is gated on the opt-in var and
+  refuses otherwise.
+
+Local-$0 (Parallels) vs cloud-$ (WAA/Azure) is labelled everywhere. Heavy imports (openadapt_flow)
+  stay lazy and the VM + replay are injectable, so the whole path is mock/dry-run testable (10 new
+  tests) with no prlctl, no VM, no mutation. Note: launch_agent/win_agent ship in openadapt-flow PR
+  #95 (still open) -- a live local run depends on that; the dry-run + tests do not.
+
+---------
+
+Co-authored-by: Claude Opus 4.8 <noreply@anthropic.com>
+
+### Refactoring
+
+- Source Benchmark* types from openadapt-types; break ml<->evals cycle
+  ([#264](https://github.com/OpenAdaptAI/openadapt-evals/pull/264),
+  [`d93254a`](https://github.com/OpenAdaptAI/openadapt-evals/commit/d93254abb86ee96a70d9a817e7b015c0e3f172ba))
+
+* refactor: source Benchmark* types from openadapt-types; break ml<->evals cycle
+
+Phase 1 of the evals->ml refactor.
+
+Fork A: BenchmarkTask/Observation/Action (adapters/base.py) and BenchmarkAgent (agents/base.py) are
+  now imported from openadapt-types (the canonical schema package) and re-exported unchanged for
+  backward compatibility with existing openadapt_evals import sites.
+
+Fork B: declare that the concrete RLEnvironment implements openadapt-ml's RolloutEnv Protocol via a
+  TYPE_CHECKING-only conformance assignment in adapters/rl_env.py. Guarded so openadapt-ml stays an
+  optional, non-runtime dependency and no import cycle is introduced (ml depends on the interface;
+  evals provides the implementation).
+
+Bumps openadapt-types pin to >=0.2.0 (release adding openadapt_types.benchmark).
+
+Tests: light suite (not heavy/gpu/vm) 1567 passed, 54 skipped.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+Claude-Session: https://claude.ai/code/session_01CKrVJJy5jWVCkXAqgUqtqZ
+
+* chore: pin openadapt-types>=0.3.0 (published w/ benchmark), drop local editable source
+
+---------
+
+Co-authored-by: Claude Opus 4.8 <noreply@anthropic.com>
+
+
 ## v0.87.2 (2026-07-10)
 
 ### Bug Fixes
