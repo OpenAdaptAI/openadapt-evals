@@ -1,6 +1,44 @@
 # CHANGELOG
 
 
+## v0.89.0 (2026-07-14)
+
+### Features
+
+- Lightweight meta-benchmark harness (unify Environment/verify + metrics)
+  ([#266](https://github.com/OpenAdaptAI/openadapt-evals/pull/266),
+  [`ae9a8c7`](https://github.com/OpenAdaptAI/openadapt-evals/commit/ae9a8c7ff428d8c74f6f1dd526599dae6827ff7e))
+
+Consolidate the three existing openadapt-evals abstractions -- BenchmarkAdapter (adapters/base.py),
+  TaskVerifierRegistry (evaluation/verifier_registry.py), and the flow-side EffectVerifier -- behind
+  ONE runtime_checkable Environment protocol whose verify() folds all three scoring paths into a
+  single call, plus ONE run_meta() runner that emits one JSONL metrics row per (env, task, mode).
+
+This is a consolidation over existing code (~80% reuse per the code audit + literature review), not
+  new infra and not an external harness.
+
+New openadapt_evals/harness/ package (lazy PEP 562 imports; no openadapt_flow pulled at import
+  time): - protocol.py: Environment protocol + MetaTask (extends openadapt_types BenchmarkTask with
+  demo/verifier/env). - adapters.py: BenchmarkAdapterEnvironment shim (any BenchmarkAdapter -> env,
+  folding evaluate()+registry into verify()); MockMedAdapter + OpenEMRAdapter wrapping the flow
+  Playwright Backend + RestRecordVerifier/FhirEffectVerifier (lazy + injectable/mockable). -
+  runner.py: run_meta() drives record->compile->replay(->heal)->verify and emits MetaMetricsRow
+  (replay_success by the env verifier, structural_rung_rate, model_calls, effect_verdict, wall_ms,
+  cost_usd). Policies wrap existing replay (replay_runner) + hybrid (HybridFlowAgent) + a generic
+  agent driver. - inspect_export.py: portable Inspect eval-log JSON export/round-trip (no inspect_ai
+  runtime dependency). - external.py: OSWorldAdapter + BrowserGymAdapter phase-2 stubs
+  (NotImplementedError + wiring docstrings; nothing installed).
+
+Verified with targeted, fully-mocked tests (12 pass): protocol conformance (runtime_checkable),
+  run_meta row correctness (ground truth from verify(), not policy self-report), registry + native
+  effect-verifier delegation, Inspect-log round-trip, and clean NotImplementedError from the
+  external stubs. No live Azure/VM/paid infra exercised.
+
+Claude-Session: https://claude.ai/code/session_01CKrVJJy5jWVCkXAqgUqtqZ
+
+Co-authored-by: Claude Opus 4.8 <noreply@anthropic.com>
+
+
 ## v0.88.0 (2026-07-14)
 
 ### Features
