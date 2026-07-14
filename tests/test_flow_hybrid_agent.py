@@ -72,10 +72,13 @@ def test_halt_triggers_agent_fallback(tmp_path):
         base, bundle_dir=tmp_path, server_url="http://x",
         replay_fn=lambda *a: _report(False, "halt"),
     )
-    # First act: replay halts -> falls back and returns the base agent's action.
+    # First act: replay halts -> a no-op WAIT primes a fresh post-replay obs.
     a1 = agent.act(_obs(), _task())
-    assert a1 is click
+    assert a1.type == "wait"
     assert agent.metrics["fallback_used"] is True
+    # Second act: the base computer-use agent acts on the fresh observation.
+    a2 = agent.act(_obs(), _task())
+    assert a2 is click
     assert agent._last_step_logs["cost_usd"] == 0.05     # cost surfaced to the runner
 
     # Ledger records the episode's fallback spend on reset/finalize.
@@ -107,6 +110,8 @@ def test_per_task_token_cap_stops_fallback(tmp_path):
         base, bundle_dir=tmp_path, server_url="http://x", ledger=ledger,
         replay_fn=lambda *a: _report(False, "halt"),
     )
+    prime = agent.act(_obs(), _task())    # WAIT primer (no base step yet)
+    assert prime.type == "wait"
     a1 = agent.act(_obs(), _task())       # 2000 tokens used
     assert a1.type == "click"
     a2 = agent.act(_obs(), _task())       # 2000 > 1500 cap -> error
@@ -120,7 +125,8 @@ def test_reset_finalizes_previous_episode_and_resets_base(tmp_path):
         base, bundle_dir=tmp_path, server_url="http://x",
         replay_fn=lambda *a: _report(False, "halt"),
     )
-    agent.act(_obs(), _task())
+    agent.act(_obs(), _task())            # WAIT primer
+    agent.act(_obs(), _task())            # real fallback step (spends)
     agent.reset()
     assert base.reset_called == 1
     assert agent.ledger.spent > 0         # previous episode recorded exactly once

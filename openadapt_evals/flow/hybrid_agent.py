@@ -187,7 +187,11 @@ class HybridFlowAgent(BenchmarkAgent):
 
         self._fallback_mode = True
         self.metrics.update({"fallback_used": True, "halt_terminal_outcome": terminal})
-        return self._fallback_step(observation, task, history)
+        # The observation handed to this first act() predates the replay's VM
+        # mutations (the replay drove the WAA server directly, bypassing the
+        # adapter). Prime a fresh post-replay screenshot with a no-op WAIT so the
+        # runner fetches current state before the paid agent's first real step.
+        return BenchmarkAction(type="wait")
 
     def _fallback_step(self, observation, task, history) -> BenchmarkAction:
         # Per-task token cap: stop the fallback if it blows the budget.
