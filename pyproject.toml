@@ -188,8 +188,10 @@ commit_message = "chore: release {version}"
 major_on_zero = false
 # Semantic Release changes only project metadata. Stamp that version into the
 # existing editable lock entry without resolving dependencies, stage it in the
-# generated release commit, and build exactly those reviewed inputs.
+# generated release commit, and build exactly those reviewed inputs. The PSR
+# action is a Docker action, so uv must be installed inside its container.
 build_command = """
+python -m pip install uv==0.11.29
 python scripts/verify_release_lock.py --write
 git add uv.lock
 uv build

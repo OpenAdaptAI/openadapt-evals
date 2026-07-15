@@ -59,13 +59,20 @@ def test_sync_changes_only_editable_root_and_is_idempotent(tmp_path: Path) -> No
 def test_release_configuration_is_fail_closed() -> None:
     metadata = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    test_workflow = (ROOT / ".github/workflows/test.yml").read_text(
+        encoding="utf-8"
+    )
     assert "major_on_zero = false" in metadata
-    assert metadata.index("python scripts/verify_release_lock.py --write") < metadata.index(
-        "git add uv.lock"
-    ) < metadata.index("uv build")
+    assert metadata.index("python -m pip install uv==0.11.29") < metadata.index(
+        "python scripts/verify_release_lock.py --write"
+    ) < metadata.index("git add uv.lock") < metadata.index("uv build")
     assert "run: uv build" not in workflow
+    assert "astral-sh/setup-uv" not in workflow
+    assert "actions/setup-python" not in workflow
     assert workflow.count("secrets.ADMIN_TOKEN") >= 3
     assert "secrets.GITHUB_TOKEN" not in workflow
+    assert 'version: "0.11.29"' in test_workflow
+    assert "uv sync --locked --extra dev --no-sources" in test_workflow
 
 
 def test_all_third_party_actions_are_commit_pinned() -> None:
