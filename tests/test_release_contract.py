@@ -63,6 +63,7 @@ def test_release_configuration_is_fail_closed() -> None:
         encoding="utf-8"
     )
     assert "major_on_zero = false" in metadata
+    assert "allow_zero_version = true" in metadata
     assert (
         "python -m pip install uv==0.11.29 && "
         "python scripts/verify_release_lock.py --write && "
