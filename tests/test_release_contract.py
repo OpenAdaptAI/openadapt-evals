@@ -63,6 +63,11 @@ def test_release_configuration_is_fail_closed() -> None:
         encoding="utf-8"
     )
     assert "major_on_zero = false" in metadata
+    assert (
+        "python -m pip install uv==0.11.29 && "
+        "python scripts/verify_release_lock.py --write && "
+        "git add uv.lock && uv build"
+    ) in metadata
     assert metadata.index("python -m pip install uv==0.11.29") < metadata.index(
         "python scripts/verify_release_lock.py --write"
     ) < metadata.index("git add uv.lock") < metadata.index("uv build")
