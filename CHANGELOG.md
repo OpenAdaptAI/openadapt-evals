@@ -1,6 +1,17 @@
 # CHANGELOG
 
 
+## v0.89.1 (2026-07-16)
+
+### Bug Fixes
+
+- Keep release lock metadata consistent
+  ([`a08917a`](https://github.com/OpenAdaptAI/openadapt-evals/commit/a08917a017945cf374e5fb2460454ebe39ace136))
+
+Pin release tooling, enforce the no-sources lock in CI, and build the reviewed lock state during
+  semantic release.
+
+
 ## v0.89.0 (2026-07-14)
 
 ### Features
