@@ -17,6 +17,7 @@ import argparse
 import hashlib
 import json
 import math
+import re
 import statistics
 from collections import Counter
 from pathlib import Path
@@ -28,10 +29,80 @@ LEGACY_TRIALS = (2, 3, 4)
 LEGACY_RUNSTAMP = "20260306_124032"
 CONDITIONS = ("baseline", "ui_cosmetic_v1")
 ARMS = ("compiled", "api")
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+CURRENT_REQUIRED_FIELDS = (
+    "arm",
+    "condition",
+    "trial",
+    "success",
+    "silent_incorrect_success",
+    "over_halt",
+    "wall_s",
+    "model_calls",
+    "cost_usd",
+    "primary_outcome",
+    "metadata",
+)
+LEGACY_REQUIRED_FIELDS = (
+    "trial",
+    "condition",
+    "task",
+    "success",
+    "reported_success",
+    "silent_incorrect_success",
+    "over_halt",
+    "wall_s",
+    "steps",
+    "model_calls",
+    "cost_usd",
+    "primary_outcome",
+)
 
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _require_fields(row: dict[str, Any], fields: tuple[str, ...], context: str) -> None:
+    missing = [field for field in fields if field not in row]
+    if missing:
+        raise ValueError(f"{context}: missing required fields: {', '.join(missing)}")
+
+
+def _require_bool(value: Any, context: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"{context}: expected boolean")
+    return value
+
+
+def _require_nonnegative_number(value: Any, context: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{context}: expected number")
+    number = float(value)
+    if not math.isfinite(number) or number < 0:
+        raise ValueError(f"{context}: expected finite non-negative number")
+    return number
+
+
+def _require_sha256(value: Any, context: str) -> str:
+    if not isinstance(value, str) or not SHA256_PATTERN.fullmatch(value):
+        raise ValueError(f"{context}: expected lowercase SHA-256")
+    return value
+
+
+def _validate_outcome_flags(row: dict[str, Any], context: str) -> None:
+    success = _require_bool(row["success"], f"{context}/success")
+    silent = _require_bool(row["silent_incorrect_success"], f"{context}/silent_incorrect_success")
+    over_halt = _require_bool(row["over_halt"], f"{context}/over_halt")
+    outcome = row["primary_outcome"]
+    if not isinstance(outcome, str) or not outcome:
+        raise ValueError(f"{context}/primary_outcome: expected non-empty string")
+    if success and (silent or outcome != "correct"):
+        raise ValueError(f"{context}: successful row has contradictory outcome flags")
+    if not success and outcome == "correct":
+        raise ValueError(f"{context}: unsuccessful row cannot have primary_outcome=correct")
+    if silent and over_halt:
+        raise ValueError(f"{context}: row cannot be both silent incorrect and over-halt")
 
 
 def _nearest_rank(values: list[float], quantile: float) -> float:
@@ -51,8 +122,8 @@ def _aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
             bool(row["silent_incorrect_success"]) for row in rows
         ),
         "over_halt_count": sum(bool(row["over_halt"]) for row in rows),
-        "model_calls_total": sum(int(row.get("model_calls", 0)) for row in rows),
-        "cost_usd_total": round(sum(float(row.get("cost_usd", 0.0)) for row in rows), 6),
+        "model_calls_total": sum(int(row["model_calls"]) for row in rows),
+        "cost_usd_total": round(sum(float(row["cost_usd"]) for row in rows), 6),
         "wall_s_mean": statistics.mean(walls),
         "wall_s_p50": statistics.median(walls),
         "wall_s_p95_nearest_rank": _nearest_rank(walls, 0.95),
@@ -72,6 +143,36 @@ def _load_current(app: str, path: Path) -> dict[str, Any]:
         raise ValueError(f"{app}: unexpected conditions")
 
     rows = payload.get("runs", [])
+    if not isinstance(rows, list) or len(rows) != len(ARMS) * len(CONDITIONS) * 3:
+        raise ValueError(f"{app}: expected exactly 12 selected rows")
+    for index, row in enumerate(rows):
+        context = f"{app}/row[{index}]"
+        if not isinstance(row, dict):
+            raise ValueError(f"{context}: expected object")
+        _require_fields(row, CURRENT_REQUIRED_FIELDS, context)
+        if row["arm"] not in ARMS or row["condition"] not in CONDITIONS:
+            raise ValueError(f"{context}: unexpected arm or condition")
+        if row["trial"] not in (1, 2, 3):
+            raise ValueError(f"{context}: expected trial 1, 2, or 3")
+        _validate_outcome_flags(row, context)
+        _require_nonnegative_number(row["wall_s"], f"{context}/wall_s")
+        model_calls = _require_nonnegative_number(row["model_calls"], f"{context}/model_calls")
+        if not model_calls.is_integer():
+            raise ValueError(f"{context}/model_calls: expected integer")
+        _require_nonnegative_number(row["cost_usd"], f"{context}/cost_usd")
+        metadata = row["metadata"]
+        if not isinstance(metadata, dict):
+            raise ValueError(f"{context}/metadata: expected object")
+        _require_sha256(metadata.get("evidence_sha256"), f"{context}/evidence_sha256")
+        evidence_path = metadata.get("evidence_relative_path")
+        if (
+            not isinstance(evidence_path, str)
+            or Path(evidence_path).is_absolute()
+            or ".." in Path(evidence_path).parts
+        ):
+            raise ValueError(f"{context}/evidence_relative_path: expected safe relative path")
+        if row["arm"] == "compiled":
+            _require_bool(metadata.get("replayer_success"), f"{context}/replayer_success")
     for arm in ARMS:
         for condition in CONDITIONS:
             cell = [
@@ -95,73 +196,91 @@ def _load_current(app: str, path: Path) -> dict[str, Any]:
     }
 
 
-def _load_legacy(root: Path) -> dict[str, Any]:
-    rows: list[dict[str, Any]] = []
-    inputs: list[dict[str, str]] = []
-    for trial in LEGACY_TRIALS:
-        base = root / f"repeat_core4_trial{trial}_{LEGACY_RUNSTAMP}"
-        for condition in ("zs", "dc"):
-            for task in LEGACY_TASKS:
-                run = base / f"val_{condition}_{task}"
-                summary_path = run / "summary.json"
-                executions = list((run / "tasks").glob("*/execution.json"))
-                if len(executions) != 1:
-                    raise ValueError(f"{run}: expected exactly one execution.json")
-                execution_path = executions[0]
-                summary = json.loads(summary_path.read_text(encoding="utf-8"))
-                execution = json.loads(execution_path.read_text(encoding="utf-8"))
-                oracle_success = bool(execution["success"])
-                if oracle_success != bool(summary["tasks"][0]["success"]):
-                    raise ValueError(f"{run}: summary/execution success disagreement")
-                actions = [step.get("action", {}) for step in execution.get("steps", [])]
-                reported_success = any(action.get("type") == "done" for action in actions)
-                silent = reported_success and not oracle_success
-                over_halt = (not reported_success) and oracle_success
-                error = execution.get("error")
-                if oracle_success:
-                    outcome = "correct"
-                elif error:
-                    outcome = "infrastructure_or_execution_error"
-                elif silent:
-                    outcome = "silent_incorrect_success"
-                elif int(execution.get("num_steps", 0)) >= 15:
-                    outcome = "step_budget_exhausted"
-                else:
-                    outcome = "oracle_failure_without_success_claim"
-                relative = run.relative_to(root)
-                rows.append(
-                    {
-                        "trial": trial,
-                        "condition": condition,
-                        "task": task,
-                        "success": oracle_success,
-                        "reported_success": reported_success,
-                        "silent_incorrect_success": silent,
-                        "over_halt": over_halt,
-                        "wall_s": float(execution["total_time_seconds"]),
-                        "steps": int(execution["num_steps"]),
-                        "model_calls": None,
-                        "cost_usd": None,
-                        "primary_outcome": outcome,
-                    }
-                )
-                inputs.extend(
-                    [
-                        {
-                            "path": str(relative / "summary.json"),
-                            "sha256": _sha256(summary_path),
-                        },
-                        {
-                            "path": str(
-                                relative / "tasks" / execution_path.parent.name / "execution.json"
-                            ),
-                            "sha256": _sha256(execution_path),
-                        },
-                    ]
-                )
-    if len(rows) != 24:
-        raise ValueError(f"legacy study: expected 24 rows, found {len(rows)}")
-    return {"rows": rows, "input_manifest": inputs}
+def _load_legacy(path: Path) -> dict[str, Any]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload.get("schema_version") != 1:
+        raise ValueError("legacy study: expected schema_version=1")
+    if payload.get("source_runstamp") != LEGACY_RUNSTAMP:
+        raise ValueError("legacy study: unexpected source runstamp")
+    if payload.get("trials_per_task_condition") != 3:
+        raise ValueError("legacy study: expected three trials per task and condition")
+
+    tasks = payload.get("tasks")
+    if (
+        not isinstance(tasks, list)
+        or not all(isinstance(task, dict) for task in tasks)
+        or [task.get("id") for task in tasks] != list(LEGACY_TASKS)
+    ):
+        raise ValueError("legacy study: unexpected task inventory")
+    for task in tasks:
+        if not isinstance(task.get("instruction"), str) or not task["instruction"]:
+            raise ValueError("legacy study: each task requires its retained instruction")
+
+    rows = payload.get("rows")
+    if not isinstance(rows, list) or len(rows) != 24:
+        raise ValueError("legacy study: expected exactly 24 rows")
+    for index, row in enumerate(rows):
+        context = f"legacy/row[{index}]"
+        if not isinstance(row, dict):
+            raise ValueError(f"{context}: expected object")
+        _require_fields(row, LEGACY_REQUIRED_FIELDS, context)
+        if row["task"] not in LEGACY_TASKS or row["condition"] not in ("zs", "dc"):
+            raise ValueError(f"{context}: unexpected task or condition")
+        if row["trial"] not in LEGACY_TRIALS:
+            raise ValueError(f"{context}: unexpected trial")
+        _validate_outcome_flags(row, context)
+        _require_bool(row["reported_success"], f"{context}/reported_success")
+        expected_silent = row["reported_success"] and not row["success"]
+        expected_over_halt = (not row["reported_success"]) and row["success"]
+        if row["silent_incorrect_success"] is not expected_silent:
+            raise ValueError(f"{context}: inconsistent silent incorrect flag")
+        if row["over_halt"] is not expected_over_halt:
+            raise ValueError(f"{context}: inconsistent over-halt flag")
+        _require_nonnegative_number(row["wall_s"], f"{context}/wall_s")
+        steps = _require_nonnegative_number(row["steps"], f"{context}/steps")
+        if not steps.is_integer():
+            raise ValueError(f"{context}/steps: expected integer")
+        if row["model_calls"] is not None or row["cost_usd"] is not None:
+            raise ValueError(f"{context}: unavailable model usage and cost must remain null")
+
+    for condition in ("zs", "dc"):
+        for task in LEGACY_TASKS:
+            cell = [row for row in rows if row["condition"] == condition and row["task"] == task]
+            if len(cell) != 3 or sorted(row["trial"] for row in cell) != list(LEGACY_TRIALS):
+                raise ValueError(f"legacy/{condition}/{task}: expected retained trials 2,3,4")
+
+    manifest = payload.get("raw_input_manifest")
+    if not isinstance(manifest, list) or len(manifest) != 48:
+        raise ValueError("legacy study: expected 48 raw input manifest entries")
+    for index, item in enumerate(manifest):
+        if not isinstance(item, dict) or set(item) != {"path", "sha256"}:
+            raise ValueError(f"legacy/input_manifest[{index}]: unexpected entry")
+        path_value = item["path"]
+        if (
+            not isinstance(path_value, str)
+            or Path(path_value).is_absolute()
+            or ".." in Path(path_value).parts
+        ):
+            raise ValueError(f"legacy/input_manifest[{index}]: unsafe path")
+        _require_sha256(item["sha256"], f"legacy/input_manifest[{index}]/sha256")
+
+    provenance = payload.get("provenance")
+    if not isinstance(provenance, dict):
+        raise ValueError("legacy study: missing provenance")
+    if provenance.get("runner_revision") is not None:
+        raise ValueError("legacy study: retained runner revision must remain unavailable")
+    if provenance.get("model_id") != "unknown":
+        raise ValueError("legacy study: retained model id must remain unknown")
+    if provenance.get("raw_inputs_committed") is not False:
+        raise ValueError("legacy study: raw inputs must not be represented as committed")
+
+    return {
+        "rows": rows,
+        "input_manifest": manifest,
+        "tasks": tasks,
+        "provenance": provenance,
+        "source_sha256": _sha256(path),
+    }
 
 
 def build_report(args: argparse.Namespace) -> dict[str, Any]:
@@ -192,7 +311,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         current_overall["compiled"]["wall_s_mean"] / current_overall["api"]["wall_s_mean"]
     )
 
-    legacy = _load_legacy(args.legacy_results_root)
+    legacy = _load_legacy(args.legacy_input)
     legacy_by_condition: dict[str, Any] = {}
     for condition in ("zs", "dc"):
         rows = [row for row in legacy["rows"] if row["condition"] == condition]
@@ -229,17 +348,30 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
             }
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "evidence_date": args.evidence_date,
-        "source_revisions": {
-            "openadapt_evals": args.evals_commit,
-            "openadapt_flow_benchmark_candidate": args.flow_commit,
-            "openadapt_flow_current_audited": args.flow_current_commit,
+        "report_provenance": {
+            "openadapt_evals_report_base_revision": args.evals_report_base_commit,
+            "report_generator_sha256": args.generator_sha256,
+            "committed_input_sha256": {
+                "frappe_results": current_apps[0]["source_sha256"],
+                "openemr_results": current_apps[1]["source_sha256"],
+                "legacy_compact": legacy["source_sha256"],
+            },
         },
-        "latest_qualified_compiler_runtime_candidate": {
+        "runtime_provenance": {
+            "openadapt_flow_candidate_association": {
+                "revision": args.flow_candidate_association,
+                "binding": "post_hoc_worktree_association",
+                "exact_runtime_revision_verified": False,
+            },
+            "openadapt_flow_current_unmeasured": args.flow_current_commit,
+        },
+        "retained_model_free_compiler_runtime_evidence": {
             "scope": (
                 "model-free compiled execution versus direct API control; pinned synthetic "
-                "Frappe Lending and pinned local OpenEMR; baseline and cosmetic drift"
+                "Frappe Lending and pinned local OpenEMR; baseline and cosmetic drift; "
+                "runtime revision is not independently bound by the source summaries"
             ),
             "oracle": "independent read-only REST plus direct SQL delta audit",
             "trials_per_application_arm_condition": 3,
@@ -258,13 +390,17 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         },
         "historical_legacy_dc_vs_zs": {
             "scope": (
-                "legacy Claude computer-use agent with serialized demonstrations versus "
+                "legacy computer-use agent with serialized demonstrations versus "
                 "the same agent zero-shot; this is not openadapt-flow compiled replay"
             ),
             "environment": "WindowsAgentArena Azure VM, runstamp 20260306_124032",
             "oracle": "WAA native task evaluator",
             "trials_per_task_condition": 3,
-            "tasks": list(LEGACY_TASKS),
+            "tasks": legacy["tasks"],
+            "provenance": {
+                **legacy["provenance"],
+                "compact_source_sha256": legacy["source_sha256"],
+            },
             "by_condition": legacy_by_condition,
             "by_task": legacy_by_task,
             "success_delta_dc_minus_zs_pp": 100
@@ -282,10 +418,10 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         },
         "unmeasured": {
             "exact_current_flow_requalification": (
-                f"No valid result on {args.flow_current_commit}. The qualified artifacts were "
-                f"generated on {args.flow_commit}; shared replayer/effect code changed afterward, "
-                "and the pinned local fixture containers/images are not currently present to rerun "
-                "without rebuilding infrastructure."
+                f"No valid result on {args.flow_current_commit}. The retained summaries came from "
+                f"a worktree later committed as {args.flow_candidate_association}, but the summaries "
+                "do not embed a runtime revision. That association is post-hoc rather than an exact "
+                "source binding, and current requalification remains pending."
             ),
             "current_flow_vs_zero_shot": (
                 "No valid result. The Flow-on-WAA live CLI has no compiled bundles or live "
@@ -302,8 +438,9 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
             "The current study measures one workflow per application and cosmetic drift only.",
             "Direct API controls are expected to be faster and are the preferred actuation tier when available.",
             "The historical WAA study used a legacy computer-use architecture, not the current compiler/runtime.",
-            "The model-free compiler/runtime artifacts qualify candidate 84c7a94, not exact current Flow 1.12.1.",
-            "Primary screenshots and oracle-evidence files remain in the ignored local Flow worktree; this report preserves normalized rows and their hashes, not those files.",
+            "The retained model-free summaries came from a worktree later committed as 84c7a94, but do not embed a runtime revision; that revision is a post-hoc association, not an exact binding.",
+            "Primary screenshots and oracle-evidence files remain outside Git; the committed summaries retain per-run evidence and artifact hashes, not the raw files.",
+            "The committed legacy input is a compact non-sensitive derivative; it retains normalized rows, task instructions, and hashes for 48 raw summary/execution inputs, not the raw inputs themselves.",
             "Legacy model ID, token usage, and dollar cost are unavailable in the retained artifacts.",
             "No new GUI, cloud, or model runs were performed for this report.",
         ],
@@ -311,14 +448,14 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def render_markdown(report: dict[str, Any]) -> str:
-    current = report["latest_qualified_compiler_runtime_candidate"]
+    current = report["retained_model_free_compiler_runtime_evidence"]
     legacy = report["historical_legacy_dc_vs_zs"]
     lines = [
         "# OpenAdapt performance evidence — 2026-07-17",
         "",
-        "This report separates the latest qualified compiled-runtime candidate evidence from historical demo-conditioned agent evidence.",
+        "This report separates retained model-free compiler/runtime evidence from historical demo-conditioned agent evidence.",
         "",
-        "## Latest qualified compiler/runtime candidate: compiled versus API",
+        "## Retained model-free compiler/runtime evidence: compiled versus API",
         "",
         "| Application | Arm | Condition | Runs | Success | Silent incorrect | Over-halt | Mean | p50 | p95 | Model calls | Cost |",
         "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
@@ -346,13 +483,25 @@ def render_markdown(report: dict[str, Any]) -> str:
             "",
             "This is a complete model-free subset, not a complete comparative matrix: the paid/zero-shot "
             "agent arm was intentionally omitted, and both source artifacts mark `publication_ready=false`.",
-            "The artifacts were generated at Flow candidate `84c7a94`. Exact current Flow 1.12.1 "
-            "changed shared replayer/effect code afterward, so its requalification remains pending.",
+            "The summaries came from a worktree later committed as `84c7a94`, but they do not embed "
+            "a runtime revision. This is a post-hoc association, not exact source binding; exact "
+            "current Flow 1.12.1 requalification remains pending.",
             "",
-            "Classification: silent incorrect success means the arm reported completion but the independent "
-            "oracle failed; over-halt means the oracle passed without a completion claim. p95 uses nearest rank.",
+            "The current benchmark's silent-incorrect and over-halt counters are retained from its "
+            "source rows. Historical counters are derived from the agent's `done` claim and the WAA "
+            "oracle. p95 uses nearest rank.",
             "",
             "## Historical legacy agent: DC versus zero-shot",
+            "",
+            "| Task ID | Retained instruction |",
+            "|---|---|",
+        ]
+    )
+    for task in legacy["tasks"]:
+        instruction = task["instruction"].replace("|", "\\|")
+        lines.append(f"| `{task['id']}` | {instruction} |")
+    lines.extend(
+        [
             "",
             "| Condition | Runs | Success | Silent incorrect | Over-halt | Mean | p50 | p95 | Mean steps |",
             "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
@@ -371,7 +520,8 @@ def render_markdown(report: dict[str, Any]) -> str:
             "",
             "Both historical arms passed 3/12 (25%), so DC − ZS was 0 percentage points. "
             "DC reduced mean wall time from 84.37s to 71.37s, but silent incorrect successes "
-            "rose from 5/12 to 6/12. This is legacy Claude computer use, not current compiled Flow.",
+            "rose from 5/12 to 6/12. This is legacy computer use with an unknown retained "
+            "model ID, not current compiled Flow.",
             "",
             "## What remains unmeasured",
             "",
@@ -388,7 +538,9 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "The JSON companion contains every normalized row and SHA-256 hashes for all source artifacts.",
+            "The JSON companion contains every normalized row, hashes of the three committed compact "
+            "inputs, per-run current evidence hashes retained by those inputs, and hashes for the 48 "
+            "uncommitted historical summary/execution inputs.",
             "",
         ]
     )
@@ -399,10 +551,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--frappe-results", type=Path, required=True)
     parser.add_argument("--openemr-results", type=Path, required=True)
-    parser.add_argument("--legacy-results-root", type=Path, required=True)
-    parser.add_argument("--flow-commit", required=True)
+    parser.add_argument("--legacy-input", type=Path, required=True)
+    parser.add_argument("--flow-candidate-association", required=True)
     parser.add_argument("--flow-current-commit", required=True)
-    parser.add_argument("--evals-commit", required=True)
+    parser.add_argument("--evals-report-base-commit", required=True)
     parser.add_argument("--evidence-date", default="2026-07-17")
     parser.add_argument("--out-json", type=Path, required=True)
     parser.add_argument("--out-md", type=Path, required=True)
@@ -411,6 +563,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    args.generator_sha256 = _sha256(Path(__file__))
     report = build_report(args)
     args.out_json.parent.mkdir(parents=True, exist_ok=True)
     args.out_md.parent.mkdir(parents=True, exist_ok=True)

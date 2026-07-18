@@ -4,8 +4,9 @@
     "The current study measures one workflow per application and cosmetic drift only.",
     "Direct API controls are expected to be faster and are the preferred actuation tier when available.",
     "The historical WAA study used a legacy computer-use architecture, not the current compiler/runtime.",
-    "The model-free compiler/runtime artifacts qualify candidate 84c7a94, not exact current Flow 1.12.1.",
-    "Primary screenshots and oracle-evidence files remain in the ignored local Flow worktree; this report preserves normalized rows and their hashes, not those files.",
+    "The retained model-free summaries came from a worktree later committed as 84c7a94, but do not embed a runtime revision; that revision is a post-hoc association, not an exact binding.",
+    "Primary screenshots and oracle-evidence files remain outside Git; the committed summaries retain per-run evidence and artifact hashes, not the raw files.",
+    "The committed legacy input is a compact non-sensitive derivative; it retains normalized rows, task instructions, and hashes for 48 raw summary/execution inputs, not the raw inputs themselves.",
     "Legacy model ID, token usage, and dollar cost are unavailable in the retained artifacts.",
     "No new GUI, cloud, or model runs were performed for this report."
   ],
@@ -311,6 +312,16 @@
       }
     ],
     "oracle": "WAA native task evaluator",
+    "provenance": {
+      "compact_source_sha256": "5aa84438ede9e3f926154448370143c7103e5a59104d66a572c6769898d72fc2",
+      "model_id": "unknown",
+      "raw_input_files": 48,
+      "raw_inputs_committed": false,
+      "runner_revision": null,
+      "runner_revision_status": "unavailable in retained artifacts",
+      "sanitization": "Compact derivative retains task instructions, normalized outcome/timing/step fields, and hashes of raw summary/execution JSON; it excludes screenshots, action payloads, and model content.",
+      "source_environment": "WindowsAgentArena Azure VM"
+    },
     "rows": [
       {
         "condition": "zs",
@@ -649,18 +660,39 @@
         "wall_s": 46.53169674999663
       }
     ],
-    "scope": "legacy Claude computer-use agent with serialized demonstrations versus the same agent zero-shot; this is not openadapt-flow compiled replay",
+    "scope": "legacy computer-use agent with serialized demonstrations versus the same agent zero-shot; this is not openadapt-flow compiled replay",
     "success_delta_dc_minus_zs_pp": 0.0,
     "tasks": [
-      "04d9aeaf",
-      "0bf05a7d",
-      "0e763496",
-      "70745df8"
+      {
+        "id": "04d9aeaf",
+        "instruction": "In a new sheet with 4 headers \"Year\", \"CA changes\", \"FA changes\", and \"OA changes\", calculate the annual changes for the Current Assets, Fixed Assets, and Other Assets columns. Set the results as percentage type."
+      },
+      {
+        "id": "0bf05a7d",
+        "instruction": "I would like to pad all the numbers in the \"Old ID\" column with zeros in front, to fill them up to seven digits in the \"New 7 Digit ID\" column."
+      },
+      {
+        "id": "0e763496",
+        "instruction": "Change the font to \"Times New Roman\" throughout the text."
+      },
+      {
+        "id": "70745df8",
+        "instruction": "Can you delay VS Code autoSave for 1000 milliseconds?"
+      }
     ],
     "trials_per_task_condition": 3,
     "verdict": "Both arms pass 3/12 runs (25%); DC-ZS success delta is 0 pp. DC is faster on this set but produces no reliability lift and one additional silent incorrect success. Model usage and cost were not retained in these artifacts."
   },
-  "latest_qualified_compiler_runtime_candidate": {
+  "report_provenance": {
+    "committed_input_sha256": {
+      "frappe_results": "72e85287fce5cb7c67c4df574a368a93a677fef00dd0458160a5963e3637338f",
+      "legacy_compact": "5aa84438ede9e3f926154448370143c7103e5a59104d66a572c6769898d72fc2",
+      "openemr_results": "6c0b6bfbe880efa3f9835d86903c8b2a5a6f45515c1bba69ef67123ab0fea52f"
+    },
+    "openadapt_evals_report_base_revision": "24a3108dc4a2c301895881d06172a2d280518dfc",
+    "report_generator_sha256": "8ed0e5d8913af6725985e884a052b79137793c178206432e4fb70282749d5200"
+  },
+  "retained_model_free_compiler_runtime_evidence": {
     "applications": [
       {
         "application": "frappe_lending",
@@ -1923,19 +1955,22 @@
         "wall_s": 2.346648750011809
       }
     ],
-    "scope": "model-free compiled execution versus direct API control; pinned synthetic Frappe Lending and pinned local OpenEMR; baseline and cosmetic drift",
+    "scope": "model-free compiled execution versus direct API control; pinned synthetic Frappe Lending and pinned local OpenEMR; baseline and cosmetic drift; runtime revision is not independently bound by the source summaries",
     "trials_per_application_arm_condition": 3,
     "verdict": "The complete model-free subset passes 12/12 compiled and 12/12 API runs with zero silent incorrect success, zero over-halt, zero model calls, and zero model cost. Direct API execution is materially faster. The zero-shot agent arm was omitted, so this is not the complete comparative matrix."
   },
-  "schema_version": 1,
-  "source_revisions": {
-    "openadapt_evals": "24a3108",
-    "openadapt_flow_benchmark_candidate": "84c7a94",
-    "openadapt_flow_current_audited": "db87e3ffe802a94046f0f131da6094dac9a0fbd7"
+  "runtime_provenance": {
+    "openadapt_flow_candidate_association": {
+      "binding": "post_hoc_worktree_association",
+      "exact_runtime_revision_verified": false,
+      "revision": "84c7a94f2d2ca9e183799394d1952ae32fa6bf92"
+    },
+    "openadapt_flow_current_unmeasured": "db87e3ffe802a94046f0f131da6094dac9a0fbd7"
   },
+  "schema_version": 2,
   "unmeasured": {
     "current_flow_agent_arm": "The matched Frappe/OpenEMR artifacts intentionally omit the paid agent arm; their own publication_ready and full_matrix_complete fields are false.",
     "current_flow_vs_zero_shot": "No valid result. The Flow-on-WAA live CLI has no compiled bundles or live runner available in the current Azure subscription, and its current live path does not wire task reset plus WAALiveAdapter ground-truth evaluation.",
-    "exact_current_flow_requalification": "No valid result on db87e3ffe802a94046f0f131da6094dac9a0fbd7. The qualified artifacts were generated on 84c7a94; shared replayer/effect code changed afterward, and the pinned local fixture containers/images are not currently present to rerun without rebuilding infrastructure."
+    "exact_current_flow_requalification": "No valid result on db87e3ffe802a94046f0f131da6094dac9a0fbd7. The retained summaries came from a worktree later committed as 84c7a94f2d2ca9e183799394d1952ae32fa6bf92, but the summaries do not embed a runtime revision. That association is post-hoc rather than an exact source binding, and current requalification remains pending."
   }
 }
