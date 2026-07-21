@@ -1,15 +1,16 @@
 # OpenAdapt Evals
 
 > [!IMPORTANT]
-> **Status: Research — not required by the product.** This package provides
-> evaluation infrastructure and benchmark runners for GUI agents. It is
-> evidence-generating research work and is not required to record, compile, or
-> replay a workflow.
+> **Status: Research infrastructure, not a required part of the product.** This
+> package is evaluation and benchmarking tooling for GUI agents and for the
+> OpenAdapt demonstration compiler. It is evidence-generating research work. It
+> is not required to record, compile, or replay a workflow, and no end user
+> needs it installed.
 >
-> The OpenAdapt product is the demonstration compiler,
+> The OpenAdapt product is the governed demonstration compiler,
 > [`openadapt-flow`](https://github.com/OpenAdaptAI/openadapt-flow), installed
-> via the [`OpenAdapt`](https://github.com/OpenAdaptAI/OpenAdapt) launcher
-> (`pip install openadapt`): it compiles a demonstrated GUI workflow into a
+> via the [`OpenAdapt`](https://github.com/OpenAdaptAI/openadapt) launcher
+> (`pip install openadapt`). It compiles a demonstrated GUI workflow into a
 > deterministic, locally executable program. Healthy runs make no model calls,
 > and it halts instead of guessing when verification fails. Lifecycle labels for
 > every repository are in the
@@ -21,11 +22,43 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Evaluation infrastructure for GUI agent benchmarks, built for [OpenAdapt](https://github.com/OpenAdaptAI/OpenAdapt).
+Evaluation and benchmarking infrastructure for GUI agents and for
+[OpenAdapt](https://github.com/OpenAdaptAI/openadapt), the governed demonstration
+compiler. Documentation for the wider project lives at
+[docs.openadapt.ai](https://docs.openadapt.ai).
 
-## What is OpenAdapt Evals?
+## What this repository is for
 
-OpenAdapt Evals is a unified framework for evaluating GUI automation agents against standardized benchmarks such as [Windows Agent Arena (WAA)](https://microsoft.github.io/WindowsAgentArena/). It provides benchmark adapters, agent interfaces, cloud VM infrastructure (Azure and AWS) for parallel evaluation, and result visualization -- everything needed to go from "I have a GUI agent" to "here are its benchmark scores."
+OpenAdapt Evals produces the evidence behind OpenAdapt's claims. It runs GUI
+agents and compiled OpenAdapt workflows against standardized benchmarks (today,
+[Windows Agent Arena (WAA)](https://microsoft.github.io/WindowsAgentArena/)),
+provisions and manages the cloud VMs those benchmarks need, and accounts for the
+dimensions that matter to a governed compiler:
+
+- **Compiled replay vs zero-shot agent** on the same tasks, scored by each
+  benchmark's own verifier rather than by the policy's self-report.
+- **Silent wrong-action rate**: how often a run writes an incorrect state without
+  signalling failure.
+- **Over-halt rate**: how often a run halts when it should have proceeded.
+- **Cost and model-call accounting**: model calls, latency, and dollar cost per
+  successful task, including the ~0-model-call healthy replay path.
+
+This is internal research tooling. It is not a packaged end-user product and it
+is not needed to use OpenAdapt. If you want to record, compile, and replay a
+workflow, use the [`OpenAdapt`](https://github.com/OpenAdaptAI/openadapt)
+launcher, not this repository.
+
+### Relationship to the rest of OpenAdapt
+
+OpenAdapt is a governed demonstration compiler: record once, compile, then
+replay deterministically with zero model calls on the healthy path, halting
+instead of guessing when verification fails. All execution substrates (web,
+Windows, macOS, Linux, RDP, and Citrix/VDI) are first-class in the product. This
+repository is where those substrates get measured. Its primary target today is
+the Windows substrate via WAA, because WAA gives an independent, reproducible
+verifier for real desktop tasks. Substrate maturity across the product is
+tracked honestly in the [OpenAdapt docs](https://docs.openadapt.ai); this repo
+does not claim maturity it has not measured.
 
 ## Benchmark Viewer
 
@@ -34,36 +67,57 @@ OpenAdapt Evals is a unified framework for evaluating GUI automation agents agai
 <details>
 <summary>More screenshots</summary>
 
-**Task Detail View** -- step-by-step replay with screenshots, actions, and execution logs:
+**Task Detail View** (step-by-step replay with screenshots, actions, and execution logs):
 
 ![Task Detail View](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/main/docs/screenshots/desktop_task_detail.png)
 
-**Cost Tracking Dashboard** -- real-time VM cost monitoring with tiered sizing and spot instances:
+**Cost Tracking Dashboard** (real-time VM cost monitoring with tiered sizing and spot instances):
 
 ![Cost Dashboard](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/main/screenshots/cost_dashboard_preview.png)
 
 </details>
 
-## Key Features
+## What is inside
 
-- **Benchmark adapters** for WAA (live, mock, and local modes), with an extensible base for OSWorld, WebArena, and others
-- **Task setup handlers** -- `verify_apps` and `install_apps` ensure required applications are present on the Windows VM before evaluation begins
-- **Agent interfaces** including `ApiAgent` (Claude / GPT), `ClaudeComputerUseAgent` (with coordinate clamping and fail-safe recovery), `RetrievalAugmentedAgent`, `RandomAgent`, and `PolicyAgent`
-- **Multi-cloud VM infrastructure** with `AzureVMManager`, `AWSVMManager`, `PoolManager`, `SSHTunnelManager`, and `VMMonitor` for running evaluations at scale on Azure or AWS
-- **End-to-end eval pipeline** (`scripts/run_eval_pipeline.py`) -- orchestrates demo generation, VM lifecycle, SSH tunnels, and ZS/DC evaluation in a single command
-- **Deterministic desktop parity mode** -- `--clean-desktop` suppresses OneDrive/toast/popover noise, `--force-tray-icons` keeps network/audio tray controls visible, and run metadata records requested/observed environment flags
-- **Standalone GRPO trainer** -- self-contained RL training loop with zero external ML dependencies, callback hooks (`on_model_loaded`, `on_before_collect`, `on_rollout_complete`, `on_step_complete`), configurable `vision_loss_mode` (exclude/include/checkpoint), and optional Outlines constrained decoding that forces `Thought: ...\nAction: CLICK/TYPE/WAIT/DONE` format
-- **Demo executor** -- tiered demo execution that replays demonstrations with adaptive grounding. Keyboard/type actions execute deterministically (no VLM needed), click actions use a grounder to find elements by description. Validated: **0.00 → 1.00** on notepad-hello
-- **Correction flywheel** -- agent fails → human demos correct approach → agent retries with demo → score improves. Full pipeline: `DemoLibrary` stores demos, `DemoExecutor` replays them with adaptation, per-step milestone tracking captures transient states
-- **RL training environment** -- `RLEnvironment` wrapper provides a Gymnasium-style `reset`/`step`/`evaluate` interface for online RL (GRPO, PPO) with per-step milestone high-water marks and dense rewards
-- **Annotation pipeline** -- VLM-based screenshot annotation (`annotation.py`, `vlm.py`) migrated from openadapt-ml so the full record-annotate-evaluate workflow runs within this repo
-- **4-layer WAA probe** -- `probe --detailed` checks screenshot capture, accessibility tree, action pipeline, and scoring independently; supports `--json` and `--layers` filtering
-- **Demo recording and review** -- VNC-based demo capture with auto-persistence (incremental `meta.json`, hardlinked PNGs), JPEG thumbnail deduplication, and markdown review artifact generation
-- **CLI tools** -- `oa-vm` for VM and pool management (50+ commands), benchmark CLI for running evals
-- **Cost optimization** -- tiered VM sizing, spot instance support, and real-time cost tracking
-- **Results visualization** -- HTML viewer with step-by-step screenshot replay, execution logs, and domain breakdowns
-- **Trace export** for converting evaluation trajectories into training data
-- **Configuration via pydantic-settings** with automatic `.env` loading
+- **openadapt-flow evaluation** (`openadapt_evals/flow/`): the paradigm-correct
+  eval for a demonstration compiler. A `replay` runner compiles one demonstration
+  into an openadapt-flow bundle and replays it against the WAA in-guest server
+  with roughly zero model calls, and a `hybrid` agent runs compiled replay first
+  with a computer-use fallback only on a detected halt. Both are scored by WAA's
+  own task verifier. Driven by `scripts/eval_flow_on_waa.py`, which is dry-run by
+  default and hard cost-capped (see below).
+- **Meta-benchmark harness** (`openadapt_evals/harness/`): one driver that runs
+  the record, compile, replay, heal, verify loop across any registered
+  `Environment` and emits one metrics row per `(env, task, mode)`. Success is the
+  environment's own verifier verdict, never the policy's self-report. Includes an
+  export path to [Inspect AI](https://inspect.aisi.org.uk/) format.
+- **Benchmark adapters** (`openadapt_evals/adapters/`): WAA live and mock
+  adapters, a `LocalAdapter` for native desktop runs with no VM, a `ScrubMiddleware`
+  wrapper that removes PII before the agent sees a screenshot, and a
+  verl-compatible environment wrapper. The `BenchmarkAdapter` base is designed to
+  extend to other benchmarks such as OSWorld or WebArena; only WAA and local are
+  implemented today.
+- **Agent interfaces** (`openadapt_evals/agents/`): `PlannerGrounderAgent`
+  (dual-model, "what to do" separated from "where to click"), `ApiAgent`
+  (Claude or GPT with demo persistence), `DemoGuidedAgent`, `DemoExecutor`
+  (tiered deterministic replay), `RetrievalAugmentedAgent`, `ClaudeComputerUseAgent`,
+  and `PolicyAgent` for trained models.
+- **Cloud VM infrastructure** (`openadapt_evals/infrastructure/`): Azure and AWS
+  VM managers behind one `VMProvider` protocol, a `PoolManager` for parallel
+  evaluation, SSH tunnel management, a monitoring dashboard, and cost tracking.
+- **RL training infrastructure** (`openadapt_evals/training/`, `openenv/`): a
+  standalone GRPO trainer with zero openadapt-ml dependency, a TRL `GRPOTrainer`
+  rollout function, an AReaL workflow wrapper, an OpenEnv-compatible environment,
+  and trajectory logging and caching utilities. This is research-stage.
+- **Workflow extraction pipeline** (`openadapt_evals/workflow/`): a four-pass
+  pipeline (scrub, transcript, extract, match) for turning desktop recordings
+  into structured workflows.
+- **Analysis and evidence** (`openadapt_evals/analysis/`, `eval_results/`):
+  trace analysis, report generation, and committed performance reports produced
+  by `scripts/report_openadapt_performance.py` and
+  `scripts/run_current_flow_local_benchmark.py`.
+- **CLI tooling**: a `oa` VM lifecycle CLI, an `oa-vm` pool CLI, and an
+  `openadapt-evals` benchmark CLI (see [CLI Reference](#cli-reference)).
 
 ## Installation
 
@@ -82,9 +136,18 @@ pip install openadapt-evals[viewer]     # Live results viewer
 pip install openadapt-evals[all]        # Everything
 ```
 
+For development, clone the repo and use [uv](https://docs.astral.sh/uv/):
+
+```bash
+git clone https://github.com/OpenAdaptAI/openadapt-evals.git
+cd openadapt-evals
+uv sync --extra dev
+uv run pytest tests/ -v
+```
+
 ## Quick Start
 
-### Run a mock evaluation (no VM required)
+### Run a mock evaluation (no VM, no API key)
 
 ```bash
 openadapt-evals mock --tasks 10
@@ -93,7 +156,7 @@ openadapt-evals mock --tasks 10
 ### Run a live evaluation against a WAA server
 
 ```bash
-# Start with a single VM (Azure by default)
+# Start a single VM (Azure by default)
 oa-vm pool-create --workers 1
 oa-vm pool-wait
 
@@ -130,276 +193,238 @@ metrics = compute_metrics(results)
 print(f"Success rate: {metrics['success_rate']:.1%}")
 ```
 
+## Evaluating openadapt-flow on WAA
+
+This is the point of the repository: measuring the demonstration compiler, not
+just generic agents. `scripts/eval_flow_on_waa.py` runs openadapt-flow against
+WAA in two modes, both scored by WAA's own verifier.
+
+- **replay**: compile one demonstration into a bundle, then replay it via the
+  Windows backend against the WAA in-guest server with roughly zero model calls.
+  This is the paradigm-correct eval for a compiler.
+- **hybrid**: compiled replay first, with a computer-use agent fallback only on a
+  detected halt. Directly comparable to a pure agent baseline on the same tasks.
+
+**Safety.** This command is dry-run by default. It never provisions Azure, never
+starts a VM, and makes no network calls unless you pass `--live`, which also
+requires a reachable WAA server and stays under hard cost caps. A prior uncapped
+run was expensive, which is why the caps are mandatory.
+
+```bash
+# Cost estimate and plan for a 10-task and a full (154) replay run (no network):
+python scripts/eval_flow_on_waa.py --mode replay --tasks 10 --dry-run
+python scripts/eval_flow_on_waa.py --mode replay --tasks 154 --dry-run
+
+# Hybrid dry-run assuming a 30% halt/fallback rate:
+python scripts/eval_flow_on_waa.py --mode hybrid --tasks 154 --fallback-rate 0.3 --dry-run
+
+# Live run (gated: needs Azure, a revived waa-pool, and maintainer go-ahead):
+python scripts/eval_flow_on_waa.py --mode replay --task-ids <id1>,<id2> \
+    --bundles ./flow_bundles --server-url http://localhost:5001 --live
+```
+
+The `openadapt-eval-flow` console entry point wraps the same script.
+
+### Evidence reports
+
+Bounded, reproducible performance reports are committed under `eval_results/`
+and generated by `scripts/report_openadapt_performance.py` and
+`scripts/run_current_flow_local_benchmark.py`, each with an accompanying
+markdown summary. These reports are the source for public performance claims and
+are intended to be regenerable. Deployment-derived thresholds, tuned adversary
+parameters, per-system-of-record oracle recipes, and real customer datasets are
+not part of this open repository.
+
+## More workflows
+
 ### Demo-conditioned evaluation
 
-Record demos on a remote VM via VNC, annotate with a VLM, then run demo-conditioned eval:
+Record demos on a remote VM via VNC, annotate with a VLM, then run
+demo-conditioned eval:
 
 ```bash
 # 1. Pre-flight check: verify all required apps are installed
 python scripts/record_waa_demos.py record-waa \
-  --tasks 04d9aeaf,0a0faba3 \
-  --server http://localhost:5001 \
-  --verify
+  --tasks 04d9aeaf,0a0faba3 --server http://localhost:5001 --verify
 
 # 2. Record demos interactively (perform actions on VNC, press Enter after each step)
 python scripts/record_waa_demos.py record-waa \
-  --tasks 04d9aeaf,0a0faba3 \
-  --server http://localhost:5001 \
-  --output waa_recordings/
+  --tasks 04d9aeaf,0a0faba3 --server http://localhost:5001 --output waa_recordings/
 
-# 3. Annotate recordings with VLM
+# 3. Annotate recordings with a VLM
 python scripts/record_waa_demos.py annotate \
-  --recordings waa_recordings/ \
-  --output annotated_demos/ \
-  --provider openai
+  --recordings waa_recordings/ --output annotated_demos/ --provider openai
 
 # 4. Run demo-conditioned eval
 python scripts/record_waa_demos.py eval \
-  --demo_dir annotated_demos/ \
-  --tasks 04d9aeaf,0a0faba3
+  --demo_dir annotated_demos/ --tasks 04d9aeaf,0a0faba3
 ```
 
-### End-to-end eval pipeline
+### Full evaluation runner
 
-For a fully automated flow (demo generation, VM lifecycle, SSH tunnels, ZS and DC evaluation):
+`scripts/run_full_eval.py` is a production-grade runner with resume support,
+per-task error isolation, health checks with exponential backoff, and parallel
+pool execution:
 
 ```bash
-# Run for all recordings that have demos
-python scripts/run_eval_pipeline.py
+# List tasks without executing
+python scripts/run_full_eval.py --dry-run --server-url http://localhost:5001
 
-# Specific task(s)
-python scripts/run_eval_pipeline.py --tasks 04d9aeaf
+# Single VM, all WAA tasks, API grounder
+python scripts/run_full_eval.py \
+    --server-url http://localhost:5001 --grounder-model gpt-4.1-mini
 
-# Dry run
-python scripts/run_eval_pipeline.py --tasks 04d9aeaf --dry-run
-
-# AWS instead of Azure
-python scripts/run_eval_pipeline.py --cloud aws --vm-name waa-pool-00
-
-# Deterministic desktop parity + pinned image version metadata
-python scripts/run_eval_pipeline.py \
-  --tasks 04d9aeaf \
-  --clean-desktop \
-  --force-tray-icons \
-  --waa-image-version win11-24h2-2026-03-04
+# Parallel across pool VMs
+python scripts/run_full_eval.py --grounder-model gpt-4.1-mini --parallel 3
 ```
 
 ### Dedicated grounder endpoint (UI-Venus)
 
-For higher click accuracy, serve [UI-Venus-1.5-8B](https://huggingface.co/inclusionAI/UI-Venus-1.5-8B) on a GPU and point the DemoExecutor or PlannerGrounderAgent at it. This replaces general VLM grounding (GPT-4.1-mini) with a purpose-built GUI grounding model.
+For higher click accuracy, serve
+[UI-Venus-1.5-8B](https://huggingface.co/inclusionAI/UI-Venus-1.5-8B) on a GPU
+and point the DemoExecutor or PlannerGrounderAgent at it. This replaces general
+VLM grounding with a purpose-built GUI grounding model.
 
 ```bash
-# 1. On a GPU machine (A10G 24GB, RTX 4090, etc.):
-bash scripts/serve_ui_venus.sh
-# Serves at http://0.0.0.0:8000 by default
-
-# 2. Verify it's running:
+# On a GPU machine (A10G 24GB, RTX 4090, etc.):
+bash scripts/serve_ui_venus.sh   # serves at http://0.0.0.0:8000 by default
 curl http://gpu-host:8000/v1/models
-# Should list "UI-Venus-1.5-8B"
 
-# 3. Run the correction flywheel with the dedicated grounder:
-python scripts/run_correction_flywheel.py \
-    --task-config example_tasks/clear-browsing-data-chrome.yaml \
-    --demo-dir ./demos \
-    --grounder-endpoint http://gpu-host:8000
-
-# 4. Or run the full evaluation with the grounder:
+# Run the full evaluation with the grounder
 python scripts/run_full_eval.py \
-    --server-url http://localhost:5001 \
-    --grounder-endpoint http://gpu-host:8000
+    --server-url http://localhost:5001 --grounder-endpoint http://gpu-host:8000
 ```
 
-The endpoint uses the UI-Venus native bounding-box prompt format (`[x1,y1,x2,y2]`) and is compatible with vLLM, Ollama, or any OpenAI-compatible server. Both `DemoExecutor` and `PlannerGrounderAgent` use the same prompt format for consistency.
+The endpoint uses the UI-Venus native bounding-box prompt format
+(`[x1,y1,x2,y2]`) and is compatible with vLLM, Ollama, or any OpenAI-compatible
+server.
 
-### GRPO training with TRL (recommended)
+### GRPO training with TRL (research-stage)
 
-The recommended path for RL training of VLM desktop agents uses TRL's `GRPOTrainer` with dense milestone rewards from WAA environments. This replaces the standalone GRPO trainer with a battle-tested implementation that supports Unsloth, vLLM, constrained decoding, and automatic telemetry.
+The RL path trains VLM desktop agents with TRL's `GRPOTrainer` and dense
+milestone rewards from WAA environments:
 
 ```bash
 # Basic training against a live WAA VM
 python scripts/train_trl_grpo.py \
-    --task-dir ./example_tasks \
-    --server-url http://localhost:5001 \
-    --model Qwen/Qwen2.5-VL-7B-Instruct \
-    --output ./grpo_output
+    --task-dir ./example_tasks --server-url http://localhost:5001 \
+    --model Qwen/Qwen2.5-VL-7B-Instruct --output ./grpo_output
 
-# With Unsloth (2x VRAM efficiency) + constrained decoding
-python scripts/train_trl_grpo.py \
-    --task-dir ./example_tasks \
-    --server-url http://localhost:5001 \
-    --model Qwen/Qwen2.5-VL-7B-Instruct \
-    --use-unsloth \
-    --constrained-decoding \
-    --output ./grpo_output
-
-# Mock mode (validates full pipeline without VM or GPU)
-python scripts/train_trl_grpo.py \
-    --task-dir ./example_tasks \
-    --mock \
-    --output ./grpo_output_mock
-
-# With Weave tracing for experiment tracking
-python scripts/train_trl_grpo.py \
-    --task-dir ./example_tasks \
-    --server-url http://localhost:5001 \
-    --model Qwen/Qwen2.5-VL-7B-Instruct \
-    --weave-project openadapt-grpo \
-    --output ./grpo_output
+# Mock mode (validates the full pipeline without a VM or GPU)
+python scripts/train_trl_grpo.py --task-dir ./example_tasks --mock --output ./grpo_output_mock
 ```
 
-Key flags: `--constrained-decoding` (Outlines regex, eliminates unparseable output), `--vision-loss-mode` (exclude/include/checkpoint), `--weave-project` (Weave tracing), `--use-vllm` (faster generation), `--loss-type` (grpo/dapo/dr_grpo).
-
-### Parallel evaluation
-
-```bash
-# Create a pool of VMs and distribute tasks (Azure)
-oa-vm pool-create --workers 5
-oa-vm pool-wait
-oa-vm pool-run --tasks 50
-
-# Same workflow on AWS
-oa-vm pool-create --cloud aws --workers 5
-oa-vm pool-wait --cloud aws
-oa-vm pool-run --cloud aws --tasks 50
-
-# Or use Azure ML orchestration
-openadapt-evals azure --workers 10 --waa-path /path/to/WindowsAgentArena
-```
+Key flags: `--constrained-decoding` (Outlines regex, eliminates unparseable
+output), `--vision-loss-mode` (exclude, include, or checkpoint),
+`--weave-project` (Weave tracing), `--use-vllm` (faster generation),
+`--loss-type` (grpo, dapo, or dr_grpo).
 
 ## Architecture
 
 ```
 openadapt_evals/
+├── flow/                 # openadapt-flow evaluation (compiler under test)
+│   ├── replay_runner.py  #   demonstrate-then-replay against WAA (~0 model calls)
+│   ├── hybrid_agent.py   #   compiled replay first, agent fallback on halt
+│   ├── cost.py           #   model-call and dollar accounting
+│   └── parallels_env.py  #   local Parallels-backed Windows env
+├── harness/              # meta-benchmark harness (one driver, one metrics row)
+│   ├── runner.py         #   run_meta over any Environment, verifier-scored
+│   ├── protocol.py       #   Environment protocol
+│   ├── adapters.py       #   BenchmarkAdapter -> Environment bridge
+│   └── inspect_export.py #   export to Inspect AI format
 ├── agents/               # Agent implementations
-│   ├── base.py           #   BenchmarkAgent ABC
-│   ├── api_agent.py      #   ApiAgent (Claude, GPT)
-│   ├── claude_computer_use_agent.py  # ClaudeComputerUseAgent (coord clamping, fail-safe)
+│   ├── planner_grounder_agent.py  # PlannerGrounderAgent (dual-model)
+│   ├── api_agent.py      #   ApiAgent (Claude, GPT) with demo persistence
+│   ├── demo_guided_agent.py       # DemoGuidedAgent (demo-conditioned + self-verify)
+│   ├── demo_executor.py  #   DemoExecutor (tiered deterministic replay)
 │   ├── retrieval_agent.py#   RetrievalAugmentedAgent
+│   ├── claude_computer_use_agent.py  # Claude computer-use agent
 │   └── policy_agent.py   #   PolicyAgent (trained models)
 ├── adapters/             # Benchmark adapters
 │   ├── base.py           #   BenchmarkAdapter ABC + data classes
-│   ├── rl_env.py         #   RLEnvironment (Gymnasium-style wrapper for GRPO/PPO)
-│   └── waa/              #   WAA live, mock, and local adapters
-├── infrastructure/       # Cloud VM and pool management
-│   ├── azure_vm.py       #   AzureVMManager
-│   ├── aws_vm.py         #   AWSVMManager
-│   ├── vm_provider.py    #   VMProvider protocol (multi-cloud abstraction)
-│   ├── pool.py           #   PoolManager
-│   ├── probe.py          #   4-layer WAA probe (screenshot, a11y, action, score)
-│   ├── ssh_tunnel.py     #   SSHTunnelManager
-│   └── vm_monitor.py     #   VMMonitor dashboard
-├── evaluation/           # Shared evaluation utilities
-│   └── metrics.py        #   fuzzy_match and scoring functions
-├── benchmarks/           # Evaluation runner, CLI, viewers
-│   ├── runner.py         #   evaluate_agent_on_benchmark()
-│   ├── cli.py            #   Benchmark CLI (run, mock, live, view, probe)
-│   ├── vm_cli.py         #   VM/Pool CLI (oa-vm, 50+ commands)
-│   ├── viewer.py         #   HTML results viewer
-│   ├── pool_viewer.py    #   Pool results viewer
-│   └── trace_export.py   #   Training data export
-├── waa_deploy/           # WAA Docker image & task setup
-│   ├── evaluate_server.py#   Flask server (port 5050): /setup, /evaluate, /task
-│   ├── Dockerfile        #   QEMU + Windows 11 + pre-downloaded apps
-│   └── tools_config.json #   App installer URLs and configs
-├── annotation.py         # VLM-based demo annotation pipeline
-├── vlm.py                # VLM provider abstraction (OpenAI, Anthropic)
-├── server/               # WAA server extensions
-├── config.py             # Settings (pydantic-settings, .env)
-└── __init__.py
+│   ├── waa/              #   WAA live + mock adapters
+│   ├── local/            #   LocalAdapter (native desktop, no VM)
+│   ├── scrub_middleware.py#  ScrubMiddleware (PII removal, strict mode)
+│   ├── rl_env.py         #   RLEnvironment (Gymnasium-style wrapper)
+│   └── verl_env.py       #   verl-compatible environment wrapper
+├── openenv/              # OpenEnv-compatible environment (HTTP + WebSocket)
+├── training/             # RL training infrastructure
+│   ├── standalone/       #   Standalone GRPO trainer (zero openadapt-ml deps)
+│   ├── trl_rollout.py    #   TRL GRPOTrainer rollout_func
+│   ├── areal_workflow.py #   AReaL AgentWorkflow wrapper
+│   ├── trajectory_logger.py  # SFT data collection
+│   └── planner_cache.py  #   pHash-based planner response cache
+├── workflow/             # 4-pass workflow extraction (scrub/transcript/extract/match)
+├── evaluation/           # Built-in verifiers + verifier registry
+├── infrastructure/       # Azure/AWS VM and pool management
+│   ├── azure_vm.py, aws_vm.py, vm_provider.py, pool.py
+│   ├── ssh_tunnel.py, vm_monitor.py, resource_tracker.py
+├── benchmarks/           # Evaluation runner, CLIs, viewers, trace export
+├── analysis/             # Trace analysis + report generation
+├── cli/                  # Unified `oa` CLI (VM lifecycle)
+├── waa_deploy/           # WAA Docker image (QEMU + Windows 11 + Flask) + task setup
+├── server/               # WAA server extensions (/evaluate endpoint)
+├── task_config.py        # YAML/JSON custom task definitions
+├── demo_library.py       # DemoLibrary (directory-based demo storage)
+├── correction_*.py       # Human correction capture, store, and parsing
+└── config.py             # Settings (pydantic-settings, .env)
+
 scripts/
-├── run_eval_pipeline.py      # End-to-end eval: demo gen + VM + ZS/DC eval
-├── record_waa_demos.py       # Record demos via VNC
-├── generate_demo_review.py   # Markdown review artifacts with thumbnails
-├── run_grpo_rollout.py       # Example: collect RL rollouts from WAA
-├── refine_demo.py            # Two-pass LLM demo refinement
-└── run_dc_eval.py            # Demo-conditioned evaluation
+├── eval_flow_on_waa.py          # Evaluate openadapt-flow on WAA (dry-run default)
+├── report_openadapt_performance.py   # Generate committed performance reports
+├── run_current_flow_local_benchmark.py  # Local Flow benchmark
+├── run_full_eval.py             # Full evaluation runner with resume + parallel
+├── collect_distillation_data.py # Teacher trajectory collection for SFT
+├── finetune_distilled.py        # Student model LoRA fine-tuning
+├── record_waa_demos.py          # Record demos from VNC sessions
+└── train_trl_grpo.py            # TRL GRPO RL training
 ```
 
-### How it fits together
+### How the WAA stack fits together
 
 ```
 LOCAL MACHINE                          CLOUD VM (Azure or AWS, Ubuntu)
-┌─────────────────────┐                ┌──────────────────────────────┐
-│  oa-vm CLI          │   SSH Tunnel   │  Docker                      │
-│  (pool management)  │ ─────────────> │  ├─ evaluate_server (:5050)  │
-│                     │  :5001 → :5000 │  │  └─ /setup, /evaluate     │
-│  openadapt-evals    │  :5051 → :5050 │  ├─ Samba share (/tmp/smb/)  │
-│  (benchmark runner) │  :8006 → :8006 │  └─ QEMU (Win 11)           │
-│                     │                │     ├─ WAA Flask API (:5000) │
-│                     │                │     ├─ \\host.lan\Data\      │
-│                     │                │     └─ Agent                 │
-└─────────────────────┘                └──────────────────────────────┘
++---------------------+                +------------------------------+
+|  oa-vm CLI          |   SSH Tunnel   |  Docker                      |
+|  (pool management)  | ============>  |  +- evaluate_server (:5050)  |
+|                     |  :5001 -> :5000|  |  +- /setup, /evaluate     |
+|  openadapt-evals    |  :5051 -> :5050|  +- Samba share (/tmp/smb/)  |
+|  (benchmark runner) |  :8006 -> :8006|  +- QEMU (Win 11)            |
+|                     |                |     +- WAA Flask API (:5000) |
+|                     |                |     +- Agent                 |
++---------------------+                +------------------------------+
 ```
 
-Both backends use the same `VMProvider` protocol. Pass `--cloud azure` (default) or `--cloud aws` to any pool command. AWS now supports nested virtualization on C8i/M8i/R8i instances (from ~$0.19/hr, Feb 2026), though GPU families (g5, g6) still require metal instances. Azure uses `Standard_D8ds_v5` ($0.38/hr).
-
-![Windows 11 on AWS EC2](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/main/docs/aws-waa-windows-desktop.png)
-
-### UNIX Socket Bridge (Docker Port 5050 Workaround)
-
-The WAA Docker container runs QEMU with `--cap-add NET_ADMIN` for TAP networking, which breaks Docker's standard port forwarding for port 5050 (`evaluate_server.py`). The workaround is a two-stage socat proxy using a UNIX socket:
-
-```bash
-# Stage 1: Bridge container network namespace to a UNIX socket
-CONTAINER_PID=$(docker inspect --format '{{.State.Pid}}' <container_name>)
-nsenter -t $CONTAINER_PID -n socat UNIX-LISTEN:/tmp/waa-bridge.sock,fork TCP:localhost:5050
-
-# Stage 2: Expose the UNIX socket as a TCP port on the VM host
-socat TCP-LISTEN:5051,fork,reuseaddr UNIX-CONNECT:/tmp/waa-bridge.sock
-```
-
-This makes `VM_HOST:5051` forward to container port 5050. Port 5000 (WAA Flask API) uses standard Docker port forwarding and works normally.
-
-**After a container restart**, remove the stale socket (`rm -f /tmp/waa-bridge.sock`) and re-run both stages with the new container PID.
-
-For the full networking architecture, SSH tunnel setup, and data flow diagrams, see [docs/gpu_e2e_validation/architecture.md](docs/gpu_e2e_validation/architecture.md).
-
-## WAA Task Setup & App Management
-
-The evaluate server (`waa_deploy/evaluate_server.py`) runs on the Docker Linux side (port 5050) and orchestrates task setup on the Windows VM. The `/setup` endpoint accepts a list of setup handlers:
-
-```bash
-# Check if required apps are installed on the Windows VM
-curl -X POST http://localhost:5051/setup \
-  -H "Content-Type: application/json" \
-  -d '{"config": [{"type": "verify_apps", "parameters": {"apps": ["libreoffice-calc"]}}]}'
-# → 200 if all present, 422 if any missing
-
-# Install missing apps via two-phase pipeline
-curl -X POST http://localhost:5051/setup \
-  -H "Content-Type: application/json" \
-  -d '{"config": [{"type": "install_apps", "parameters": {"apps": ["libreoffice-calc"]}}]}'
-```
-
-### Two-phase install pipeline
-
-Large installers (e.g. LibreOffice 350MB MSI) can't be downloaded within the WAA server's 120s command timeout. The `install_apps` handler solves this with a two-phase approach:
-
-1. **Download on Linux** -- the evaluate server downloads the installer to the Samba share (`/tmp/smb/` = `\\host.lan\Data\` on Windows), with no timeout constraint
-2. **Install on Windows** -- a small PowerShell script is written to the Samba share and executed via the WAA server, running only `msiexec` (fast, no download)
-
-The Dockerfile also pre-downloads LibreOffice at build time with dynamic version discovery, so first-boot installs work without depending on mirror availability.
-
-### Automatic app verification
-
-When a task config includes `related_apps`, the live adapter automatically prepends a `verify_apps` step before the task's setup config. The `--verify` flag on `record_waa_demos.py` provides a pre-flight check across all tasks before starting a recording session.
-
-![LibreOffice Calc running inside Windows 11 QEMU VM via noVNC in Chrome](screenshots/waa_libreoffice_desktop.png)
+Both cloud backends use the same `VMProvider` protocol. Pass `--cloud azure`
+(default) or `--cloud aws` to any pool command. AWS supports nested
+virtualization on C8i/M8i/R8i instances; Azure uses `Standard_D8ds_v5`. See
+[docs/gpu_e2e_validation/architecture.md](docs/gpu_e2e_validation/architecture.md)
+for the full networking and SSH tunnel details, and the CLAUDE.md in this repo
+for the Docker `--cap-add NET_ADMIN` requirement and the port 5050 socat bridge.
 
 ## CLI Reference
 
+The repository ships three console entry points.
+
 ### Benchmark CLI (`openadapt-evals`)
 
-| Command    | Description                                   |
-|------------|-----------------------------------------------|
-| `run`        | Run live evaluation (localhost:5001 default)   |
-| `mock`       | Run with mock adapter (no VM required)         |
-| `live`       | Run against a WAA server (full control)        |
-| `eval-suite` | Automated full-cycle evaluation (ZS + DC)      |
-| `azure`      | Run parallel evaluation on Azure ML            |
-| `probe`      | Check WAA readiness (`--detailed` for 4-layer diagnostics, `--json`, `--layers`) |
-| `view`       | Generate HTML viewer for results               |
-| `estimate`   | Estimate Azure costs                           |
+| Command      | Description                                                     |
+|--------------|-----------------------------------------------------------------|
+| `run`        | Run live evaluation (localhost:5001 default)                    |
+| `mock`       | Run with the mock adapter (no VM required)                      |
+| `live`       | Run against a WAA server with full control                      |
+| `eval-suite` | Automated full-cycle evaluation (zero-shot + demo-conditioned)  |
+| `azure`      | Run parallel evaluation on Azure ML                             |
+| `probe`      | Check WAA readiness (`--detailed` for 4-layer diagnostics)      |
+| `view`       | Generate the HTML results viewer                                |
+| `estimate`   | Estimate Azure costs                                            |
+
+### VM lifecycle CLI (`oa`)
+
+Single-VM lifecycle and diagnostics: `setup`, `status`, `start`, `stop`,
+`deallocate`, `delete`, `probe`, `logs`, `diag`, `ssh`, `vnc`, `exec`, and
+`monitor`. Run `oa --help` for details.
 
 ### VM/Pool CLI (`oa-vm`)
 
@@ -412,19 +437,22 @@ When a task config includes `related_apps`, the live adapter automatically prepe
 | `pool-pause`    | Deallocate pool VMs (stop billing)       |
 | `pool-resume`   | Restart deallocated pool VMs             |
 | `pool-cleanup`  | Delete all pool VMs and resources        |
-| `image-create`  | Create golden image from a pool VM       |
-| `image-list`    | List available golden images             |
-| `vm monitor`    | Dashboard with SSH tunnels               |
-| `vm setup-waa`  | Deploy WAA container on a VM             |
+| `image-create`  | Create a golden image from a pool VM     |
+| `vm setup-waa`  | Deploy the WAA container on a VM          |
 | `smoke-test-aws`| Verify AWS credentials, AMI, VPC, lifecycle |
 
-All pool commands accept `--cloud azure` (default) or `--cloud aws`.
+All pool commands accept `--cloud azure` (default) or `--cloud aws`. Run
+`oa-vm --help` for the full list of 50+ commands.
 
-Run `oa-vm --help` for the full list of 50+ commands.
+Additional console entry points: `openadapt-eval-flow` (evaluate openadapt-flow
+on WAA), `openadapt-train-grpo`, `openadapt-eval`, `openadapt-collect`,
+`openadapt-analyze`, and `openadapt-gpu` (GPU instance lifecycle).
 
 ## Configuration
 
-Settings are loaded automatically from environment variables or a `.env` file in the project root via [pydantic-settings](https://docs.pydantic.dev/latest/concepts/pydantic_settings/).
+Settings are loaded automatically from environment variables or a `.env` file in
+the project root via
+[pydantic-settings](https://docs.pydantic.dev/latest/concepts/pydantic_settings/).
 
 ```bash
 # .env
@@ -439,44 +467,20 @@ AZURE_ML_WORKSPACE_NAME=...
 
 ### AWS authentication
 
-AWS credentials are resolved via [boto3's default credential chain](https://boto3.amazonaws.com/v1/documentation/api/latest/guide/credentials.html). **SSO (IAM Identity Center) is recommended** for interactive use:
+AWS credentials are resolved via
+[boto3's default credential chain](https://boto3.amazonaws.com/v1/documentation/api/latest/guide/credentials.html).
+SSO (IAM Identity Center) is recommended for interactive use:
 
 ```bash
-# One-time setup — opens a guided wizard
-aws configure sso
-# Prompts for: SSO start URL, region, account, role name, profile name
-
-# Login (opens browser, caches short-lived token)
-aws sso login
-
-# Verify it works
+aws configure sso   # one-time guided wizard
+aws sso login       # opens browser, caches a short-lived token
 oa-vm smoke-test-aws
-
-# All oa-vm --cloud aws commands now work automatically
 oa-vm pool-create --cloud aws --workers 1
 ```
 
-<details>
-<summary>Example <code>~/.aws/config</code> for SSO</summary>
-
-```ini
-[default]
-sso_session = my-org
-sso_account_id = 111122223333
-sso_role_name = PowerUserAccess
-region = us-east-1
-
-[sso-session my-org]
-sso_start_url = https://my-org.awsapps.com/start
-sso_region = us-east-1
-sso_registration_scopes = sso:account:access
-```
-
-</details>
-
-Static keys (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` in `.env`) also work but are not recommended for interactive use -- they don't expire and are a security risk if leaked.
-
-See [`openadapt_evals/config.py`](openadapt_evals/config.py) for all available settings.
+Static keys (`AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`) also work but are
+not recommended for interactive use, since they do not expire. See
+[`openadapt_evals/config.py`](openadapt_evals/config.py) for all settings.
 
 ## Custom Agents
 
@@ -492,7 +496,6 @@ class MyAgent(BenchmarkAgent):
         task: BenchmarkTask,
         history: list[tuple[BenchmarkObservation, BenchmarkAction]] | None = None,
     ) -> BenchmarkAction:
-        # Your agent logic here
         return BenchmarkAction(type="click", x=0.5, y=0.5)
 
     def reset(self) -> None:
@@ -501,7 +504,7 @@ class MyAgent(BenchmarkAgent):
 
 ## Contributing
 
-We welcome contributions. To get started:
+This is research infrastructure and it moves quickly. Contributions are welcome:
 
 ```bash
 git clone https://github.com/OpenAdaptAI/openadapt-evals.git
@@ -510,18 +513,27 @@ uv sync --extra dev
 uv run pytest tests/ -v
 ```
 
-See [CLAUDE.md](https://github.com/OpenAdaptAI/openadapt-evals/blob/main/CLAUDE.md) for development conventions and architecture details.
+Branches and pull requests only, never a direct push to `main`. PR titles must
+use [conventional commit](https://www.conventionalcommits.org/) format, since
+`python-semantic-release` parses them to decide version bumps. See
+[CLAUDE.md](https://github.com/OpenAdaptAI/openadapt-evals/blob/main/CLAUDE.md)
+for development conventions, the WAA benchmark workflow, and architecture detail.
 
 ## Related Projects
 
 | Project | Description |
 |---------|-------------|
-| [OpenAdapt](https://github.com/OpenAdaptAI/OpenAdapt) | Desktop automation with demo-conditioned AI agents |
+| [OpenAdapt](https://github.com/OpenAdaptAI/openadapt) | Launcher for the governed demonstration compiler (`pip install openadapt`) |
+| [openadapt-flow](https://github.com/OpenAdaptAI/openadapt-flow) | The demonstration compiler itself (record, compile, deterministic replay) |
 | [openadapt-ml](https://github.com/OpenAdaptAI/openadapt-ml) | Training and policy runtime |
 | [openadapt-capture](https://github.com/OpenAdaptAI/openadapt-capture) | Screen recording and demo sharing |
 | [openadapt-consilium](https://github.com/OpenAdaptAI/openadapt-consilium) | Multi-model consensus library |
 | [openadapt-grounding](https://github.com/OpenAdaptAI/openadapt-grounding) | UI element localization |
 
+Project documentation: [docs.openadapt.ai](https://docs.openadapt.ai). Full
+organization: [github.com/OpenAdaptAI](https://github.com/OpenAdaptAI).
+
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
+</content>
