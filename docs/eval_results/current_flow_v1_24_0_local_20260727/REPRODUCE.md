@@ -91,13 +91,34 @@ violations recorded in this directory reproduce with it either way.
 | Model calls / cost | 0 / $0.00 |
 
 The comparison runner digest is identical to the one used for the published
-1.16.1 report, so the two measurements differ only in the engine under test.
+1.16.1 report, so the *harness* — task script, arms, oracle, trial count, and
+retry policy — is byte-identical across the two measurements.
+
+**The two measurements are not otherwise apples-to-apples.** The MockMed target
+application ships *inside* the Flow wheel (`openadapt_flow/mockmed/`), so
+changing the pinned wheel changes the engine **and** the application it is
+measured against. Between `v1.16.1` and `v1.24.0` the fixture changed in
+`openadapt_flow/mockmed/static/app.js` and `static/styles.css`; the load-bearing
+change is [`c416b7d`][c416b7d] ("export real public demo evidence pack"), which
+added a patient banner to the top of the New Encounter form.
+
+That single fixture change is the whole cause of the `clean` over-halt delta
+reported in `COMPARISON_TO_v1_16_1.md`. With the banner present, the band the
+1.16.1 bundle had mined as its `step_010` `region_stable` postcondition is
+identical before and after the Save click, so the compiler's largest-changed-
+region search moves down onto the saved-encounter row — which renders the
+trial-unique `note` parameter. Read: the over-halt difference is attributable to
+the bundled application, not to a change in engine reliability. Every counted
+number in this directory stands as measured; only the attribution is corrected.
+
+[c416b7d]: https://github.com/OpenAdaptAI/openadapt-flow/commit/c416b7d404ab6480351ec1d1809bcc26bdee1b4a
 
 ## 6. Expected variation
 
 `clean` compiled over-halts reproduced 2/3 in both the primary run and the
 independent replication under `replication/`, with the same failing region. It
-is a reproducible baseline regression, not a flake — but it is not 3/3, so
-absolute counts may differ by one trial on other hosts. Wall-clock timings are
+is reproducible, not a flake — but it is not 3/3, because the surviving trial
+turns on the exact glyphs of that trial's unique note (see the attribution note
+in §5), so absolute counts may differ by one trial on other hosts. Timings are
 host-specific. Outcome classifications (task success, silent incorrect, wrong
 action, transaction outcome, business effect) should not vary.
