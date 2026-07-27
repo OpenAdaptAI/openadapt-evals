@@ -83,10 +83,14 @@ The underlying engine defect this exposed is real but different from the one
 originally claimed here: a parameter's demonstrated value could become a pixel
 invariant, because nothing screened a downstream CLICK whose changed region
 renders that parameter (`lint_param_leakage` covered text postconditions and
-parameterized TYPE steps only). Flow now screens the candidate region against
-the run's parameter values and reports any drop in `param_hygiene.json`.
-Recompiling with a Flow carrying that fix should not produce this postcondition
-at all; the numbers above remain the measurement of the wheels as published.
+parameterized TYPE steps only). The fix tracked in
+[`openadapt-flow#285`][flow-285] screens the candidate region against the
+demonstrated parameter values and reports any drop in `param_hygiene.json`.
+Recompiling with a Flow release carrying that fix should not produce this
+postcondition at all; the numbers above remain the measurement of the wheels as
+published.
+
+[flow-285]: https://github.com/OpenAdaptAI/openadapt-flow/pull/285
 
 The counted trials are retained in `clean_postcondition_over_halt.json`.
 `theme_postcondition_over_halt.json` is retained with zero observations as the

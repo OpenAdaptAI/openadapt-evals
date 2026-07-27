@@ -128,6 +128,17 @@ def _classify(row: dict[str, Any]) -> str:
     return "halt_or_error"
 
 
+def _reproduce_command(flow_version: str, wheel_filename: str) -> str:
+    """Return the exact-version command recorded in derived evidence."""
+
+    return (
+        "python scripts/run_current_flow_local_benchmark.py "
+        f"--flow-source <v{flow_version}-checkout> "
+        f"--flow-wheel <{wheel_filename}> "
+        "--out <new-output-directory>"
+    )
+
+
 def _aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
     steady = [float(row["steady_wall_s"]) for row in rows]
     end_to_end = [float(row["end_to_end_wall_s"]) for row in rows]
@@ -612,12 +623,7 @@ def run_benchmark(
         "observed_count": len(theme_over_halts),
         "required_trials": trials,
         "observations": theme_over_halts,
-        "reproduce": (
-            "python scripts/run_current_flow_local_benchmark.py "
-            "--flow-source <v1.16.1-checkout> "
-            "--flow-wheel <openadapt_flow-1.16.1-py3-none-any.whl> "
-            "--out <new-output-directory>"
-        ),
+        "reproduce": _reproduce_command(flow_version, flow_wheel.name),
     }
     (out_dir / "theme_postcondition_over_halt.json").write_text(
         json.dumps(regression, indent=2, sort_keys=True) + "\n",
