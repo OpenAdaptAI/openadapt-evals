@@ -1,6 +1,101 @@
 # CHANGELOG
 
 
+## v0.90.0 (2026-07-27)
+
+### Documentation
+
+- Add lifecycle status banner ([#268](https://github.com/OpenAdaptAI/openadapt-evals/pull/268),
+  [`24a3108`](https://github.com/OpenAdaptAI/openadapt-evals/commit/24a3108dc4a2c301895881d06172a2d280518dfc))
+
+Adds the standard lifecycle banner used across the org (matching the banner wave on
+  openadapt-capture, openadapt-grounding, etc.), derived from this repo's classification in the
+  repository lifecycle registry (OpenAdaptAI/.github repository-lifecycle.yml, reviewed 2026-07-15):
+  Research.
+
+Existing README content is unchanged below the banner.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com>
+
+- Refresh README as evidence-generating eval infra
+  ([#271](https://github.com/OpenAdaptAI/openadapt-evals/pull/271),
+  [`1fec685`](https://github.com/OpenAdaptAI/openadapt-evals/commit/1fec68532e70dd05d6ad8668870c376c7fd8d996))
+
+Reframe the README around what this repo actually is: evaluation and benchmarking infrastructure
+  that produces evidence for OpenAdapt's governed-demonstration-compiler claims, not an end-user
+  product.
+
+- Keep and clean the research-status banner (no em dashes anywhere) - Add the openadapt-flow
+  evaluation section (replay + hybrid on WAA, scored by WAA's own verifier, dry-run-by-default and
+  cost-capped) - Document the meta-benchmark harness, the unified oa VM CLI, the openadapt-eval-flow
+  entry point, and the committed evidence reports - Update the architecture tree to match the
+  current package layout (flow/, harness/, openenv/, workflow/, analysis/, cli/) - Frame substrates
+  as first-class in the product with honest maturity; keep private crown-jewel data and recipes out
+  of scope - Cross-link docs.openadapt.ai and the OpenAdaptAI org
+
+Claude-Session: https://claude.ai/code/session_01NyCHrzA1psrKMFfroYbzaM
+
+Co-authored-by: Claude Opus 4.8 <noreply@anthropic.com>
+
+- **evals**: Bind current Flow release performance
+  ([#270](https://github.com/OpenAdaptAI/openadapt-evals/pull/270),
+  [`8b00d3c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/8b00d3c8036eca9dbde81d124ee1b66675605dfc))
+
+- **evals**: Publish bounded OpenAdapt performance evidence
+  ([#269](https://github.com/OpenAdaptAI/openadapt-evals/pull/269),
+  [`7629ba5`](https://github.com/OpenAdaptAI/openadapt-evals/commit/7629ba5a2447c919e499e88e9b4eedbc80c8f3ab))
+
+* docs(evals): publish bounded OpenAdapt performance evidence
+
+* fix(evals): bind performance report provenance
+
+### Features
+
+- **evals**: Rebind published evidence to Flow 1.24.0 and guard against drift
+  ([#272](https://github.com/OpenAdaptAI/openadapt-evals/pull/272),
+  [`3fc35e9`](https://github.com/OpenAdaptAI/openadapt-evals/commit/3fc35e9dfb4840de1201d387d4b796aa141a1785))
+
+The published comparison was measured against Flow v1.16.1 and was still the current public evidence
+  eight minor releases later. Re-run it against the exact published 1.24.0 wheel with the
+  byte-identical runner, add coverage for the new transaction outcome taxonomy, and add a guard so
+  this cannot recur silently.
+
+Comparison (runner SHA-256 ac58c0b9…970f, unchanged; wheel SHA-256 170fdac1…4aef; 3 trials per cell,
+  no retries, zero model calls, $0.00):
+
+- REGRESSION: the region_stable over-halt on the Save Encounter step moved out of `theme` drift into
+  the `clean` no-drift baseline, 2/3 in both the primary run and an independent replication, with
+  the effect independently confirmed saved every time. A false halt on an undrifted application is
+  strictly worse than the theme-drift false halt it replaced. - FIXED: `theme` over-halt is gone
+  (3/3 -> 0/3). - IMPROVED: identity coverage 1/8 -> 5/8 armed clicks. - Unchanged: 3/3 task success
+  in all conditions, 0 silent incorrect, 0 wrong actions; DOM controls still 3/3 clean/theme and 0/3
+  rename, failing loudly before mutation.
+
+Transaction outcome probe (new): 5 MockMed fault modes x 2 verification configurations x 3 trials,
+  judged only against the system of record at GET /api/db.
+
+- HOLDS: COMPLETED_UNVERIFIED is never a production success and never billable (11 applicable runs);
+  no blind retry of a consequential write in 24 applicable runs, including commit-then-timeout. -
+  UNSOUND: uncertain delivery does not land in RECONCILIATION_REQUIRED. A backend that commits then
+  hangs past the client timeout yields HALTED_BEFORE_EFFECT -- an assertion that no effect occurred
+  -- while the store holds the write. 7/16 applicable runs made a false absence claim, and 14/23
+  claimed a proven absence for an actuated step with no verification performed at all.
+
+Drift guard: docs/eval_results/PUBLISHED_EVIDENCE.json pins which evidence set is current and which
+  release it was measured against. scripts/check_published_evidence_freshness.py fails when that pin
+  no longer matches the current published release or its wheel digest. Offline consistency runs on
+  every PR; the PyPI comparison runs daily in evidence-freshness.yml. An unreachable PyPI warns and
+  skips rather than failing, since it is not drift.
+
+Also anchors the `eval_results/` gitignore rule to the repo root: unanchored, it matched
+  docs/eval_results/ too, so every published evidence set had to be force-added and one could
+  silently go unpublished.
+
+Claude-Session: https://claude.ai/code/session_01NyCHrzA1psrKMFfroYbzaM
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.89.1 (2026-07-16)
 
 ### Bug Fixes
