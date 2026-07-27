@@ -41,6 +41,12 @@ jobs:
             exit 1
           fi
 
+      # Offline half of the published-evidence drift guard: the manifest must
+      # agree with the artifacts it describes. The network half (is the pinned
+      # release still the current one?) runs in evidence-freshness.yml.
+      - name: Check published evidence manifest consistency
+        run: python scripts/check_published_evidence_freshness.py --offline
+
       - name: Run tests
         run: |
           uv run --no-sources pytest tests/ -q \
