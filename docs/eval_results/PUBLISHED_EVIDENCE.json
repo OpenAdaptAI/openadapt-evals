@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "package": "openadapt-flow",
+  "comment": [
+    "Every published evidence set in docs/eval_results and the engine release it",
+    "was measured against. scripts/check_published_evidence_freshness.py fails",
+    "when a set marked current no longer pins the current published release, or",
+    "when a pinned wheel digest does not match that release on PyPI.",
+    "Mark a set superseded (never delete it) when a newer set replaces it: the",
+    "old numbers stay reproducible against the wheel they were measured on."
+  ],
+  "evidence": [
+    {
+      "path": "docs/eval_results/current_flow_v1_16_1_local_20260718",
+      "status": "superseded",
+      "superseded_by": "docs/eval_results/current_flow_v1_24_0_local_20260727",
+      "flow_version": "1.16.1",
+      "wheel_sha256": "c7073283475e7ae722db2478b499d962364851104e09edb71f254ba21c1310cd",
+      "measured_on": "2026-07-18"
+    },
+    {
+      "path": "docs/eval_results/current_flow_v1_24_0_local_20260727",
+      "status": "current",
+      "flow_version": "1.24.0",
+      "wheel_sha256": "170fdac154794292c99dc6eea6486e7a2c3fdf321bcd87976d924bccd3db4aef",
+      "sdist_sha256": "2d4702e5ccbdfed0f78063ca510dc82894a2833edbed71d77edffbd0ffebd67d",
+      "measured_on": "2026-07-27"
+    }
+  ]
+}

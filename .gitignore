@@ -41,7 +41,11 @@ private/
 
 # Local experiment data (NEVER commit — screenshots, results, recordings)
 flywheel_results/
-eval_results/
+# Anchored: only the repo-root scratch directory. `docs/eval_results/` holds
+# committed, published evidence and must stay tracked — an unanchored rule
+# matched it too, so every evidence set had to be force-added and one could
+# silently go unpublished.
+/eval_results/
 grpo_output/
 annotated_demos/
 annotated_demos_core4/
