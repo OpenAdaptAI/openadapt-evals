@@ -12,7 +12,7 @@ reproducible against the 1.16.1 wheel it was measured on.
 | File | What it holds |
 |---|---|
 | `REPORT.md`, `results.json` | Compiled replay versus steelmanned DOM selector controls: 3 conditions x 3 arms x 3 trials, no retries |
-| `COMPARISON_TO_v1_16_1.md` | Release-over-release delta, with the regression called out |
+| `COMPARISON_TO_v1_16_1.md` | Release-over-release delta, with the `clean` over-halt and its attribution called out |
 | `REPRODUCE.md` | Exact commands, digests, and environment capture |
 | `clean_postcondition_over_halt.json` | The counted `clean`-baseline over-halt trials |
 | `theme_postcondition_over_halt.json` | Zero observations — evidence that the 1.16.1 `theme` over-halt is fixed |
@@ -29,11 +29,14 @@ No blind retry of a consequential write occurred in any of 24 applicable runs,
 including commit-then-timeout. Identity coverage improved from 1/8 to 5/8 armed
 clicks.
 
-**Regressed.** The `region_stable` postcondition over-halt on the `Save
-Encounter` step moved out of `theme` drift and into the **`clean` no-drift
-baseline**, where it fired 2/3 in both the primary run and the replication. The
-effect was independently confirmed to have saved correctly every time. See
-`COMPARISON_TO_v1_16_1.md`.
+**Moved.** The `region_stable` postcondition over-halt on the `Save Encounter`
+step moved out of `theme` drift and into the **`clean` no-drift baseline**,
+where it fired 2/3 in both the primary run and the replication. The effect was
+independently confirmed to have saved correctly every time. This is **not** an
+engine regression: MockMed ships inside the Flow wheel, so the target
+application also changed between the two pinned releases, and that change
+(`c416b7d`, a patient banner added to the New Encounter form) is the cause. See
+"Attribution" in `COMPARISON_TO_v1_16_1.md`.
 
 **Unsound.** Uncertain delivery does **not** land in `RECONCILIATION_REQUIRED`.
 When the backend commits a write and then hangs past the client timeout, the run

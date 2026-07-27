@@ -21,7 +21,7 @@
   "observations": [],
   "observed_count": 0,
   "oracle": "arm-independent screenshot/OCR final-state check: exact note and saved banner, Triage row, intended patient, no wrong-type write",
-  "reproduce": "python scripts/run_current_flow_local_benchmark.py --flow-source <v1.16.1-checkout> --flow-wheel <openadapt_flow-1.16.1-py3-none-any.whl> --out <new-output-directory>",
+  "reproduce": "python scripts/run_current_flow_local_benchmark.py --flow-source <v1.24.0-checkout> --flow-wheel <openadapt_flow-1.24.0-py3-none-any.whl> --out <new-output-directory>",
   "required_trials": 3,
   "runner_sha256": "ac58c0b9a02cfc991144a1f5c7a2814c6b6b748bcba27b87f8e1027ee575970f",
   "schema_version": 1,

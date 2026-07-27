@@ -102,3 +102,12 @@ def test_wheel_extraction_rejects_path_traversal(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="unsafe wheel member"):
         MODULE._extract_wheel(wheel, tmp_path / "extract")
+
+
+def test_reproduce_command_binds_the_measured_release() -> None:
+    assert MODULE._reproduce_command("1.24.0", "openadapt_flow-1.24.0-py3-none-any.whl") == (
+        "python scripts/run_current_flow_local_benchmark.py "
+        "--flow-source <v1.24.0-checkout> "
+        "--flow-wheel <openadapt_flow-1.24.0-py3-none-any.whl> "
+        "--out <new-output-directory>"
+    )
