@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
+import statistics
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +26,10 @@ from typing import Any, Mapping, Sequence
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 ORACLE_STATUSES = {"confirmed", "refuted", "unavailable"}
+DEPENDENCY_BINDING_RE = re.compile(
+    r"^(?P<distribution>[A-Za-z0-9][A-Za-z0-9_.-]*)==(?P<version>[^;\s]+);"
+    r"module_sha256=(?P<sha256>[0-9a-f]{64})$"
+)
 
 
 class OracleContractError(ValueError):
@@ -100,7 +106,60 @@ def _validate_expected_fields(fields: object) -> list[dict[str, Any]]:
         if not isinstance(observation, dict) or not isinstance(observation.get("method"), str):
             raise OracleContractError(f"{context}: observation method is required")
         validated.append(item)
+    if not any(item["purpose"] == "effect" for item in validated):
+        raise OracleContractError("oracle contract requires at least one effect field")
     return validated
+
+
+def _validate_dimension(values: object, *, name: str) -> list[str]:
+    if (
+        not isinstance(values, list)
+        or not values
+        or not all(isinstance(value, str) and value for value in values)
+        or len(values) != len(set(values))
+    ):
+        raise OracleContractError(f"{name} must be a non-empty unique string list")
+    return values
+
+
+def _validate_dependency_versions(value: object) -> dict[str, str]:
+    if not isinstance(value, dict) or not value:
+        raise OracleContractError("oracle dependency versions are missing")
+    dependencies: dict[str, str] = {}
+    for module_name, binding in value.items():
+        if (
+            not isinstance(module_name, str)
+            or not module_name
+            or not isinstance(binding, str)
+            or DEPENDENCY_BINDING_RE.fullmatch(binding) is None
+            or "unknown" in binding.lower()
+        ):
+            raise OracleContractError(
+                "dependency_versions must bind each module to an exact distribution, "
+                "version, and module SHA-256"
+            )
+        dependencies[module_name] = binding
+    return dict(sorted(dependencies.items()))
+
+
+def _validate_observation_provider(value: object) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise OracleContractError("oracle observation provider is missing")
+    required = ("distribution", "version", "module", "path_in_artifact", "sha256")
+    if not all(isinstance(value.get(key), str) and value[key] for key in required):
+        raise OracleContractError(
+            "observation_provider requires distribution, version, module, "
+            "path_in_artifact, and SHA-256"
+        )
+    path = Path(value["path_in_artifact"])
+    if path.is_absolute() or ".." in path.parts:
+        raise OracleContractError("observation_provider path_in_artifact is unsafe")
+    if not SHA256_RE.fullmatch(value["sha256"]):
+        raise OracleContractError("oracle observation provider is not exact-bound")
+    artifact_sha = value.get("artifact_sha256")
+    if artifact_sha is not None and not SHA256_RE.fullmatch(str(artifact_sha)):
+        raise OracleContractError("observation_provider artifact SHA-256 is invalid")
+    return {key: str(item) for key, item in value.items()}
 
 
 def _validate_wrong_action_rules(
@@ -285,24 +344,14 @@ def build_oracle_contract(
 
     if not COMMIT_RE.fullmatch(evals_commit):
         raise OracleContractError("evals_commit must be a full Git commit")
-    if not arms or len(set(arms)) != len(arms):
-        raise OracleContractError("arms must be a non-empty unique list")
+    validated_arms = _validate_dimension(list(arms), name="arms")
     fields = _validate_expected_fields([dict(item) for item in expected_fields])
     rules = _validate_wrong_action_rules(
         [dict(item) for item in wrong_action_rules],
         field_names={item["name"] for item in fields},
     )
-    dependencies = dict(sorted(dependency_versions.items()))
-    if not dependencies or not all(
-        isinstance(name, str) and name and isinstance(version, str) and version
-        for name, version in dependencies.items()
-    ):
-        raise OracleContractError("dependency_versions must contain exact package versions")
-    provider = dict(observation_provider)
-    if not isinstance(provider.get("module"), str) or not SHA256_RE.fullmatch(
-        str(provider.get("sha256", ""))
-    ):
-        raise OracleContractError("observation_provider requires a module and SHA-256")
+    dependencies = _validate_dependency_versions(dict(dependency_versions))
+    provider = _validate_observation_provider(dict(observation_provider))
 
     contract: dict[str, Any] = {
         "schema_version": 1,
@@ -312,7 +361,7 @@ def build_oracle_contract(
             "wrong_action_rules": rules,
         },
         "arm_independence": {
-            "same_contract_for_arms": list(arms),
+            "same_contract_for_arms": validated_arms,
             "actor_report_fields_consumed": [],
             "verifier_owner": "openadapt-evals",
             "observation_inputs": ["final_frame", "run_parameters"],
@@ -340,6 +389,7 @@ def validate_oracle_contract(
 
     if not isinstance(contract, dict) or contract.get("schema_version") != 1:
         raise OracleContractError("oracle contract schema_version must be 1")
+    validated_arms = _validate_dimension(list(arms), name="arms")
     expected_fields = _validate_expected_fields(contract.get("expected_fields"))
     decision = contract.get("decision")
     if not isinstance(decision, dict) or decision.get("success") != ("all_required_fields_exact"):
@@ -355,7 +405,7 @@ def validate_oracle_contract(
         raise OracleContractError("the published verifier must be owned by openadapt-evals")
     if independence.get("actor_report_fields_consumed") != []:
         raise OracleContractError("the oracle must not consume the actor completion report")
-    if independence.get("same_contract_for_arms") != list(arms):
+    if independence.get("same_contract_for_arms") != validated_arms:
         raise OracleContractError("the oracle contract does not cover the exact arm order")
 
     bindings = contract.get("bindings")
@@ -382,12 +432,8 @@ def validate_oracle_contract(
             raise OracleContractError(
                 f"{name} binding changed: evidence {binding.get('sha256')}, current {actual}"
             )
-    provider = bindings.get("observation_provider")
-    if not isinstance(provider, dict) or not SHA256_RE.fullmatch(str(provider.get("sha256", ""))):
-        raise OracleContractError("oracle observation provider is not exact-bound")
-    dependencies = bindings.get("dependency_versions")
-    if not isinstance(dependencies, dict) or not dependencies:
-        raise OracleContractError("oracle dependency versions are missing")
+    _validate_observation_provider(bindings.get("observation_provider"))
+    dependencies = _validate_dependency_versions(bindings.get("dependency_versions"))
     if canonical_sha256(dependencies) != bindings.get("dependency_versions_sha256"):
         raise OracleContractError("oracle dependency version digest does not match")
 
@@ -398,14 +444,53 @@ def validate_oracle_contract(
         raise OracleContractError("oracle contract digest does not match")
 
 
+def _nonnegative_number(value: object, *, context: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise OracleContractError(f"{context}: expected a non-negative finite number")
+    result = float(value)
+    if not math.isfinite(result) or result < 0:
+        raise OracleContractError(f"{context}: expected a non-negative finite number")
+    return result
+
+
+def _nearest_rank(values: list[float], quantile: float) -> float:
+    ordered = sorted(values)
+    return ordered[max(0, math.ceil(quantile * len(ordered)) - 1)]
+
+
+def _expected_aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    steady = [float(row["steady_wall_s"]) for row in rows]
+    end_to_end = [float(row["end_to_end_wall_s"]) for row in rows]
+    taxonomy = Counter(row["primary_outcome"] for row in rows)
+    return {
+        "n": len(rows),
+        "task_success_count": sum(row["success"] is True for row in rows),
+        "task_success_rate": sum(row["success"] is True for row in rows) / len(rows),
+        "reported_complete_count": sum(row["reported_complete"] is True for row in rows),
+        "silent_incorrect_success_count": taxonomy["silent_incorrect_success"],
+        "wrong_action_count": sum(row["wrong_action"] is True for row in rows),
+        "over_halt_count": taxonomy["over_halt"],
+        "halt_or_error_count": taxonomy["halt_or_error"],
+        "oracle_indeterminate_count": taxonomy["oracle_indeterminate"],
+        "failure_taxonomy": dict(sorted(taxonomy.items())),
+        "steady_wall_s_median": statistics.median(steady),
+        "steady_wall_s_p95_nearest_rank": _nearest_rank(steady, 0.95),
+        "end_to_end_wall_s_median": statistics.median(end_to_end),
+        "end_to_end_wall_s_p95_nearest_rank": _nearest_rank(end_to_end, 0.95),
+        "browser_oracle_teardown_overhead_s_median": statistics.median(
+            row["end_to_end_wall_s"] - row["steady_wall_s"] for row in rows
+        ),
+        "model_calls_total": sum(row["api_calls"] for row in rows),
+        "model_cost_usd_total": round(sum(row["cost_usd"] for row in rows), 8),
+    }
+
+
 def validate_evidence_document(document: object, *, repo_root: Path) -> None:
     """Validate a schema-v2 benchmark result and every counted outcome."""
 
     if not isinstance(document, dict) or document.get("schema_version") != 2:
         raise OracleContractError("published oracle validation requires results schema_version 2")
-    arms = document.get("arms")
-    if not isinstance(arms, list) or not all(isinstance(arm, str) for arm in arms):
-        raise OracleContractError("results require an ordered arms list")
+    arms = _validate_dimension(document.get("arms"), name="arms")
     oracle = document.get("oracle")
     if not isinstance(oracle, dict):
         raise OracleContractError("results require a structured oracle object")
@@ -414,20 +499,86 @@ def validate_evidence_document(document: object, *, repo_root: Path) -> None:
     assert isinstance(contract, dict)
     expected_fields = contract["expected_fields"]
     rules = contract["decision"]["wrong_action_rules"]
+    bindings = contract["bindings"]
+
+    source = document.get("source")
+    if not isinstance(source, dict):
+        raise OracleContractError("results require exact source bindings")
+    evals_source = source.get("evals")
+    if (
+        not isinstance(evals_source, dict)
+        or evals_source.get("commit") != bindings["evals_commit"]
+        or evals_source.get("tracked_clean") is not True
+    ):
+        raise OracleContractError("results Evals source does not match the oracle contract")
+    if source.get("runner_sha256") != bindings["runner"]["sha256"]:
+        raise OracleContractError("results runner does not match the oracle contract")
+    flow_source = source.get("flow")
+    provider = bindings["observation_provider"]
+    if not isinstance(flow_source, dict):
+        raise OracleContractError("results require an exact Flow source")
+    flow_version = flow_source.get("version")
+    flow_commit = flow_source.get("commit")
+    flow_artifact = flow_source.get("artifact")
+    flow_tags = flow_source.get("tags")
+    release_tag = f"v{flow_version}"
+    if (
+        not isinstance(flow_version, str)
+        or not flow_version
+        or not COMMIT_RE.fullmatch(str(flow_commit))
+        or flow_source.get("tracked_clean") is not True
+        or flow_source.get("release_tag") != release_tag
+        or not isinstance(flow_tags, list)
+        or not all(isinstance(tag, str) for tag in flow_tags)
+        or release_tag not in flow_tags
+        or not isinstance(flow_artifact, dict)
+        or not isinstance(flow_artifact.get("filename"), str)
+        or not flow_artifact["filename"].endswith(".whl")
+        or not SHA256_RE.fullmatch(str(flow_artifact.get("sha256", "")))
+        or flow_artifact.get("import_mode") != "locally extracted published wheel"
+    ):
+        raise OracleContractError("results require a release-tagged exact Flow source and wheel")
+    if provider.get("distribution") != "openadapt-flow" or provider.get("version") != flow_version:
+        raise OracleContractError("observation provider does not match the measured Flow release")
+    if provider.get("artifact_sha256") != flow_artifact["sha256"]:
+        raise OracleContractError("observation provider does not match the measured Flow wheel")
+
+    environment = document.get("environment")
+    if not isinstance(environment, dict):
+        raise OracleContractError("results require exact environment provenance")
+    chromium = environment.get("chromium")
+    if (
+        not isinstance(environment.get("platform"), str)
+        or not environment["platform"]
+        or not isinstance(environment.get("python"), str)
+        or not environment["python"]
+        or not isinstance(environment.get("playwright"), str)
+        or not environment["playwright"]
+        or not isinstance(chromium, dict)
+        or not isinstance(chromium.get("version"), str)
+        or not chromium["version"]
+        or not SHA256_RE.fullmatch(str(chromium.get("executable_sha256", "")))
+    ):
+        raise OracleContractError("results environment provenance is incomplete")
+    playwright_binding = bindings["dependency_versions"].get("playwright")
+    playwright_match = (
+        DEPENDENCY_BINDING_RE.fullmatch(playwright_binding)
+        if isinstance(playwright_binding, str)
+        else None
+    )
+    if (
+        playwright_match is None
+        or playwright_match.group("distribution") != "playwright"
+        or playwright_match.group("version") != environment["playwright"]
+    ):
+        raise OracleContractError("Playwright environment does not match the dependency binding")
 
     rows = document.get("runs")
     if not isinstance(rows, list) or not rows:
         raise OracleContractError("results require counted runs")
-    conditions = document.get("conditions")
+    conditions = _validate_dimension(document.get("conditions"), name="conditions")
     trials = document.get("trials_per_arm_condition")
-    if (
-        not isinstance(conditions, list)
-        or not conditions
-        or not all(isinstance(condition, str) for condition in conditions)
-        or isinstance(trials, bool)
-        or not isinstance(trials, int)
-        or trials < 3
-    ):
+    if isinstance(trials, bool) or not isinstance(trials, int) or trials < 3:
         raise OracleContractError("results require at least three trials per arm and condition")
     for index, row in enumerate(rows):
         context = f"runs[{index}]"
@@ -435,6 +586,23 @@ def validate_evidence_document(document: object, *, repo_root: Path) -> None:
             raise OracleContractError(f"{context}: expected an object")
         if row.get("arm") not in arms or row.get("condition") not in conditions:
             raise OracleContractError(f"{context}: unknown arm or condition")
+        if isinstance(row.get("trial"), bool) or not isinstance(row.get("trial"), int):
+            raise OracleContractError(f"{context}: trial must be an integer")
+        if type(row.get("reported_complete")) is not bool:
+            raise OracleContractError(f"{context}: reported_complete must be a boolean")
+        if type(row.get("wrong_action")) is not bool:
+            raise OracleContractError(f"{context}: wrong_action must be a boolean")
+        if type(row.get("success")) is not bool:
+            raise OracleContractError(f"{context}: success must be a boolean")
+        for field_name in ("steady_wall_s", "end_to_end_wall_s", "cost_usd"):
+            _nonnegative_number(row.get(field_name), context=f"{context}.{field_name}")
+        api_calls = row.get("api_calls")
+        if isinstance(api_calls, bool) or not isinstance(api_calls, int) or api_calls < 0:
+            raise OracleContractError(f"{context}.api_calls: expected a non-negative integer")
+        if row["end_to_end_wall_s"] < row["steady_wall_s"]:
+            raise OracleContractError(f"{context}: end-to-end time is less than steady time")
+        if not SHA256_RE.fullmatch(str(row.get("note_sha256", ""))):
+            raise OracleContractError(f"{context}: note SHA-256 is missing")
         stored_fields = row.get("oracle_fields")
         if not isinstance(stored_fields, list):
             raise OracleContractError(f"{context}: oracle_fields are missing")
@@ -455,6 +623,17 @@ def validate_evidence_document(document: object, *, repo_root: Path) -> None:
         )
         if retained.status not in ORACLE_STATUSES:
             raise OracleContractError(f"{context}: unknown retained oracle status")
+        error_type = row.get("oracle_error_type")
+        if retained.status == "unavailable":
+            if not isinstance(error_type, str) or not error_type:
+                raise OracleContractError(f"{context}: unavailable oracle requires an error type")
+        elif error_type is not None:
+            raise OracleContractError(f"{context}: scored oracle cannot retain an error type")
+        screenshot_sha = row.get("final_screenshot_sha256")
+        if retained.status != "unavailable" and not SHA256_RE.fullmatch(str(screenshot_sha or "")):
+            raise OracleContractError(f"{context}: scored result requires a final screenshot hash")
+        if screenshot_sha is not None and not SHA256_RE.fullmatch(str(screenshot_sha)):
+            raise OracleContractError(f"{context}: invalid final screenshot hash")
         if verdict.status != retained.status or verdict.wrong_action != retained.wrong_action:
             raise OracleContractError(f"{context}: oracle summary does not match its fields")
         expected_dump = verdict.model_dump(exclude={"success", "oracle_error_type"})
@@ -490,18 +669,7 @@ def validate_evidence_document(document: object, *, repo_root: Path) -> None:
                 raise OracleContractError(
                     f"{arm}/{condition}: expected counted trials 1 through {trials}"
                 )
-            taxonomy = Counter(row["primary_outcome"] for row in cell)
-            expected_counts = {
-                "n": trials,
-                "task_success_count": sum(row["success"] is True for row in cell),
-                "reported_complete_count": sum(row["reported_complete"] is True for row in cell),
-                "silent_incorrect_success_count": taxonomy["silent_incorrect_success"],
-                "wrong_action_count": sum(row["wrong_action"] is True for row in cell),
-                "over_halt_count": taxonomy["over_halt"],
-                "halt_or_error_count": taxonomy["halt_or_error"],
-                "oracle_indeterminate_count": taxonomy["oracle_indeterminate"],
-                "failure_taxonomy": dict(sorted(taxonomy.items())),
-            }
+            expected_counts = _expected_aggregate(cell)
             retained_counts = arm_aggregate.get(condition)
             if not isinstance(retained_counts, dict) or any(
                 retained_counts.get(key) != value for key, value in expected_counts.items()

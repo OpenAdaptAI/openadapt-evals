@@ -118,15 +118,43 @@ def _dependency_versions_for_modules(*module_names: str) -> dict[str, str]:
     for module_name in module_names:
         module = importlib.import_module(module_name)
         distributions = sorted(set(providers.get(module_name, [])))
-        if len(distributions) == 1:
-            provider = distributions[0]
-            version = importlib.metadata.version(provider)
-        else:
-            provider = module_name
-            version = str(getattr(module, "__version__", "unknown"))
+        if len(distributions) != 1:
+            raise RuntimeError(
+                f"cannot bind {module_name!r} to one installed distribution: {distributions}"
+            )
+        provider = distributions[0]
+        version = importlib.metadata.version(provider)
+        if not version or version.lower() == "unknown":
+            raise RuntimeError(f"cannot bind an exact version for {provider!r}")
         module_file = Path(module.__file__).resolve()
         versions[module_name] = f"{provider}=={version};module_sha256={file_sha256(module_file)}"
     return dict(sorted(versions.items()))
+
+
+def _chromium_binding() -> dict[str, str]:
+    """Bind the exact Playwright-managed browser used by the campaign."""
+
+    from playwright.sync_api import sync_playwright  # noqa: PLC0415
+
+    with sync_playwright() as playwright:
+        executable = Path(playwright.chromium.executable_path).resolve()
+    if not executable.is_file():
+        raise RuntimeError(f"Playwright Chromium is missing: {executable}")
+    result = subprocess.run(
+        [str(executable), "--version"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    version = result.stdout.strip() or result.stderr.strip()
+    if not version:
+        raise RuntimeError("Playwright Chromium did not report its version")
+    return {
+        "version": version,
+        "executable_name": executable.name,
+        "executable_sha256": file_sha256(executable),
+    }
 
 
 def _extract_wheel(wheel: Path, destination: Path) -> None:
@@ -238,7 +266,8 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- Platform: `{report['environment']['platform']}`",
         f"- Python: `{report['environment']['python']}`",
         f"- Playwright: `{report['environment']['playwright']}`",
-        f"- Chromium: `{report['environment']['chromium']}`",
+        f"- Chromium: `{report['environment']['chromium']['version']}` "
+        f"(executable SHA-256 `{report['environment']['chromium']['executable_sha256']}`)",
         "- Network/provider use: loopback bundled MockMed only; no cloud VM, "
         "hosted runner, or model API",
         "",
@@ -454,6 +483,7 @@ def run_benchmark(
             .relative_to(artifact_root)
             .as_posix(),
             "sha256": file_sha256(Path(observer_module.__file__).resolve()),
+            "artifact_sha256": _sha256(flow_wheel),
         },
         dependency_versions=_dependency_versions_for_modules(
             "numpy",
@@ -461,8 +491,10 @@ def run_benchmark(
             "onnxruntime",
             "PIL",
             "rapidocr_onnxruntime",
+            "playwright",
         ),
     )
+    chromium_binding = _chromium_binding()
 
     def verify_final_state(screen_png: bytes, note_text: str) -> Any:
         return verify_mockmed_final_state(
@@ -568,6 +600,7 @@ def run_benchmark(
                                 ).model_dump(exclude={"success"})
                             )
                         end_to_end = time.monotonic() - started
+                        row["arm"] = arm
                         row["condition"] = condition
                         row["trial"] = trial
                         row["note_sha256"] = hashlib.sha256(note.encode("utf-8")).hexdigest()
@@ -665,7 +698,7 @@ def run_benchmark(
             "platform": platform.platform(),
             "python": platform.python_version(),
             "playwright": importlib.metadata.version("playwright"),
-            "chromium": "Playwright-managed headless Chromium",
+            "chromium": chromium_binding,
         },
         "setup": {
             "server_start_wall_s": server_start_wall_s,
