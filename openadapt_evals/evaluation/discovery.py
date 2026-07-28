@@ -4,13 +4,13 @@ Provides multiple methods to discover the WAA VM IP address without
 requiring manual configuration.
 """
 
-import os
 import json
+import os
 import subprocess
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Optional
-from dataclasses import dataclass
 
 
 class DiscoveryMethod(Enum):
@@ -191,7 +191,7 @@ class VMIPDiscovery:
                     ip=ip,
                     method=DiscoveryMethod.DOCKER,
                     confidence=0.9,
-                    details=f"From Docker container inspection"
+                    details="From Docker container inspection"
                 )
         except (subprocess.TimeoutExpired, FileNotFoundError):
             pass

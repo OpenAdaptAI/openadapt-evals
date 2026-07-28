@@ -6,15 +6,12 @@ transcripts with timestamped narration, intent, and UI context per action.
 
 from __future__ import annotations
 
-import base64
 import json
 import logging
 import re
-from datetime import datetime, timezone
 from typing import Any
 
 from openadapt_evals.workflow.models import (
-    ActionType,
     EpisodeTranscript,
     RecordingSession,
     TranscriptEntry,
@@ -163,8 +160,12 @@ def generate_transcript(
     from openadapt_evals.vlm import vlm_call
 
     all_entries: list[TranscriptEntry] = []
-    total_input_tokens = 0
-    total_output_tokens = 0
+    # NOTE: EpisodeTranscript.total_input_tokens / total_output_tokens /
+    # generation_cost_usd stay at their 0 defaults. `vlm_call` returns text
+    # only and reports its own usage to the global cost tracker, so there is
+    # no per-transcript number to accumulate here. Two accumulators used to be
+    # declared at this point and were never incremented or passed to the
+    # constructor, which read as if the totals were being collected.
 
     # Process in batches with 2-step overlap for context
     overlap = 2

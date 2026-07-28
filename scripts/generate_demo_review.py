@@ -24,7 +24,6 @@ from pathlib import Path
 
 from PIL import Image
 
-
 THUMBNAIL_WIDTH = 600
 
 

@@ -8,8 +8,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from openadapt_evals.adapters.base import (
     BenchmarkAction,
     BenchmarkObservation,
@@ -23,7 +21,6 @@ from openadapt_evals.demo_controller import (
     run_with_controller,
 )
 from openadapt_evals.plan_verify import VerificationResult
-
 
 # ---------------------------------------------------------------------------
 # Fixtures and helpers
@@ -597,14 +594,6 @@ class TestExecuteLoop:
         mock_verify_step.side_effect = verify_sequence
         mock_verify_goal.return_value = _make_goal_verified()
 
-        # Mock the VLM replan call
-        replan_response = (
-            "Step 1:\n"
-            "  Think: Alternative approach.\n"
-            "  Action: Try clicking elsewhere.\n"
-            "  Expect: Sheet should appear.\n"
-        )
-
         with patch("openadapt_evals.demo_controller.DemoController._replan") as mock_replan:
             # Instead of actually replanning, just skip the failed step
             def fake_replan(obs, failed_step):
@@ -615,7 +604,7 @@ class TestExecuteLoop:
             mock_replan.side_effect = fake_replan
 
             task = _make_task()
-            result = controller.execute(task, max_steps=30)
+            controller.execute(task, max_steps=30)
 
         assert controller.plan_state.replans == 1
         assert controller.plan_state.steps[0].status == "failed"
@@ -655,7 +644,7 @@ class TestExecuteLoop:
         mock_verify_goal.return_value = _make_goal_verified()
 
         task = _make_task()
-        result = controller.execute(task, max_steps=30)
+        controller.execute(task, max_steps=30)
 
         # Step 1 was force-marked done (override)
         assert controller.plan_state.steps[0].status == "done"
@@ -702,7 +691,7 @@ class TestExecuteLoop:
         mock_verify_step.return_value = _make_unclear()
 
         task = _make_task()
-        result = controller.execute(task, max_steps=3)
+        controller.execute(task, max_steps=3)
 
         # Should have attempted exactly 3 steps
         assert controller.plan_state.total_attempts == 3
@@ -766,7 +755,7 @@ class TestExecuteLoop:
 
         task = _make_task()
         # With no screenshots, verification is skipped but loop continues
-        result = controller.execute(task, max_steps=5)
+        controller.execute(task, max_steps=5)
 
         # verify_step should not have been called (no screenshots)
         mock_verify_step.assert_not_called()
@@ -957,7 +946,7 @@ class TestPlanStepDriftPrevention:
         controller.max_retries = 5
 
         task = _make_task()
-        result = controller.execute(task, max_steps=10)
+        controller.execute(task, max_steps=10)
 
         # Step 1 should have had 3 attempts (2 unclear + 1 verified)
         assert controller.plan_state.steps[0].attempts == 3
@@ -1575,7 +1564,7 @@ class TestAgentPlanProgressSuppression:
         mock_verify_goal.return_value = _make_goal_verified()
 
         task = _make_task()
-        result = controller.execute(task, max_steps=30)
+        controller.execute(task, max_steps=30)
 
         # Step 1 was force-marked done by the controller's override
         assert controller.plan_state.steps[0].status == "done"

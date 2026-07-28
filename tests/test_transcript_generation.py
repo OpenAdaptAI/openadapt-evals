@@ -5,11 +5,8 @@ from __future__ import annotations
 import json
 from unittest.mock import patch
 
-import pytest
-
 from openadapt_evals.workflow.models import (
     ActionType,
-    EpisodeTranscript,
     NormalizedAction,
     RecordingSession,
     RecordingSource,
@@ -20,9 +17,9 @@ from openadapt_evals.workflow.pipeline.scrub import (
     scrub_text,
 )
 from openadapt_evals.workflow.pipeline.transcript import (
+    _parse_transcript_response,
     estimate_transcript_cost,
     generate_transcript,
-    _parse_transcript_response,
 )
 
 
@@ -89,7 +86,7 @@ class TestTranscriptGeneration:
             }
         ] * 3)
         session = _make_session(10)
-        transcript = generate_transcript(session, batch_size=3)
+        generate_transcript(session, batch_size=3)
         # With batch_size=3 and 10 actions, multiple VLM calls needed
         assert mock_vlm.call_count >= 3
 

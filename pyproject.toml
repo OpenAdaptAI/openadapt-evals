@@ -55,7 +55,13 @@ ml = [
 dev = [
     "pytest>=8.0.0",
     "pytest-mock>=3.12.0",
-    "ruff>=0.1.0",
+    # Bounded on purpose. `ruff>=0.1.0` let any resolver pick any future ruff,
+    # and ruff 0.16.0 grew its DEFAULT rule set from 59 rules to 413. This
+    # project selected no rules explicitly, so it silently inherited 354 new
+    # ones: `ruff check .` went from 0 configured rules to 1653 findings
+    # without a line of code changing. Raise this ceiling deliberately, with
+    # the new findings triaged in the same change.
+    "ruff>=0.16,<0.17",
     "flask>=3.0.0",
     "requests-toolbelt>=1.0.0",
     "fire>=0.5.0",
@@ -182,6 +188,65 @@ markers = [
 
 [tool.ruff]
 line-length = 100
+# Pinned so a future ruff cannot change which syntax rewrites are considered
+# valid. Matches `requires-python = ">=3.10"`.
+target-version = "py310"
+
+[tool.ruff.lint]
+# Explicit and bounded on purpose.
+#
+# Before this change there was no `select` at all, so the rule set was
+# whatever the installed ruff happened to default to. Under ruff 0.16.0 that
+# is 413 rules and 1653 findings here. A findings list that large cannot be
+# reviewed honestly, and it would keep moving with every ruff release, so the
+# rule set is now stated rather than inherited.
+#
+# E/F/I/W with E501 ignored is the house set already used by
+# openadapt-capture, openadapt-privacy, openadapt-telemetry, openadapt-crier,
+# openadapt-herald, openadapt-desktop and OpenAdapt. This repo did not pass it
+# (478 findings, including three F821 undefined names); those are fixed in
+# this same change, so the declaration is true rather than aspirational.
+#
+# Expanding beyond this set is a deliberate future decision with its own
+# review, not something a version bump does on our behalf.
+select = ["E", "F", "I", "W"]
+
+# E501 line-too-long: the formatter owns line length. `line-length = 100`
+# above still governs formatting; enforcing it as a lint error only produces
+# noise on long URLs, pinned hashes and embedded PowerShell/SQL literals that
+# cannot be wrapped. Consistent with every other repo in this workspace.
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# E402 (import not at top of file) is ignored ONLY where the ordering is
+# load-bearing, listed file by file so a new accidental one still fails.
+# Every entry below was read; none is a style accident.
+#
+# `sys.path` must be extended before the package it makes importable:
+"openadapt_evals/waa_deploy/evaluate_server.py" = ["E402"]
+"scripts/enrich_demo_targets.py" = ["E402"]
+"scripts/update_weekly_north_star.py" = ["E402"]
+# `load_dotenv()` must run before `openadapt_evals.vlm`, which reads provider
+# credentials from the environment at import time:
+"scripts/convert_recording_to_demo.py" = ["E402"]
+"scripts/refine_demo.py" = ["E402"]
+"scripts/record_waa_demos.py" = ["E402"]
+# `logging.basicConfig()` must run before the imported module installs its own
+# handlers, or the E2E script emits nothing:
+"scripts/test_verl_env_e2e.py" = ["E402"]
+# `pytest.importorskip()` must run before the import it guards. This is the
+# same contract the CI "bare heavy imports in tests" guard enforces; moving
+# the import above the skip would make the light CI job try to load
+# openadapt_ml:
+"tests/test_api_agent_ml.py" = ["E402"]
+
+# This generator's SHA-256 is embedded in the published evidence report
+# docs/eval_results/openadapt_performance_20260717.json, and
+# tests/test_report_openadapt_performance.py regenerates that report byte for
+# byte. Reformatting the file changes the hash and invalidates a pinned
+# provenance record, so its import block stays exactly as published. Removing
+# a single blank line here was enough to fail that test.
+"scripts/report_openadapt_performance.py" = ["I001"]
 
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]

@@ -10,19 +10,16 @@ from __future__ import annotations
 import io
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from openadapt_evals.adapters.base import BenchmarkAction
 from openadapt_evals.demo_library import (
-    Demo,
-    DemoGuidance,
     DemoLibrary,
     DemoStep,
     _build_enriched_instruction,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -138,7 +135,7 @@ class TestAddDemoDescriptions:
             "Start menu button in taskbar",
             "Close button in top-right corner",
         ]
-        demo_id = tmp_library.add_demo(
+        tmp_library.add_demo(
             "task_a",
             screenshots=[png_bytes, png_bytes],
             actions=actions,
@@ -153,7 +150,7 @@ class TestAddDemoDescriptions:
         self, tmp_library: DemoLibrary, png_bytes: bytes
     ):
         actions = [_make_click_action(0.5, 0.3)]
-        demo_id = tmp_library.add_demo(
+        tmp_library.add_demo(
             "task_b",
             screenshots=[png_bytes],
             actions=actions,
@@ -179,7 +176,7 @@ class TestAddDemoDescriptions:
     ):
         """Descriptions must survive a fresh get_demo() (read from disk)."""
         actions = [_make_click_action(0.5, 0.3)]
-        demo_id = tmp_library.add_demo(
+        tmp_library.add_demo(
             "task_d",
             screenshots=[png_bytes],
             actions=actions,

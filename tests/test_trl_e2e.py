@@ -21,8 +21,8 @@ Requires torch (CPU only, no GPU). Skipped in CI via @pytest.mark.heavy.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
 import io
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -181,7 +181,9 @@ class TestTRLE2E:
         screenshot = buf.getvalue()
 
         from openadapt_evals.adapters.base import (
-            BenchmarkObservation, BenchmarkResult, BenchmarkTask,
+            BenchmarkObservation,
+            BenchmarkResult,
+            BenchmarkTask,
         )
 
         adapter.observe.return_value = BenchmarkObservation(
@@ -206,15 +208,16 @@ class TestTRLE2E:
 
     def test_generation_sees_pixel_values(self):
         """The model sees pixel_values during rollout generation."""
-        torch = pytest.importorskip("torch")
+        pytest.importorskip("torch")
         from openadapt_evals.training.vlm_wrapper import VLMModelWrapper
 
         model, processor = self._make_tiny_vlm_and_processor()
         wrapper = VLMModelWrapper(model)
 
         # Simulate what generate_fn does
-        from openadapt_evals.training.standalone.prompt import build_agent_messages
         from PIL import Image
+
+        from openadapt_evals.training.standalone.prompt import build_agent_messages
 
         img = Image.new("RGB", (100, 100), color=(128, 128, 128))
         messages = build_agent_messages("Test task", include_image=True)
@@ -227,7 +230,7 @@ class TestTRLE2E:
         wrapper.cache_vision_inputs(dict(inputs.items()))
 
         # Generate (what generate_fn does)
-        outputs = wrapper.generate(
+        wrapper.generate(
             input_ids=inputs["input_ids"],
             pixel_values=inputs.get("pixel_values"),
             max_new_tokens=5, do_sample=True,
@@ -240,7 +243,7 @@ class TestTRLE2E:
 
     def test_trl_forward_gets_cached_pixel_values(self):
         """TRL's training forward pass gets pixel_values via the wrapper."""
-        torch = pytest.importorskip("torch")
+        pytest.importorskip("torch")
         from openadapt_evals.training.vlm_wrapper import VLMModelWrapper
 
         model, processor = self._make_tiny_vlm_and_processor()
@@ -264,14 +267,12 @@ class TestTRLE2E:
 
     def test_output_format_not_garbage(self):
         """Generation produces parseable output, not # # # # #."""
-        torch = pytest.importorskip("torch")
-        from openadapt_evals.training.vlm_wrapper import VLMModelWrapper
+        pytest.importorskip("torch")
 
-        model, processor = self._make_tiny_vlm_and_processor()
-        wrapper = VLMModelWrapper(model)
-
-        from PIL import Image
-        img = Image.new("RGB", (100, 100), color=(128, 128, 128))
+        # This test only exercises the chat template, so it needs the
+        # processor. The wrapper and PIL image it used to build were never
+        # referenced.
+        _, processor = self._make_tiny_vlm_and_processor()
 
         from openadapt_evals.training.standalone.prompt import build_agent_messages
         messages = build_agent_messages("Test task", include_image=True)
@@ -293,7 +294,7 @@ class TestTRLE2E:
 
     def test_no_thinking_tokens_in_template(self):
         """Chat template does not inject <think> tags."""
-        torch = pytest.importorskip("torch")
+        pytest.importorskip("torch")
 
         _, processor = self._make_tiny_vlm_and_processor()
 
@@ -369,7 +370,7 @@ class TestTRLE2E:
         TRL needs model.parameters() to set up the optimizer. The wrapper
         must delegate this to the wrapped model.
         """
-        torch = pytest.importorskip("torch")
+        pytest.importorskip("torch")
         from openadapt_evals.training.vlm_wrapper import VLMModelWrapper
 
         model, _ = self._make_tiny_vlm_and_processor()

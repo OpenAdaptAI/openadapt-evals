@@ -73,19 +73,13 @@ _EXPORTS = {
 
 if TYPE_CHECKING:  # pragma: no cover
     from openadapt_evals.flow.cost import (
+        MODELS,
         CostGuardConfig,
         FlowRunCostEstimate,
-        MODELS,
         SpendLedger,
         estimate_flow_waa_cost,
     )
     from openadapt_evals.flow.hybrid_agent import HybridFlowAgent
-    from openadapt_evals.flow.replay_runner import (
-        FlowTask,
-        PerTaskReplayMetrics,
-        aggregate_replay_metrics,
-        run_demonstrate_then_replay,
-    )
     from openadapt_evals.flow.parallels_env import (
         ParallelsConfig,
         ParallelsSession,
@@ -93,6 +87,12 @@ if TYPE_CHECKING:  # pragma: no cover
         builtin_tasks,
         parallels_enabled,
         run_parallels_replay,
+    )
+    from openadapt_evals.flow.replay_runner import (
+        FlowTask,
+        PerTaskReplayMetrics,
+        aggregate_replay_metrics,
+        run_demonstrate_then_replay,
     )
 
 

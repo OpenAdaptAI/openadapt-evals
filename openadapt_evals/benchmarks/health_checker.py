@@ -282,7 +282,9 @@ class ContainerHealthChecker:
             # Use Azure ML SDK to get logs
             # Note: This is a simplified implementation
             # Real implementation would use ml_client.jobs.get_logs() or similar
-            job = self.ml_client.client.jobs.get(job_name)
+            # Result deliberately discarded: this call only confirms the job
+            # exists (it raises otherwise). Real log fetching is the TODO below.
+            self.ml_client.client.jobs.get(job_name)
 
             # For now, return empty string as placeholder
             # In production, this would fetch actual logs

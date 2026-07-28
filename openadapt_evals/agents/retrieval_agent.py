@@ -33,19 +33,18 @@ CLI:
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Optional, Union
 
 from PIL import Image
 
-from openadapt_evals.agents.base import BenchmarkAgent
-from openadapt_evals.agents.api_agent import ApiAgent
 from openadapt_evals.adapters.base import (
     BenchmarkAction,
     BenchmarkObservation,
     BenchmarkTask,
 )
+from openadapt_evals.agents.api_agent import ApiAgent
+from openadapt_evals.agents.base import BenchmarkAgent
 
 logger = logging.getLogger("openadapt_evals.agents.retrieval")
 

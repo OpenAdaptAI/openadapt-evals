@@ -44,7 +44,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from openadapt_evals.vlm import vlm_call, extract_json
+from openadapt_evals.vlm import extract_json, vlm_call
 
 # ---------------------------------------------------------------------------
 # Defaults
@@ -226,7 +226,7 @@ def run_holistic_review(
     # Parse JSON from response — handle markdown fences and preamble text
     flagged = extract_json(raw)
     if flagged is None:
-        print(f"  WARNING: Could not parse holistic review response as JSON.")
+        print("  WARNING: Could not parse holistic review response as JSON.")
         print(f"  Raw response:\n{raw[:500]}")
         return []
     if not isinstance(flagged, list):
@@ -320,7 +320,7 @@ def run_per_step_review(
     )
     correction = extract_json(raw)
     if correction is None:
-        print(f"    WARNING: Could not parse per-step response as JSON.")
+        print("    WARNING: Could not parse per-step response as JSON.")
         print(f"    Raw response:\n{raw[:300]}")
         return None
     if not isinstance(correction, dict):
@@ -565,7 +565,7 @@ def refine_recording(
     # Check for existing refined meta
     refined_path = rec_dir / "meta_refined.json"
     if refined_path.exists() and not dry_run:
-        print(f"  NOTE: meta_refined.json already exists.")
+        print("  NOTE: meta_refined.json already exists.")
         if not auto:
             choice = input("  Overwrite? [y/N] ").strip().lower()
             if choice not in ("y", "yes"):
@@ -606,7 +606,7 @@ def refine_recording(
     # ------------------------------------------------------------------
     # Pass 2: Per-step verification
     # ------------------------------------------------------------------
-    print(f"\n  === Pass 2: Per-Step Verification ===")
+    print("\n  === Pass 2: Per-Step Verification ===")
     refinements: list[dict] = []
 
     for i, flag in enumerate(flagged):
@@ -651,7 +651,7 @@ def refine_recording(
             print(f"    Reason:    {reason}")
             print(f"    Confidence: {confidence:.0%}")
             if dry_run:
-                print(f"    (dry-run: not saving)")
+                print("    (dry-run: not saving)")
                 decision = "reject"  # dry-run never actually changes anything
 
             refinements.append(
@@ -696,7 +696,7 @@ def refine_recording(
         if r["decision"] != "reject" and r["final_text"].startswith("[REMOVE]")
     )
 
-    print(f"\n  === Summary ===")
+    print("\n  === Summary ===")
     print(f"  Flagged: {len(flagged)}  |  Accepted: {accepted}  |  Edited: {edited}  |  Rejected: {rejected}")
     if removals:
         print(f"  Steps marked for removal: {removals}")

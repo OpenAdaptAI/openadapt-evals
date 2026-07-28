@@ -40,7 +40,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from openadapt_evals.vlm import vlm_call, image_bytes_from_path
+from openadapt_evals.vlm import image_bytes_from_path, vlm_call
 
 # Regex patterns for extracting key references from step descriptions
 _CELL_REF_RE = re.compile(r'\b([A-Z]+\d+)\b')

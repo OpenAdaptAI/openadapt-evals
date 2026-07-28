@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from openadapt_evals.adapters import (
     BenchmarkAction,
-    BenchmarkObservation,
     WAAMockAdapter,
 )
-from openadapt_evals.adapters.base import BenchmarkResult
 from openadapt_evals.adapters.rl_env import RLEnvironment, RolloutStep
 
 
@@ -75,7 +73,6 @@ class TestPerStepEvalEnabled:
         task_id = adapter.list_tasks()[0].task_id
 
         # Patch evaluate to raise
-        original_evaluate = adapter.evaluate
         adapter.evaluate = MagicMock(side_effect=RuntimeError("eval server down"))
 
         env = RLEnvironment(

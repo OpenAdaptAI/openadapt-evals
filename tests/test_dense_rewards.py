@@ -4,15 +4,13 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from openadapt_evals.adapters.base import (
     BenchmarkAction,
     BenchmarkObservation,
     BenchmarkResult,
     BenchmarkTask,
 )
-from openadapt_evals.adapters.rl_env import RLEnvironment, ResetConfig
+from openadapt_evals.adapters.rl_env import ResetConfig, RLEnvironment
 from openadapt_evals.task_config import Milestone, TaskCheck, TaskConfig
 
 

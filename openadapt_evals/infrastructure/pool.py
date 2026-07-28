@@ -46,11 +46,11 @@ from openadapt_evals.infrastructure.azure_vm import (
 if TYPE_CHECKING:
     from openadapt_evals.infrastructure.vm_provider import VMProvider
 from openadapt_evals.infrastructure.vm_monitor import (
+    PoolWorker,
     VMConfig,
     VMMonitor,
     VMPool,
     VMPoolRegistry,
-    PoolWorker,
 )
 
 logger = logging.getLogger(__name__)
@@ -763,10 +763,9 @@ class PoolManager:
 
             # Stream logs via tail -f with auto-reconnect on SSH drop
             # tail -f --pid exits when the benchmark process dies
-            last_activity = time.time()
             while True:
                 try:
-                    result = ssh_run(
+                    ssh_run(
                         worker.ip,
                         tail_cmd,
                         stream=True,
@@ -817,7 +816,6 @@ class PoolManager:
                                 worker.name, 0, 1,
                                 f"killed: no activity for {stale_timeout // 60} minutes",
                             )
-                        last_activity = time.time()
                     except Exception:
                         # Can't even check — retry
                         continue

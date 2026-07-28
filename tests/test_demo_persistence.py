@@ -121,7 +121,6 @@ computer.click(500, 300)
 
                 # Check that demo was included
                 demo_included = logs.get("demo_included", False)
-                demo_length = logs.get("demo_length", 0)
                 demo_found_in_logs.append(demo_included)
 
                 # Verify demo appears in the user_question (prompt)
@@ -318,9 +317,8 @@ class TestDemoPersistenceWithRealCapture:
 
     def test_demo_format_and_persistence(self, capture_path):
         """Test demo formatting from capture and persistence validation."""
-        from pathlib import Path
-        from openadapt_ml.ingest.capture import capture_to_episode
         from openadapt_ml.experiments.demo_prompt.format_demo import format_episode_as_demo
+        from openadapt_ml.ingest.capture import capture_to_episode
 
         # Load capture
         episode = capture_to_episode(

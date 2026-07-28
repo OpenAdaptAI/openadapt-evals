@@ -26,10 +26,7 @@ See also:
 
 from __future__ import annotations
 
-import json
 import logging
-import subprocess
-import tempfile
 from pathlib import Path
 from typing import Any, Callable
 
@@ -553,10 +550,10 @@ class StandaloneMetrics:
     """
 
     from openadapt_evals.evaluation.metrics import (
-        exact_match,
-        fuzzy_match,
         contains,
+        exact_match,
         file_exists,
+        fuzzy_match,
     )
 
 

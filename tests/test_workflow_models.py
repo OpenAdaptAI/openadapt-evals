@@ -14,12 +14,12 @@ Test organization:
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+from openadapt_evals.workflow.adapters.waa import WAARecordingAdapter
 from openadapt_evals.workflow.models import (
     ActionType,
     CanonicalWorkflow,
@@ -27,18 +27,14 @@ from openadapt_evals.workflow.models import (
     RecordingSession,
     RecordingSource,
     Workflow,
-    WorkflowInstance,
     WorkflowLibrary,
     WorkflowStep,
 )
-from openadapt_evals.workflow.adapters.waa import WAARecordingAdapter
 from openadapt_evals.workflow.pipeline.match import (
-    SIMILARITY_THRESHOLD,
     add_instance_to_canonical,
     create_canonical_from_workflow,
     match_workflow_to_canonical,
 )
-
 
 # ---------------------------------------------------------------------------
 # Synthetic data factories
@@ -200,7 +196,7 @@ def _family_b_sales() -> Workflow:
         tags=["data-entry", "spreadsheet", "sales"],
         embedding=emb,
         steps=[
-            _make_step(i, desc, "Enter data", f"Type in cell", "Data entered",
+            _make_step(i, desc, "Enter data", "Type in cell", "Data entered",
                         ActionType.TYPE, "LibreOffice Calc")
             for i, desc in enumerate([
                 "Click cell A1 and type 'Quarter'",
@@ -229,7 +225,7 @@ def _family_b_budget() -> Workflow:
         tags=["data-entry", "spreadsheet", "budget"],
         embedding=emb,
         steps=[
-            _make_step(i, desc, "Enter data", f"Type in cell", "Data entered",
+            _make_step(i, desc, "Enter data", "Type in cell", "Data entered",
                         ActionType.TYPE, "LibreOffice Calc")
             for i, desc in enumerate([
                 "Click cell A1 and type 'Category'",
@@ -260,7 +256,7 @@ def _family_b_grades() -> Workflow:
         tags=["data-entry", "spreadsheet", "grades"],
         embedding=emb,
         steps=[
-            _make_step(i, desc, "Enter data", f"Type in cell", "Data entered",
+            _make_step(i, desc, "Enter data", "Type in cell", "Data entered",
                         ActionType.TYPE, "LibreOffice Calc")
             for i, desc in enumerate([
                 "Click cell A1 and type 'Student'",

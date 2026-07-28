@@ -47,7 +47,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -332,7 +331,7 @@ def run_mock_validation(
         return 1
     else:
         print("VALIDATION PASSED -- pipeline is ready for GPU training")
-        print(f"\nTo train, run without --mock:")
+        print("\nTo train, run without --mock:")
         print(
             f"  python scripts/finetune_distilled.py "
             f"--data-dir {data_dir} --base-model {base_model}"
@@ -421,7 +420,6 @@ def train(
         use_4bit: Whether to use 4-bit quantization.
         gradient_accumulation_steps: Gradient accumulation steps.
     """
-    import torch
 
     # Load data
     episodes = load_trajectories(data_dir)
@@ -436,7 +434,9 @@ def train(
     try:
         from unsloth import FastVisionModel
 
-        use_unsloth = True
+        # The import is the availability probe; `_train_unsloth` imports its
+        # own reference. Read the symbol here so the probe is not dead code.
+        use_unsloth = FastVisionModel is not None
         logger.info("Unsloth detected -- using FastVisionModel for 2x speedup")
     except ImportError:
         logger.info("Unsloth not available -- using standard TRL + PEFT")
@@ -485,8 +485,8 @@ def _train_unsloth(
     gradient_accumulation_steps: int,
 ) -> None:
     """Train using Unsloth's FastVisionModel for optimized LoRA."""
+    from trl import SFTConfig, SFTTrainer
     from unsloth import FastVisionModel
-    from trl import SFTTrainer, SFTConfig
 
     logger.info("Loading base model with Unsloth: %s", base_model)
 
@@ -567,9 +567,9 @@ def _train_standard(
 ) -> None:
     """Train using standard TRL SFTTrainer + PEFT LoRA."""
     import torch
+    from peft import LoraConfig, TaskType, get_peft_model
     from transformers import AutoModelForCausalLM, AutoProcessor, BitsAndBytesConfig
-    from peft import LoraConfig, get_peft_model, TaskType
-    from trl import SFTTrainer, SFTConfig
+    from trl import SFTConfig, SFTTrainer
 
     logger.info("Loading base model: %s", base_model)
 

@@ -16,7 +16,7 @@ ensuring that the calling controller never crashes due to verification issues.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -364,7 +364,7 @@ def verify_plan_progress(
 
         Falls back to a conservative estimate on any failure.
     """
-    from openadapt_evals.vlm import vlm_call, extract_json
+    from openadapt_evals.vlm import extract_json, vlm_call
 
     plan_text = _format_plan_steps(plan_steps)
     prompt = _VERIFY_PLAN_PROGRESS_PROMPT.format(

@@ -12,13 +12,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from openadapt_evals.adapters.base import (
-    BenchmarkAction,
     BenchmarkObservation,
     BenchmarkResult,
     BenchmarkTask,
@@ -31,7 +29,6 @@ from openadapt_evals.training.areal_workflow import (
     _build_messages,
     _screenshot_to_base64,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -347,7 +344,7 @@ class TestWAADesktopWorkflow:
 
         with patch.object(wf, "_create_env", return_value=env):
             with patch("openadapt_evals.training.areal_workflow.AsyncOpenAI", return_value=mock_client):
-                reward = asyncio.run(
+                asyncio.run(
                     wf.run(
                         data={
                             "task_id": "test-task",

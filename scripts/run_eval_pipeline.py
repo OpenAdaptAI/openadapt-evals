@@ -135,7 +135,7 @@ def _generate_demos(
 
         result = subprocess.run(cmd, timeout=600, capture_output=True, text=True)
         if result.returncode == 0:
-            print(f"[demos]   -> done")
+            print("[demos]   -> done")
             generated.append(task_id)
         else:
             print(f"[demos]   ERROR: exit code {result.returncode}")
@@ -174,7 +174,7 @@ def _ensure_vm_running(
     if "deallocated" in state.lower() or "stopped" in state.lower():
         print(f"[vm] Starting {vm_name}...")
         if not manager.start_vm(vm_name):
-            print(f"[vm] Start failed")
+            print("[vm] Start failed")
             return None
         print(f"[vm] {vm_name} started")
         ip = manager.get_vm_ip(vm_name)
@@ -233,9 +233,9 @@ def _deallocate_vm(
     print(f"\n[vm] Deallocating {vm_name} (stops billing)...")
     manager = _create_vm_manager(cloud=cloud, resource_group=resource_group)
     if not manager.deallocate_vm(vm_name):
-        print(f"[vm] Deallocate failed")
+        print("[vm] Deallocate failed")
         return False
-    print(f"[vm] Deallocate initiated. Billing will stop shortly.")
+    print("[vm] Deallocate initiated. Billing will stop shortly.")
     return True
 
 
@@ -394,7 +394,7 @@ def _wait_waa_ready(
         if waa_ok and not eval_ok:
             # WAA is up but evaluate isn't — acceptable for ZS-only runs
             if elapsed > 60:
-                print(f"[waa] WAA ready but evaluate server not responding (continuing)")
+                print("[waa] WAA ready but evaluate server not responding (continuing)")
                 return True
 
         time.sleep(10)
@@ -448,7 +448,6 @@ def _run_eval(
 ) -> dict[str, dict]:
     """Run all eval conditions sequentially with health checks."""
     results = {}
-    start_time = time.time()
 
     for i, (tid, run_name, demo_path) in enumerate(conditions):
         cond_label = "DC" if demo_path else "ZS"
@@ -534,7 +533,6 @@ def _run_eval(
         }
         print(f"\n  -> {status} ({elapsed:.0f}s)")
 
-    total_time = time.time() - start_time
     return results
 
 
@@ -559,7 +557,7 @@ def _print_summary(results: dict[str, dict], agent: str) -> None:
     # Print log file locations
     log_paths = [r.get("log_path") for r in results.values() if r.get("log_path")]
     if log_paths:
-        print(f"\n  Logs:")
+        print("\n  Logs:")
         for p in log_paths:
             print(f"    {p}")
 
@@ -692,7 +690,7 @@ def main() -> int:
     # Tasks eligible for eval = those with demos (or will have demos after generation)
     eval_tasks = list(recorded_tasks)  # copy; demos will be generated for missing ones
 
-    print(f"Pipeline Configuration")
+    print("Pipeline Configuration")
     print(f"  Recordings: {recordings_dir} ({len(recorded_tasks)} task(s))")
     print(f"  Demo dir:   {demo_dir} ({len(existing_demos)} existing)")
     print(f"  Missing:    {len(missing_demos)} demo(s) to generate")

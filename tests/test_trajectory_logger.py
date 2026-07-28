@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 
 import pytest
 
 from openadapt_evals.training.trajectory_logger import PlannerTrajectoryLogger
-
 
 # -- Fixtures ----------------------------------------------------------------
 
@@ -460,7 +457,6 @@ class TestAgentIntegration:
         self, output_dir, sample_screenshot, sample_planner_output
     ):
         """PlannerGrounderAgent calls trajectory_logger.log_step in act()."""
-        from unittest.mock import MagicMock
 
         from openadapt_evals.adapters.base import (
             BenchmarkAction,

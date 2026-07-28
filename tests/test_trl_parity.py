@@ -25,7 +25,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # 1. test_trl_rollout_constrained_decoding
 # ---------------------------------------------------------------------------
@@ -252,11 +251,11 @@ class TestUnslothLoading:
         # Import GRPOTrainer to test its __init__ + train model loading
         from openadapt_evals.training.trl_wrapper import GRPOTrainer
 
-        trainer = GRPOTrainer(config)
+        GRPOTrainer(config)
 
         # Patch unsloth import and everything else in train()
         with patch.dict("sys.modules", {"unsloth": MagicMock(FastVisionModel=mock_fvm)}), \
-             patch("openadapt_evals.training.trl_wrapper.GRPOTrainer.train") as mock_train:
+             patch("openadapt_evals.training.trl_wrapper.GRPOTrainer.train"):
 
             # Manually test the Unsloth loading logic that lives inside train()
             # by replicating the relevant branch from trl_wrapper.py
@@ -424,8 +423,8 @@ class TestCallbackBridgeUnusedHooksStored:
     without crashing, even though they are not currently fired."""
 
     def test_trl_callback_bridge_unused_hooks_stored(self):
-        from openadapt_evals.training.trl_wrapper import GRPOTrainer
         from openadapt_evals.training.standalone.config import TrainingConfig
+        from openadapt_evals.training.trl_wrapper import GRPOTrainer
 
         before_collect_fn = MagicMock()
         rollout_complete_fn = MagicMock()
@@ -536,8 +535,9 @@ class TestAgentOutputSchema:
 
     def test_missing_reasoning_raises(self):
         """reasoning is required — omitting it should raise ValidationError."""
-        from openadapt_evals.training.trl_rollout import _AgentOutput
         from pydantic import ValidationError
+
+        from openadapt_evals.training.trl_rollout import _AgentOutput
 
         with pytest.raises(ValidationError):
             _AgentOutput(type="click", x=0.5, y=0.3)

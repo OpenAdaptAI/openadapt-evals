@@ -15,11 +15,10 @@ import pytest
 
 from openadapt_evals.adapters.base import BenchmarkAction
 from openadapt_evals.demo_library import (
+    _HAS_IMAGEHASH,
     Demo,
-    DemoGuidance,
     DemoLibrary,
     DemoStep,
-    _HAS_IMAGEHASH,
     _demo_to_dict,
 )
 
@@ -634,7 +633,7 @@ class TestVisualAlignmentEdgeCases:
             _make_click_action(0.5, 0.5),
             _make_click_action(0.9, 0.9),
         ]
-        demo_id = tmp_library.add_demo(
+        tmp_library.add_demo(
             "task_next",
             screenshots=screenshots,
             actions=actions,

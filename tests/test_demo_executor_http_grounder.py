@@ -7,14 +7,12 @@ native bbox prompt format.
 
 from __future__ import annotations
 
-import json
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from openadapt_evals.adapters.base import BenchmarkAction, BenchmarkObservation
 from openadapt_evals.agents.demo_executor import DemoExecutor
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -121,7 +119,7 @@ class TestGroundClickHttp:
         mock_response.raise_for_status = MagicMock()
 
         with patch("requests.post", return_value=mock_response) as mock_post:
-            action = executor_with_endpoint._ground_click_http(
+            executor_with_endpoint._ground_click_http(
                 fake_observation, "the Settings icon"
             )
 

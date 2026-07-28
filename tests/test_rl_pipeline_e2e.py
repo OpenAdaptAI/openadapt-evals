@@ -21,7 +21,7 @@ from openadapt_evals.adapters.base import (
     BenchmarkResult,
     BenchmarkTask,
 )
-from openadapt_evals.adapters.rl_env import RLEnvironment, ResetConfig
+from openadapt_evals.adapters.rl_env import ResetConfig, RLEnvironment
 from openadapt_evals.task_config import TaskConfig
 
 

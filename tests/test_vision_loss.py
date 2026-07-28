@@ -10,8 +10,8 @@ No GPU, no model weights, no API keys required.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
 import io
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -133,7 +133,6 @@ class TestProcessorConsistency:
         The model's vision merge sees the mismatch.
         """
         prompt = "prompt tokens here"
-        action_text = "CLICK(x=0.5,y=0.3)"
 
         # Old approach: process prompt only
         prompt_inputs = mock_processor(text=[prompt], images=["img"])
@@ -338,8 +337,8 @@ class TestComputeRolloutLossIntegration:
 
     def test_runs_without_crash(self, mock_processor, tiny_png):
         """The full loss computation runs end-to-end without error."""
-        from openadapt_evals.training.standalone.trainer import GRPOTrainer
         from openadapt_evals.training.standalone.config import TrainingConfig
+        from openadapt_evals.training.standalone.trainer import GRPOTrainer
         from openadapt_evals.training.standalone.waa_direct import Rollout, RolloutStep
 
         config = TrainingConfig(vision_loss_mode="include")
@@ -365,8 +364,8 @@ class TestComputeRolloutLossIntegration:
 
     def test_exclude_mode_strips_vision_keys(self, mock_processor, tiny_png):
         """In exclude mode, vision tensors are not passed to the model."""
-        from openadapt_evals.training.standalone.trainer import GRPOTrainer
         from openadapt_evals.training.standalone.config import TrainingConfig
+        from openadapt_evals.training.standalone.trainer import GRPOTrainer
         from openadapt_evals.training.standalone.waa_direct import Rollout, RolloutStep
 
         config = TrainingConfig(vision_loss_mode="exclude")
@@ -412,8 +411,8 @@ class TestComputeRolloutLossIntegration:
         The key assertion: loss_abs > 0 (each rollout contributes
         non-zero loss even though the sum cancels).
         """
-        from openadapt_evals.training.standalone.trainer import GRPOTrainer
         from openadapt_evals.training.standalone.config import TrainingConfig
+        from openadapt_evals.training.standalone.trainer import GRPOTrainer
         from openadapt_evals.training.standalone.waa_direct import Rollout, RolloutStep
 
         config = TrainingConfig(vision_loss_mode="exclude")

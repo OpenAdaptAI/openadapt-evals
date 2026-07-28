@@ -913,8 +913,8 @@ def _build_markdown_payload(
     lines = [
         "## Trace Analysis Summary",
         "",
-        f"| Metric | Value |",
-        f"|--------|-------|",
+        "| Metric | Value |",
+        "|--------|-------|",
         f"| Model | {model} |",
         f"| Episodes | {summary['total_episodes']} |",
         f"| Success Rate | {sr:.1%} |",
@@ -1382,13 +1382,6 @@ def _section_comparison(comparison: dict[str, Any]) -> str:
     cost_class = "diff-positive" if cost_delta < 0 else ("diff-negative" if cost_delta > 0 else "diff-neutral")
     cost_arrow = "+" if cost_delta > 0 else ""
 
-    def _stat_row(label: str, old_val: str, new_val: str, delta_str: str, delta_class: str) -> str:
-        return f"""
-            <div class="comparison-stat">
-                <span class="comparison-stat-label">{label}</span>
-                <span class="comparison-stat-value">{old_val}</span>
-            </div>"""
-
     # Side-by-side stat cards
     side_by_side = f"""
     <div class="comparison-grid">
@@ -1466,6 +1459,14 @@ def _section_comparison(comparison: dict[str, Any]) -> str:
         <div class="card">
             <div class="card-label">Regressed</div>
             <div class="card-value danger">{len(comparison['regressed'])}</div>
+        </div>
+        <div class="card">
+            <div class="card-label">Avg Steps Delta</div>
+            <div class="card-value {steps_class}">{steps_arrow}{steps_delta:.1f}</div>
+        </div>
+        <div class="card">
+            <div class="card-label">Est. Cost Delta</div>
+            <div class="card-value {cost_class}">{cost_arrow}${cost_delta:.2f}</div>
         </div>
     </div>"""
 

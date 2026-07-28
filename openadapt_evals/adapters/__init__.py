@@ -55,12 +55,12 @@ from openadapt_evals.adapters.verl_env import (
     register_in_vagen,
 )
 from openadapt_evals.adapters.waa import (
+    SyntheticTaskError,
     WAAAdapter,
     WAAConfig,
-    WAAMockAdapter,
     WAALiveAdapter,
     WAALiveConfig,
-    SyntheticTaskError,
+    WAAMockAdapter,
     is_real_waa_task_id,
     is_synthetic_task_id,
 )

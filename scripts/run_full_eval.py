@@ -48,7 +48,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import signal
 import sys
 import time
@@ -288,8 +287,8 @@ def run_single_task(
 
     Never raises -- all errors are caught and returned in the result.
     """
-    from openadapt_evals.adapters.base import BenchmarkAction, BenchmarkTask
-    from openadapt_evals.adapters.rl_env import RLEnvironment, ResetConfig
+    from openadapt_evals.adapters.base import BenchmarkTask
+    from openadapt_evals.adapters.rl_env import ResetConfig, RLEnvironment
     from openadapt_evals.adapters.waa.live import WAALiveAdapter, WAALiveConfig
 
     start_time = time.time()
@@ -449,6 +448,12 @@ def print_summary(results: list[dict], total_elapsed: float) -> None:
     print(f"  Avg steps:          {avg_steps:.1f}")
     print(f"  Avg task time:      {avg_time:.1f}s")
     print(f"  Total time:         {total_elapsed / 60:.1f} min")
+    # `errors` counts every result carrying an `error`. It is printed
+    # separately because `infra_errors + agent_errors` misses any error with no
+    # `error_type`, which the per-task table shows as ERROR but which was
+    # previously absent from the aggregate summary.
+    if errors:
+        print(f"  Errors:             {errors}")
     if infra_errors:
         print(f"  Infra errors:       {infra_errors}")
         print(f"  Adj success rate:   {adj_rate:.1%} (excluding infra)")
@@ -660,7 +665,7 @@ def main() -> int:
         print(f"Max steps: {args.max_steps}")
         if args.parallel:
             print(f"Parallel: {args.parallel} workers")
-        print(f"\nTasks:")
+        print("\nTasks:")
         for i, tid in enumerate(task_ids, 1):
             print(f"  {i:3d}. {tid}")
         return 0
@@ -867,7 +872,7 @@ def main() -> int:
     print(f"\nResults saved to: {output_path}")
 
     if _shutdown_requested:
-        print(f"\nRun was interrupted. Resume with:")
+        print("\nRun was interrupted. Resume with:")
         print(f"  python scripts/run_full_eval.py --resume --output {output_path} \\")
         print(f"    --server-url {args.server_url} \\")
         if args.grounder_endpoint:

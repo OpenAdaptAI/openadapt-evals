@@ -543,8 +543,8 @@ class SSHTunnelManager:
         Returns:
             True if tunnel appears to be working.
         """
-        import urllib.request
         import urllib.error
+        import urllib.request
 
         try:
             if remote_port == 5000:

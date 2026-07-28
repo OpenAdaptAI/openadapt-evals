@@ -6,9 +6,10 @@ This is critical for multi-step task completion.
 See api_agent.py lines 318-330 for the implementation.
 """
 
-import pytest
-from unittest.mock import Mock, patch, MagicMock
 from io import BytesIO
+from unittest.mock import Mock, patch
+
+import pytest
 from PIL import Image
 
 

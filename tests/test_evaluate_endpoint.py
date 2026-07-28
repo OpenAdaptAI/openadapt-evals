@@ -1,18 +1,13 @@
 """Tests for the WAA /evaluate endpoint implementation."""
 
-import pytest
 from unittest.mock import MagicMock, patch
 
 from openadapt_evals.server.evaluate_endpoint import (
     MockEnv,
     StandaloneMetrics,
-    StandaloneGetters,
-    evaluate_task_state,
-    get_actual_value,
-    get_expected_value,
-    run_metric,
-    create_standalone_evaluator,
     _truncate_value,
+    create_standalone_evaluator,
+    evaluate_task_state,
 )
 
 
@@ -234,7 +229,7 @@ class TestWAALiveAdapterEvaluate:
     def test_evaluate_fallback_on_404(self):
         """Test evaluation behavior when endpoint returns 404."""
         from openadapt_evals.adapters import WAALiveAdapter, WAALiveConfig
-        from openadapt_evals.adapters.base import BenchmarkTask, BenchmarkAction
+        from openadapt_evals.adapters.base import BenchmarkAction, BenchmarkTask
 
         adapter = WAALiveAdapter(WAALiveConfig(
             server_url="http://test:5000",
@@ -263,8 +258,9 @@ class TestWAALiveAdapterEvaluate:
     def test_evaluate_fallback_on_connection_error(self):
         """Test evaluation behavior on connection error."""
         import requests
+
         from openadapt_evals.adapters import WAALiveAdapter, WAALiveConfig
-        from openadapt_evals.adapters.base import BenchmarkTask, BenchmarkAction
+        from openadapt_evals.adapters.base import BenchmarkAction, BenchmarkTask
 
         adapter = WAALiveAdapter(WAALiveConfig(
             server_url="http://test:5000",
@@ -294,6 +290,7 @@ class TestWAALiveAdapterEvaluate:
     def test_evaluate_retries_on_timeout(self):
         """Test that evaluate retries on timeout with backoff."""
         import requests
+
         from openadapt_evals.adapters import WAALiveAdapter, WAALiveConfig
         from openadapt_evals.adapters.base import BenchmarkTask
 
@@ -325,6 +322,7 @@ class TestWAALiveAdapterEvaluate:
     def test_evaluate_succeeds_after_retry(self):
         """Test that evaluate succeeds on second attempt after timeout."""
         import requests
+
         from openadapt_evals.adapters import WAALiveAdapter, WAALiveConfig
         from openadapt_evals.adapters.base import BenchmarkTask
 

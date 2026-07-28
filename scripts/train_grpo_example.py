@@ -49,7 +49,6 @@ except ImportError:
 from openadapt_evals.adapters.base import BenchmarkAction, BenchmarkObservation
 from openadapt_evals.adapters.rl_env import RLEnvironment
 
-
 # -- Policy gradient loss ------------------------------------------------------
 
 

@@ -413,7 +413,7 @@ def run_single_task(
 
     Never raises -- all errors are caught and returned in the result.
     """
-    from openadapt_evals.adapters.rl_env import RLEnvironment, ResetConfig
+    from openadapt_evals.adapters.rl_env import ResetConfig, RLEnvironment
     from openadapt_evals.adapters.waa.live import WAALiveAdapter, WAALiveConfig
 
     start_time = time.time()
@@ -567,7 +567,7 @@ def print_summary(results: list[dict], total_elapsed: float, meta: dict) -> None
     if meta.get("checkpoint"):
         print(f"  Checkpoint:         {meta.get('checkpoint')}")
     else:
-        print(f"  Checkpoint:         (baseline -- no adapter)")
+        print("  Checkpoint:         (baseline -- no adapter)")
     print(f"  Total tasks:        {total}")
     print(f"  Passed:             {successes} ({successes / total:.1%})")
     print(f"  Failed:             {total - successes}")
@@ -939,8 +939,8 @@ def main() -> int:
         print(f"Screenshots saved to: {screenshots_dir}")
 
     if _shutdown_requested:
-        print(f"\nRun was interrupted. Resume with:")
-        print(f"  python scripts/eval_checkpoint.py --resume \\")
+        print("\nRun was interrupted. Resume with:")
+        print("  python scripts/eval_checkpoint.py --resume \\")
         print(f"    --base-model {args.base_model} \\")
         if args.checkpoint:
             print(f"    --checkpoint {args.checkpoint} \\")

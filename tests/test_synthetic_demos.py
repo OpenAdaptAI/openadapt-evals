@@ -6,8 +6,6 @@ from pathlib import Path
 import pytest
 
 from openadapt_evals.agents.api_agent import ApiAgent
-from openadapt_evals.adapters.base import BenchmarkObservation, BenchmarkTask
-from openadapt_evals.adapters.waa import WAAMockAdapter
 
 
 def test_synthetic_demos_exist():
@@ -125,7 +123,6 @@ def test_demo_action_formats():
     # Should have at least one of these action types
     has_click = bool(re.search(r'CLICK\(x=[\d.]+,\s*y=[\d.]+\)', content))
     has_type = bool(re.search(r'TYPE\(".*"\)', content))
-    has_wait = bool(re.search(r'WAIT\([\d.]+\)', content))
     has_done = "DONE()" in content
 
     assert has_done, "Demo should end with DONE()"

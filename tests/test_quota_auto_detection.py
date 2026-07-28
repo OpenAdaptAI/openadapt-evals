@@ -129,7 +129,7 @@ class TestQuotaWaitCommand:
 
     def test_immediate_success_when_quota_sufficient(self):
         """Test that command exits immediately when quota is already sufficient."""
-        from openadapt_evals.benchmarks.vm_cli import cmd_azure_ml_quota_wait, init_logging
+        from openadapt_evals.benchmarks.vm_cli import cmd_azure_ml_quota_wait
 
         mock_output = json.dumps([
             {
@@ -279,7 +279,6 @@ class TestCLIIntegration:
     def test_default_values(self):
         """Test that default values are set correctly."""
         # Import the module to get access to the parser
-        from openadapt_evals.benchmarks import vm_cli as cli
 
         # Create a minimal parser just for testing defaults
         parser = argparse.ArgumentParser()

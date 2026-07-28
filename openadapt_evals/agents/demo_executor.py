@@ -103,9 +103,9 @@ class DemoExecutor:
         Returns:
             (score, screenshots) -- score from evaluate_dense().
         """
-        from openadapt_evals.adapters.rl_env import ResetConfig
-
         import time as _time
+
+        from openadapt_evals.adapters.rl_env import ResetConfig
         _t0 = _time.time()
         _tier1 = 0
         _tier2 = 0
@@ -401,6 +401,7 @@ class DemoExecutor:
         serving ``inclusionAI/UI-Venus-1.5-8B``.
         """
         import base64
+
         import requests
 
         endpoint = self._grounder_endpoint.rstrip("/")

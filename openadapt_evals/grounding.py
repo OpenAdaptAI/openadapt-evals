@@ -389,7 +389,6 @@ def _run_glm_ocr(screenshot: bytes) -> list[dict]:
         return []
 
     try:
-        import io
         import tempfile
         from pathlib import Path
 
@@ -437,8 +436,9 @@ def _run_pytesseract(screenshot: bytes) -> list[dict]:
         return []
 
     try:
-        from PIL import Image
         import io
+
+        from PIL import Image
 
         image = Image.open(io.BytesIO(screenshot))
         data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)

@@ -40,9 +40,16 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Load .env for API keys
+# Load .env for API keys. Must precede the openadapt_evals imports below,
+# which read provider credentials from the environment at import time.
 from dotenv import load_dotenv
+
 load_dotenv()
+
+from openadapt_evals.constants import HARDER_TASK_IDS
+from openadapt_evals.telemetry import (
+    track_demo_recorded,
+)
 
 # WAA tasks to record
 TASKS = [
@@ -92,11 +99,6 @@ TASKS = [
         ],
     },
 ]
-
-from openadapt_evals.constants import HARDER_TASK_IDS
-from openadapt_evals.telemetry import (
-    track_demo_recorded,
-)
 
 # File names for the docx setup task
 DOCX_FILES = ["report.docx", "meeting_notes.docx", "proposal.docx"]
@@ -195,7 +197,10 @@ def check_dependencies() -> bool:
     # Check openadapt-capture
     try:
         import openadapt_capture
-        print("  ✓ openadapt-capture installed")
+
+        # Report the resolved path: the import is the availability probe, and
+        # naming the file distinguishes a site install from a local checkout.
+        print(f"  ✓ openadapt-capture installed ({openadapt_capture.__file__})")
     except ImportError:
         print("  Installing openadapt-capture...")
         try:
@@ -251,7 +256,7 @@ def setup_create_docx_files() -> None:
     if created:
         print(f"  Created {len(created)} .docx file(s) in Documents: {', '.join(created)}")
     else:
-        print(f"  .docx files already exist in Documents")
+        print("  .docx files already exist in Documents")
 
 
 SETUP_FUNCTIONS = {
@@ -388,7 +393,6 @@ def main() -> int:
     print_header("Summary")
 
     successful = [tid for tid, path in results.items() if path is not None]
-    skipped = [tid for tid, path in results.items() if path is None]
 
     for task in TASKS:
         status = "✓ recorded" if results.get(task["id"]) else "✗ skipped"
@@ -1568,9 +1572,9 @@ def cmd_record_waa(
     """
     # Guard: Fire may pass True if --tasks is used without a value
     if not isinstance(tasks, str):
-        print(f"ERROR: --tasks must be a string of comma-separated task IDs.")
+        print("ERROR: --tasks must be a string of comma-separated task IDs.")
         print(f"  Got: {tasks!r} (type {type(tasks).__name__})")
-        print(f"  Hint: use --tasks=\"id1,id2,...\" (with = and no space)")
+        print("  Hint: use --tasks=\"id1,id2,...\" (with = and no space)")
         return
 
     # --auto is a convenience flag that enables all sub-flags
@@ -1672,9 +1676,9 @@ def cmd_record_waa(
             print(f"    python {__file__} record-waa --auto --tasks={tasks}")
             print()
             print("  Or use granular flags:")
-            print(f"    --auto-vm        Start Azure VM (incurs charges)")
-            print(f"    --auto-tunnel    Establish SSH tunnels")
-            print(f"    --auto-container Start Docker container + socat proxy")
+            print("    --auto-vm        Start Azure VM (incurs charges)")
+            print("    --auto-tunnel    Establish SSH tunnels")
+            print("    --auto-container Start Docker container + socat proxy")
             return
 
     if not connected:
@@ -1698,11 +1702,11 @@ def cmd_record_waa(
         print(f"  Cached {len(task_configs_cache)}/{len(task_ids)} task config(s).")
     if fetch_failures:
         print(f"  WARNING: {fetch_failures} task config(s) failed to fetch from {evaluate_url}.")
-        print(f"  Step generation will use task IDs instead of instructions for those tasks.")
-        print(f"  (Is the evaluate server / socat proxy running?)")
+        print("  Step generation will use task IDs instead of instructions for those tasks.")
+        print("  (Is the evaluate server / socat proxy running?)")
     if not task_configs_cache and len(task_ids) > 0:
         print(f"  ERROR: Could not fetch ANY task configs from {evaluate_url}.")
-        print(f"  The evaluate server may be down. Check socat proxy on the VM.")
+        print("  The evaluate server may be down. Check socat proxy on the VM.")
         answer = input("  Continue anyway? [y/N] ").strip().lower()
         if answer not in ("y", "yes"):
             return
@@ -1759,7 +1763,7 @@ def cmd_record_waa(
             print(f"    {n_done} step(s) done, {n_left} remaining (saved {ts})")
             print(f"    Next step: {next_step}")
             print(f"\n  Check VNC ({vnc_url}) — is the VM still where you left off?")
-            print(f"  If yes, we can skip the hard reset and resume recording.")
+            print("  If yes, we can skip the hard reset and resume recording.")
             answer = input("  Resume from checkpoint? [y/N] ").strip().lower()
             if answer in ("y", "yes"):
                 resumable_task = _tid
@@ -1846,7 +1850,7 @@ def cmd_record_waa(
                 time.sleep(5)  # Give the app time to open after setup
             except Exception as e:
                 print(f"  WARNING: environment setup failed: {e}")
-                print(f"  The task app may not be open. Check VNC.")
+                print("  The task app may not be open. Check VNC.")
             print("  Waiting for screen to stabilize...")
             return _wait_for_stable_screen(server)
 
@@ -1866,7 +1870,7 @@ def cmd_record_waa(
                 _setup_task_env()
             except Exception as e:
                 print(f"  WARNING: environment setup failed: {e}")
-                print(f"  The task app may not be open. Check VNC.")
+                print("  The task app may not be open. Check VNC.")
             print("  Waiting for screen to stabilize...")
             return _wait_for_stable_screen(server)
 
@@ -2229,11 +2233,11 @@ def cmd_annotate_waa(
         ANNOTATION_SYSTEM_PROMPT,
         AnnotatedDemo,
         AnnotatedStep,
-        parse_annotation_response,
         format_annotated_demo,
+        parse_annotation_response,
         validate_annotations,
     )
-    from openadapt_evals.vlm import vlm_call, image_bytes_from_path
+    from openadapt_evals.vlm import image_bytes_from_path, vlm_call
 
     recordings_dir = Path(recordings)
     output_dir = Path(output)

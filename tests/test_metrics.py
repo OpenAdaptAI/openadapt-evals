@@ -1,10 +1,10 @@
 """Tests for shared evaluation metrics module."""
 
 from openadapt_evals.evaluation.metrics import (
+    boolean,
+    contains,
     exact_match,
     fuzzy_match,
-    contains,
-    boolean,
     get_metric,
 )
 

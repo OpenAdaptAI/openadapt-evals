@@ -36,16 +36,16 @@ Usage:
 from __future__ import annotations
 
 import json
+import logging
+import socket
 import subprocess
 import time
-from dataclasses import dataclass, field, asdict
+import urllib.error
+import urllib.request
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
-import urllib.request
-import urllib.error
-import socket
-import logging
 
 logger = logging.getLogger(__name__)
 

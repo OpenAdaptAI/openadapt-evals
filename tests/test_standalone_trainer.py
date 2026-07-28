@@ -13,7 +13,6 @@ import pytest
 from openadapt_evals.training.standalone.config import TrainingConfig
 from openadapt_evals.training.standalone.trainer import GRPOTrainer
 
-
 # ---------------------------------------------------------------------------
 # Action regex
 # ---------------------------------------------------------------------------
@@ -120,8 +119,9 @@ class TestOutlinesIntegration:
             import outlines
         except ImportError:
             pytest.skip("outlines not installed")
-        from PIL import Image as PILImage
         import io
+
+        from PIL import Image as PILImage
         img = PILImage.new("RGB", (10, 10))
         buf = io.BytesIO()
         img.save(buf, format="PNG")
@@ -132,6 +132,7 @@ class TestOutlinesIntegration:
         """Generator.__call__ must accept **inference_kwargs (max_new_tokens)."""
         try:
             import inspect
+
             from outlines.generator import SteerableGenerator
         except ImportError:
             pytest.skip("outlines not installed")

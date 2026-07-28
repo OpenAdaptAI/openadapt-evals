@@ -13,26 +13,21 @@ Validates:
 from __future__ import annotations
 
 import io
-import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
 from openadapt_evals.adapters.base import BenchmarkAction
 from openadapt_evals.demo_library import (
+    _HAS_IMAGEHASH,
     AlignmentStrategy,
     AlignmentTraceEntry,
     Demo,
-    DemoGuidance,
     DemoLibrary,
     DemoStep,
     HybridAlignmentStrategy,
     PHashAlignmentStrategy,
-    _HAS_CLIP,
-    _HAS_IMAGEHASH,
     _demo_to_dict,
-    _empty_guidance,
 )
 
 # Skip the entire module if imagehash is not installed.

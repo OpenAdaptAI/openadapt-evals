@@ -7,8 +7,8 @@ without requiring a GPU, real model, or WAA server.
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
-import pytest
 
+import pytest
 
 # ---------------------------------------------------------------------------
 # Mock rollout_func tests
@@ -140,8 +140,8 @@ class TestConfigSeparation:
 
     def test_wrapper_accepts_trl_config(self):
         """The TRL wrapper accepts a trl_config kwarg."""
-        from openadapt_evals.training.trl_wrapper import GRPOTrainer
         from openadapt_evals.training.standalone.config import TrainingConfig
+        from openadapt_evals.training.trl_wrapper import GRPOTrainer
 
         tc = TrainingConfig(task_dir="tasks/")
 
@@ -151,8 +151,8 @@ class TestConfigSeparation:
 
     def test_wrapper_defaults_without_trl_config(self):
         """Without trl_config, wrapper builds defaults from TrainingConfig."""
-        from openadapt_evals.training.trl_wrapper import GRPOTrainer
         from openadapt_evals.training.standalone.config import TrainingConfig
+        from openadapt_evals.training.trl_wrapper import GRPOTrainer
 
         tc = TrainingConfig(task_dir="tasks/")
         trainer = GRPOTrainer(tc)
@@ -168,18 +168,20 @@ class TestTRLWrapperConstruction:
     """Test the wrapper can be constructed with all callback combinations."""
 
     def test_no_callbacks(self):
-        from openadapt_evals.training.trl_wrapper import GRPOTrainer
         from openadapt_evals.training.standalone.config import TrainingConfig
+        from openadapt_evals.training.trl_wrapper import GRPOTrainer
 
         trainer = GRPOTrainer(TrainingConfig())
         assert trainer._on_model_loaded is None
         assert trainer._on_step_complete is None
 
     def test_all_callbacks(self):
-        from openadapt_evals.training.trl_wrapper import GRPOTrainer
         from openadapt_evals.training.standalone.config import TrainingConfig
+        from openadapt_evals.training.trl_wrapper import GRPOTrainer
 
-        fn = lambda *a, **kw: None
+        def fn(*a, **kw):
+            return None
+
         trainer = GRPOTrainer(
             TrainingConfig(),
             on_model_loaded=fn,
@@ -194,8 +196,8 @@ class TestTRLWrapperConstruction:
 
     def test_trl_config_passthrough(self):
         """TRL config is stored as-is, not translated."""
-        from openadapt_evals.training.trl_wrapper import GRPOTrainer
         from openadapt_evals.training.standalone.config import TrainingConfig
+        from openadapt_evals.training.trl_wrapper import GRPOTrainer
 
         mock_trl = MagicMock()
         mock_trl.loss_type = "dapo"
@@ -258,12 +260,16 @@ class TestWrapperPassesCallbacks:
         torch), we verify by inspecting the source code of train() to confirm
         the kwargs are passed. This avoids needing GPU/torch in CI.
         """
-        from openadapt_evals.training.trl_wrapper import GRPOTrainer
-        from openadapt_evals.training.standalone.config import TrainingConfig
         import inspect
 
-        before_fn = lambda task_id, env: None
-        complete_fn = lambda rollout, index: None
+        from openadapt_evals.training.standalone.config import TrainingConfig
+        from openadapt_evals.training.trl_wrapper import GRPOTrainer
+
+        def before_fn(task_id, env):
+            return None
+
+        def complete_fn(rollout, index):
+            return None
 
         trainer = GRPOTrainer(
             TrainingConfig(task_dir="tasks/"),
@@ -307,6 +313,7 @@ class TestVLMPatchIntegration:
     def test_patch_used_in_train_source(self):
         """trl_wrapper.train() patches the model for VLM compatibility."""
         import inspect
+
         from openadapt_evals.training import trl_wrapper
 
         source = inspect.getsource(trl_wrapper.GRPOTrainer.train)
@@ -319,6 +326,7 @@ class TestVLMPatchIntegration:
     def test_generate_fn_calls_cache_vision_inputs(self):
         """generate_fn caches vision inputs on the wrapper before generating."""
         import inspect
+
         from openadapt_evals.training import trl_rollout
 
         source = inspect.getsource(trl_rollout.make_waa_rollout_func)

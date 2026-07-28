@@ -40,8 +40,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 
 from openadapt_evals.adapters.base import (
     BenchmarkAction,
@@ -51,8 +50,8 @@ from openadapt_evals.adapters.base import (
     BenchmarkTask,
 )
 from openadapt_evals.agents.base import BenchmarkAgent
-from openadapt_evals.correction_store import CorrectionEntry, CorrectionStore
 from openadapt_evals.agents.claude_computer_use_agent import _parse_multilevel_demo
+from openadapt_evals.correction_store import CorrectionEntry, CorrectionStore
 from openadapt_evals.plan_verify import (
     VerificationResult,
     verify_goal_completion,
@@ -667,12 +666,6 @@ class DemoController:
 
         # Completed steps summary
         done_steps = [s for s in plan_state.steps if s.status == "done"]
-        pending_steps = [
-            s
-            for s in plan_state.steps
-            if s.status in ("pending", "in_progress")
-            and s.step_num != step.step_num
-        ]
 
         lines = [
             f"GOAL: {plan_state.goal}",

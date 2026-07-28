@@ -260,6 +260,8 @@ class TestGlobalRegistry:
     def test_register_alias_works(self):
         from openadapt_evals.evaluation.verifier_registry import (
             register as reg,
+        )
+        from openadapt_evals.evaluation.verifier_registry import (
             registry,
         )
 
@@ -297,7 +299,6 @@ class TestBuiltinVerifiers:
         """The clear_browsing_data verifier should be available after import."""
         # Import built-in verifiers to trigger registration
         import openadapt_evals.evaluation.builtin_verifiers  # noqa: F401
-
         from openadapt_evals.evaluation.verifier_registry import registry
 
         assert registry.has_verifier("clear_browsing_data")
@@ -305,7 +306,6 @@ class TestBuiltinVerifiers:
     def test_clear_browsing_data_success(self):
         """Test the verifier with a mock adapter that reports empty cache."""
         import openadapt_evals.evaluation.builtin_verifiers  # noqa: F401
-
         from openadapt_evals.evaluation.verifier_registry import registry
 
         class MockAdapter:
@@ -320,7 +320,6 @@ class TestBuiltinVerifiers:
     def test_clear_browsing_data_failure(self):
         """Test the verifier with a mock adapter that reports non-empty cache."""
         import openadapt_evals.evaluation.builtin_verifiers  # noqa: F401
-
         from openadapt_evals.evaluation.verifier_registry import registry
 
         class MockAdapter:
@@ -335,7 +334,6 @@ class TestBuiltinVerifiers:
     def test_clear_browsing_data_error(self):
         """Test the verifier handles adapter errors gracefully."""
         import openadapt_evals.evaluation.builtin_verifiers  # noqa: F401
-
         from openadapt_evals.evaluation.verifier_registry import registry
 
         class BrokenAdapter:

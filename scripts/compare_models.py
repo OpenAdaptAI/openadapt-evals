@@ -237,7 +237,7 @@ def run_single_task(
 ) -> dict[str, Any]:
     """Run a single task and return a result dict. Never raises."""
     from openadapt_evals.adapters.base import BenchmarkTask
-    from openadapt_evals.adapters.rl_env import RLEnvironment, ResetConfig
+    from openadapt_evals.adapters.rl_env import ResetConfig, RLEnvironment
     from openadapt_evals.adapters.waa.live import WAALiveAdapter, WAALiveConfig
     from openadapt_evals.task_config import TaskConfig
 

@@ -188,14 +188,14 @@ def _write_run_environment_metadata(
 
 def cmd_mock(args: argparse.Namespace) -> int:
     """Run mock evaluation (no Windows VM required)."""
-    from openadapt_evals.benchmarks import (
-        WAAMockAdapter,
-        SmartMockAgent,
-        EvaluationConfig,
-        evaluate_agent_on_benchmark,
-        compute_metrics,
-    )
     from openadapt_evals.agents import ApiAgent
+    from openadapt_evals.benchmarks import (
+        EvaluationConfig,
+        SmartMockAgent,
+        WAAMockAdapter,
+        compute_metrics,
+        evaluate_agent_on_benchmark,
+    )
 
     print(f"Running mock WAA evaluation with {args.tasks} tasks...")
 
@@ -330,13 +330,13 @@ def cmd_run(args: argparse.Namespace) -> int:
     - Sets sensible defaults for output and run name
     """
     from openadapt_evals.adapters import WAALiveAdapter, WAALiveConfig
-    from openadapt_evals.agents import SmartMockAgent, ApiAgent, RetrievalAugmentedAgent
-    from openadapt_evals.agents.scripted_agent import ScriptedAgent
     from openadapt_evals.adapters.base import BenchmarkAction
+    from openadapt_evals.agents import ApiAgent, SmartMockAgent
+    from openadapt_evals.agents.scripted_agent import ScriptedAgent
     from openadapt_evals.benchmarks import (
         EvaluationConfig,
-        evaluate_agent_on_benchmark,
         compute_metrics,
+        evaluate_agent_on_benchmark,
     )
 
     server_url = args.server
@@ -542,8 +542,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     no_open = getattr(args, "no_open", False)
     if sys.stdout.isatty() and not no_open:
         try:
-            from openadapt_evals.benchmarks import generate_benchmark_viewer
             import webbrowser
+
+            from openadapt_evals.benchmarks import generate_benchmark_viewer
             viewer_path = benchmark_dir / "viewer.html"
             generate_benchmark_viewer(benchmark_dir=benchmark_dir, output_path=viewer_path)
             print(f"Viewer generated: {viewer_path}")
@@ -560,13 +561,13 @@ def cmd_run(args: argparse.Namespace) -> int:
 def cmd_live(args: argparse.Namespace) -> int:
     """Run live evaluation against a WAA server."""
     from openadapt_evals.adapters import WAALiveAdapter, WAALiveConfig
-    from openadapt_evals.agents import SmartMockAgent, ApiAgent, RetrievalAugmentedAgent
-    from openadapt_evals.agents.scripted_agent import ScriptedAgent
     from openadapt_evals.adapters.base import BenchmarkAction
+    from openadapt_evals.agents import ApiAgent, RetrievalAugmentedAgent, SmartMockAgent
+    from openadapt_evals.agents.scripted_agent import ScriptedAgent
     from openadapt_evals.benchmarks import (
         EvaluationConfig,
-        evaluate_agent_on_benchmark,
         compute_metrics,
+        evaluate_agent_on_benchmark,
     )
 
     evaluate_url = getattr(args, "evaluate_url", None)
@@ -820,7 +821,11 @@ def cmd_smoke_live(args: argparse.Namespace) -> int:
     from openadapt_evals.adapters import WAALiveAdapter, WAALiveConfig
     from openadapt_evals.adapters.base import BenchmarkAction
     from openadapt_evals.agents.scripted_agent import ScriptedAgent
-    from openadapt_evals.benchmarks import EvaluationConfig, compute_metrics, evaluate_agent_on_benchmark
+    from openadapt_evals.benchmarks import (
+        EvaluationConfig,
+        compute_metrics,
+        evaluate_agent_on_benchmark,
+    )
 
     vm_context = _resolve_vm_context(args)
     if not vm_context:
@@ -1159,7 +1164,7 @@ def cmd_probe(args: argparse.Namespace) -> int:
                 print(f"Attempt {attempt}/{max_attempts}: Timeout, waiting...")
                 time.sleep(args.wait_interval)
             else:
-                print(f"ERROR: Connection timed out")
+                print("ERROR: Connection timed out")
 
     print("ERROR: WAA server not reachable")
     return 1
@@ -1489,7 +1494,6 @@ def cmd_server_start(args: argparse.Namespace) -> int:
     WAA runs inside a Docker container with Windows nested virtualization.
     This command starts the existing 'winarena' container.
     """
-    import time
 
     vm_context = _resolve_vm_context(args)
     if not vm_context:
@@ -1506,14 +1510,14 @@ def cmd_server_start(args: argparse.Namespace) -> int:
     # If docker/image is unhealthy, it can hang and the run-command call will time out.
     start_script = '''
  set -e
- 
+
  # Check if container exists
  CONTAINER_ID=$(docker ps -aq -f name=winarena)
  if [ -z "$CONTAINER_ID" ]; then
      echo "ERROR: No 'winarena' container found. Run setup-waa first."
      exit 1
  fi
- 
+
  # Check if already running
  RUNNING=$(docker ps -q -f name=winarena)
  if [ -n "$RUNNING" ]; then
@@ -1524,7 +1528,7 @@ def cmd_server_start(args: argparse.Namespace) -> int:
      disown || true
      echo "Started docker start in background; see /tmp/winarena_start.log"
  fi
- 
+
  # Wait a moment and show status
  sleep 3
  docker ps -f name=winarena --format "ID: {{.ID}}, Status: {{.Status}}"
@@ -1736,8 +1740,8 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
 
 def cmd_up(args: argparse.Namespace) -> int:
     """Start VM, wait for boot, start WAA server, and probe until ready."""
-    import time
     import base64
+    import time
     from pathlib import Path
 
     vm_context = _resolve_vm_context(args)
@@ -1850,7 +1854,7 @@ PY
         text=True,
     )
     if result.returncode != 0 or not result.stdout.strip():
-        print(f"ERROR: Could not get public IP")
+        print("ERROR: Could not get public IP")
         return 1
     public_ip = result.stdout.strip()
     server_url = f"http://{public_ip}:5000"
@@ -1869,7 +1873,7 @@ PY
      echo "This VM may need setup. See openadapt-ml vm setup-waa command."
      exit 1
  fi
- 
+
  # Start container if not running
  RUNNING=$(docker ps -q -f name=winarena)
  if [ -z "$RUNNING" ]; then
@@ -1878,7 +1882,7 @@ PY
      disown || true
      echo "Started docker start in background; see /tmp/winarena_start.log"
  fi
- 
+
  sleep 3
  docker ps -f name=winarena --format "Container: {{.Names}}, Status: {{.Status}}"
  '''
@@ -1983,7 +1987,6 @@ def cmd_wandb_report(args: argparse.Namespace) -> int:
     try:
         from openadapt_evals.integrations.wandb_reports import (
             WandbReportGenerator,
-            generate_demo_report,
         )
     except ImportError as e:
         print(f"ERROR: wandb reports API not available: {e}")
@@ -2147,8 +2150,8 @@ def cmd_azure_monitor(args: argparse.Namespace) -> int:
 
 def cmd_azure(args: argparse.Namespace) -> int:
     """Run Azure-based parallel evaluation."""
-    from openadapt_evals.benchmarks.azure import AzureConfig, AzureWAAOrchestrator
     from openadapt_evals.benchmarks import SmartMockAgent
+    from openadapt_evals.benchmarks.azure import AzureConfig, AzureWAAOrchestrator
 
     print("Setting up Azure evaluation...")
 

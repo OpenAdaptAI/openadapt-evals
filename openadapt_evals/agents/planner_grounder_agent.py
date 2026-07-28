@@ -315,7 +315,6 @@ class PlannerGrounderAgent(BenchmarkAgent):
                 if shortcuts:
                     # Pick the first shortcut the agent hasn't tried
                     shortcut = shortcuts[0]
-                    keys = [k.strip() for k in shortcut.split("+")]
                     logger.warning(
                         "Anti-loop FORCED OVERRIDE: bypassing planner, "
                         "emitting keyboard shortcut %r from demo",
@@ -857,8 +856,6 @@ class PlannerGrounderAgent(BenchmarkAgent):
             Grounded BenchmarkAction with pixel or fractional coordinates.
         """
         import base64
-        import json
-        import re
 
         import requests
 

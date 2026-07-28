@@ -32,7 +32,7 @@ from datetime import datetime
 
 from dotenv import load_dotenv
 
-from openadapt_evals.integrations.fixtures import Scenario, WAA_DOMAINS
+from openadapt_evals.integrations.fixtures import WAA_DOMAINS, Scenario
 from openadapt_evals.integrations.wandb_logger import WandbLogger
 
 # Load .env file

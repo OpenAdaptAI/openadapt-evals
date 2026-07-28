@@ -7,7 +7,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from openadapt_evals.adapters.base import (
-    BenchmarkAction,
     BenchmarkObservation,
     BenchmarkTask,
 )

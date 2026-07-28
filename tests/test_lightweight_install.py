@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import importlib
 import sys
-from unittest import mock
 
 import pytest
 
@@ -232,7 +231,7 @@ class TestVmCliStaysLight:
 
         assert oe.WAAAdapter is direct_adapter  # lazy value is the real object
         assert callable(oe.compute_metrics)
-        from openadapt_evals.benchmarks import WAAMockAdapter, EvaluationConfig
+        from openadapt_evals.benchmarks import EvaluationConfig, WAAMockAdapter
 
         assert WAAMockAdapter is not None
         assert EvaluationConfig is not None

@@ -17,10 +17,7 @@ from __future__ import annotations
 import logging
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from openadapt_evals.adapters.base import (
-    BenchmarkAction,
     BenchmarkObservation,
     BenchmarkResult,
     BenchmarkTask,
@@ -29,9 +26,7 @@ from openadapt_evals.training.trl_rollout import (
     _empty_rollout_result,
     _run_episode,
     make_waa_rollout_func,
-    parse_action_json,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -188,9 +183,11 @@ class TestCorruptScreenshotRetry:
         )
         trainer = _make_mock_trainer(num_generations=1)
 
-        from openadapt_evals.training import trl_rollout
-        from PIL import Image
         import io as _io
+
+        from PIL import Image
+
+        from openadapt_evals.training import trl_rollout
 
         # Create a real valid PNG
         img = Image.new("RGB", (10, 10), color="red")
@@ -247,8 +244,9 @@ class TestCorruptScreenshotRetry:
         )
         trainer = _make_mock_trainer(num_generations=1)
 
-        from openadapt_evals.training import trl_rollout
         from PIL import Image
+
+        from openadapt_evals.training import trl_rollout
 
         def mock_run(env, gfn, instr, tid, ms, stuck_threshold=3):
             from openadapt_evals.adapters.rl_env import ResetConfig
@@ -346,7 +344,6 @@ class TestStuckDetection:
 
         # Vary the observation screenshots returned by step
         step_idx = {"n": 0}
-        original_step = adapter.step
 
         def varying_step(action):
             idx = min(step_idx["n"] + 1, len(screenshots) - 1)
@@ -438,7 +435,9 @@ class TestTruncationWarning:
         truncation check fires.
         """
         import io as _io
+
         from PIL import Image
+
         from openadapt_evals.training import trl_rollout
 
         adapter = _make_mock_adapter()
@@ -514,7 +513,9 @@ class TestTruncationWarning:
     def test_no_truncation_warning_when_short(self, caplog):
         """HF generate path: short output does NOT trigger warning."""
         import io as _io
+
         from PIL import Image
+
         from openadapt_evals.training import trl_rollout
 
         adapter = _make_mock_adapter()

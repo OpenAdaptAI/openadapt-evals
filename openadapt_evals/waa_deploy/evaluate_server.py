@@ -408,11 +408,10 @@ Write-Host 'Chrome installed.'
 
     def _download_libreoffice():
         """Discover latest LibreOffice version and download MSI to Samba share."""
-        import re as _re
-        import subprocess
-
         # Check if already downloaded
         import glob
+        import re as _re
+        import subprocess
         existing = glob.glob("/tmp/smb/LibreOffice_*_Win_x86-64.msi")
         if existing:
             logger.info(f"install_apps: LibreOffice MSI already present: {existing[0]}")
@@ -745,6 +744,6 @@ def _run_metric(func_name, actual, expected):
 
 if __name__ == "__main__":
     logger.info("Starting evaluate server on port 5050")
-    logger.info(f"WAA evaluators loaded from /client/desktop_env/evaluators/")
-    logger.info(f"Controller pointing to 172.30.0.2:5000")
+    logger.info("WAA evaluators loaded from /client/desktop_env/evaluators/")
+    logger.info("Controller pointing to 172.30.0.2:5000")
     app.run(host="0.0.0.0", port=5050, debug=False)

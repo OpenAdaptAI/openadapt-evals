@@ -30,7 +30,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from openadapt_evals.adapters.base import (
     BenchmarkAction,
@@ -39,6 +39,15 @@ from openadapt_evals.adapters.base import (
     BenchmarkResult,
     BenchmarkTask,
 )
+
+if TYPE_CHECKING:
+    # Both are type-only: `requests` and Pillow are imported inside the method
+    # bodies that use them, to keep them off this module's import path. The
+    # `requests.Response` and `PIL.Image.Image` annotations below named
+    # undefined modules until this block existed, so `typing.get_type_hints()`
+    # on this adapter raised NameError.
+    import PIL.Image
+    import requests
 
 logger = logging.getLogger(__name__)
 
@@ -1412,6 +1421,7 @@ class WAALiveAdapter(BenchmarkAdapter):
                 # Detect actual screen dimensions from screenshot
                 try:
                     from io import BytesIO
+
                     from PIL import Image
                     img = Image.open(BytesIO(screenshot))
                     self._actual_screen_size = img.size
@@ -1841,7 +1851,6 @@ class WAALiveAdapter(BenchmarkAdapter):
                 # Use repr for safe string embedding
                 app_repr = repr(app)
                 if pkg_id:
-                    pkg_repr = repr(pkg_id)
                     install_lines.append(
                         f"r = subprocess.run("
                         f"'winget install --id {pkg_id}"
@@ -1854,8 +1863,8 @@ class WAALiveAdapter(BenchmarkAdapter):
                         f"print(f'winget install {pkg_id}: rc={{r.returncode}}')"
                     )
                     install_lines.append(
-                        f"print(r.stdout[-500:] if len(r.stdout) > 500"
-                        f" else r.stdout)"
+                        "print(r.stdout[-500:] if len(r.stdout) > 500"
+                        " else r.stdout)"
                     )
                     # winget returns 0 on success, -1978335189 (0x8A150019)
                     # when already installed — both are fine.
@@ -1878,20 +1887,20 @@ class WAALiveAdapter(BenchmarkAdapter):
                     )
                     # Parse first package ID from winget search output
                     install_lines.append(
-                        f"match = re.search("
-                        f"r'(\\S+\\.\\S+)\\s+\\S+\\s+winget', s.stdout)"
+                        "match = re.search("
+                        "r'(\\S+\\.\\S+)\\s+\\S+\\s+winget', s.stdout)"
                     )
                     install_lines.append(
-                        f"pkg = match.group(1) if match else None"
+                        "pkg = match.group(1) if match else None"
                     )
                     install_lines.append(
-                        f"r2 = subprocess.run("
-                        f"f'winget install --id {{pkg}}"
-                        f" --accept-package-agreements"
-                        f" --accept-source-agreements"
-                        f" --silent', shell=True,"
-                        f" capture_output=True, text=True, timeout=300)"
-                        f" if pkg else None"
+                        "r2 = subprocess.run("
+                        "f'winget install --id {pkg}"
+                        " --accept-package-agreements"
+                        " --accept-source-agreements"
+                        " --silent', shell=True,"
+                        " capture_output=True, text=True, timeout=300)"
+                        " if pkg else None"
                     )
                     install_lines.append(
                         f"failed.append({app_repr})"

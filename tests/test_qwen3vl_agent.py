@@ -11,10 +11,8 @@ Tests cover:
 8. Edge cases in parsing
 """
 
-import pytest
 
 from openadapt_evals.adapters.base import (
-    BenchmarkAction,
     BenchmarkObservation,
     BenchmarkTask,
 )
@@ -28,7 +26,6 @@ from openadapt_evals.agents.qwen3vl_agent import (
     _format_a11y_tree,
     parse_qwen_action,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

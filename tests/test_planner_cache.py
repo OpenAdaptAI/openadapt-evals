@@ -2,13 +2,9 @@
 
 from __future__ import annotations
 
-import importlib
 import json
-import sys
-import tempfile
 from io import BytesIO
 from pathlib import Path
-from unittest import mock
 
 import pytest
 
@@ -172,7 +168,7 @@ class TestPerceptualHashing:
     def test_phash_used_when_available(self, tmp_path: Path):
         """When imagehash is installed, the screenshot hash should be a
         perceptual hash (hex string), not an MD5 digest."""
-        from openadapt_evals.training.planner_cache import PlannerCache, _HAS_IMAGEHASH
+        from openadapt_evals.training.planner_cache import _HAS_IMAGEHASH, PlannerCache
 
         if not _HAS_IMAGEHASH:
             pytest.skip("imagehash not installed")

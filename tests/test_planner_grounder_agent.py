@@ -12,12 +12,10 @@ from openadapt_evals.adapters.base import (
     BenchmarkTask,
 )
 from openadapt_evals.agents.planner_grounder_agent import (
-    PlannerGrounderAgent,
-    _ANTI_LOOP_THRESHOLD,
     _PLANNER_PROMPT,
+    PlannerGrounderAgent,
     _action_to_planner_output,
 )
-
 
 # -- Fixtures ----------------------------------------------------------------
 

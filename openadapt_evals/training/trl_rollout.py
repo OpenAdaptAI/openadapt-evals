@@ -75,16 +75,18 @@ from typing import Any, Callable, Optional
 
 from pydantic import BaseModel
 
-from openadapt_evals.adapters.base import BenchmarkAction, BenchmarkObservation
-from openadapt_evals.adapters.rl_env import RLEnvironment, ResetConfig
+from openadapt_evals.adapters.base import BenchmarkAction
+from openadapt_evals.adapters.rl_env import ResetConfig, RLEnvironment
+
+# Re-exported on purpose, not merely imported: this module must use the SAME
+# system prompt object as the standalone trainer, and
+# tests/test_trl_parity.py asserts the identity so the two training paths
+# cannot drift. The base model (Qwen2.5-VL-7B-Instruct) was SFT'd on the DSL
+# format (Thought: ...\nAction: CLICK(x=0.XX, y=0.XX)); a different prompt
+# produces garbage because the model has never seen that format.
+from openadapt_evals.training.standalone.prompt import SYSTEM_PROMPT  # noqa: F401
 
 logger = logging.getLogger(__name__)
-
-# Use the SAME system prompt as the standalone trainer.
-# The base model (Qwen2.5-VL-7B-Instruct) was SFT'd on the DSL format
-# (Thought: ...\nAction: CLICK(x=0.XX, y=0.XX)). Using a different prompt
-# (e.g. JSON) produces garbage because the model has never seen that format.
-from openadapt_evals.training.standalone.prompt import SYSTEM_PROMPT  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Constrained decoding regex -- ported from standalone trainer
@@ -407,8 +409,6 @@ def make_waa_rollout_func(
     # Index task configs by name for lookup
     config_map: dict[str, Any] = {}
     if task_configs:
-        from openadapt_evals.task_config import TaskConfig
-
         for tc in task_configs:
             config_map[tc.name] = tc
             config_map[tc.id] = tc

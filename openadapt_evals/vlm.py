@@ -12,7 +12,6 @@ import json
 import re
 from pathlib import Path
 
-
 _DEFAULT_TIMEOUT = 120  # seconds — prevents indefinite hangs on API calls
 
 

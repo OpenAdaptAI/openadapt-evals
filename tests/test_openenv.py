@@ -4,12 +4,9 @@ from __future__ import annotations
 
 import base64
 import textwrap
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock
 
 from openadapt_evals.adapters.base import (
-    BenchmarkAction,
     BenchmarkObservation,
     BenchmarkResult,
     BenchmarkTask,

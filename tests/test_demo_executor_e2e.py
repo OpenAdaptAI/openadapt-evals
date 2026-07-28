@@ -18,7 +18,6 @@ from openadapt_evals.adapters.rl_env import ResetConfig, RolloutStep
 from openadapt_evals.agents.demo_executor import DemoExecutor
 from openadapt_evals.demo_library import Demo, DemoStep
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

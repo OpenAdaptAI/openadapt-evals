@@ -17,7 +17,6 @@ from scripts.report_openadapt_performance import (
     render_markdown,
 )
 
-
 ROOT = Path(__file__).resolve().parents[1]
 INPUT_ROOT = ROOT / "docs/eval_results/inputs/openadapt_performance_20260717"
 REPORT_JSON = ROOT / "docs/eval_results/openadapt_performance_20260717.json"

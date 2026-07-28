@@ -15,14 +15,13 @@ Usage:
 """
 
 import json
-import time
 from pathlib import Path
 
+from openadapt_evals.benchmarks.azure import VM_TIER_COSTS, VM_TIER_SPOT_COSTS
 from openadapt_evals.benchmarks.monitoring import (
     CostTracker,
     calculate_potential_savings,
 )
-from openadapt_evals.benchmarks.azure import VM_TIER_COSTS, VM_TIER_SPOT_COSTS
 
 
 def print_header(title: str, char: str = "="):
@@ -171,10 +170,10 @@ def main():
     print("#"*70)
 
     # Demo 1: CostTracker
-    report = demo_cost_tracker()
+    demo_cost_tracker()
 
     # Demo 2: Cost Calculator
-    results = demo_cost_calculator()
+    demo_cost_calculator()
 
     # Summary
     print_header("DEMONSTRATION COMPLETE", "=")

@@ -21,7 +21,6 @@ passes through the function unchanged. No runtime cost.
 
 from __future__ import annotations
 
-import functools
 import logging
 from typing import Any, Callable, TypeVar
 

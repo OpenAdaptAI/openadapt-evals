@@ -37,7 +37,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-
 ARMS = ("compiled", "dom", "dom_named")
 CONDITIONS = ("clean", "theme", "rename")
 ARM_LABELS = {

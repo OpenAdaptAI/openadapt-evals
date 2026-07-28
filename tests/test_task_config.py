@@ -5,13 +5,11 @@ from __future__ import annotations
 import json
 import os
 import textwrap
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
-import yaml
 
 from openadapt_evals.task_config import Milestone, TaskCheck, TaskConfig
-
 
 # ---------------------------------------------------------------------------
 # YAML loading tests

@@ -17,7 +17,6 @@ from typing import Any
 
 from pydantic import BaseModel, Field, computed_field
 
-
 # ---------------------------------------------------------------------------
 # 3.1 Recording Normalization Layer
 # ---------------------------------------------------------------------------
