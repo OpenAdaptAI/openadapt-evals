@@ -47,6 +47,17 @@ jobs:
       - name: Check published evidence manifest consistency
         run: python scripts/check_published_evidence_freshness.py --offline
 
+      # This repo declared a ruff config for years with nothing enforcing it,
+      # and drifted to 478 findings against its own declared rule set --
+      # including three undefined names. PR #275 cleared all of them; without a
+      # gate the same decay restarts immediately, and the next person to add one
+      # hits the same wall. Costs about 10 seconds inside a job that already
+      # installs ruff, so it needs no runner, no install step and no new
+      # workflow. The linter is version-bounded (ruff>=0.16,<0.17) and the rule
+      # set is explicit, so this cannot go red because ruff shipped a release.
+      - name: Lint
+        run: uv run --no-sources ruff check .
+
       - name: Run tests
         run: |
           uv run --no-sources pytest tests/ -q \
