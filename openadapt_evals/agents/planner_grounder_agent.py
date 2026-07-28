@@ -375,14 +375,21 @@ class PlannerGrounderAgent(BenchmarkAgent):
                 },
             )
 
-        if decision == "FAIL":
+        if decision in ("FAIL", "ERROR"):
             self._action_history.append("FAIL()")
+            error = (
+                planner_output.get("error")
+                or reasoning
+                or "planner reported failure"
+            )
             return BenchmarkAction(
                 type="error",
                 raw_action={
                     "planner_output": planner_output,
                     "source": "planner",
                     "fail_reason": reasoning,
+                    "error": error,
+                    "error_type": planner_output.get("error_type", "agent"),
                 },
             )
 
@@ -992,6 +999,22 @@ def _action_to_planner_output(action: BenchmarkAction) -> dict[str, Any]:
             "decision": "DONE",
             "instruction": "",
             "reasoning": action.raw_action.get("reasoning", "") if action.raw_action else "",
+        }
+
+    if action.type == "error":
+        raw_action = action.raw_action or {}
+        error = (
+            raw_action.get("reason")
+            or raw_action.get("error")
+            or raw_action.get("parse_error")
+            or "planner reported failure"
+        )
+        return {
+            "decision": "ERROR",
+            "instruction": "",
+            "reasoning": str(error),
+            "error": str(error),
+            "error_type": raw_action.get("error_type", "agent"),
         }
 
     # Use the action string representation as the instruction.

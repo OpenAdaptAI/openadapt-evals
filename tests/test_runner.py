@@ -555,3 +555,39 @@ class TestRunSingleTask:
 
         # Should have only taken 0 steps (done before first step execution)
         assert result.num_steps == 0
+
+    def test_agent_error_cannot_be_overwritten_by_successful_evaluation(self):
+        """A terminal agent error cannot be reported as task success."""
+        adapter = WAAMockAdapter(num_tasks=1, domains=["browser"])
+        task = adapter.list_tasks()[0]
+        adapter.evaluate = Mock(
+            return_value=BenchmarkResult(
+                task_id=task.task_id,
+                success=True,
+                score=1.0,
+            )
+        )
+        agent = ScriptedAgent(
+            [
+                BenchmarkAction(
+                    type="error",
+                    raw_action={
+                        "error": "provider offline",
+                        "error_type": "infrastructure",
+                    },
+                )
+            ]
+        )
+        config = EvaluationConfig(
+            verbose=False,
+            save_execution_traces=False,
+            enable_live_tracking=False,
+        )
+
+        result = _run_single_task(agent, adapter, task, config)
+
+        assert result.success is False
+        assert result.score == 0.0
+        assert result.error == "provider offline"
+        assert result.reason == "provider offline"
+        assert result.error_type == "infrastructure"

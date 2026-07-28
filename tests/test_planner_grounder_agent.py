@@ -82,6 +82,22 @@ class MockDonePlannerAgent:
         pass
 
 
+class MockErrorPlannerAgent:
+    """Mock planner that reports a terminal provider failure."""
+
+    def act(self, observation, task, history=None):
+        return BenchmarkAction(
+            type="error",
+            raw_action={
+                "error": "provider offline",
+                "error_type": "infrastructure",
+            },
+        )
+
+    def reset(self):
+        pass
+
+
 # -- Tests: Agent-based planner + grounder ------------------------------------
 
 
@@ -108,6 +124,19 @@ class TestAgentBasedPipeline:
 
         assert action.type == "done"
         assert action.raw_action["source"] == "planner"
+
+    def test_planner_error_stops_before_grounding(self, observation, task):
+        """A planner failure cannot be converted into a grounded action."""
+        planner = MockErrorPlannerAgent()
+        grounder = MagicMock()
+
+        agent = PlannerGrounderAgent(planner=planner, grounder=grounder)
+        action = agent.act(observation, task)
+
+        assert action.type == "error"
+        assert action.raw_action["error"] == "provider offline"
+        assert action.raw_action["error_type"] == "infrastructure"
+        grounder.act.assert_not_called()
 
     def test_planner_metadata_attached_to_action(self, observation, task):
         """Planner output dict is attached to the final action's raw_action."""
@@ -396,6 +425,26 @@ class TestActionToPlannerOutput:
 
         assert result["decision"] == "DONE"
         assert result["reasoning"] == ""
+
+    def test_error_action_maps_to_fail_decision(self):
+        """Planner errors remain terminal and retain their diagnostics."""
+        action = BenchmarkAction(
+            type="error",
+            raw_action={
+                "error": "provider offline",
+                "error_type": "infrastructure",
+            },
+        )
+
+        result = _action_to_planner_output(action)
+
+        assert result == {
+            "decision": "ERROR",
+            "instruction": "",
+            "reasoning": "provider offline",
+            "error": "provider offline",
+            "error_type": "infrastructure",
+        }
 
 
 # -- Tests: Accessibility tree formatting -------------------------------------
