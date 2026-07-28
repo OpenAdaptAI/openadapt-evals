@@ -66,7 +66,8 @@ def require_successful_receipt(
             raise ReceiptValidationError(
                 f"{context} receipt has failed={payload['failed']!r}"
             )
-        positive = True
+        # An explicit lack of failure is not proof that the operation
+        # completed. Require a separate positive outcome signal.
 
     for field in ("error", "stderr"):
         if field not in payload:

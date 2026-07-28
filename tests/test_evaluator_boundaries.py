@@ -83,6 +83,7 @@ def test_postconfig_request_exception_is_unscored_infrastructure() -> None:
     "receipt",
     [
         {"success": False},
+        {"failed": False},
         {"success": True, "stderr": "warning"},
         {"delivery_state": "uncertain"},
         {"delivery_state": "invalid"},
