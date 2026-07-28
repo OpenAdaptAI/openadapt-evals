@@ -27,6 +27,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import math
 import re
 import time
 from dataclasses import dataclass
@@ -39,6 +40,12 @@ from openadapt_evals.adapters.base import (
     BenchmarkResult,
     BenchmarkTask,
 )
+from openadapt_evals.errors import (
+    ActionDeliveredObservationError,
+    ActionDeliveryState,
+    ActionDeliveryUncertainError,
+    ActionExecutionError,
+)
 
 if TYPE_CHECKING:
     # Both are type-only: `requests` and Pillow are imported inside the method
@@ -50,6 +57,15 @@ if TYPE_CHECKING:
     import requests
 
 logger = logging.getLogger(__name__)
+
+
+def _fraction_to_pixel(value: float, size: int, name: str) -> int:
+    """Map an inclusive normalized coordinate to one valid pixel index."""
+    if size <= 0:
+        raise ValueError(f"{name} screen dimension must be positive")
+    if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+        raise ValueError(f"{name}_frac must be a finite value between 0 and 1")
+    return min(int(value * size), size - 1)
 
 
 # WAA task IDs are UUIDs with a domain suffix, e.g., "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx-WOS"
@@ -672,15 +688,21 @@ class WAALiveAdapter(BenchmarkAdapter):
         Raises:
             RuntimeError: If server is not reachable.
         """
+        # Invalidate every task-bound observation before any reset work. A
+        # failed reset must not leave an earlier task actionable.
+        self._current_task = None
+        self._step_count = 0
+        self._actions = []
+        self._actual_screen_size = None
+        self._current_screenshot = None
+        self._current_a11y = None
+        self._current_rects = {}
+
         if not self.check_connection():
             raise RuntimeError(
                 f"Cannot connect to WAA server at {self.config.server_url}. "
                 f"Ensure Windows VM is running and server is started."
             )
-
-        self._current_task = task
-        self._step_count = 0
-        self._actions = []
 
         import requests
 
@@ -691,7 +713,9 @@ class WAALiveAdapter(BenchmarkAdapter):
             if task.raw_config:
                 self._run_task_setup(task.raw_config)
                 time.sleep(2.0)
-            return self._get_observation()
+            observation = self._get_observation()
+            self._current_task = task
+            return observation
 
         # Legacy mode (lightweight=False): full cleanup + focus checks.
         # Kept for backward compatibility but not recommended — the cleanup
@@ -737,14 +761,17 @@ class WAALiveAdapter(BenchmarkAdapter):
                     "Marking task as infrastructure failure before step budget."
                 )
 
-        return self._get_observation()
+        observation = self._get_observation()
+        self._current_task = task
+        return observation
 
     def _send_command(self, command: str) -> None:
         """Send a pyautogui command to WAA via /execute_windows.
 
-        Handles fail-safe detection and recovery. If PyAutoGUI's fail-safe is
-        triggered (mouse at screen corner), recovery is attempted automatically
-        via the /execute endpoint before retrying the command once.
+        A fail-safe response can occur after a multi-call command delivered a
+        prefix. The command is retried only when the server explicitly reports
+        ``delivery_state=not_delivered``. Otherwise recovery only prepares a
+        later separately authorized attempt.
 
         Args:
             command: Python command string to execute on the WAA server.
@@ -756,69 +783,180 @@ class WAALiveAdapter(BenchmarkAdapter):
             resp = requests.post(
                 f"{self.config.server_url}/execute_windows",
                 json={"command": command},
-                timeout=self.config.timeout
+                timeout=self.config.timeout,
             )
-            # Check ALL responses (200 and non-200) for fail-safe errors.
-            # WAA returns 500 with a JSON "message" field for fail-safe,
-            # and sometimes 200 with stderr containing the exception.
-            response_text = resp.text
-            if resp.status_code == 200:
-                result = resp.json()
-                stderr = result.get("stderr", "")
-                stdout = result.get("stdout", "")
-                response_text = stderr + stdout
-                if stderr:
-                    logger.warning(f"Command stderr: {stderr}")
-            else:
-                logger.error(f"Execute failed ({resp.status_code}): {resp.text}")
+        except Exception as exc:
+            raise ActionDeliveryUncertainError(
+                "WAA command request failed; delivery outcome is uncertain: "
+                f"{exc}"
+            ) from exc
 
-            # Detect PyAutoGUI fail-safe and attempt recovery (once per step)
-            if _is_failsafe_error(response_text):
-                logger.warning(
-                    "PyAutoGUI fail-safe detected; attempting recovery..."
+        response_text, stderr = self._command_response_details(resp)
+
+        # WAA can report the fail-safe through HTTP 500 or through stderr on
+        # HTTP 200. Recovery is bounded to one attempt and must itself succeed.
+        if _is_failsafe_error(response_text):
+            logger.warning("PyAutoGUI fail-safe detected; attempting recovery...")
+            delivery_state = self._command_delivery_state(resp)
+            if not self._recover_failsafe():
+                if delivery_state is ActionDeliveryState.NOT_DELIVERED:
+                    raise ActionExecutionError(
+                        "WAA fail-safe recovery failed after confirmed non-delivery"
+                    )
+                raise ActionDeliveryUncertainError(
+                    "WAA fail-safe recovery failed; delivery could not be confirmed"
                 )
-                if self._recover_failsafe():
-                    logger.info(
-                        "Fail-safe cleared; retrying command: %s", command
-                    )
-                    retry_resp = requests.post(
-                        f"{self.config.server_url}/execute_windows",
-                        json={"command": command},
-                        timeout=self.config.timeout,
-                    )
-                    if retry_resp.status_code == 200:
-                        retry_result = retry_resp.json()
-                        if retry_result.get("stderr"):
-                            logger.warning(
-                                f"Retry stderr: {retry_result['stderr']}"
-                            )
-                    else:
-                        logger.error(
-                            f"Retry failed ({retry_resp.status_code}): "
-                            f"{retry_resp.text}"
-                        )
-                else:
-                    logger.error(
-                        "Fail-safe recovery failed; step will proceed "
-                        "with degraded state"
-                    )
-            elif resp.status_code == 200:
-                logger.debug(f"Executed: {command}")
-        except Exception as e:
-            logger.error(f"Execute request failed: {e}")
 
-    def step(
-        self, action: BenchmarkAction
-    ) -> tuple[BenchmarkObservation, bool, dict[str, Any]]:
+            if delivery_state is not ActionDeliveryState.NOT_DELIVERED:
+                raise ActionDeliveryUncertainError(
+                    "WAA fail-safe may have occurred after part of the command was "
+                    "delivered; refusing a blind retry"
+                )
+
+            logger.info(
+                "Fail-safe cleared after an explicit non-delivery receipt; "
+                "retrying command: %s",
+                command,
+            )
+            try:
+                retry_resp = requests.post(
+                    f"{self.config.server_url}/execute_windows",
+                    json={"command": command},
+                    timeout=self.config.timeout,
+                )
+            except Exception as exc:
+                raise ActionDeliveryUncertainError(
+                    "WAA command retry failed; delivery outcome is uncertain: "
+                    f"{exc}"
+                ) from exc
+
+            retry_text, retry_stderr = self._command_response_details(retry_resp)
+            retry_delivery_state = self._command_delivery_state(retry_resp)
+            if _is_failsafe_error(retry_text):
+                if retry_delivery_state is ActionDeliveryState.NOT_DELIVERED:
+                    raise ActionExecutionError(
+                        "WAA command retry triggered a fail-safe before delivery"
+                    )
+                raise ActionDeliveryUncertainError(
+                    "WAA command retry triggered a fail-safe; refusing another retry"
+                )
+            if retry_resp.status_code != 200:
+                message = (
+                    "WAA command retry was not confirmed: "
+                    f"HTTP {retry_resp.status_code}: {retry_resp.text}"
+                )
+                if retry_delivery_state is ActionDeliveryState.NOT_DELIVERED:
+                    raise ActionExecutionError(message)
+                raise ActionDeliveryUncertainError(message)
+            self._validate_command_receipt(retry_resp, context="retry")
+            if retry_stderr:
+                raise ActionDeliveryUncertainError(
+                    f"WAA command retry returned stderr: {retry_stderr}"
+                )
+            logger.debug("Executed after fail-safe recovery: %s", command)
+            return
+
+        if resp.status_code != 200:
+            message = (
+                "WAA command was not confirmed: "
+                f"HTTP {resp.status_code}: {resp.text}"
+            )
+            if self._command_delivery_state(resp) is ActionDeliveryState.NOT_DELIVERED:
+                raise ActionExecutionError(message)
+            raise ActionDeliveryUncertainError(message)
+        self._validate_command_receipt(resp, context="command")
+        if stderr:
+            raise ActionDeliveryUncertainError(
+                f"WAA command returned stderr: {stderr}"
+            )
+        logger.debug("Executed: %s", command)
+
+    @classmethod
+    def _validate_command_receipt(cls, response: Any, *, context: str) -> None:
+        """Reject an explicit failed or incomplete HTTP-200 command receipt."""
+        try:
+            result = response.json()
+        except Exception:
+            return
+        if not isinstance(result, dict):
+            return
+
+        reason: str | None = None
+        if "success" in result and result["success"] is not True:
+            reason = f"success={result['success']!r}"
+        if result.get("error"):
+            reason = f"error={result['error']!r}"
+        if "returncode" in result and (
+            isinstance(result["returncode"], bool)
+            or not isinstance(result["returncode"], int)
+            or result["returncode"] != 0
+        ):
+            reason = f"returncode={result['returncode']!r}"
+
+        delivery_state = cls._command_delivery_state(response)
+        if "delivery_state" in result and delivery_state is None:
+            reason = f"invalid delivery_state={result['delivery_state']!r}"
+        if reason is None and delivery_state in {
+            ActionDeliveryState.NOT_DELIVERED,
+            ActionDeliveryState.UNCERTAIN,
+        }:
+            reason = f"delivery_state={delivery_state.value}"
+        if reason is None:
+            return
+
+        message = f"WAA {context} receipt did not confirm execution: {reason}"
+        if delivery_state is ActionDeliveryState.NOT_DELIVERED:
+            raise ActionExecutionError(message)
+        raise ActionDeliveryUncertainError(message)
+
+    @staticmethod
+    def _command_delivery_state(response: Any) -> ActionDeliveryState | None:
+        """Read an explicit typed delivery state from one server receipt."""
+        try:
+            result = response.json()
+        except Exception:
+            return None
+        if not isinstance(result, dict):
+            return None
+        try:
+            return ActionDeliveryState(result.get("delivery_state"))
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _command_response_details(response: Any) -> tuple[str, str]:
+        """Return response diagnostics and reject malformed success receipts."""
+        response_text = str(response.text or "")
+        try:
+            result = response.json()
+        except Exception as exc:
+            if response.status_code == 200:
+                raise ActionDeliveryUncertainError(
+                    "WAA returned an invalid command receipt; delivery outcome is uncertain"
+                ) from exc
+            return response_text, ""
+
+        if not isinstance(result, dict):
+            if response.status_code == 200:
+                raise ActionDeliveryUncertainError(
+                    "WAA returned an invalid command receipt; delivery outcome is uncertain"
+                )
+            return response_text, ""
+
+        stderr = str(result.get("stderr") or "")
+        stdout = str(result.get("stdout") or "")
+        message = str(result.get("message") or "")
+        return "\n".join((response_text, stderr, stdout, message)), stderr
+
+    def step(self, action: BenchmarkAction) -> tuple[BenchmarkObservation, bool, dict[str, Any]]:
         """Execute action and return new observation.
 
         Uses element-based grounding via WAA's Computer class. Click actions
         are translated to computer.mouse.move_id(id) commands that WAA executes
         using the rects we POSTed to /update_computer.
 
-        If PyAutoGUI's fail-safe is triggered (mouse at screen corner), recovery
-        is attempted automatically via the /execute endpoint before retrying the
-        command once.
+        If PyAutoGUI's fail-safe is triggered, the adapter refuses a blind
+        retry unless the server proves that the command was not dispatched.
 
         Args:
             action: Action to execute.
@@ -826,26 +964,48 @@ class WAALiveAdapter(BenchmarkAdapter):
         Returns:
             Tuple of (observation, done, info).
         """
-        self._step_count += 1
-        self._actions.append(action)
+        if self._current_task is None:
+            raise ActionExecutionError("WAA action requires a successfully loaded task")
+
+        pointer_action = action.type in {
+            "click",
+            "double_click",
+            "right_click",
+            "scroll",
+            "drag",
+        } or (action.type == "type" and action.target_node_id is not None)
+        if pointer_action:
+            self._require_pointer_context()
 
         # Translate action to element-based command for WAA's Computer
         command = self._translate_action(action)
+
+        if action.type not in ("done", "error") and (
+            not command or command.lstrip().startswith("pass")
+        ):
+            raise ActionExecutionError(
+                f"WAA action {action.type!r} did not produce an executable command"
+            )
 
         # Execute command via /execute_windows (has access to computer object)
         if command:
             self._send_command(command)
 
+        self._step_count += 1
+        self._actions.append(action)
+
         # Wait for UI to settle
         time.sleep(self.config.action_delay)
 
         # Check if done (error actions are also terminal)
-        done = (
-            action.type in ("done", "error") or
-            self._step_count >= self.config.max_steps
-        )
+        done = action.type in ("done", "error") or self._step_count >= self.config.max_steps
 
-        obs = self._get_observation()
+        try:
+            obs = self._get_observation()
+        except Exception as exc:
+            raise ActionDeliveredObservationError(
+                f"WAA action {action.type!r} was delivered, but observation failed: {exc}"
+            ) from exc
         info = {
             "step": self._step_count,
             "command": command,
@@ -867,12 +1027,19 @@ class WAALiveAdapter(BenchmarkAdapter):
         """
         import requests
 
+        recovery_script = (
+            "import pyautogui\n"
+            "previous = pyautogui.FAILSAFE\n"
+            "try:\n"
+            "    pyautogui.FAILSAFE = False\n"
+            "    pyautogui.moveTo(500, 400)\n"
+            "finally:\n"
+            "    pyautogui.FAILSAFE = previous\n"
+        )
+        recovery_payload = base64.b64encode(recovery_script.encode()).decode()
         recovery_command = (
-            'python -c "'
-            "import pyautogui; "
-            "pyautogui.FAILSAFE=False; "
-            "pyautogui.moveTo(500, 400)"
-            '"'
+            'python -c "import base64;'
+            f"exec(base64.b64decode('{recovery_payload}'))\""
         )
         try:
             resp = requests.post(
@@ -880,15 +1047,22 @@ class WAALiveAdapter(BenchmarkAdapter):
                 json={"command": recovery_command},
                 timeout=10.0,
             )
-            if resp.status_code == 200:
-                logger.info("Fail-safe recovery command succeeded")
-                return True
-            else:
+            if resp.status_code != 200:
                 logger.error(
-                    f"Fail-safe recovery request returned HTTP {resp.status_code}: "
-                    f"{resp.text}"
+                    f"Fail-safe recovery request returned HTTP {resp.status_code}: {resp.text}"
                 )
                 return False
+            try:
+                _, stderr = self._command_response_details(resp)
+                self._validate_command_receipt(resp, context="fail-safe recovery")
+            except ActionExecutionError as exc:
+                logger.error("Fail-safe recovery returned an invalid receipt: %s", exc)
+                return False
+            if stderr:
+                logger.error("Fail-safe recovery returned stderr: %s", stderr)
+                return False
+            logger.info("Fail-safe recovery command succeeded")
+            return True
         except Exception as e:
             logger.error(f"Fail-safe recovery request failed: {e}")
             return False
@@ -1142,7 +1316,7 @@ class WAALiveAdapter(BenchmarkAdapter):
             return result
 
     def _result_from_evaluate_response(
-        self, task: BenchmarkTask, result: dict,
+        self, task: BenchmarkTask, result: Any,
     ) -> BenchmarkResult:
         """Build a BenchmarkResult from an /evaluate 200 body.
 
@@ -1153,13 +1327,54 @@ class WAALiveAdapter(BenchmarkAdapter):
         servers have neither field and are treated as measurements, which is
         what they were.
         """
+        def invalid(reason: str) -> BenchmarkResult:
+            return BenchmarkResult(
+                task_id=task.task_id,
+                success=False,
+                score=0.0,
+                num_steps=self._step_count,
+                reason=f"Malformed evaluation response: {reason}",
+                error_type="evaluation",
+            )
+
+        if not isinstance(result, dict):
+            return invalid("body must be an object")
+
+        success = result.get("success")
+        if not isinstance(success, bool):
+            return invalid("success must be a boolean")
+
+        score = result.get("score")
+        if (
+            isinstance(score, bool)
+            or not isinstance(score, (int, float))
+            or not math.isfinite(float(score))
+            or not 0.0 <= float(score) <= 1.0
+        ):
+            return invalid("score must be a finite number between 0 and 1")
+        score = float(score)
+
+        scored = result.get("scored")
+        if scored is not None and not isinstance(scored, bool):
+            return invalid("scored must be a boolean when present")
+
         error_type = result.get("error_type")
-        if result.get("scored") is False and not error_type:
+        if error_type not in (None, "infrastructure", "evaluation"):
+            return invalid("error_type must be infrastructure, evaluation, or null")
+        if scored is True and error_type is not None:
+            return invalid("a scored result cannot carry an error_type")
+        if success != (score >= 1.0):
+            return invalid("success contradicts score")
+
+        if scored is False and error_type is None:
             error_type = "evaluation"
+        if error_type is not None and (success or score != 0.0):
+            return invalid("an unscored result must have success=false and score=0")
+
         return BenchmarkResult(
             task_id=task.task_id,
-            success=result.get("success", False),
-            score=result.get("score", 0.0),
+            success=success,
+            score=score,
             num_steps=self._step_count,
             reason=result.get("reason"),
             error_type=error_type,
@@ -1219,14 +1434,24 @@ class WAALiveAdapter(BenchmarkAdapter):
     def screen_size(self) -> tuple[int, int]:
         """Actual screen dimensions (width, height) detected from screenshots.
 
-        Defaults to config values until first screenshot is taken.
-        RL agents should verify this matches their coordinate normalization
-        assumption (e.g., 1920x1080 for models trained on that resolution).
+        Configured dimensions are not observation evidence. The property
+        refuses access until a screenshot establishes the live viewport.
         """
-        return self._actual_screen_size or (
-            self.config.screen_width,
-            self.config.screen_height,
-        )
+        if self._actual_screen_size is None:
+            raise ActionExecutionError(
+                "WAA screen size requires an exact measured viewport"
+            )
+        return self._actual_screen_size
+
+    def _require_pointer_context(self) -> tuple[int, int]:
+        """Return the current measured viewport or refuse pointer actuation."""
+        if self._current_task is None:
+            raise ActionExecutionError("WAA pointer action requires a loaded task")
+        if self._actual_screen_size is None:
+            raise ActionExecutionError(
+                "WAA pointer action requires an exact measured viewport"
+            )
+        return self.screen_size
 
     def observe(self) -> BenchmarkObservation:
         """Get current observation (screenshot + a11y tree) without stepping.
@@ -1298,34 +1523,68 @@ class WAALiveAdapter(BenchmarkAdapter):
         Returns:
             Tuple of (observation, done, info) -- same as step().
         """
+        if action_type not in ("done", "error") and self._current_task is None:
+            raise ActionExecutionError(
+                "WAA pixel action requires a successfully loaded task"
+            )
+
+        pointer_actions = {
+            "click",
+            "double_click",
+            "right_click",
+            "type",
+            "scroll",
+            "drag",
+        }
+        if action_type in pointer_actions:
+            measured_viewport = self._require_pointer_context()
+
         if x_frac is not None or y_frac is not None:
-            w, h = self.screen_size
-            x = int((x_frac or 0.0) * w)
-            y = int((y_frac or 0.0) * h)
+            # Pointer actions above require this exact measured value. Do not
+            # substitute configured dimensions as actuation evidence.
+            if action_type not in pointer_actions:
+                measured_viewport = self._require_pointer_context()
+            w, h = measured_viewport
+            if x_frac is not None:
+                x = _fraction_to_pixel(x_frac, w, "x")
+            if y_frac is not None:
+                y = _fraction_to_pixel(y_frac, h, "y")
 
-        # Build the action for bookkeeping (step count, action history)
+        # Build and validate the command before changing rollout state.
         action = BenchmarkAction(type=action_type, x=x, y=y, text=text, key=key)
-        self._step_count += 1
-        self._actions.append(action)
-
-        # Build pyautogui command directly -- no element resolution needed
         command = self._build_pixel_command(
-            action_type=action_type, x=x, y=y, text=text, key=key,
+            action_type=action_type,
+            x=x,
+            y=y,
+            text=text,
+            key=key,
         )
+
+        if action_type not in ("done", "error") and (
+            not command or command.lstrip().startswith("pass")
+        ):
+            raise ActionExecutionError(
+                f"WAA pixel action {action_type!r} did not produce an executable command"
+            )
 
         if command:
             self._send_command(command)
+
+        self._step_count += 1
+        self._actions.append(action)
 
         # Wait for UI to settle
         time.sleep(self.config.action_delay)
 
         # Check if done (error actions are also terminal)
-        done = (
-            action_type in ("done", "error")
-            or self._step_count >= self.config.max_steps
-        )
+        done = action_type in ("done", "error") or self._step_count >= self.config.max_steps
 
-        obs = self._get_observation()
+        try:
+            obs = self._get_observation()
+        except Exception as exc:
+            raise ActionDeliveredObservationError(
+                f"WAA pixel action {action_type!r} was delivered, but observation failed: {exc}"
+            ) from exc
         info = {
             "step": self._step_count,
             "command": command,
@@ -1365,22 +1624,37 @@ class WAALiveAdapter(BenchmarkAdapter):
         if action_type == "wait":
             return "import time; time.sleep(1)"
 
-        # Resolve pixel coordinates and clamp to safe margin
-        px = int(x) if x is not None else 0
-        py = int(y) if y is not None else 0
-        px, py = self._clamp_pixel_coords(px, py)
+        if action_type in {
+            "click",
+            "double_click",
+            "right_click",
+            "type",
+            "scroll",
+            "drag",
+        }:
+            if x is None or y is None:
+                raise ActionExecutionError(
+                    f"WAA pixel {action_type!r} action requires x and y coordinates"
+                )
+            try:
+                px, py = self._clamp_pixel_coords(int(x), int(y))
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ActionExecutionError(
+                    f"WAA pixel {action_type!r} action has invalid coordinates"
+                ) from exc
 
-        if action_type == "click":
-            return f"import pyautogui; pyautogui.click({px}, {py})"
-
-        if action_type == "double_click":
-            return f"import pyautogui; pyautogui.doubleClick({px}, {py})"
-
-        if action_type == "right_click":
-            return f"import pyautogui; pyautogui.rightClick({px}, {py})"
+            click_method = {
+                "click": "click",
+                "double_click": "doubleClick",
+                "right_click": "rightClick",
+            }.get(action_type)
+            if click_method:
+                return f"import pyautogui; pyautogui.{click_method}({px}, {py})"
 
         if action_type == "type":
-            type_body = _build_type_commands(text or "")
+            if text is None:
+                raise ActionExecutionError("WAA pixel 'type' action requires text")
+            type_body = _build_type_commands(text)
             return (
                 f"import pyautogui; import time; "
                 f"pyautogui.click({px}, {py}); "
@@ -1389,6 +1663,8 @@ class WAALiveAdapter(BenchmarkAdapter):
             )
 
         if action_type == "key":
+            if not key:
+                raise ActionExecutionError("WAA pixel 'key' action requires key")
             # Reuse the key translation logic
             temp_action = BenchmarkAction(type="key", key=key)
             return self._translate_key_action(temp_action)
@@ -1398,11 +1674,21 @@ class WAALiveAdapter(BenchmarkAdapter):
 
         if action_type == "drag":
             # drag needs end coordinates passed via text as "end_x,end_y"
-            ex, ey = px, py
-            if text:
-                parts = text.split(",")
-                if len(parts) == 2:
-                    ex, ey = self._clamp_pixel_coords(int(parts[0]), int(parts[1]))
+            if not text:
+                raise ActionExecutionError(
+                    "WAA pixel 'drag' action requires end coordinates"
+                )
+            parts = text.split(",")
+            if len(parts) != 2:
+                raise ActionExecutionError(
+                    "WAA pixel 'drag' end coordinates must be 'x,y'"
+                )
+            try:
+                ex, ey = self._clamp_pixel_coords(int(parts[0]), int(parts[1]))
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ActionExecutionError(
+                    "WAA pixel 'drag' action has invalid end coordinates"
+                ) from exc
             return (
                 f"import pyautogui; import time; "
                 f"pyautogui.moveTo({px}, {py}); "
@@ -1414,8 +1700,7 @@ class WAALiveAdapter(BenchmarkAdapter):
                 f"pyautogui.mouseUp(button='left')"
             )
 
-        logger.warning(f"Unknown pixel action type: {action_type}")
-        return None
+        raise ActionExecutionError(f"Unsupported WAA pixel action type: {action_type!r}")
 
     def _get_observation(self) -> BenchmarkObservation:
         """Fetch current observation from WAA server.
@@ -1428,6 +1713,12 @@ class WAALiveAdapter(BenchmarkAdapter):
         """
         import requests
 
+        # Observation evidence is one atomic generation. Do not combine a new
+        # screenshot with accessibility data or geometry from an older frame.
+        self._current_screenshot = None
+        self._current_a11y = None
+        self._current_rects = {}
+        self._actual_screen_size = None
         screenshot = None
         a11y_tree = None
 
@@ -1487,6 +1778,11 @@ class WAALiveAdapter(BenchmarkAdapter):
         # Update WAA's Computer with current rects for element grounding
         if self._current_rects:
             self._update_waa_computer()
+
+        if not screenshot and not a11y_tree:
+            raise AdapterInfrastructureError(
+                "WAA observation failed: no screenshot or accessibility evidence was available"
+            )
 
         return BenchmarkObservation(
             screenshot=screenshot,
@@ -1640,7 +1936,7 @@ class WAALiveAdapter(BenchmarkAdapter):
             escaped = shell_cmd.replace("\\", "\\\\").replace("'", "\\'")
             return (
                 "import subprocess; "
-                f"subprocess.run('{escaped}', shell=True, timeout=60)"
+                f"subprocess.run('{escaped}', shell=True, timeout=60, check=True)"
             )
 
         if entry_type == "launch":
@@ -2017,10 +2313,15 @@ class WAALiveAdapter(BenchmarkAdapter):
                     timeout=http_timeout,
                 )
                 if resp.status_code == 200:
-                    result = resp.json()
-                    stderr = result.get("stderr", "")
+                    _, stderr = self._command_response_details(resp)
                     if stderr:
-                        logger.warning("Setup %s stderr: %s", entry_type, stderr)
+                        raise ActionDeliveryUncertainError(
+                            f"WAA setup command returned stderr: {stderr}"
+                        )
+                    self._validate_command_receipt(
+                        resp,
+                        context=f"setup {entry_type}",
+                    )
                     logger.info("Setup %s: ok", entry_type)
                     self._last_setup_results.append(
                         {"type": entry_type, "status": "ok"}
@@ -2869,21 +3170,30 @@ public static class FgWin {
         return False
 
     def _clamp_pixel_coords(self, x: int, y: int) -> tuple[int, int]:
-        """Clamp pixel coordinates to a safe margin from screen edges.
+        """Validate pixel coordinates without moving the requested target.
 
-        Prevents PyAutoGUI fail-safe by keeping the mouse at least 5px from
-        any screen corner.  If both coordinates are 0, the action would
-        target the top-left corner -- the most common fail-safe trigger.
+        PyAutoGUI reserves the four exact screen corners for its fail-safe.
+        Refuse those targets instead of shifting a valid target to a different
+        control. Other edge coordinates remain unchanged.
 
         Returns:
-            Clamped (x, y) tuple.
+            The unchanged validated ``(x, y)`` tuple.
         """
-        screen_w, screen_h = self._actual_screen_size or (
-            self.config.screen_width, self.config.screen_height,
-        )
-        margin = 5
-        x = max(margin, min(x, screen_w - margin))
-        y = max(margin, min(y, screen_h - margin))
+        screen_w, screen_h = self._require_pointer_context()
+        if x < 0 or x >= screen_w or y < 0 or y >= screen_h:
+            raise ActionExecutionError(
+                f"WAA coordinates ({x}, {y}) are outside the "
+                f"{screen_w}x{screen_h} viewport"
+            )
+        if (x, y) in {
+            (0, 0),
+            (0, screen_h - 1),
+            (screen_w - 1, 0),
+            (screen_w - 1, screen_h - 1),
+        }:
+            raise ActionExecutionError(
+                f"WAA coordinates ({x}, {y}) are reserved for the input fail-safe"
+            )
         return x, y
 
     def _translate_action(self, action: BenchmarkAction) -> str | None:
@@ -2917,7 +3227,9 @@ public static class FgWin {
             return self._translate_click_action(action, "right_click")
 
         if action.type == "type":
-            text = action.text or ""
+            if action.text is None:
+                raise ActionExecutionError("WAA 'type' action requires text")
+            text = action.text
             type_body = _build_type_commands(text)
             # If target_node_id is set (from type_element), click element first to focus it
             if action.target_node_id is not None:
@@ -2926,18 +3238,24 @@ public static class FgWin {
                     rect = self._current_rects[elem_id]
                     cx = (rect[0] + rect[2]) // 2
                     cy = (rect[1] + rect[3]) // 2
-                    return (
-                        f"import pyautogui; import time; "
-                        f"pyautogui.click({cx}, {cy}); "
-                        f"time.sleep(0.2); "
-                        f"{type_body}"
-                    )
+                    cx, cy = self._clamp_pixel_coords(cx, cy)
                 else:
-                    logger.warning(f"Element ID '{elem_id}' not found for type_element, typing without focus")
+                    raise ActionExecutionError(
+                        f"WAA element {elem_id!r} is stale; recorded coordinates "
+                        "are not authorized as current type evidence"
+                    )
+                return (
+                    f"import pyautogui; import time; "
+                    f"pyautogui.click({cx}, {cy}); "
+                    f"time.sleep(0.2); "
+                    f"{type_body}"
+                )
             return f"import pyautogui; {type_body}"
 
         if action.type == "key":
-            key = action.key or ""
+            if not action.key:
+                raise ActionExecutionError("WAA 'key' action requires key")
+            key = action.key
             modifiers = action.modifiers or []
 
             # Handle modifier+key combos (Ctrl+A, Alt+F4, etc.)
@@ -2956,7 +3274,9 @@ public static class FgWin {
             return f"import pyautogui; pyautogui.press('{key.lower()}')"
 
         if action.type == "scroll":
-            direction = action.scroll_direction or "down"
+            direction = action.scroll_direction
+            if direction not in ("up", "down"):
+                raise ActionExecutionError("WAA scroll direction must be 'up' or 'down'")
             # pyautogui.scroll(clicks) - positive is up, negative is down
             clicks = 3 if direction == "up" else -3
             return f"import pyautogui; pyautogui.scroll({clicks})"
@@ -2970,31 +3290,55 @@ public static class FgWin {
                     rect = self._current_rects[elem_id]
                     start_x = (rect[0] + rect[2]) // 2
                     start_y = (rect[1] + rect[3]) // 2
+                else:
+                    raise ActionExecutionError(
+                        f"WAA element {elem_id!r} is stale; recorded coordinates "
+                        "are not authorized as current drag evidence"
+                    )
             if start_x is None and action.x is not None and action.y is not None:
-                screen_w, screen_h = self._actual_screen_size or (self.config.screen_width, self.config.screen_height)
-                start_x = action.x if not isinstance(action.x, float) or action.x > 1 else int(action.x * screen_w)
-                start_y = action.y if not isinstance(action.y, float) or action.y > 1 else int(action.y * screen_h)
+                screen_w, screen_h = self._actual_screen_size or (
+                    self.config.screen_width,
+                    self.config.screen_height,
+                )
+                start_x = (
+                    action.x
+                    if not isinstance(action.x, float) or action.x > 1
+                    else _fraction_to_pixel(action.x, screen_w, "x")
+                )
+                start_y = (
+                    action.y
+                    if not isinstance(action.y, float) or action.y > 1
+                    else _fraction_to_pixel(action.y, screen_h, "y")
+                )
 
             # Get end position
-            screen_w, screen_h = self._actual_screen_size or (self.config.screen_width, self.config.screen_height)
+            screen_w, screen_h = self._actual_screen_size or (
+                self.config.screen_width,
+                self.config.screen_height,
+            )
             end_x = action.end_x
             end_y = action.end_y
             if end_x is not None and isinstance(end_x, float) and 0 <= end_x <= 1:
-                end_x = int(end_x * screen_w)
+                end_x = _fraction_to_pixel(end_x, screen_w, "end_x")
             if end_y is not None and isinstance(end_y, float) and 0 <= end_y <= 1:
-                end_y = int(end_y * screen_h)
+                end_y = _fraction_to_pixel(end_y, screen_h, "end_y")
 
             # Skip drag if coordinates are missing or both are at origin
             if start_x is None or end_x is None or end_y is None:
-                logger.warning("Drag action missing coordinates, skipping")
-                return "pass  # drag skipped: missing coordinates"
+                raise ActionExecutionError("WAA drag action requires start and end coordinates")
             if int(start_x) == 0 and int(start_y) == 0 and int(end_x) == 0 and int(end_y) == 0:
-                logger.warning("Drag action has all-zero coordinates, skipping")
-                return "pass  # drag skipped: all-zero coordinates"
+                raise ActionExecutionError("WAA drag action cannot use all-zero coordinates")
 
             # Clamp to safe margin
-            start_x, start_y = self._clamp_pixel_coords(int(start_x), int(start_y))
-            end_x, end_y = self._clamp_pixel_coords(int(end_x), int(end_y))
+            try:
+                start_x, start_y = self._clamp_pixel_coords(
+                    int(start_x), int(start_y)
+                )
+                end_x, end_y = self._clamp_pixel_coords(int(end_x), int(end_y))
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ActionExecutionError(
+                    "WAA drag action has invalid or out-of-viewport coordinates"
+                ) from exc
 
             return (
                 f"import pyautogui; import time; "
@@ -3007,8 +3351,7 @@ public static class FgWin {
                 f"pyautogui.mouseUp(button='left')"
             )
 
-        logger.warning(f"Unknown action type: {action.type}")
-        return None
+        raise ActionExecutionError(f"Unsupported WAA action type: {action.type!r}")
 
     def _translate_click_action(self, action: BenchmarkAction, click_method: str) -> str:
         """Translate click-type action to pyautogui command.
@@ -3038,26 +3381,33 @@ public static class FgWin {
                 cx, cy = self._clamp_pixel_coords(cx, cy)
                 return f"import pyautogui; pyautogui.{pyautogui_method}({cx}, {cy})"
             else:
-                logger.warning(f"Element ID '{elem_id}' not found in rects, falling back to coordinates")
-                # If no coordinates were provided alongside the element ID,
-                # skip the click entirely rather than clicking (0,0) which
-                # triggers PyAutoGUI fail-safe.
-                if action.x is None and action.y is None:
-                    logger.warning(f"No fallback coordinates for '{elem_id}', skipping click")
-                    return "pass  # element not found and no coordinates"
+                raise ActionExecutionError(
+                    f"WAA element {elem_id!r} is stale; recorded coordinates "
+                    "are not authorized as current click evidence"
+                )
 
         # Fallback: use coordinates if provided
-        x = action.x if action.x is not None else 0
-        y = action.y if action.y is not None else 0
+        if action.x is None or action.y is None:
+            raise ActionExecutionError("WAA click action requires x and y coordinates")
+        x = action.x
+        y = action.y
 
         # Convert normalized coordinates to pixels
-        screen_w, screen_h = self._actual_screen_size or (self.config.screen_width, self.config.screen_height)
+        screen_w, screen_h = self._actual_screen_size or (
+            self.config.screen_width,
+            self.config.screen_height,
+        )
         if isinstance(x, float) and 0 <= x <= 1:
-            x = int(x * screen_w)
+            x = _fraction_to_pixel(x, screen_w, "x")
         if isinstance(y, float) and 0 <= y <= 1:
-            y = int(y * screen_h)
+            y = _fraction_to_pixel(y, screen_h, "y")
 
-        x, y = self._clamp_pixel_coords(int(x), int(y))
+        try:
+            x, y = self._clamp_pixel_coords(int(x), int(y))
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ActionExecutionError(
+                "WAA click action has invalid or out-of-viewport coordinates"
+            ) from exc
         return f"import pyautogui; pyautogui.{pyautogui_method}({x}, {y})"
 
     def _translate_key_action(self, action: BenchmarkAction) -> str:
@@ -3083,9 +3433,18 @@ public static class FgWin {
             "End": "end",
             "PageUp": "pageup",
             "PageDown": "pagedown",
-            "F1": "f1", "F2": "f2", "F3": "f3", "F4": "f4",
-            "F5": "f5", "F6": "f6", "F7": "f7", "F8": "f8",
-            "F9": "f9", "F10": "f10", "F11": "f11", "F12": "f12",
+            "F1": "f1",
+            "F2": "f2",
+            "F3": "f3",
+            "F4": "f4",
+            "F5": "f5",
+            "F6": "f6",
+            "F7": "f7",
+            "F8": "f8",
+            "F9": "f9",
+            "F10": "f10",
+            "F11": "f11",
+            "F12": "f12",
         }
         key = key_map.get(key, key.lower())
 

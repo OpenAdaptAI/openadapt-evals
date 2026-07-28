@@ -1,9 +1,12 @@
 """Tests for shared evaluation metrics module."""
 
+import pytest
+
 from openadapt_evals.evaluation.metrics import (
     boolean,
     contains,
     exact_match,
+    file_exists,
     fuzzy_match,
     get_metric,
 )
@@ -22,6 +25,10 @@ class TestExactMatch:
     def test_numbers(self):
         assert exact_match(42, 42) == 1.0
         assert exact_match(42, 43) == 0.0
+
+    def test_missing_values_are_not_a_match(self):
+        with pytest.raises(ValueError):
+            exact_match(None, None)
 
 
 class TestFuzzyMatch:
@@ -48,6 +55,10 @@ class TestContains:
     def test_case_insensitive(self):
         assert contains("Hello World", "WORLD") == 1.0
 
+    def test_empty_expectation_is_not_automatic_success(self):
+        with pytest.raises(ValueError):
+            contains("anything", "")
+
 
 class TestBoolean:
     def test_both_truthy(self):
@@ -58,6 +69,21 @@ class TestBoolean:
 
     def test_mismatch(self):
         assert boolean(1, False) == 0.0
+
+    def test_boolean_strings_are_parsed_not_treated_as_truthy(self):
+        assert boolean("false", "true") == 0.0
+
+    def test_ambiguous_boolean_is_rejected(self):
+        with pytest.raises(ValueError):
+            boolean("yes", True)
+
+
+class TestFileExists:
+    def test_requires_remote_boolean_evidence(self):
+        assert file_exists(True, True) == 1.0
+        assert file_exists(False, True) == 0.0
+        with pytest.raises(ValueError):
+            file_exists("/tmp/local-path", "/tmp/local-path")
 
 
 class TestGetMetric:

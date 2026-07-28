@@ -20,6 +20,35 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from openadapt_evals.adapters.base import (
+    UNSCORED_BENCHMARK_ERROR_TYPES,
+    normalize_benchmark_result_artifact,
+)
+
+
+def _normalize_pool_task_artifact(task: object) -> tuple[dict[str, Any], bool]:
+    """Return a display row and whether it is a measured outcome."""
+    raw = dict(task) if isinstance(task, dict) else {}
+    if "score" not in raw and "result" in raw:
+        raw["score"] = raw["result"]
+    task_id = str(raw.get("task_id") or "unknown")
+    result = normalize_benchmark_result_artifact(
+        raw,
+        expected_task_id=task_id,
+        context=f"pool artifact for {task_id}",
+    )
+    raw.update(
+        {
+            "task_id": result.task_id,
+            "result": result.score,
+            "score": result.score,
+            "success": result.success,
+            "error": result.error,
+            "reason": result.reason,
+            "error_type": result.error_type,
+        }
+    )
+    return raw, result.error_type not in UNSCORED_BENCHMARK_ERROR_TYPES
 
 def parse_pool_logs(pool_dir: Path) -> dict[str, Any]:
     """Parse WAA pool log files to extract task results.
@@ -61,7 +90,13 @@ def parse_pool_logs(pool_dir: Path) -> dict[str, Any]:
 
     for log_file in log_files:
         worker_id = log_file.stem.replace("waa-pool-", "")
-        workers[worker_id] = {"tasks": 0, "successes": 0, "failures": 0}
+        workers[worker_id] = {
+            "tasks": 0,
+            "outcomes": 0,
+            "successes": 0,
+            "failures": 0,
+            "unscored": 0,
+        }
 
         current_task = None
         last_result = None
@@ -133,15 +168,35 @@ def parse_pool_logs(pool_dir: Path) -> dict[str, Any]:
 
                     current_task["domain"] = domain
                     current_task["task_id"] = task_id
-                    current_task["result"] = last_result if last_result is not None else 0.0
-                    current_task["success"] = last_result is not None and last_result > 0
+                    current_task.update(
+                        {
+                            "result": last_result,
+                            "score": last_result,
+                            "success": last_result is not None and last_result >= 1.0,
+                            "error_type": (
+                                None if last_result is not None else "evaluation"
+                            ),
+                            "reason": (
+                                None
+                                if last_result is not None
+                                else "pool log did not contain a result"
+                            ),
+                        }
+                    )
                     current_task["timestamp"] = metadata["last_timestamp"]
+                    current_task, is_scored = _normalize_pool_task_artifact(
+                        current_task
+                    )
 
                     # Update worker stats
                     workers[worker_id]["tasks"] += 1
-                    if current_task["success"]:
+                    if not is_scored:
+                        workers[worker_id]["unscored"] += 1
+                    elif current_task["success"]:
+                        workers[worker_id]["outcomes"] += 1
                         workers[worker_id]["successes"] += 1
                     else:
+                        workers[worker_id]["outcomes"] += 1
                         workers[worker_id]["failures"] += 1
 
                     tasks.append(current_task)
@@ -162,12 +217,23 @@ def get_domain_stats(tasks: list[dict]) -> dict[str, dict[str, int]]:
     for task in tasks:
         domain = task.get("domain", "unknown")
         if domain not in domain_stats:
-            domain_stats[domain] = {"total": 0, "success": 0, "fail": 0}
+            domain_stats[domain] = {
+                "total": 0,
+                "outcomes": 0,
+                "success": 0,
+                "fail": 0,
+                "unscored": 0,
+            }
 
         domain_stats[domain]["total"] += 1
-        if task.get("success"):
+        result, is_scored = _normalize_pool_task_artifact(task)
+        if not is_scored:
+            domain_stats[domain]["unscored"] += 1
+        elif result["success"]:
+            domain_stats[domain]["outcomes"] += 1
             domain_stats[domain]["success"] += 1
         else:
+            domain_stats[domain]["outcomes"] += 1
             domain_stats[domain]["fail"] += 1
 
     return domain_stats
@@ -192,14 +258,23 @@ def generate_pool_results_viewer(
 
     # Parse logs
     data = parse_pool_logs(pool_dir)
-    tasks = data["tasks"]
+    tasks = [_normalize_pool_task_artifact(task)[0] for task in data["tasks"]]
     workers = data["workers"]
     metadata = data["metadata"]
 
     # Calculate stats
     num_tasks = len(tasks)
-    num_success = sum(1 for t in tasks if t.get("success"))
-    success_rate = (num_success / num_tasks * 100) if num_tasks > 0 else 0
+    outcome_tasks = [
+        task
+        for task in tasks
+        if task.get("error_type") not in UNSCORED_BENCHMARK_ERROR_TYPES
+    ]
+    num_outcomes = len(outcome_tasks)
+    num_unscored = num_tasks - num_outcomes
+    num_success = sum(1 for task in outcome_tasks if task["success"] is True)
+    success_rate = (
+        num_success / num_outcomes * 100 if num_outcomes > 0 else 0
+    )
 
     # Domain stats
     domain_stats = get_domain_stats(tasks)
@@ -246,6 +321,8 @@ def generate_pool_results_viewer(
         metadata=metadata,
         domain_stats=domain_stats,
         num_tasks=num_tasks,
+        num_outcomes=num_outcomes,
+        num_unscored=num_unscored,
         num_success=num_success,
         success_rate=success_rate,
         elapsed_str=elapsed_str,
@@ -266,6 +343,8 @@ def _generate_pool_viewer_html(
     metadata: dict,
     domain_stats: dict,
     num_tasks: int,
+    num_outcomes: int,
+    num_unscored: int,
     num_success: int,
     success_rate: float,
     elapsed_str: str,
@@ -276,13 +355,18 @@ def _generate_pool_viewer_html(
     # Worker rows HTML
     worker_rows = ""
     for worker_id, stats in sorted(workers.items()):
-        rate = (stats["successes"] / stats["tasks"] * 100) if stats["tasks"] > 0 else 0
+        rate = (
+            stats["successes"] / stats["outcomes"] * 100
+            if stats["outcomes"] > 0
+            else 0
+        )
         worker_rows += f"""
             <tr>
                 <td>Worker {worker_id}</td>
                 <td>{stats["tasks"]}</td>
                 <td class="success">{stats["successes"]}</td>
                 <td class="error">{stats["failures"]}</td>
+                <td>{stats["unscored"]}</td>
                 <td>{rate:.1f}%</td>
             </tr>
         """
@@ -291,19 +375,32 @@ def _generate_pool_viewer_html(
     domain_tags = ""
     for domain in sorted(domain_stats.keys()):
         stats = domain_stats[domain]
-        rate = (stats["success"] / stats["total"] * 100) if stats["total"] > 0 else 0
+        rate = (
+            stats["success"] / stats["outcomes"] * 100
+            if stats["outcomes"] > 0
+            else 0
+        )
         domain_tags += f"""
             <div class="domain-tag">
                 <span class="domain-name">{domain}</span>
-                <span class="domain-stats">{stats["success"]}/{stats["total"]} ({rate:.0f}%)</span>
+                <span class="domain-stats">{stats["success"]}/{stats["outcomes"]} ({rate:.0f}%) · {stats["total"]} attempts</span>
             </div>
         """
 
     # Task rows HTML
     task_rows = ""
     for i, task in enumerate(tasks):
-        status_class = "success" if task.get("success") else "fail"
-        status_text = "PASS" if task.get("success") else "FAIL"
+        is_unscored = task.get("error_type") in UNSCORED_BENCHMARK_ERROR_TYPES
+        status_class = (
+            "success"
+            if task["success"] is True
+            else ("unscored" if is_unscored else "fail")
+        )
+        status_text = (
+            "PASS"
+            if task["success"] is True
+            else ("UNSCORED" if is_unscored else "FAIL")
+        )
         result = task.get("result", 0)
         task_rows += f"""
             <tr class="task-row" data-domain="{task.get("domain", "unknown")}" data-status="{status_class}">
@@ -492,6 +589,10 @@ def _generate_pool_viewer_html(
             background: rgba(255, 95, 95, 0.2);
             color: var(--error);
         }}
+        .status-badge.unscored {{
+            background: rgba(245, 158, 11, 0.2);
+            color: #f59e0b;
+        }}
         .domain-badge {{
             font-size: 0.75rem;
             color: var(--accent);
@@ -568,12 +669,20 @@ def _generate_pool_viewer_html(
                     <div class="stat-label">Total Tasks</div>
                 </div>
                 <div class="stat-card">
+                    <div class="stat-value">{num_outcomes}</div>
+                    <div class="stat-label">Measured Outcomes</div>
+                </div>
+                <div class="stat-card">
                     <div class="stat-value success">{num_success}</div>
                     <div class="stat-label">Passed</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-value error">{num_tasks - num_success}</div>
+                    <div class="stat-value error">{num_outcomes - num_success}</div>
                     <div class="stat-label">Failed</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value error">{num_unscored}</div>
+                    <div class="stat-label">Unscored Errors</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-value {"success" if success_rate >= 50 else "error"}">{success_rate:.1f}%</div>
@@ -601,6 +710,7 @@ def _generate_pool_viewer_html(
                         <th>Tasks</th>
                         <th>Passed</th>
                         <th>Failed</th>
+                        <th>Unscored</th>
                         <th>Success Rate</th>
                     </tr>
                 </thead>
@@ -628,6 +738,7 @@ def _generate_pool_viewer_html(
                         <option value="all">All</option>
                         <option value="success">Passed</option>
                         <option value="fail">Failed</option>
+                        <option value="unscored">Unscored</option>
                     </select>
                 </div>
                 <span class="filter-count" id="filter-count">{num_tasks} tasks</span>

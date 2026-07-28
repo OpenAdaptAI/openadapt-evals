@@ -27,8 +27,11 @@ from openadapt_evals.adapters import (
     BenchmarkObservation,
     BenchmarkResult,
     BenchmarkTask,
+    EvaluationUnavailableError,
+    normalize_benchmark_result,
 )
 from openadapt_evals.agents import BenchmarkAgent
+from openadapt_evals.errors import RolloutEvaluationError, RolloutInfrastructureError
 from openadapt_evals.telemetry import (
     track_action_executed,
     track_agent_run,
@@ -40,6 +43,22 @@ if TYPE_CHECKING:
     from openadapt_evals.benchmarks.live_tracker import LiveEvaluationTracker
 
 logger = logging.getLogger(__name__)
+
+_ERROR_TYPES = frozenset({"agent", "infrastructure", "evaluation"})
+
+
+def _exception_error_type(error: Exception, fallback: str) -> str:
+    """Return one allowed error type for an escaped exception."""
+    claimed = getattr(error, "error_type", None)
+    if claimed is None:
+        claimed = fallback
+    if isinstance(claimed, str) and claimed in _ERROR_TYPES:
+        return claimed
+    logger.warning(
+        "Exception claimed unknown error_type=%r; classifying it as evaluation",
+        claimed,
+    )
+    return "evaluation"
 
 
 @dataclass
@@ -155,6 +174,11 @@ def evaluate_agent_on_benchmark(
     else:
         results = _evaluate_sequential(agent, adapter, tasks, config, trace_collector, live_tracker)
 
+    results = [
+        normalize_benchmark_result(result, context=f"returned result {index}")
+        for index, result in enumerate(results)
+    ]
+
     # Save summary if trace collection is enabled
     if trace_collector is not None:
         trace_collector.save_summary(results)
@@ -163,23 +187,27 @@ def evaluate_agent_on_benchmark(
     if live_tracker is not None:
         live_tracker.finish()
 
-    # Log summary
+    metrics = compute_metrics(results)
+    success_count = metrics["success_count"]
+    avg_steps = metrics["avg_steps"]
+
+    # Exclude evaluator and infrastructure outages from the outcome rate.
+    # Agent errors remain failed outcomes and also remain visible as errors.
     if config.verbose:
-        success_count = sum(1 for r in results if r.success)
-        success_rate = success_count / len(results) if results else 0
-        avg_steps = sum(r.num_steps for r in results) / len(results) if results else 0
         logger.info(
-            f"Evaluation complete: {success_count}/{len(results)} "
-            f"({success_rate:.1%}) success, {avg_steps:.1f} avg steps"
+            f"Evaluation complete: {success_count}/{metrics['num_outcome_tasks']} "
+            f"outcomes ({metrics['success_rate']:.1%}) success; "
+            f"{metrics['error_count']} errors across {metrics['num_tasks']} attempts; "
+            f"{avg_steps:.1f} avg steps"
         )
-    else:
-        success_count = sum(1 for r in results if r.success)
-        avg_steps = sum(r.num_steps for r in results) / len(results) if results else 0
 
     track_agent_run_completed(
         adapter=adapter.name,
         agent_class=type(agent).__name__,
-        num_tasks=len(results),
+        num_tasks=metrics["num_tasks"],
+        attempt_count=metrics["num_tasks"],
+        outcome_count=metrics["num_outcome_tasks"],
+        error_count=metrics["error_count"],
         success_count=success_count,
         avg_steps=round(avg_steps, 2),
         run_name=config.run_name or "unspecified",
@@ -214,7 +242,13 @@ def _evaluate_sequential(
         if config.verbose:
             logger.info(f"Task {i + 1}/{len(tasks)}: {task.task_id}")
 
-        result = _run_single_task(agent, adapter, task, config, trace_collector, live_tracker)
+        try:
+            result = _run_single_task(
+                agent, adapter, task, config, trace_collector, live_tracker
+            )
+        except Exception as e:
+            logger.error(f"Task {task.task_id} failed with error: {e}")
+            result = _failed_task_result(task, e)
         results.append(result)
 
         if config.on_task_complete:
@@ -272,16 +306,21 @@ def _evaluate_parallel(
 
             except Exception as e:
                 logger.error(f"Task {task.task_id} failed with error: {e}")
-                results.append(
-                    BenchmarkResult(
-                        task_id=task.task_id,
-                        success=False,
-                        score=0.0,
-                        error=str(e),
-                    )
-                )
+                results.append(_failed_task_result(task, e))
 
     return results
+
+
+def _failed_task_result(task: BenchmarkTask, error: Exception) -> BenchmarkResult:
+    """Convert an escaped worker error into an explicit unmeasured attempt."""
+    return BenchmarkResult(
+        task_id=task.task_id,
+        success=False,
+        score=0.0,
+        error=str(error),
+        reason=str(error),
+        error_type=_exception_error_type(error, "infrastructure"),
+    )
 
 
 def _run_single_task(
@@ -307,6 +346,7 @@ def _run_single_task(
     """
     start_time = time.perf_counter()
     history: list[tuple[BenchmarkObservation, BenchmarkAction]] = []
+    failure_error_type = "infrastructure"
 
     # Start trace collection if enabled
     if trace_collector is not None:
@@ -334,6 +374,7 @@ def _run_single_task(
 
             # Get action from agent
             try:
+                failure_error_type = "agent"
                 think_start = time.perf_counter()
                 action = agent.act(obs, task, history if config.save_trajectories else None)
                 think_end = time.perf_counter()
@@ -390,26 +431,30 @@ def _run_single_task(
                         f"(override {done_gate_overrides + 1}/{config.done_gate_max_overrides})"
                     )
                     try:
-                        gate_result = adapter.evaluate(task)
-                        gate_score = gate_result.score
+                        failure_error_type = "evaluation"
+                        gate_result = normalize_benchmark_result(
+                            adapter.evaluate(task),
+                            expected_task_id=task.task_id,
+                            context="done-gate result",
+                        )
                     except Exception as e:
-                        logger.warning(
-                            f"Step {steps}: Done-gate evaluation failed: {e}. "
-                            "Accepting 'done' to avoid infinite loop."
-                        )
-                        done = True
-                        break
+                        if getattr(e, "error_type", None) is not None:
+                            raise
+                        raise RolloutEvaluationError(
+                            f"Done-gate evaluation failed: {e}"
+                        ) from e
 
-                    # If evaluate endpoint is unreachable, accept "done"
-                    # rather than forcing the agent to continue pointlessly
-                    if gate_result.error_type == "infrastructure":
-                        logger.warning(
-                            f"Step {steps}: Done-gate skipped — evaluate "
-                            f"returned infrastructure error: {gate_result.reason}. "
-                            "Accepting 'done'."
+                    if gate_result.error_type is not None:
+                        message = (
+                            gate_result.reason
+                            or gate_result.error
+                            or "done-gate evaluation did not produce a measured result"
                         )
-                        done = True
-                        break
+                        raise EvaluationUnavailableError(
+                            str(message), error_type=gate_result.error_type
+                        )
+
+                    gate_score = gate_result.score
 
                     if gate_score >= config.done_gate_threshold:
                         logger.info(
@@ -450,23 +495,28 @@ def _run_single_task(
                         task.instruction = task.instruction[:marker_idx]
                     task.instruction = task.instruction + continuation_msg
 
-                    # Get a fresh observation for the agent's next step
-                    # Use a no-op key press to trigger a new screenshot
-                    try:
-                        noop_action = BenchmarkAction(type="key", key="")
-                        obs, env_done, _info = adapter.step(noop_action)
-                        if env_done:
-                            logger.info(
-                                f"Step {steps}: Environment signaled done during "
-                                "done-gate screenshot refresh"
-                            )
-                            done = True
-                            break
-                    except Exception as e:
-                        logger.warning(
-                            f"Step {steps}: Failed to get fresh observation "
-                            f"after done-gate override: {e}. Using previous obs."
+                    # Refresh only through an observation-only adapter method.
+                    # Never synthesize input to request a screenshot.
+                    failure_error_type = "infrastructure"
+                    observe = getattr(adapter, "observe", None)
+                    if not callable(observe):
+                        raise RolloutInfrastructureError(
+                            "Done-gate rejected completion, but the adapter cannot "
+                            "provide a fresh observation"
                         )
+                    try:
+                        refreshed_obs = observe()
+                    except Exception as e:
+                        raise RolloutInfrastructureError(
+                            "Done-gate rejected completion, but the fresh observation "
+                            f"failed: {e}"
+                        ) from e
+                    if not isinstance(refreshed_obs, BenchmarkObservation):
+                        raise RolloutInfrastructureError(
+                            "Done-gate rejected completion, but the adapter returned "
+                            "an invalid fresh observation"
+                        )
+                    obs = refreshed_obs
 
                     steps += 1
                     continue
@@ -481,6 +531,7 @@ def _run_single_task(
 
             # Execute action
             try:
+                failure_error_type = "infrastructure"
                 logger.info(f"Step {steps}: Executing action in environment")
                 exec_start = time.perf_counter()
                 obs, done, info = adapter.step(action)
@@ -505,16 +556,20 @@ def _run_single_task(
         if steps >= max_steps:
             logger.warning(f"Task reached maximum steps ({max_steps})")
 
-        # Evaluate result
-        logger.info("Evaluating task result")
-        result = adapter.evaluate(task)
-
         # An evaluator observes target state, not whether the agent itself
         # completed this attempt safely. A pre-existing target state can score
-        # as successful even after the agent reported a provider or parse
-        # failure, so the terminal agent error remains authoritative.
+        # as successful after an agent error. Do not call the evaluator for a
+        # terminal error because evaluator unavailability must not hide a valid
+        # agent failure from the benchmark denominator.
         if action is not None and action.type == "error":
             raw_action = action.raw_action or {}
+            claimed_error_type = raw_action.get("error_type")
+            if claimed_error_type not in (None, "agent"):
+                logger.warning(
+                    "Agent terminal error claimed error_type=%r; classifying the "
+                    "attempt as an agent outcome",
+                    claimed_error_type,
+                )
             error_reason = (
                 raw_action.get("reason")
                 or raw_action.get("error")
@@ -522,16 +577,37 @@ def _run_single_task(
                 or raw_action.get("fail_reason")
                 or "agent reported a terminal error"
             )
-            result.success = False
-            result.score = 0.0
-            result.error_type = raw_action.get("error_type", "agent")
-            result.error = str(error_reason)
-            result.reason = str(error_reason)
+            result = BenchmarkResult(
+                task_id=task.task_id,
+                success=False,
+                score=0.0,
+                error_type="agent",
+                error=str(error_reason),
+                reason=str(error_reason),
+            )
+        else:
+            logger.info("Evaluating task result")
+            failure_error_type = "evaluation"
+            try:
+                result = normalize_benchmark_result(
+                    adapter.evaluate(task),
+                    expected_task_id=task.task_id,
+                    context="final evaluator result",
+                )
+            except Exception as e:
+                if getattr(e, "error_type", None) is not None:
+                    raise
+                raise RolloutEvaluationError(f"Task evaluation failed: {e}") from e
 
         # Update result with trajectory info
         result.steps = history if config.save_trajectories else []
         result.num_steps = steps
         result.total_time_seconds = time.perf_counter() - start_time
+        result = normalize_benchmark_result(
+            result,
+            expected_task_id=task.task_id,
+            context="final task result",
+        )
 
         # Log final result
         if result.success:
@@ -553,7 +629,7 @@ def _run_single_task(
 
     except Exception as e:
         logger.error(f"Error running task {task.task_id}: {e}")
-        error_type = getattr(e, "error_type", None)
+        error_type = _exception_error_type(e, failure_error_type)
         result = BenchmarkResult(
             task_id=task.task_id,
             success=False,
@@ -570,11 +646,15 @@ def _run_single_task(
         if trace_collector is not None:
             trace_collector.finish_task(result)
 
-        return result
+        return normalize_benchmark_result(
+            result,
+            expected_task_id=task.task_id,
+            context="escaped task result",
+        )
 
 
 def compute_metrics(results: list[BenchmarkResult]) -> dict:
-    """Compute aggregate metrics from evaluation results.
+    """Compute outcomes without scoring unavailable evaluation attempts.
 
     Args:
         results: List of BenchmarkResult from evaluation.
@@ -585,36 +665,61 @@ def compute_metrics(results: list[BenchmarkResult]) -> dict:
     if not results:
         return {
             "num_tasks": 0,
+            "num_attempts": 0,
+            "num_outcome_tasks": 0,
+            "error_count": 0,
             "success_rate": 0.0,
             "avg_score": 0.0,
             "avg_steps": 0.0,
             "avg_time_seconds": 0.0,
             "num_infrastructure_failures": 0,
+            "num_evaluation_failures": 0,
+            "num_agent_failures": 0,
             "num_tasks_excluding_infra": 0,
             "success_rate_excluding_infra": 0.0,
+            "success_count": 0,
+            "fail_count": 0,
         }
 
+    results = [
+        normalize_benchmark_result(result, context=f"aggregate result {index}")
+        for index, result in enumerate(results)
+    ]
     num_tasks = len(results)
-    success_count = sum(1 for r in results if r.success)
-    total_score = sum(r.score for r in results)
+    unavailable_types = {"infrastructure", "evaluation"}
+    outcomes = [
+        result for result in results if result.error_type not in unavailable_types
+    ]
+    success_count = sum(1 for result in outcomes if result.success)
+    total_score = sum(result.score for result in outcomes)
     total_steps = sum(r.num_steps for r in results)
     total_time = sum(r.total_time_seconds for r in results)
     infra_failures = [r for r in results if r.error_type == "infrastructure"]
-    non_infra = [r for r in results if r.error_type != "infrastructure"]
-    non_infra_success = sum(1 for r in non_infra if r.success)
+    evaluation_failures = [r for r in results if r.error_type == "evaluation"]
+    agent_failures = [r for r in results if r.error_type == "agent"]
+    outcome_count = len(outcomes)
+    outcome_fail_count = outcome_count - success_count
+    error_count = sum(1 for result in results if result.error_type is not None)
 
     return {
         "num_tasks": num_tasks,
-        "success_rate": success_count / num_tasks,
-        "avg_score": total_score / num_tasks,
+        "num_attempts": num_tasks,
+        "num_outcome_tasks": outcome_count,
+        "error_count": error_count,
+        "success_rate": success_count / outcome_count if outcomes else 0.0,
+        "avg_score": total_score / outcome_count if outcomes else 0.0,
         "avg_steps": total_steps / num_tasks,
         "avg_time_seconds": total_time / num_tasks,
         "success_count": success_count,
-        "fail_count": num_tasks - success_count,
+        "fail_count": outcome_fail_count,
         "num_infrastructure_failures": len(infra_failures),
-        "num_tasks_excluding_infra": len(non_infra),
+        "num_evaluation_failures": len(evaluation_failures),
+        "num_agent_failures": len(agent_failures),
+        # Compatibility aliases. Evaluator and infrastructure outages are
+        # excluded. Agent errors remain failed benchmark outcomes.
+        "num_tasks_excluding_infra": outcome_count,
         "success_rate_excluding_infra": (
-            non_infra_success / len(non_infra) if non_infra else 0.0
+            success_count / outcome_count if outcomes else 0.0
         ),
     }
 

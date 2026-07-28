@@ -16,8 +16,14 @@ Usage:
 
 from __future__ import annotations
 
+import io
 import json
 import logging
+import math
+
+from PIL import Image
+
+from openadapt_evals.errors import RolloutEvaluationError
 
 logger = logging.getLogger(__name__)
 
@@ -65,42 +71,83 @@ def vlm_judge(
 
     Returns:
         Tuple of (success: bool, confidence: float).
+
+    Raises:
+        RolloutEvaluationError: If the screenshot or model response cannot be
+            measured under the judge contract.
     """
     from openadapt_evals.vlm import vlm_call
 
+    if not isinstance(screenshot, bytes) or not screenshot:
+        raise RolloutEvaluationError("VLM judging requires screenshot bytes")
+    try:
+        with Image.open(io.BytesIO(screenshot)) as image:
+            image.load()
+    except Exception as exc:
+        raise RolloutEvaluationError(
+            "VLM judging requires a decodable screenshot"
+        ) from exc
+    if not isinstance(description, str) or not description.strip():
+        raise RolloutEvaluationError("VLM judging requires a condition description")
+
     prompt = _JUDGE_PROMPT.format(description=description)
-    response = vlm_call(
-        prompt,
-        images=[screenshot],
-        model=model,
-        provider=provider,
-        max_tokens=256,
-        temperature=0.1,
-        cost_label="vlm_judge",
-    )
+    try:
+        response = vlm_call(
+            prompt,
+            images=[screenshot],
+            model=model,
+            provider=provider,
+            max_tokens=256,
+            temperature=0.1,
+            cost_label="vlm_judge",
+        )
+    except Exception as exc:
+        raise RolloutEvaluationError("VLM judge call failed") from exc
+
+    if not isinstance(response, str):
+        raise RolloutEvaluationError("VLM judge returned a non-text response")
+
+    def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"Duplicate JSON key: {key}")
+            result[key] = value
+        return result
 
     try:
-        import re
+        data = json.loads(response.strip(), object_pairs_hook=reject_duplicate_keys)
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise RolloutEvaluationError(
+            "VLM judge did not return the required JSON object"
+        ) from exc
+    if not isinstance(data, dict):
+        raise RolloutEvaluationError("VLM judge response must be a JSON object")
 
-        match = re.search(r"\{[^}]+\}", response, re.DOTALL)
-        if match:
-            data = json.loads(match.group())
-        else:
-            data = json.loads(response)
-
-        verdict = str(data.get("verdict", "NO")).upper().startswith("Y")
-        confidence = float(data.get("confidence", 0.5))
-        explanation = data.get("explanation", "")
-        logger.info(
-            "VLM judge: %s (confidence=%.2f) — %s",
-            "PASS" if verdict else "FAIL",
-            confidence,
-            explanation[:80],
+    verdict_text = data.get("verdict")
+    if verdict_text not in {"YES", "NO"}:
+        raise RolloutEvaluationError(
+            "VLM judge verdict must be exactly 'YES' or 'NO'"
         )
-        return verdict, confidence
+    confidence_value = data.get("confidence")
+    if isinstance(confidence_value, bool) or not isinstance(
+        confidence_value, (int, float)
+    ):
+        raise RolloutEvaluationError("VLM judge confidence must be numeric")
+    confidence = float(confidence_value)
+    if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+        raise RolloutEvaluationError(
+            "VLM judge confidence must be finite and within [0, 1]"
+        )
+    explanation = data.get("explanation", "")
+    if not isinstance(explanation, str):
+        raise RolloutEvaluationError("VLM judge explanation must be text")
 
-    except (json.JSONDecodeError, ValueError, KeyError):
-        # Fallback: check if response starts with YES
-        verdict = response.strip().upper().startswith("YES")
-        logger.warning("VLM judge JSON parse failed, fallback: %s", verdict)
-        return verdict, 0.5
+    verdict = verdict_text == "YES"
+    logger.info(
+        "VLM judge: %s (confidence=%.2f) — %s",
+        "PASS" if verdict else "FAIL",
+        confidence,
+        explanation[:80],
+    )
+    return verdict, confidence

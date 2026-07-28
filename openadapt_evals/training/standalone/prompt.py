@@ -6,11 +6,17 @@ operates in the same prompt distribution as SFT. NO openadapt-ml imports.
 
 from __future__ import annotations
 
-import json as _json
 import logging
-import re
+import math
 from dataclasses import dataclass
 from typing import Any
+
+from openadapt_evals.action_envelope import (
+    parse_single_dsl_action,
+    parse_single_json_object,
+    require_exact_fields,
+)
+from openadapt_evals.errors import ActionParseError
 
 logger = logging.getLogger(__name__)
 DEFAULT_SCREEN_SIZE: tuple[int, int] = (1920, 1080)
@@ -50,8 +56,23 @@ class SimpleAction:
     key: str | None = None
 
 
+def _normalized_point_to_pixels(
+    x: float,
+    y: float,
+    screen_size: tuple[int, int],
+) -> tuple[int, int]:
+    """Map inclusive normalized coordinates to valid viewport indices."""
+    width, height = screen_size
+    if width <= 0 or height <= 0:
+        raise ActionParseError("Screen dimensions must be positive")
+    return min(int(x * width), width - 1), min(int(y * height), height - 1)
+
+
 def build_agent_messages(
-    instruction: str, *, include_image: bool = False, action_history: str = "",
+    instruction: str,
+    *,
+    include_image: bool = False,
+    action_history: str = "",
 ) -> list[dict]:
     """Build chat messages matching the SFT prompt format."""
     history_text = f"{action_history}\n" if action_history else ""
@@ -75,78 +96,136 @@ def build_agent_messages(
 
 
 def parse_vlm_output_to_action(
-    text: str, screen_size: tuple[int, int] = DEFAULT_SCREEN_SIZE,
+    text: str,
+    screen_size: tuple[int, int] = DEFAULT_SCREEN_SIZE,
 ) -> SimpleAction:
     """Parse VLM output to SimpleAction. Supports Thought/Action, bare DSL, and JSON."""
     text = text.strip()
     width, height = screen_size
     logger.debug("Parsing VLM output (%d chars): %.200s", len(text), text)
 
-    # Extract from "Action: ..." format
-    action_match = re.search(r"Action:\s*(.+)", text, re.IGNORECASE)
-    if action_match:
-        text = action_match.group(1).strip()
-
     # JSON: {"action_type": "click", "coordinate": [x, y]}
-    json_match = re.search(r'\{[^}]*"action_type"[^}]*\}', text)
-    if json_match:
-        try:
-            d = _json.loads(json_match.group())
-            atype = d.get("action_type", "").lower()
-            coord = d.get("coordinate", d.get("coords", []))
-            if atype == "click" and len(coord) >= 2:
+    data = parse_single_json_object(text)
+    if data is not None:
+        atype = data.get("action_type", "")
+        if not isinstance(atype, str):
+            raise ActionParseError("JSON action_type must be a string")
+        atype = atype.lower()
+        if atype == "click":
+            coordinate_fields = {field for field in ("coordinate", "coords") if field in data}
+            if len(coordinate_fields) != 1:
+                raise ActionParseError("JSON click requires exactly one coordinate field")
+            field = next(iter(coordinate_fields))
+            _require_json_fields(data, {"action_type", field})
+            coord = data[field]
+            if not isinstance(coord, (list, tuple)) or len(coord) != 2:
+                raise ActionParseError("JSON click requires exactly two coordinates")
+            if any(isinstance(value, bool) for value in coord):
+                raise ActionParseError("JSON click coordinates must be numbers, not booleans")
+            try:
                 xv, yv = float(coord[0]), float(coord[1])
-                if xv <= 1.0 and yv <= 1.0:
-                    xv, yv = xv * width, yv * height
-                return SimpleAction(type="click", x=int(xv), y=int(yv))
-            if atype == "type":
-                return SimpleAction(type="type", text=d.get("text", ""))
-            if atype in ("done", "wait"):
-                return SimpleAction(type=atype)
-        except Exception:
-            pass
+            except (TypeError, ValueError) as exc:
+                raise ActionParseError("Malformed JSON click coordinates") from exc
+            if not math.isfinite(xv) or not math.isfinite(yv):
+                raise ActionParseError("JSON click coordinates must be finite")
+            normalized = 0.0 <= xv <= 1.0 and 0.0 <= yv <= 1.0
+            pixels = 0.0 <= xv < width and 0.0 <= yv < height
+            if normalized:
+                x_px, y_px = _normalized_point_to_pixels(xv, yv, screen_size)
+                return SimpleAction(type="click", x=x_px, y=y_px)
+            if not all(isinstance(value, int) and not isinstance(value, bool) for value in coord):
+                raise ActionParseError(
+                    "Pixel-space JSON click coordinates must be explicit integers"
+                )
+            if not pixels:
+                raise ActionParseError("JSON click coordinates are outside the viewport")
+            return SimpleAction(type="click", x=coord[0], y=coord[1])
+        if atype == "type":
+            _require_json_fields(data, {"action_type", "text"})
+            if not isinstance(data.get("text"), str):
+                raise ActionParseError("JSON type requires string text")
+            return SimpleAction(type="type", text=data["text"])
+        if atype in ("done", "wait"):
+            _require_json_fields(data, {"action_type"})
+            return SimpleAction(type=atype)
+        raise ActionParseError(f"Unsupported JSON action type: {atype!r}")
 
-    # CLICK(x=..., y=...)
-    m = re.search(r"CLICK\(x=(-?[\d.]+),\s*y=(-?[\d.]+)\)", text, re.IGNORECASE)
-    if m:
+    command, arguments = parse_single_dsl_action(
+        text,
+        allowed_commands={"CLICK", "TYPE", "WAIT", "DONE"},
+    )
+    if command == "CLICK":
+        require_exact_fields(arguments, {"x", "y"}, command)
         try:
-            xf = max(0.0, min(1.0, float(m.group(1))))
-            yf = max(0.0, min(1.0, float(m.group(2))))
-            return SimpleAction(type="click", x=int(xf * width), y=int(yf * height))
+            xf = float(arguments["x"])
+            yf = float(arguments["y"])
+            if not all(math.isfinite(v) and 0.0 <= v <= 1.0 for v in (xf, yf)):
+                raise ActionParseError("CLICK coordinates must be between 0 and 1")
+            x_px, y_px = _normalized_point_to_pixels(xf, yf, screen_size)
+            return SimpleAction(type="click", x=x_px, y=y_px)
         except (ValueError, TypeError, OverflowError):
-            # The regex [\d.]+ can match literal "..." from model output
-            # (e.g. CLICK(x=..., y=...)), causing float("...") to raise
-            # ValueError.  Fall through to DONE rather than crashing.
-            logger.warning("Malformed CLICK coords: x=%s y=%s — returning DONE", m.group(1), m.group(2))
-            return SimpleAction(type="done")
-
-    # TYPE(text="...")
-    m = re.search(r"""TYPE\(text=["']([^"'\\]*(?:\\.[^"'\\]*)*)["']\)""", text, re.IGNORECASE)
-    if m:
-        t = m.group(1).replace("\\\\", "\\").replace('\\"', '"').replace("\\'", "'")
-        return SimpleAction(type="type", text=t)
-
-    if re.search(r"\bWAIT\s*\(\s*\)", text, re.IGNORECASE):
+            raise ActionParseError(
+                f"Malformed CLICK coordinates: "
+                f"x={arguments['x']!r}, y={arguments['y']!r}"
+            )
+    if command == "TYPE":
+        require_exact_fields(arguments, {"text"}, command)
+        value = arguments["text"]
+        value = value.replace("\\\\", "\\").replace('\\"', '"').replace("\\'", "'")
+        return SimpleAction(type="type", text=value)
+    if command == "WAIT":
+        require_exact_fields(arguments, set(), command)
         return SimpleAction(type="wait")
-    if re.search(r"\bDONE\s*\(\s*\)", text, re.IGNORECASE):
+    if command == "DONE":
+        require_exact_fields(arguments, set(), command)
         return SimpleAction(type="done")
 
-    logger.warning("Could not parse VLM output: %s. Defaulting to DONE.", text)
-    return SimpleAction(type="done")
+    raise ActionParseError(f"Unsupported action command: {command!r}")
+
+
+def _require_json_fields(data: dict[str, Any], required: set[str]) -> None:
+    """Reject missing and unrelated standalone JSON action fields."""
+    fields = set(data) - {"reasoning"}
+    missing = required - fields
+    extra = fields - required
+    if missing:
+        raise ActionParseError(
+            f"JSON action requires {', '.join(sorted(missing))}"
+        )
+    if extra:
+        raise ActionParseError(
+            f"JSON action has unsupported fields: {', '.join(sorted(extra))}"
+        )
 
 
 def format_action_as_text(
-    action: SimpleAction, screen_size: tuple[int, int] = DEFAULT_SCREEN_SIZE,
+    action: SimpleAction,
+    screen_size: tuple[int, int] = DEFAULT_SCREEN_SIZE,
 ) -> str:
     """Convert SimpleAction to DSL text for log-prob computation."""
     width, height = screen_size
     if action.type == "click":
-        xf = (action.x or 0) / width if width > 0 else 0.0
-        yf = (action.y or 0) / height if height > 0 else 0.0
+        if width <= 0 or height <= 0:
+            raise ActionParseError("Screen dimensions must be positive")
+        if action.x is None or action.y is None:
+            raise ActionParseError("Cannot format CLICK without x and y")
+        if not (
+            math.isfinite(action.x)
+            and math.isfinite(action.y)
+            and 0 <= action.x < width
+            and 0 <= action.y < height
+        ):
+            raise ActionParseError("Cannot format CLICK outside the viewport")
+        xf = action.x / width
+        yf = action.y / height
         return f"CLICK(x={xf:.2f}, y={yf:.2f})"
     if action.type == "type":
-        escaped = (action.text or "").replace("\\", "\\\\").replace('"', '\\"')
+        if not isinstance(action.text, str):
+            raise ActionParseError("Cannot format TYPE without explicit string text")
+        escaped = action.text.replace("\\", "\\\\").replace('"', '\\"')
         return f'TYPE(text="{escaped}")'
     if action.type == "wait":
         return "WAIT()"
-    return "DONE()"
+    if action.type == "done":
+        return "DONE()"
+    raise ActionParseError(f"Cannot format unsupported action type: {action.type!r}")

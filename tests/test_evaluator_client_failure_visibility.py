@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import builtins
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
@@ -141,6 +143,200 @@ def test_vm_reported_command_error_is_not_an_empty_measurement(
         client._require_output({"error": "WinError 5", "output": ""}, "file_content")
 
 
+@pytest.mark.parametrize("receipt", [{}, None, {"output": None}, {"output": 1}])
+def test_missing_or_non_string_getter_output_is_not_measured(
+    tmp_path: Path, receipt: object
+) -> None:
+    client = EvaluatorClient(
+        vm_ip="10.0.0.1",
+        waa_evaluators_path=tmp_path,
+        require_waa_evaluators=False,
+    )
+
+    with pytest.raises(EvaluationError):
+        client._require_output(receipt, "file_content")
+
+
+def test_explicit_empty_getter_output_remains_valid(tmp_path: Path) -> None:
+    client = EvaluatorClient(
+        vm_ip="10.0.0.1",
+        waa_evaluators_path=tmp_path,
+        require_waa_evaluators=False,
+    )
+
+    assert client._require_output(
+        {"returncode": 0, "output": ""}, "file_content"
+    ) == ""
+
+
+def test_delivery_alone_does_not_prove_command_completion(tmp_path: Path) -> None:
+    client = EvaluatorClient(
+        vm_ip="10.0.0.1",
+        waa_evaluators_path=tmp_path,
+        require_waa_evaluators=False,
+    )
+
+    with pytest.raises(EvaluationError):
+        client._require_output(
+            {"delivery_state": "delivered", "output": ""},
+            "file_content",
+        )
+
+
+@pytest.mark.parametrize(
+    "receipt",
+    [
+        {"success": False, "output": "saved"},
+        {"returncode": 0, "stderr": "warning", "output": "saved"},
+        {"delivery_state": "uncertain", "output": "saved"},
+        {"delivery_state": "invalid", "output": "saved"},
+        {"output": "saved"},
+    ],
+)
+def test_failed_or_unproved_getter_receipt_is_not_measured(
+    tmp_path: Path, receipt: dict
+) -> None:
+    client = EvaluatorClient(
+        vm_ip="10.0.0.1",
+        waa_evaluators_path=tmp_path,
+        require_waa_evaluators=False,
+    )
+
+    with pytest.raises(EvaluationError):
+        client._require_output(receipt, "file_content")
+
+
+def test_empty_process_name_cannot_match_every_output(tmp_path: Path) -> None:
+    client = EvaluatorClient(
+        vm_ip="10.0.0.1",
+        waa_evaluators_path=tmp_path,
+        require_waa_evaluators=False,
+    )
+    env = MagicMock()
+
+    with pytest.raises(EvaluationError):
+        client._fallback_getter(env, "process_running", {"process": ""})
+    env.execute.assert_not_called()
+
+
+def test_loaded_getter_requires_known_result_parameters(tmp_path: Path) -> None:
+    client = EvaluatorClient(
+        vm_ip="10.0.0.1",
+        waa_evaluators_path=tmp_path,
+        require_waa_evaluators=False,
+    )
+    client._getters = SimpleNamespace(get_file_content=lambda _env, _spec: "")
+    client._metrics = SimpleNamespace(exact_match=lambda _actual, _expected: 1.0)
+
+    result = client.evaluate({
+        "evaluator": {
+            "result": {"type": "file_content"},
+            "expected": {"value": ""},
+            "func": "exact_match",
+        }
+    })
+
+    assert result.success is False
+    assert result.scored is False
+    assert result.error_type == "evaluation"
+
+
+def test_metric_options_are_applied_and_invalid_conjunction_is_refused(
+    tmp_path: Path,
+) -> None:
+    client = EvaluatorClient(
+        vm_ip="10.0.0.1",
+        waa_evaluators_path=tmp_path,
+        require_waa_evaluators=False,
+    )
+    metric = MagicMock(side_effect=lambda _a, _e, strict=False: 0.0 if strict else 1.0)
+    client._metrics = SimpleNamespace(exact_match=metric)
+
+    assert client._run_metric(
+        {"func": "exact_match", "options": {"strict": True}}, "a", "a"
+    ) == 0.0
+    metric.assert_called_once_with("a", "a", strict=True)
+
+    with pytest.raises(EvaluationError, match="conj='and'"):
+        client._run_metric({"func": "exact_match", "conj": "invalid"}, "a", "a")
+
+
+def test_failed_http_receipt_is_classified_as_infrastructure(tmp_path: Path) -> None:
+    client = EvaluatorClient(
+        vm_ip="10.0.0.1",
+        waa_evaluators_path=tmp_path,
+        require_waa_evaluators=False,
+    )
+    response = MagicMock(status_code=200)
+    response.raise_for_status.return_value = None
+    response.json.return_value = {"success": False, "output": ""}
+
+    with patch("requests.post", return_value=response):
+        result = client.evaluate({
+            "evaluator": {
+                "result": {"type": "file_content", "path": "C:/out.txt"},
+                "expected": {"value": ""},
+                "func": "exact_match",
+            }
+        })
+
+    assert result.success is False
+    assert result.scored is False
+    assert result.error_type == "infrastructure"
+
+
+def test_duplicate_outer_receipt_keys_cannot_score_exact_empty(tmp_path: Path) -> None:
+    client = EvaluatorClient(
+        vm_ip="10.0.0.1",
+        waa_evaluators_path=tmp_path,
+        require_waa_evaluators=False,
+    )
+    response = requests.Response()
+    response.status_code = 200
+    response._content = b'{"returncode":1,"returncode":0,"output":""}'
+
+    with patch("requests.post", return_value=response):
+        result = client.evaluate({
+            "evaluator": {
+                "result": {"type": "file_content", "path": "C:/out.txt"},
+                "expected": {"value": ""},
+                "func": "exact_match",
+            }
+        })
+
+    assert result.success is False
+    assert result.scored is False
+    assert result.error_type == "infrastructure"
+
+
+@pytest.mark.parametrize(("value", "rendered"), [("", ""), (0, "0"), (False, "False")])
+def test_result_serialization_preserves_falsy_evidence(
+    value: object,
+    rendered: str,
+) -> None:
+    payload = EvaluationResult(True, 1.0, actual=value, expected=value).to_dict()
+
+    assert payload["actual"] == rendered
+    assert payload["expected"] == rendered
+
+
+@pytest.mark.parametrize("expected", [None, {}, {"type": "literal"}])
+def test_missing_or_malformed_expected_contract_is_unscored(
+    tmp_path: Path, expected: object
+) -> None:
+    client = EvaluatorClient(
+        vm_ip="10.0.0.1",
+        waa_evaluators_path=tmp_path,
+        require_waa_evaluators=False,
+    )
+    config = {"result": {"type": "file_content", "path": "C:/out.txt"}}
+    if expected is not None:
+        config["expected"] = expected
+
+    with pytest.raises(EvaluationError):
+        client._get_expected_value(config)
+
+
 def test_unknown_metric_name_is_not_silently_scored_with_exact_match(
     tmp_path: Path,
 ) -> None:
@@ -165,6 +361,22 @@ def test_known_metric_still_scores_normally(tmp_path: Path) -> None:
 
     assert client._fallback_metric("exact_match", "a", "a") == 1.0
     assert client._fallback_metric("exact_match", "a", "b") == 0.0
+
+
+@pytest.mark.parametrize("score", [float("nan"), float("inf"), -0.1, 1.1, True])
+def test_invalid_metric_score_is_not_a_measurement(
+    tmp_path: Path, score: object
+) -> None:
+    client = EvaluatorClient(
+        vm_ip="10.0.0.1",
+        waa_evaluators_path=tmp_path,
+        require_waa_evaluators=False,
+    )
+    client._metrics = MagicMock()
+    client._metrics.exact_match.return_value = score
+
+    with pytest.raises(EvaluationError):
+        client._run_metric({"func": "exact_match"}, "a", "a")
 
 
 def test_missing_evaluator_config_is_flagged_not_scored(tmp_path: Path) -> None:

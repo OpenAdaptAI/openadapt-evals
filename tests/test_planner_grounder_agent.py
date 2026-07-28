@@ -381,6 +381,42 @@ class TestHTTPGrounder:
         call_url = mock_post.call_args[0][0]
         assert "/v1/chat/completions" in call_url
 
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            '{"type":"done","x":0.5,"y":0.5}',
+            '{"type":"click","x":0.1,"x":0.9,"y":0.5}',
+            '{"type":"click","x":0.5,"y":0.5,"key":"enter"}',
+            '{"type":"click","x":0.5,"y":0.5}{"type":"done"}',
+            '{"type":"click","x":NaN,"y":0.5}',
+            '{"type":"click","x":500,"y":0.5}',
+            "[900, 100, 100, 200]",
+            "[500, 0.5]",
+            "[-1, 100]",
+            "[1001, 500]",
+        ],
+    )
+    def test_grounder_rejects_ambiguous_or_invalid_coordinates(self, raw):
+        action = PlannerGrounderAgent._parse_bbox_to_action(raw)
+
+        assert action.type == "error"
+        assert action.raw_action["parse_error"]
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ('{"type":"click","x":0.25,"y":1.0}', (0.25, 1.0)),
+            ("[250, 200, 750, 800]", (0.5, 0.5)),
+            ("[0.25, 1.0]", (0.25, 1.0)),
+            ("[250, 750]", (0.25, 0.75)),
+        ],
+    )
+    def test_grounder_accepts_one_coherent_coordinate_space(self, raw, expected):
+        action = PlannerGrounderAgent._parse_bbox_to_action(raw)
+
+        assert action.type == "click"
+        assert (action.x, action.y) == expected
+
 
 # -- Tests: _action_to_planner_output helper ----------------------------------
 
@@ -704,6 +740,31 @@ class TestStructuredPlannerOutput:
         assert action.x == 0.6
         assert action.y == 0.4
 
+    @pytest.mark.parametrize("action_type", ["click", "double_click"])
+    @patch("openadapt_evals.vlm.vlm_call")
+    @patch("openadapt_evals.vlm.extract_json")
+    def test_structured_pointer_action_requires_a_target(
+        self, mock_extract, mock_vlm, action_type, observation, task
+    ):
+        mock_vlm.return_value = "{}"
+        mock_extract.return_value = {
+            "decision": "COMMAND",
+            "action_type": action_type,
+            "target_description": "",
+        }
+        grounder = MagicMock()
+        agent = PlannerGrounderAgent(
+            planner="claude-sonnet-4-20250514",
+            grounder=grounder,
+            planner_provider="anthropic",
+        )
+
+        action = agent.act(observation, task)
+
+        assert action.type == "error"
+        assert action.raw_action["parse_error"] == "missing_target_description"
+        grounder.act.assert_not_called()
+
     @patch("openadapt_evals.vlm.vlm_call")
     @patch("openadapt_evals.vlm.extract_json")
     def test_backward_compat_instruction_field(
@@ -728,6 +789,78 @@ class TestStructuredPlannerOutput:
         # Should fall through to grounder via backward compat path
         assert action.type == "click"
         assert action.x == 0.5
+
+    @pytest.mark.parametrize("decision", ["MAYBE", "", 1])
+    @patch("openadapt_evals.vlm.vlm_call")
+    @patch("openadapt_evals.vlm.extract_json")
+    def test_unknown_decision_cannot_act(
+        self, mock_extract, mock_vlm, decision, observation, task
+    ):
+        mock_vlm.return_value = "{}"
+        mock_extract.return_value = {
+            "decision": decision,
+            "action_type": "click",
+            "target_description": "delete account",
+        }
+        grounder = MagicMock()
+        agent = PlannerGrounderAgent(
+            planner="claude-sonnet-4-20250514",
+            grounder=grounder,
+            planner_provider="anthropic",
+        )
+
+        action = agent.act(observation, task)
+
+        assert action.type == "error"
+        assert action.raw_action["parse_error"] == "invalid_decision"
+        grounder.act.assert_not_called()
+
+    @patch("openadapt_evals.vlm.vlm_call")
+    @patch("openadapt_evals.vlm.extract_json")
+    def test_unknown_structured_action_cannot_fall_back_to_click(
+        self, mock_extract, mock_vlm, observation, task
+    ):
+        mock_vlm.return_value = "{}"
+        mock_extract.return_value = {
+            "decision": "COMMAND",
+            "action_type": "delete",
+            "target_description": "delete account",
+        }
+        grounder = MagicMock()
+        agent = PlannerGrounderAgent(
+            planner="claude-sonnet-4-20250514",
+            grounder=grounder,
+            planner_provider="anthropic",
+        )
+
+        action = agent.act(observation, task)
+
+        assert action.type == "error"
+        assert action.raw_action["parse_error"] == "invalid_action_type"
+        grounder.act.assert_not_called()
+
+    @pytest.mark.parametrize("direction", ["", "left", None])
+    @patch("openadapt_evals.vlm.vlm_call")
+    @patch("openadapt_evals.vlm.extract_json")
+    def test_structured_scroll_requires_explicit_supported_direction(
+        self, mock_extract, mock_vlm, direction, observation, task
+    ):
+        mock_vlm.return_value = "{}"
+        mock_extract.return_value = {
+            "decision": "COMMAND",
+            "action_type": "scroll",
+            "action_value": direction,
+        }
+        agent = PlannerGrounderAgent(
+            planner="claude-sonnet-4-20250514",
+            grounder=MagicMock(),
+            planner_provider="anthropic",
+        )
+
+        action = agent.act(observation, task)
+
+        assert action.type == "error"
+        assert action.raw_action["parse_error"] == "invalid_scroll_direction"
 
 
 # -- Tests: Type-then-Enter queuing ------------------------------------------

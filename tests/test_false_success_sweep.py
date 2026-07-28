@@ -84,6 +84,41 @@ class TestRLEnvironmentEvaluate:
 
         assert env.evaluate() == 0.0
 
+    @pytest.mark.parametrize("score", [float("nan"), float("inf"), -0.1, 1.1])
+    def test_invalid_score_is_not_a_reward(self, score: float) -> None:
+        adapter = _adapter(
+            BenchmarkResult(
+                task_id="t1", success=False, score=score, error_type=None
+            )
+        )
+        env = RLEnvironment(adapter)
+        env.reset(ResetConfig(task_id="t1"))
+        env.step(BenchmarkAction(type="click", x=1, y=1))
+        env.trajectory[-1].reward = -1.0
+
+        with pytest.raises(EvaluationUnavailableError, match="score"):
+            env.evaluate()
+
+        assert env.trajectory[-1].reward == -1.0
+
+    def test_any_error_type_is_not_flattened_to_a_score(self) -> None:
+        adapter = _adapter(
+            BenchmarkResult(
+                task_id="t1",
+                success=False,
+                score=0.0,
+                error_type="agent",
+                reason="agent action could not be evaluated",
+            )
+        )
+        env = RLEnvironment(adapter)
+        env.reset(ResetConfig(task_id="t1"))
+
+        with pytest.raises(EvaluationUnavailableError) as excinfo:
+            env.evaluate()
+
+        assert excinfo.value.error_type == "agent"
+
     def test_evaluate_result_exposes_the_tristate(self) -> None:
         adapter = _adapter(
             BenchmarkResult(
@@ -652,3 +687,67 @@ def test_live_adapter_does_not_accept_an_unscored_200_as_a_result() -> None:
         task, {"success": False, "score": 0.0, "scored": True, "error_type": None},
     )
     assert measured.error_type is None
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        None,
+        [],
+        {},
+        {"success": 1, "score": 1.0},
+        {"success": True, "score": True},
+        {"success": False, "score": float("nan")},
+        {"success": False, "score": float("inf")},
+        {"success": False, "score": -0.1},
+        {"success": True, "score": 1.1},
+        {"success": True, "score": 0.9},
+        {"success": False, "score": 1.0},
+        {"success": False, "score": 0.0, "scored": "false"},
+        {"success": False, "score": 0.0, "error_type": "agent"},
+        {
+            "success": False,
+            "score": 0.0,
+            "scored": True,
+            "error_type": "infrastructure",
+        },
+        {
+            "success": False,
+            "score": 0.5,
+            "scored": False,
+            "error_type": "evaluation",
+        },
+    ],
+)
+def test_live_adapter_rejects_malformed_evaluate_responses(body: object) -> None:
+    from openadapt_evals.adapters.waa.live import WAALiveAdapter
+
+    adapter = WAALiveAdapter.__new__(WAALiveAdapter)
+    adapter._step_count = 2
+
+    result = adapter._result_from_evaluate_response(_task(), body)
+
+    assert result.success is False
+    assert result.score == 0.0
+    assert result.error_type == "evaluation"
+    assert result.reason and result.reason.startswith("Malformed evaluation response:")
+
+
+def test_live_adapter_accepts_canonical_partial_and_complete_measurements() -> None:
+    from openadapt_evals.adapters.waa.live import WAALiveAdapter
+
+    adapter = WAALiveAdapter.__new__(WAALiveAdapter)
+    adapter._step_count = 2
+    task = _task()
+
+    partial = adapter._result_from_evaluate_response(
+        task,
+        {"success": False, "score": 0.5, "scored": True, "error_type": None},
+    )
+    complete = adapter._result_from_evaluate_response(
+        task,
+        {"success": True, "score": 1.0},
+    )
+
+    assert (partial.success, partial.score, partial.error_type) == (False, 0.5, None)
+    assert (complete.success, complete.score, complete.error_type) == (True, 1.0, None)

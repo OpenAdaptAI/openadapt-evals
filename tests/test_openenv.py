@@ -19,6 +19,7 @@ def _make_mock_adapter():
     adapter = MagicMock()
     _fake_obs = BenchmarkObservation(
         screenshot=b"\x89PNG\r\n\x1a\n" + b"\x00" * 100,
+        viewport=(1280, 720),
         raw_observation={},
     )
     adapter.observe.return_value = _fake_obs

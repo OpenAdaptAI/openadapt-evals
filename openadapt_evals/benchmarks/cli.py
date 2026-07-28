@@ -186,6 +186,26 @@ def _write_run_environment_metadata(
     metadata_path.write_text(json.dumps(metadata, indent=2))
 
 
+def _print_evaluation_metrics(metrics: dict, title: str = "Evaluation Results") -> None:
+    """Print benchmark outcomes without hiding unavailable attempts."""
+    print("\n" + "=" * 50)
+    print(title)
+    print("=" * 50)
+    print(f"Attempts:     {metrics['num_tasks']}")
+    print(f"Outcomes:     {metrics['num_outcome_tasks']}")
+    print(f"Errors:       {metrics['error_count']}")
+    print(f"Success rate: {metrics['success_rate']:.1%} (outcomes only)")
+    print(f"Avg score:    {metrics['avg_score']:.3f} (outcomes only)")
+    print(f"Avg steps:    {metrics['avg_steps']:.1f} (all attempts)")
+    if metrics["error_count"]:
+        print(
+            "Error types:  "
+            f"infrastructure={metrics['num_infrastructure_failures']}, "
+            f"evaluation={metrics['num_evaluation_failures']}, "
+            f"agent={metrics['num_agent_failures']}"
+        )
+
+
 def cmd_mock(args: argparse.Namespace) -> int:
     """Run mock evaluation (no Windows VM required)."""
     from openadapt_evals.agents import ApiAgent
@@ -304,16 +324,7 @@ def cmd_mock(args: argparse.Namespace) -> int:
     # Compute and display metrics
     metrics = compute_metrics(results)
 
-    print("\n" + "=" * 50)
-    print("Evaluation Results")
-    print("=" * 50)
-    print(f"Tasks:        {metrics['num_tasks']}")
-    print(f"Success rate: {metrics['success_rate']:.1%}")
-    print(f"Avg score:    {metrics['avg_score']:.3f}")
-    print(f"Avg steps:    {metrics['avg_steps']:.1f}")
-    if metrics.get("num_infrastructure_failures", 0):
-        print(f"Infra fails:  {metrics['num_infrastructure_failures']}")
-        print(f"Adj success:  {metrics.get('success_rate_excluding_infra', 0.0):.1%}")
+    _print_evaluation_metrics(metrics)
 
     if config:
         print(f"\nResults saved to: {config.output_dir}/{config.run_name}")
@@ -519,16 +530,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     # Compute and display metrics
     metrics = compute_metrics(results)
 
-    print("\n" + "=" * 50)
-    print("Evaluation Results")
-    print("=" * 50)
-    print(f"Tasks:        {metrics['num_tasks']}")
-    print(f"Success rate: {metrics['success_rate']:.1%}")
-    print(f"Avg score:    {metrics['avg_score']:.3f}")
-    print(f"Avg steps:    {metrics['avg_steps']:.1f}")
-    if metrics.get("num_infrastructure_failures", 0):
-        print(f"Infra fails:  {metrics['num_infrastructure_failures']}")
-        print(f"Adj success:  {metrics.get('success_rate_excluding_infra', 0.0):.1%}")
+    _print_evaluation_metrics(metrics)
     benchmark_dir = Path(eval_config.output_dir) / eval_config.run_name
     _write_run_environment_metadata(
         benchmark_dir,
@@ -779,16 +781,7 @@ def cmd_live(args: argparse.Namespace) -> int:
     # Compute and display metrics
     metrics = compute_metrics(results)
 
-    print("\n" + "=" * 50)
-    print("Evaluation Results")
-    print("=" * 50)
-    print(f"Tasks:        {metrics['num_tasks']}")
-    print(f"Success rate: {metrics['success_rate']:.1%}")
-    print(f"Avg score:    {metrics['avg_score']:.3f}")
-    print(f"Avg steps:    {metrics['avg_steps']:.1f}")
-    if metrics.get("num_infrastructure_failures", 0):
-        print(f"Infra fails:  {metrics['num_infrastructure_failures']}")
-        print(f"Adj success:  {metrics.get('success_rate_excluding_infra', 0.0):.1%}")
+    _print_evaluation_metrics(metrics)
 
     if eval_config:
         benchmark_dir = Path(eval_config.output_dir) / eval_config.run_name
@@ -1063,13 +1056,7 @@ docker ps -f name=winarena --format "Container: {{.Names}}, Status: {{.Status}}"
         )
 
         metrics = compute_metrics(results)
-        print("\n" + "=" * 50)
-        print("Smoke Live Results")
-        print("=" * 50)
-        print(f"Tasks:        {metrics['num_tasks']}")
-        print(f"Success rate: {metrics['success_rate']:.1%}")
-        print(f"Avg score:    {metrics['avg_score']:.3f}")
-        print(f"Avg steps:    {metrics['avg_steps']:.1f}")
+        _print_evaluation_metrics(metrics, "Smoke Live Results")
         benchmark_dir = Path(eval_config.output_dir) / eval_config.run_name
         _write_run_environment_metadata(
             benchmark_dir,
@@ -1079,10 +1066,6 @@ docker ps -f name=winarena --format "Container: {{.Names}}, Status: {{.Status}}"
             evaluate_url=None,
         )
         print(f"\nResults saved to: {benchmark_dir}")
-        if metrics.get("num_infrastructure_failures", 0):
-            print(f"Infra fails:  {metrics['num_infrastructure_failures']}")
-            print(f"Adj success:  {metrics.get('success_rate_excluding_infra', 0.0):.1%}")
-
         return 0
 
     finally:

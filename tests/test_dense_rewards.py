@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from openadapt_evals.adapters.base import (
     BenchmarkAction,
     BenchmarkObservation,
     BenchmarkResult,
     BenchmarkTask,
+    EvaluationUnavailableError,
 )
 from openadapt_evals.adapters.rl_env import ResetConfig, RLEnvironment
 from openadapt_evals.task_config import Milestone, TaskCheck, TaskConfig
@@ -286,3 +289,56 @@ class TestEvaluateDenseEvalOrder:
 
         mock_local.assert_not_called()
         assert score >= 0.75
+
+    def test_measured_milestone_can_replace_unavailable_binary_evaluator(self):
+        adapter = _make_adapter()
+        adapter.evaluate.return_value = BenchmarkResult(
+            task_id="test-001",
+            success=False,
+            score=0.0,
+            error_type="infrastructure",
+        )
+        check = TaskCheck(check="command", run="echo ok", expect="ok")
+        task_config = _make_task_config(
+            milestones=[Milestone(name="Saved", check=check)]
+        )
+        env = RLEnvironment(adapter, task_config=task_config)
+        env.reset(config=ResetConfig(task_id="test-001"))
+
+        with patch.object(TaskConfig, "_run_vm_command", return_value="ok"):
+            assert env.evaluate_dense() == 1.0
+
+    def test_unmeasured_milestone_does_not_hide_evaluator_failure(self):
+        adapter = _make_adapter()
+        adapter.evaluate.return_value = BenchmarkResult(
+            task_id="test-001",
+            success=False,
+            score=0.0,
+            error_type="infrastructure",
+        )
+        check = TaskCheck(check="command", run="echo ok", expect="ok")
+        task_config = _make_task_config(
+            milestones=[Milestone(name="Saved", check=check)]
+        )
+        env = RLEnvironment(adapter, task_config=task_config)
+        env.reset(config=ResetConfig(task_id="test-001"))
+
+        with (
+            patch.object(TaskConfig, "_run_vm_command", side_effect=OSError("offline")),
+            pytest.raises(EvaluationUnavailableError),
+        ):
+            env.evaluate_dense()
+
+    def test_local_check_exception_is_not_a_measured_zero(self):
+        check = TaskCheck(check="screenshot", description="Saved result")
+        task_config = _make_task_config()
+        task_config.checks = [check]
+
+        with (
+            patch(
+                "openadapt_evals.vlm_evaluator.vlm_judge",
+                side_effect=RuntimeError("judge offline"),
+            ),
+            pytest.raises(EvaluationUnavailableError),
+        ):
+            task_config.evaluate_checks_local(b"image", "http://localhost:5001")

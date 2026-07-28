@@ -33,12 +33,14 @@ from typing import Any
 
 from PIL import Image
 
+from openadapt_evals.action_envelope import parse_single_json_object
 from openadapt_evals.adapters.base import (
     BenchmarkAction,
     BenchmarkObservation,
     BenchmarkTask,
 )
 from openadapt_evals.agents.base import BenchmarkAgent
+from openadapt_evals.errors import ActionParseError
 
 logger = logging.getLogger("openadapt_evals.agents.api")
 
@@ -758,23 +760,96 @@ class ApiAgent(BenchmarkAgent):
                 - error: Error message (if failed)
         """
         try:
-            # Defensive: ensure response_text is actually a string
+            # Model output is an action protocol. Coercing arbitrary objects to
+            # strings can manufacture a parseable action from malformed output.
             if not isinstance(response_text, str):
+                return {
+                    "status": "failed",
+                    "error": "API response must be a string action envelope",
+                }
+
+            decision_matches = re.findall(
+                r"```decision\s*\n(.*?)```", response_text, re.DOTALL | re.IGNORECASE
+            )
+            if len(decision_matches) > 1:
+                return {"status": "failed", "error": "Multiple decision blocks"}
+
+            action_calls = re.findall(
+                r"\bcomputer\.[A-Za-z_][A-Za-z0-9_]*\s*\(", response_text
+            )
+            json_objects = re.findall(r"\{[^{}]*\}", response_text, re.DOTALL)
+            fenced_pattern = re.compile(
+                r"^```([A-Za-z0-9_-]*)[ \t]*\n(.*?)^```[ \t]*$",
+                re.DOTALL | re.IGNORECASE | re.MULTILINE,
+            )
+            fenced_matches = list(fenced_pattern.finditer(response_text))
+            action_blocks = [
+                match.group(2)
+                for match in fenced_matches
+                if match.group(1).lower() in {"", "python", "json"}
+            ]
+            if len(action_calls) > 1 or len(json_objects) > 1 or len(action_blocks) > 1:
+                return {
+                    "status": "failed",
+                    "error": "Response must contain exactly one action envelope",
+                }
+
+            if action_blocks:
+                block = action_blocks[0].strip()
                 try:
-                    # Handle case where response might be a dict or other object
-                    if hasattr(response_text, 'get'):
-                        # It's a dict-like object
-                        response_text = str(response_text)
-                        logs["response_type_coerced"] = "dict_to_str"
-                    elif hasattr(response_text, 'text'):
-                        # It might be a response object with a text attribute
-                        response_text = response_text.text
-                        logs["response_type_coerced"] = "obj_text_attr"
-                    else:
-                        response_text = str(response_text)
-                        logs["response_type_coerced"] = "generic_str"
-                except Exception as e:
-                    return {"status": "failed", "error": f"Response type coercion failed: {e}"}
+                    block_json = parse_single_json_object(block)
+                except ActionParseError as exc:
+                    return {"status": "failed", "error": str(exc)}
+                if block_json is None and not self._validate_action(
+                    block, width, height
+                ):
+                    return {
+                        "status": "failed",
+                        "error": "Fenced block must contain one exact action",
+                    }
+
+            outside_blocks = fenced_pattern.sub("", response_text)
+            outside_calls = re.findall(
+                r"\bcomputer\.[A-Za-z_][A-Za-z0-9_]*\s*\(", outside_blocks
+            )
+            outside_json = re.findall(r"\{[^{}]*\}", outside_blocks, re.DOTALL)
+            if action_blocks and (outside_calls or outside_json):
+                return {
+                    "status": "failed",
+                    "error": "Competing action envelopes use different formats",
+                }
+            if (
+                not action_blocks
+                and action_calls
+                and json_objects
+                and "computer." not in json_objects[0]
+            ):
+                return {
+                    "status": "failed",
+                    "error": "Competing action envelopes use different formats",
+                }
+
+            if json_objects:
+                try:
+                    parse_single_json_object(json_objects[0])
+                except ActionParseError as exc:
+                    return {"status": "failed", "error": str(exc)}
+
+            decision = None
+            if decision_matches:
+                decision = decision_matches[0].strip().upper()
+                if decision not in {"DONE", "FAIL", "WAIT", "CONTINUE"}:
+                    return {
+                        "status": "failed",
+                        "error": f"Unknown decision: {decision_matches[0].strip()!r}",
+                    }
+                if decision in {"DONE", "FAIL", "WAIT"}:
+                    if action_calls or json_objects or action_blocks:
+                        return {
+                            "status": "failed",
+                            "error": "Terminal decision cannot include an action",
+                        }
+                    return {"status": "terminal", "action": decision}
 
             # Extract memory block (update internal state)
             try:
@@ -783,20 +858,6 @@ class ApiAgent(BenchmarkAgent):
                     self.memory_block_text = memory_match.group(1).strip()
             except Exception as e:
                 logger.warning(f"Memory extraction failed: {e}")
-
-            # Strategy 0: Check for terminal decisions (DONE, FAIL, WAIT)
-            try:
-                decision_match = re.search(r"```decision\n(.*?)```", response_text, re.DOTALL)
-                if decision_match:
-                    decision = decision_match.group(1).strip().upper()
-                    if "DONE" in decision:
-                        return {"status": "terminal", "action": "DONE"}
-                    elif "FAIL" in decision:
-                        return {"status": "terminal", "action": "FAIL"}
-                    elif "WAIT" in decision:
-                        return {"status": "terminal", "action": "WAIT"}
-            except Exception as e:
-                logger.warning(f"Decision extraction failed: {e}")
 
             # Strategy 1: Standard Python code block
             try:
@@ -1170,8 +1231,14 @@ class ApiAgent(BenchmarkAgent):
                 end_x=float(x2), end_y=float(y2), raw_action=raw_action,
             )
 
-        logger.warning(f"Unrecognized action, treating as no-op: {code}")
-        return BenchmarkAction(type="done", raw_action=raw_action)
+        logger.warning("Unrecognized computer action: %s", code)
+        raw_action.update(
+            {
+                "parse_error": "unrecognized computer action",
+                "error_type": "agent",
+            }
+        )
+        return BenchmarkAction(type="error", raw_action=raw_action)
 
     def _add_to_history(self, entry: str) -> None:
         """Add an entry to the rich history (reasoning + action)."""

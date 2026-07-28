@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
+from openadapt_evals.adapters.base import EvaluationUnavailableError
 from openadapt_evals.task_config import (
     Milestone,
     TaskCheck,
@@ -26,19 +29,20 @@ def _make_task_config(milestones):
 
 
 class TestEvaluateMilestonesScreenshot:
-    def test_no_milestones_returns_zero(self):
+    def test_no_milestones_is_unmeasured(self):
         task = _make_task_config([])
-        assert evaluate_milestones_screenshot(task, b"fake-png") == 0.0
+        with pytest.raises(EvaluationUnavailableError, match="No milestone"):
+            evaluate_milestones_screenshot(task, b"fake-png")
 
-    def test_no_screenshot_milestones_returns_zero(self):
-        """Non-screenshot milestones are skipped entirely."""
+    def test_non_screenshot_milestone_is_not_silently_skipped(self):
         task = _make_task_config([
             Milestone(
                 name="Command check",
                 check=TaskCheck(check="command", run="echo 1", expect="1"),
             ),
         ])
-        assert evaluate_milestones_screenshot(task, b"fake-png") == 0.0
+        with pytest.raises(EvaluationUnavailableError, match="cannot measure"):
+            evaluate_milestones_screenshot(task, b"fake-png")
 
     @patch("openadapt_evals.vlm_evaluator.vlm_judge")
     def test_all_pass(self, mock_vlm):
@@ -74,8 +78,7 @@ class TestEvaluateMilestonesScreenshot:
         assert score == 0.5
 
     @patch("openadapt_evals.vlm_evaluator.vlm_judge")
-    def test_skips_non_screenshot_milestones(self, mock_vlm):
-        """Mixed milestones: only screenshot ones are evaluated."""
+    def test_mixed_contract_is_not_partially_measured(self, mock_vlm):
         mock_vlm.return_value = (True, 0.9)
         task = _make_task_config([
             Milestone(
@@ -87,9 +90,9 @@ class TestEvaluateMilestonesScreenshot:
                 check=TaskCheck(check="screenshot", description="Something visible"),
             ),
         ])
-        score = evaluate_milestones_screenshot(task, b"fake-png")
-        assert score == 1.0  # 1/1 screenshot milestone passed
-        mock_vlm.assert_called_once()
+        with pytest.raises(EvaluationUnavailableError, match="cannot measure"):
+            evaluate_milestones_screenshot(task, b"fake-png")
+        mock_vlm.assert_not_called()
 
     @patch("openadapt_evals.vlm_evaluator.vlm_judge")
     def test_custom_model_passed_through(self, mock_vlm):

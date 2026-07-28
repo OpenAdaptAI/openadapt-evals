@@ -6,7 +6,6 @@ Tests cover:
 - Stuck detection (P1)
 - Truncation warning (P1)
 - DiagnosticsCallback (P2)
-- _empty_rollout_result helper
 
 All tests are "light" -- they mock heavy deps (torch, transformers, PIL) and
 run with [dev] deps only.
@@ -17,13 +16,16 @@ from __future__ import annotations
 import logging
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from openadapt_evals.adapters.base import (
     BenchmarkObservation,
     BenchmarkResult,
     BenchmarkTask,
 )
+from openadapt_evals.errors import RolloutInfrastructureError
+from openadapt_evals.task_config import TaskConfig
 from openadapt_evals.training.trl_rollout import (
-    _empty_rollout_result,
     _run_episode,
     make_waa_rollout_func,
 )
@@ -53,14 +55,20 @@ def _make_mock_adapter(screenshot=_GOOD_SCREENSHOT):
 
     adapter.observe.return_value = BenchmarkObservation(
         screenshot=screenshot,
+        viewport=(1920, 1200),
         raw_observation={},
     )
     adapter.reset.return_value = BenchmarkObservation(
         screenshot=screenshot,
+        viewport=(1920, 1200),
         raw_observation={},
     )
     adapter.step.return_value = (
-        BenchmarkObservation(screenshot=screenshot, raw_observation={}),
+        BenchmarkObservation(
+            screenshot=screenshot,
+            viewport=(1920, 1200),
+            raw_observation={},
+        ),
         False,
         {},
     )
@@ -77,6 +85,19 @@ def _make_mock_adapter(screenshot=_GOOD_SCREENSHOT):
     return adapter
 
 
+class _HealthAdapter:
+    """A non-mock adapter type used to exercise the live health gate."""
+
+    def __init__(self, screenshot=_GOOD_SCREENSHOT, error=None):
+        self._screenshot = screenshot
+        self._error = error
+
+    def observe(self):
+        if self._error is not None:
+            raise self._error
+        return BenchmarkObservation(screenshot=self._screenshot, raw_observation={})
+
+
 def _make_mock_trainer(num_generations=2):
     """Create a mock TRL GRPOTrainer."""
     trainer = MagicMock()
@@ -90,6 +111,19 @@ def _make_mock_trainer(num_generations=2):
     return trainer
 
 
+def _make_task_config() -> TaskConfig:
+    return TaskConfig(
+        name="Test task",
+        id="test-task",
+        domain="desktop",
+        setup=[],
+        checks=[],
+        combine="and",
+        max_steps=5,
+        milestones=[],
+    )
+
+
 # ---------------------------------------------------------------------------
 # Feature 1: Pre-rollout health check
 # ---------------------------------------------------------------------------
@@ -101,7 +135,9 @@ class TestHealthCheck:
     def test_health_check_passes(self):
         """When adapter.observe() returns a good screenshot, rollout proceeds."""
         adapter = _make_mock_adapter()
-        func = make_waa_rollout_func(adapter, max_steps=3)
+        func = make_waa_rollout_func(
+            adapter, task_configs=[_make_task_config()], max_steps=3
+        )
         trainer = _make_mock_trainer(num_generations=1)
 
         from openadapt_evals.training import trl_rollout
@@ -118,40 +154,31 @@ class TestHealthCheck:
         assert result["env_reward"] == [0.5]
         assert result["completion_ids"] == [[2, 3]]
 
-    def test_health_check_fails_returns_zeros(self):
-        """When adapter.observe() raises, rollout returns zero rewards."""
-        adapter = _make_mock_adapter()
-        adapter.observe.side_effect = ConnectionError("server down")
+    def test_health_check_failure_is_not_zero_reward(self):
+        adapter = _HealthAdapter(error=ConnectionError("server down"))
         func = make_waa_rollout_func(adapter, max_steps=3)
         trainer = _make_mock_trainer(num_generations=2)
 
-        result = func(["Task A", "Task B"], trainer)
-
-        # 2 prompts x 2 generations = 4 entries, all zero
-        assert len(result["env_reward"]) == 4
-        assert all(r == 0.0 for r in result["env_reward"])
-        assert all(ids == [] for ids in result["completion_ids"])
+        with pytest.raises(RolloutInfrastructureError, match="server down"):
+            func(["Task A", "Task B"], trainer)
 
     def test_health_check_empty_screenshot(self):
         """When adapter returns empty screenshot bytes, returns zeros."""
-        adapter = _make_mock_adapter(screenshot=b"")
+        adapter = _HealthAdapter(screenshot=b"")
         func = make_waa_rollout_func(adapter, max_steps=3)
         trainer = _make_mock_trainer(num_generations=1)
 
-        result = func(["Test task"], trainer)
-
-        assert result["env_reward"] == [0.0]
-        assert result["completion_ids"] == [[]]
+        with pytest.raises(RolloutInfrastructureError, match="0 bytes"):
+            func(["Test task"], trainer)
 
     def test_health_check_small_screenshot(self):
         """Screenshot smaller than 100 bytes triggers health check failure."""
-        adapter = _make_mock_adapter(screenshot=b"\x89PNG" + b"\x00" * 50)
+        adapter = _HealthAdapter(screenshot=b"\x89PNG" + b"\x00" * 50)
         func = make_waa_rollout_func(adapter, max_steps=3)
         trainer = _make_mock_trainer(num_generations=1)
 
-        result = func(["Test task"], trainer)
-
-        assert result["env_reward"] == [0.0]
+        with pytest.raises(RolloutInfrastructureError, match="54 bytes"):
+            func(["Test task"], trainer)
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +204,7 @@ class TestCorruptScreenshotRetry:
         adapter = _make_mock_adapter()
         func = make_waa_rollout_func(
             adapter,
+            task_configs=[_make_task_config()],
             max_steps=3,
             screenshot_retries=3,
             screenshot_retry_delay=0,
@@ -234,10 +262,11 @@ class TestCorruptScreenshotRetry:
         )
 
     def test_corrupt_screenshot_all_fail(self):
-        """All retry attempts fail -- returns DONE action ("done", [], [])."""
+        """Unreadable observation data must stop the rollout."""
         adapter = _make_mock_adapter()
         func = make_waa_rollout_func(
             adapter,
+            task_configs=[_make_task_config()],
             max_steps=3,
             screenshot_retries=3,
             screenshot_retry_delay=0,
@@ -253,17 +282,11 @@ class TestCorruptScreenshotRetry:
             env.reset(config=ResetConfig(task_id=tid))
 
             with patch.object(Image, "open", side_effect=OSError("always corrupt")):
-                text, ids, lps = gfn(b"not a png", "test instruction")
-
-            assert text == "done"
-            assert ids == []
-            assert lps == []
-            return [1], [2], [-0.1], 0.0
+                gfn(b"not a png", "test instruction")
 
         with patch.object(trl_rollout, "_run_episode", side_effect=mock_run):
-            result = func(["Test task"], trainer)
-
-        assert result["env_reward"] == [0.0]
+            with pytest.raises(RolloutInfrastructureError, match="unreadable"):
+                func(["Test task"], trainer)
 
 
 # ---------------------------------------------------------------------------
@@ -329,7 +352,9 @@ class TestStuckDetection:
         adapter.observe = varying_observe
         # Also vary reset return
         adapter.reset.return_value = BenchmarkObservation(
-            screenshot=screenshots[0], raw_observation={},
+            screenshot=screenshots[0],
+            viewport=(1920, 1200),
+            raw_observation={},
         )
 
         env = RLEnvironment(adapter)
@@ -350,7 +375,9 @@ class TestStuckDetection:
             step_idx["n"] += 1
             return (
                 BenchmarkObservation(
-                    screenshot=screenshots[idx], raw_observation={},
+                    screenshot=screenshots[idx],
+                    viewport=(1920, 1200),
+                    raw_observation={},
                 ),
                 False,
                 {},
@@ -411,6 +438,35 @@ class TestStuckDetection:
         # Without stuck detection, all 8 steps should run
         assert call_count["n"] == 8
 
+    def test_scroll_up_uses_structured_step_dispatch(self):
+        from openadapt_evals.adapters.rl_env import RLEnvironment
+
+        adapter = _make_mock_adapter()
+        env = RLEnvironment(adapter)
+        outputs = iter(
+            [
+                (
+                    '{"type":"scroll","x":0.5,"y":0.5,"direction":"up"}',
+                    [1],
+                    [-0.1],
+                ),
+                ('{"type":"done"}', [2], [-0.1]),
+            ]
+        )
+
+        _run_episode(
+            env,
+            lambda screenshot, instruction: next(outputs),
+            "Test",
+            "test-task",
+            max_steps=2,
+            stuck_threshold=0,
+        )
+
+        dispatched = adapter.step.call_args_list[0].args[0]
+        assert dispatched.type == "scroll"
+        assert dispatched.scroll_direction == "up"
+
 
 # ---------------------------------------------------------------------------
 # Feature 4: Truncation warning
@@ -444,6 +500,7 @@ class TestTruncationWarning:
         max_new_tokens = 10
         func = make_waa_rollout_func(
             adapter,
+            task_configs=[_make_task_config()],
             max_steps=1,
             max_new_tokens=max_new_tokens,
             screenshot_retries=1,
@@ -522,6 +579,7 @@ class TestTruncationWarning:
         max_new_tokens = 256
         func = make_waa_rollout_func(
             adapter,
+            task_configs=[_make_task_config()],
             max_steps=1,
             max_new_tokens=max_new_tokens,
             screenshot_retries=1,
@@ -652,53 +710,3 @@ class TestDiagnosticsCallback:
 
         # Should still log with zeroed metrics
         assert any("Step 1" in r.message for r in caplog.records)
-
-
-# ---------------------------------------------------------------------------
-# _empty_rollout_result helper
-# ---------------------------------------------------------------------------
-
-
-class TestEmptyRolloutResult:
-    """Tests for the _empty_rollout_result helper."""
-
-    def test_empty_rollout_result_shape(self):
-        """Verify correct dict structure for various prompt/gen combos."""
-        result = _empty_rollout_result(["A", "B", "C"], num_generations=4)
-
-        assert len(result["prompt_ids"]) == 12  # 3 * 4
-        assert len(result["completion_ids"]) == 12
-        assert len(result["logprobs"]) == 12
-        assert len(result["env_reward"]) == 12
-
-        # All rewards should be zero
-        assert all(r == 0.0 for r in result["env_reward"])
-
-        # All lists should be empty
-        assert all(ids == [] for ids in result["prompt_ids"])
-        assert all(ids == [] for ids in result["completion_ids"])
-        assert all(lps == [] for lps in result["logprobs"])
-
-    def test_empty_rollout_result_single(self):
-        """Single prompt, single generation."""
-        result = _empty_rollout_result(["X"], num_generations=1)
-
-        assert len(result["env_reward"]) == 1
-        assert result["env_reward"] == [0.0]
-
-    def test_empty_rollout_result_has_all_keys(self):
-        """Result contains all four required keys."""
-        result = _empty_rollout_result(["A"], num_generations=1)
-
-        assert "prompt_ids" in result
-        assert "completion_ids" in result
-        assert "logprobs" in result
-        assert "env_reward" in result
-
-    def test_empty_rollout_result_lists_are_independent(self):
-        """Each inner list is a distinct object (not shared references)."""
-        result = _empty_rollout_result(["A", "B"], num_generations=2)
-
-        # Mutating one inner list should not affect others
-        result["prompt_ids"][0].append(999)
-        assert result["prompt_ids"][1] == []

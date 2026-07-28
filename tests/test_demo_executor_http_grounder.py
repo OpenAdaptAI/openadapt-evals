@@ -230,17 +230,15 @@ class TestBboxParsing:
             assert abs(action.x - 0.2) < 0.01
             assert abs(action.y - 0.3) < 0.01
 
-    def test_http_error_returns_center_fallback(
+    def test_http_error_does_not_invent_center_click(
         self, executor_with_endpoint, fake_observation
     ):
-        """HTTP errors should return a fallback click at center."""
         with patch("requests.post", side_effect=Exception("Connection refused")):
             action = executor_with_endpoint._ground_click_http(
                 fake_observation, "target"
             )
-            assert action.type == "click"
-            assert action.x == 0.5
-            assert action.y == 0.5
+            assert action.type == "error"
+            assert "Connection refused" in action.raw_action["grounder_error"]
 
     def test_no_screenshot(self, executor_with_endpoint):
         """Should still work without a screenshot (text-only grounding)."""

@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from openadapt_evals.adapters.base import (
     BenchmarkAction,
     BenchmarkObservation,
     BenchmarkResult,
     BenchmarkTask,
 )
+from openadapt_evals.errors import ActionParseError, RolloutInfrastructureError
 from openadapt_evals.task_config import Milestone, TaskCheck, TaskConfig
 from openadapt_evals.training.trl_rollout import (
     make_waa_rollout_func,
@@ -42,10 +45,8 @@ class TestParseActionJson:
         action = parse_action_json('{"type": "done"}')
         assert action.type == "done"
 
-    def test_with_thinking_prefix(self):
-        text = """I need to click the button.
-
-```json
+    def test_fenced_json(self):
+        text = """```json
 {"type": "click", "x": 0.2, "y": 0.8}
 ```"""
         action = parse_action_json(text)
@@ -53,24 +54,45 @@ class TestParseActionJson:
         assert action.x == 0.2
 
     def test_with_markdown_fence(self):
-        action = parse_action_json('```json\n{"type": "scroll", "x": 0.5, "y": 0.5}\n```')
+        action = parse_action_json(
+            '```json\n{"type":"scroll","x":0.5,"y":0.5,"direction":"up"}\n```'
+        )
         assert action.type == "scroll"
+        assert action.scroll_direction == "up"
 
-    def test_no_json_returns_done(self):
-        action = parse_action_json("I'm not sure what to do")
-        assert action.type == "done"
+    def test_no_action_is_not_task_completion(self):
+        with pytest.raises(ActionParseError):
+            parse_action_json("I'm not sure what to do")
 
-    def test_invalid_json_returns_done(self):
-        action = parse_action_json("{broken json}")
-        assert action.type == "done"
+    def test_invalid_json_is_not_task_completion(self):
+        with pytest.raises(ActionParseError):
+            parse_action_json("{broken json}")
 
-    def test_unknown_type_returns_done(self):
-        action = parse_action_json('{"type": "fly_to_moon", "x": 0}')
-        assert action.type == "done"
+    def test_unknown_type_is_not_task_completion(self):
+        with pytest.raises(ActionParseError):
+            parse_action_json('{"type": "fly_to_moon", "x": 0}')
 
     def test_noop(self):
         action = parse_action_json('{"type": "noop"}')
         assert action.type == "noop"
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            '{"type": "click", "x": 0.5}',
+            '{"type": "click", "x": -0.1, "y": 0.5}',
+            '{"type": "click", "x": 0.5, "y": 2}',
+            '{"type": "type"}',
+            '{"type": "key", "key": ""}',
+            '{"type": "scroll", "y": 0.5}',
+            '{"type": "scroll", "x": 0.5, "y": 0.5}',
+            '{"type": "scroll", "x": 0.5, "y": 0.5, "direction": "left"}',
+            "CLICK(x=-0.2, y=0.5)",
+        ],
+    )
+    def test_missing_or_invalid_arguments_are_rejected(self, text):
+        with pytest.raises(ActionParseError):
+            parse_action_json(text)
 
 
 # ---------------------------------------------------------------------------
@@ -195,9 +217,15 @@ class TestMakeWaaRolloutFunc:
     def test_rollout_output_shape_multiple_prompts(self):
         """Verify output shape with multiple prompts × generations."""
         adapter = _make_mock_adapter(steps_to_done=1)
-        tc = _make_task_config()
+        tc1 = _make_task_config()
+        tc1.name = "Task A"
+        tc2 = _make_task_config()
+        tc2.name = "Task B"
+        tc2.id = "test-task-b"
 
-        func = make_waa_rollout_func(adapter, task_configs=[tc], max_steps=3)
+        func = make_waa_rollout_func(
+            adapter, task_configs=[tc1, tc2], max_steps=3
+        )
 
         trainer = _make_mock_trainer()
         trainer.args.num_generations = 3
@@ -221,10 +249,11 @@ class TestMakeWaaRolloutFunc:
         assert len(result["completion_ids"]) == 6
         assert len(result["logprobs"]) == 6
 
-    def test_rollout_handles_episode_failure(self):
-        """Verify graceful handling when an episode throws an exception."""
+    def test_rollout_propagates_episode_failure(self):
         adapter = _make_mock_adapter()
-        func = make_waa_rollout_func(adapter, max_steps=3)
+        func = make_waa_rollout_func(
+            adapter, task_configs=[_make_task_config()], max_steps=3
+        )
 
         trainer = _make_mock_trainer()
         trainer.args.num_generations = 1
@@ -235,13 +264,8 @@ class TestMakeWaaRolloutFunc:
             raise RuntimeError("VM connection lost")
 
         with patch.object(trl_rollout, "_run_episode", side_effect=failing_run):
-            result = func(["Failing task"], trainer)
-
-        # Should return zeros, not crash
-        assert result["env_reward"] == [0.0]
-        assert result["prompt_ids"] == [[]]
-        assert result["completion_ids"] == [[]]
-        assert result["logprobs"] == [[]]
+            with pytest.raises(RuntimeError, match="VM connection lost"):
+                func(["Test task"], trainer)
 
     def test_task_config_lookup_by_name(self):
         """Verify task_configs are indexed by name for prompt matching."""
@@ -394,23 +418,19 @@ class TestRolloutCallbacks:
         assert len(result["env_reward"]) == 1
         assert result["env_reward"][0] == 0.5
 
-    def test_broken_callback_does_not_crash_training(self):
-        """A callback that raises should be caught and logged, not crash."""
+    def test_broken_setup_callback_aborts_collection(self):
+        """A failed pre-rollout setup must not evaluate stale task state."""
         adapter = _make_mock_adapter(steps_to_done=1)
         tc = _make_task_config()
 
         def exploding_before(task_id, env):
             raise ValueError("Boom in before_collect!")
 
-        def exploding_complete(rollout, index):
-            raise RuntimeError("Boom in rollout_complete!")
-
         func = make_waa_rollout_func(
             adapter=adapter,
             task_configs=[tc],
             max_steps=3,
             on_before_collect=exploding_before,
-            on_rollout_complete=exploding_complete,
         )
 
         trainer = _make_mock_trainer()
@@ -424,8 +444,45 @@ class TestRolloutCallbacks:
             env.step(BenchmarkAction(type="done"))
             return [1], [2], [-0.1], 0.5
 
-        with patch.object(trl_rollout, "_run_episode", side_effect=mock_run):
-            result = func(["Test task"], trainer)
+        with patch.object(trl_rollout, "_run_episode", side_effect=mock_run) as run:
+            with pytest.raises(RolloutInfrastructureError, match="before_collect"):
+                func(["Test task"], trainer)
+        run.assert_not_called()
 
-        assert len(result["env_reward"]) == 1
-        assert result["env_reward"][0] == 0.5
+    def test_unmatched_prompt_refuses_before_episode(self):
+        adapter = _make_mock_adapter()
+        func = make_waa_rollout_func(
+            adapter, task_configs=[_make_task_config()], max_steps=3
+        )
+        trainer = _make_mock_trainer()
+        trainer.args.num_generations = 1
+
+        from openadapt_evals.training import trl_rollout
+
+        with patch.object(trl_rollout, "_run_episode") as run:
+            with pytest.raises(RolloutInfrastructureError, match="no exact TaskConfig"):
+                func(["A different task"], trainer)
+        run.assert_not_called()
+
+    def test_zero_generations_refuses_before_episode(self):
+        adapter = _make_mock_adapter()
+        func = make_waa_rollout_func(
+            adapter, task_configs=[_make_task_config()], max_steps=3
+        )
+        trainer = _make_mock_trainer()
+        trainer.args.num_generations = 0
+
+        from openadapt_evals.training import trl_rollout
+
+        with patch.object(trl_rollout, "_run_episode") as run:
+            with pytest.raises(RolloutInfrastructureError, match="num_generations"):
+                func(["Test task"], trainer)
+        run.assert_not_called()
+
+    def test_zero_max_steps_is_rejected_when_rollout_is_built(self):
+        with pytest.raises(ValueError, match="max_steps"):
+            make_waa_rollout_func(
+                _make_mock_adapter(),
+                task_configs=[_make_task_config()],
+                max_steps=0,
+            )

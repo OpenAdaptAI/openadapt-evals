@@ -7,9 +7,11 @@ using the WAAMockAdapter (no VM required).
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import MagicMock
 
 import pytest
 
+from openadapt_evals.adapters.base import BenchmarkObservation
 from openadapt_evals.adapters.rl_env import RLEnvironment
 from openadapt_evals.adapters.verl_env import (
     _ACTION_PATTERN,
@@ -22,6 +24,7 @@ from openadapt_evals.adapters.verl_env import (
     register_in_vagen,
 )
 from openadapt_evals.adapters.waa.mock import WAAMockAdapter
+from openadapt_evals.errors import ActionParseError
 
 # --- Action parsing tests ---
 
@@ -65,13 +68,13 @@ class TestParseActionStr:
         action = _parse_action_str('SCROLL(x=0.50, y=0.50, direction="up")')
         assert action.scroll_direction == "up"
 
-    def test_scroll_default_direction(self):
-        action = _parse_action_str("SCROLL(x=0.50, y=0.50)")
-        assert action.scroll_direction == "down"
+    def test_scroll_requires_direction(self):
+        with pytest.raises(ActionParseError, match="direction"):
+            _parse_action_str("SCROLL(x=0.50, y=0.50)")
 
-    def test_invalid_returns_done(self):
-        action = _parse_action_str("random garbage text")
-        assert action.type == "done"
+    def test_invalid_is_not_task_completion(self):
+        with pytest.raises(ActionParseError):
+            _parse_action_str("random garbage text")
 
     def test_drag_with_end_coords(self):
         action = _parse_action_str("DRAG(x=0.20, y=0.30, end_x=0.80, end_y=0.70)")
@@ -82,10 +85,24 @@ class TestParseActionStr:
         assert action.end_y == pytest.approx(0.70)
 
     def test_drag_without_end_coords(self):
-        action = _parse_action_str("DRAG(x=0.20, y=0.30)")
-        assert action.type == "drag"
-        assert action.end_x is None
-        assert action.end_y is None
+        with pytest.raises(ActionParseError, match="end_x"):
+            _parse_action_str("DRAG(x=0.20, y=0.30)")
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "CLICK(x=0.5)",
+            "CLICK(x=-0.1, y=0.5)",
+            "CLICK(x=nan, y=0.5)",
+            "SCROLL(x=0.5)",
+            'SCROLL(x=0.5, y=0.5, direction="left")',
+            "TYPE()",
+            "KEY()",
+        ],
+    )
+    def test_missing_or_invalid_arguments_are_rejected(self, text):
+        with pytest.raises(ActionParseError):
+            _parse_action_str(text)
 
     def test_with_thinking(self):
         action = _parse_action_str(
@@ -203,6 +220,52 @@ class TestWAADesktopEnv:
         assert done is True
         assert isinstance(reward, float)
 
+    def test_step_does_not_turn_evaluator_failure_into_zero_reward(self):
+        env = _make_mock_env()
+        asyncio.run(env.reset(seed=42))
+        env._rl_env.evaluate = MagicMock(side_effect=RuntimeError("evaluator offline"))
+
+        with pytest.raises(RuntimeError, match="evaluator offline"):
+            asyncio.run(env.step("DONE()"))
+
+    def test_partial_reward_is_not_reported_as_success(self):
+        env = _make_mock_env()
+        asyncio.run(env.reset(seed=42))
+        env._rl_env.evaluate = MagicMock(return_value=0.75)
+
+        _, reward, done, info = asyncio.run(env.step("DONE()"))
+
+        assert done is True
+        assert reward == 0.75
+        assert info["success"] is False
+
+    @pytest.mark.parametrize(
+        "action_text, expected",
+        [
+            ("CLICK(x=1.0, y=1.0)", (1919, 1199, None, None)),
+            (
+                "DRAG(x=1.0, y=1.0, end_x=1.0, end_y=1.0)",
+                (1919, 1199, 1919, 1199),
+            ),
+        ],
+    )
+    def test_fractional_edge_stays_inside_viewport(self, action_text, expected):
+        env = _make_mock_env()
+        asyncio.run(env.reset(seed=42))
+
+        asyncio.run(env.step(action_text))
+
+        action = env._rl_env.trajectory[-1].action
+        assert (action.x, action.y, action.end_x, action.end_y) == expected
+
+    def test_fractional_action_rejects_invalid_viewport_dimensions(self):
+        env = _make_mock_env()
+        asyncio.run(env.reset(seed=42))
+        env._rl_env._last_obs = BenchmarkObservation(viewport=(0, 1200))
+
+        with pytest.raises(ValueError, match="dimension must be positive"):
+            asyncio.run(env.step("CLICK(x=0.5, y=0.5)"))
+
     def test_max_steps_triggers_done(self):
         env = _make_mock_env()
         env._max_steps = 3
@@ -261,12 +324,11 @@ class TestWAADesktopEnv:
         _, _, _, info = asyncio.run(env.step("DONE()"))
         assert info["is_action_valid"] is True
 
-    def test_is_action_valid_on_garbage(self):
-        """Unparseable actions should have is_action_valid=False."""
+    def test_garbage_does_not_end_the_episode(self):
         env = _make_mock_env()
         asyncio.run(env.reset(seed=42))
-        _, _, _, info = asyncio.run(env.step("random garbage text"))
-        assert info["is_action_valid"] is False
+        with pytest.raises(ActionParseError):
+            asyncio.run(env.step("random garbage text"))
 
     def test_obs_contains_image_placeholder(self):
         """Test that observations with screenshots include <image> placeholder."""

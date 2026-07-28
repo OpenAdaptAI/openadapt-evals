@@ -2,12 +2,16 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from openadapt_evals.server.evaluate_endpoint import (
+    EvaluationNotRunError,
     MockEnv,
     StandaloneMetrics,
     _truncate_value,
     create_standalone_evaluator,
     evaluate_task_state,
+    get_expected_value,
 )
 
 
@@ -144,6 +148,38 @@ class TestEvaluateTaskState:
             assert result["success"] is False
             assert "Failed to load" in result["reason"]
 
+    def test_missing_expected_contract_cannot_match_missing_actual(self):
+        getters = MagicMock()
+        getters.get_thing.return_value = None
+        metrics = MagicMock()
+        metrics.exact_match.return_value = 1.0
+
+        with patch(
+            "openadapt_evals.server.evaluate_endpoint._load_waa_evaluators",
+            return_value=(getters, metrics),
+        ):
+            result = evaluate_task_state(
+                {"evaluator": {"result": {"type": "thing"}}}
+            )
+
+        assert result["scored"] is False
+        assert result["error_type"] == "evaluation"
+        metrics.exact_match.assert_not_called()
+
+
+def test_expected_getter_failure_is_not_a_null_expected_value():
+    getters = MagicMock()
+    getters.get_reference.side_effect = RuntimeError("offline")
+
+    with pytest.raises(EvaluationNotRunError) as excinfo:
+        get_expected_value(
+            {"expected": {"type": "reference"}},
+            env=MagicMock(),
+            getters=getters,
+        )
+
+    assert excinfo.value.error_type == "infrastructure"
+
 
 class TestCreateStandaloneEvaluator:
     """Tests for create_standalone_evaluator function."""
@@ -176,7 +212,10 @@ class TestCreateStandaloneEvaluator:
         with patch("requests.post") as mock_post:
             mock_response = MagicMock()
             mock_response.status_code = 200
-            mock_response.json.return_value = {"output": "test"}
+            mock_response.json.return_value = {
+                "returncode": 0,
+                "output": "test",
+            }
             mock_post.return_value = mock_response
 
             result = evaluate(config)

@@ -40,7 +40,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from openadapt_evals.adapters import BenchmarkResult, BenchmarkTask
+from openadapt_evals.adapters import (
+    BenchmarkResult,
+    BenchmarkTask,
+    normalize_benchmark_result,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -166,17 +170,22 @@ class WandbLogger:
         if self._run is None:
             self.init()
 
+        result = normalize_benchmark_result(result, context="W&B task result")
         self._results_buffer.append(result)
         self._tasks_logged += 1
 
-        # Log incremental metrics
-        success_count = sum(1 for r in self._results_buffer if r.success)
-        current_rate = success_count / len(self._results_buffer)
+        # Log incremental measured-outcome metrics. Infrastructure and
+        # evaluator failures are attempts, not failed task outcomes.
+        metrics = self._compute_metrics(self._results_buffer)
+        is_outcome = result.error_type not in {"infrastructure", "evaluation"}
 
         self._run.log({
-            "task/current_success_rate": current_rate,
+            "task/current_success_rate": metrics["success_rate"],
             "task/tasks_completed": self._tasks_logged,
-            "task/last_task_success": result.success,
+            "task/outcomes_completed": metrics["num_outcome_tasks"],
+            "task/last_task_is_outcome": is_outcome,
+            "task/last_task_success": result.success if is_outcome else None,
+            "task/last_task_error_type": result.error_type,
             "task/last_task_steps": result.num_steps,
         })
 
@@ -197,6 +206,11 @@ class WandbLogger:
         if not results:
             logger.warning("No results to log")
             return
+
+        results = [
+            normalize_benchmark_result(result, context=f"W&B result {index}")
+            for index, result in enumerate(results)
+        ]
 
         # Build task_id -> domain mapping
         task_domains = {}
@@ -220,7 +234,15 @@ class WandbLogger:
             "eval/avg_steps": metrics["avg_steps"],
             "eval/avg_time_seconds": metrics["avg_time_seconds"],
             "eval/num_tasks": metrics["num_tasks"],
+            "eval/num_attempts": metrics["num_attempts"],
+            "eval/num_outcome_tasks": metrics["num_outcome_tasks"],
             "eval/num_success": metrics["num_success"],
+            "eval/error_count": metrics["error_count"],
+            "eval/num_infrastructure_failures": metrics[
+                "num_infrastructure_failures"
+            ],
+            "eval/num_evaluation_failures": metrics["num_evaluation_failures"],
+            "eval/num_agent_failures": metrics["num_agent_failures"],
         })
 
         # Log per-domain metrics
@@ -229,6 +251,20 @@ class WandbLogger:
                 f"eval/domain/{domain}/success_rate": dm["success_rate"],
                 f"eval/domain/{domain}/avg_steps": dm["avg_steps"],
                 f"eval/domain/{domain}/num_tasks": dm["num_tasks"],
+                f"eval/domain/{domain}/num_attempts": dm["num_attempts"],
+                f"eval/domain/{domain}/num_outcome_tasks": dm[
+                    "num_outcome_tasks"
+                ],
+                f"eval/domain/{domain}/error_count": dm["error_count"],
+                f"eval/domain/{domain}/num_infrastructure_failures": dm[
+                    "num_infrastructure_failures"
+                ],
+                f"eval/domain/{domain}/num_evaluation_failures": dm[
+                    "num_evaluation_failures"
+                ],
+                f"eval/domain/{domain}/num_agent_failures": dm[
+                    "num_agent_failures"
+                ],
             })
 
         # Log task results table
@@ -346,28 +382,11 @@ class WandbLogger:
             self._run = None
 
     def _compute_metrics(self, results: list[BenchmarkResult]) -> dict[str, Any]:
-        """Compute aggregate metrics from results."""
-        if not results:
-            return {
-                "num_tasks": 0,
-                "num_success": 0,
-                "success_rate": 0.0,
-                "avg_score": 0.0,
-                "avg_steps": 0.0,
-                "avg_time_seconds": 0.0,
-            }
+        """Compute measured outcome metrics and retain error-attempt counts."""
+        from openadapt_evals.benchmarks.runner import compute_metrics
 
-        num_tasks = len(results)
-        num_success = sum(1 for r in results if r.success)
-
-        return {
-            "num_tasks": num_tasks,
-            "num_success": num_success,
-            "success_rate": num_success / num_tasks,
-            "avg_score": sum(r.score for r in results) / num_tasks,
-            "avg_steps": sum(r.num_steps for r in results) / num_tasks,
-            "avg_time_seconds": sum(r.total_time_seconds for r in results) / num_tasks,
-        }
+        metrics = compute_metrics(results)
+        return {**metrics, "num_success": metrics["success_count"]}
 
     def _compute_domain_metrics(
         self,
@@ -399,7 +418,10 @@ class WandbLogger:
             "score",
             "num_steps",
             "time_seconds",
+            "is_outcome",
+            "error_type",
             "error",
+            "reason",
         ]
 
         data = []
@@ -412,7 +434,10 @@ class WandbLogger:
                 r.score,
                 r.num_steps,
                 r.total_time_seconds,
+                r.error_type not in {"infrastructure", "evaluation"},
+                r.error_type or "",
                 r.error or "",
+                r.reason or "",
             ])
 
         table = Table(columns=columns, data=data)
@@ -422,10 +447,10 @@ class WandbLogger:
         """Log error type breakdown."""
         error_counts: dict[str, int] = defaultdict(int)
         for r in results:
-            if not r.success and r.error:
-                error_counts[r.error] += 1
+            if r.error_type is not None:
+                error_counts[r.error_type] += 1
             elif not r.success:
-                error_counts["unknown"] += 1
+                error_counts["measured_failure"] += 1
 
         if error_counts:
             # Create error breakdown table
@@ -450,7 +475,12 @@ class WandbLogger:
     def _log_step_distribution(self, results: list[BenchmarkResult]) -> None:
         """Log step count distribution."""
         success_steps = [r.num_steps for r in results if r.success]
-        fail_steps = [r.num_steps for r in results if not r.success]
+        fail_steps = [
+            r.num_steps
+            for r in results
+            if not r.success
+            and r.error_type not in {"infrastructure", "evaluation"}
+        ]
 
         if success_steps:
             self._run.log({
@@ -489,15 +519,51 @@ def load_results_from_summary(summary_path: str | Path) -> list[BenchmarkResult]
     with open(summary_path) as f:
         summary = json.load(f)
 
+    if not isinstance(summary, dict):
+        raise ValueError("Benchmark summary must be a JSON object")
+    task_rows = summary.get("tasks")
+    if not isinstance(task_rows, list):
+        raise ValueError("Benchmark summary must contain a tasks list")
+
     results = []
-    for task_data in summary.get("tasks", []):
-        results.append(BenchmarkResult(
-            task_id=task_data["task_id"],
-            success=task_data["success"],
-            score=task_data.get("score", 1.0 if task_data["success"] else 0.0),
+    for index, task_data in enumerate(task_rows):
+        fallback_task_id = f"summary-row-{index}"
+        if not isinstance(task_data, dict):
+            results.append(
+                normalize_benchmark_result(
+                    task_data,
+                    expected_task_id=fallback_task_id,
+                    context=f"summary row {index}",
+                )
+            )
+            continue
+
+        raw_task_id = task_data.get("task_id")
+        expected_task_id = (
+            raw_task_id
+            if isinstance(raw_task_id, str) and raw_task_id
+            else fallback_task_id
+        )
+        candidate = BenchmarkResult(
+            task_id=raw_task_id,
+            success=task_data.get("success"),
+            score=task_data.get("score"),
             num_steps=task_data.get("num_steps", 0),
             total_time_seconds=task_data.get("total_time_seconds", 0.0),
             error=task_data.get("error"),
-        ))
+            reason=task_data.get("reason"),
+            error_type=(
+                task_data["error_type"]
+                if "error_type" in task_data
+                else "__missing__"
+            ),
+        )
+        results.append(
+            normalize_benchmark_result(
+                candidate,
+                expected_task_id=expected_task_id,
+                context=f"summary row {index}",
+            )
+        )
 
     return results

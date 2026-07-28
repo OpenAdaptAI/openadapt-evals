@@ -351,31 +351,26 @@ class ExecutionTraceCollector:
         Args:
             all_results: List of all BenchmarkResult objects from the run.
         """
+        # Keep one aggregation contract across CLI, traces, and integrations.
+        # Import locally to avoid a module cycle during runner initialization.
+        from openadapt_evals.adapters import normalize_benchmark_result
+        from openadapt_evals.benchmarks.runner import compute_metrics
+
+        all_results = [
+            normalize_benchmark_result(result, context=f"trace result {index}")
+            for index, result in enumerate(all_results)
+        ]
+
+        metrics = compute_metrics(all_results)
         summary = {
             "benchmark_name": self.benchmark_name,
             "run_name": self.run_name,
             "model_id": self.model_id,
-            "num_tasks": len(all_results),
-            "num_success": sum(1 for r in all_results if r.success),
-            "success_rate": sum(1 for r in all_results if r.success) / len(all_results) if all_results else 0.0,
-            "avg_score": sum(r.score for r in all_results) / len(all_results) if all_results else 0.0,
-            "avg_steps": sum(r.num_steps for r in all_results) / len(all_results) if all_results else 0.0,
-            "avg_time_seconds": sum(r.total_time_seconds for r in all_results) / len(all_results) if all_results else 0.0,
-            "num_infrastructure_failures": sum(
-                1 for r in all_results if r.error_type == "infrastructure"
-            ),
-            "num_tasks_excluding_infra": sum(
-                1 for r in all_results if r.error_type != "infrastructure"
-            ),
-            "num_success_excluding_infra": sum(
-                1 for r in all_results if r.error_type != "infrastructure" and r.success
-            ),
-            "success_rate_excluding_infra": (
-                sum(1 for r in all_results if r.error_type != "infrastructure" and r.success)
-                / sum(1 for r in all_results if r.error_type != "infrastructure")
-                if any(r.error_type != "infrastructure" for r in all_results)
-                else 0.0
-            ),
+            **metrics,
+            # Existing trace consumers use these names. Evaluator and
+            # infrastructure outages do not enter the outcome denominator.
+            "num_success": metrics["success_count"],
+            "num_success_excluding_infra": metrics["success_count"],
             "tasks": [
                 {
                     "task_id": r.task_id,
@@ -395,8 +390,10 @@ class ExecutionTraceCollector:
             json.dump(summary, f, indent=2)
 
         logger.info(
-            f"Saved summary: {summary['num_success']}/{summary['num_tasks']} tasks succeeded "
-            f"({summary['success_rate']:.1%})"
+            f"Saved summary: {summary['num_success']}/"
+            f"{summary['num_outcome_tasks']} outcomes succeeded "
+            f"({summary['success_rate']:.1%}); {summary['error_count']} errors "
+            f"across {summary['num_tasks']} attempts"
         )
 
     def _save_screenshot(self, step_idx: int, screenshot_bytes: bytes) -> str:

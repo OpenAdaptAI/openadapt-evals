@@ -53,12 +53,18 @@ import asyncio
 import hashlib
 import io
 import logging
+import math
 import re
 from pathlib import Path
 from typing import Any
 
+from openadapt_evals.action_envelope import (
+    parse_single_dsl_action,
+    require_exact_fields,
+)
 from openadapt_evals.adapters.base import BenchmarkAction, BenchmarkObservation
-from openadapt_evals.adapters.rl_env import RLEnvironment
+from openadapt_evals.adapters.rl_env import RLEnvironment, _fraction_to_pixel
+from openadapt_evals.errors import ActionParseError
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +90,19 @@ _ACTION_PATTERN = re.compile(
 )
 
 
+def _required_fraction(kwargs: dict[str, str], key: str, command: str) -> float:
+    """Read one required finite normalized coordinate."""
+    if key not in kwargs:
+        raise ActionParseError(f"{command} requires {key}")
+    try:
+        value = float(kwargs[key])
+    except (TypeError, ValueError) as exc:
+        raise ActionParseError(f"{command} has invalid {key}: {kwargs[key]!r}") from exc
+    if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+        raise ActionParseError(f"{command} {key} must be between 0 and 1")
+    return value
+
+
 def _parse_action_str(action_str: str) -> BenchmarkAction:
     """Parse a VLM action string into a BenchmarkAction.
 
@@ -96,51 +115,54 @@ def _parse_action_str(action_str: str) -> BenchmarkAction:
         WAIT()
         DONE()
     """
-    match = _ACTION_PATTERN.search(action_str)
-    if not match:
-        logger.warning("Could not parse action: %s", action_str[:100])
-        return BenchmarkAction(type="done")
-
-    cmd = match.group(1)
-    args_str = match.group(2)
-
-    # Extract key=value pairs
-    kwargs: dict[str, str] = {}
-    for kv in re.finditer(r'(\w+)\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^\s,)]+))', args_str):
-        key = kv.group(1)
-        kwargs[key] = kv.group(2) if kv.group(2) is not None else kv.group(3)
+    cmd, kwargs = parse_single_dsl_action(
+        action_str,
+        allowed_commands={"CLICK", "TYPE", "SCROLL", "KEY", "WAIT", "DONE", "DRAG"},
+    )
 
     if cmd == "CLICK":
+        require_exact_fields(kwargs, {"x", "y"}, cmd)
         return BenchmarkAction(
             type="click",
-            x=float(kwargs.get("x", 0.5)),
-            y=float(kwargs.get("y", 0.5)),
+            x=_required_fraction(kwargs, "x", cmd),
+            y=_required_fraction(kwargs, "y", cmd),
         )
     elif cmd == "TYPE":
-        return BenchmarkAction(type="type", text=kwargs.get("text", ""))
+        require_exact_fields(kwargs, {"text"}, cmd)
+        return BenchmarkAction(type="type", text=kwargs["text"])
     elif cmd == "KEY":
-        return BenchmarkAction(type="key", key=kwargs.get("key", "enter"))
+        require_exact_fields(kwargs, {"key"}, cmd)
+        if not kwargs.get("key"):
+            raise ActionParseError("KEY requires key")
+        return BenchmarkAction(type="key", key=kwargs["key"])
     elif cmd == "SCROLL":
+        require_exact_fields(kwargs, {"x", "y", "direction"}, cmd)
+        direction = kwargs.get("direction")
+        if direction not in ("up", "down"):
+            raise ActionParseError("SCROLL requires direction=up or direction=down")
         return BenchmarkAction(
             type="scroll",
-            x=float(kwargs.get("x", 0.5)),
-            y=float(kwargs.get("y", 0.5)),
-            scroll_direction=kwargs.get("direction", "down"),
+            x=_required_fraction(kwargs, "x", cmd),
+            y=_required_fraction(kwargs, "y", cmd),
+            scroll_direction=direction,
         )
     elif cmd == "WAIT":
+        require_exact_fields(kwargs, set(), cmd)
         return BenchmarkAction(type="wait")
     elif cmd == "DONE":
+        require_exact_fields(kwargs, set(), cmd)
         return BenchmarkAction(type="done")
     elif cmd == "DRAG":
+        require_exact_fields(kwargs, {"x", "y", "end_x", "end_y"}, cmd)
         return BenchmarkAction(
             type="drag",
-            x=float(kwargs.get("x", 0.5)),
-            y=float(kwargs.get("y", 0.5)),
-            end_x=float(kwargs["end_x"]) if "end_x" in kwargs else None,
-            end_y=float(kwargs["end_y"]) if "end_y" in kwargs else None,
+            x=_required_fraction(kwargs, "x", cmd),
+            y=_required_fraction(kwargs, "y", cmd),
+            end_x=_required_fraction(kwargs, "end_x", cmd),
+            end_y=_required_fraction(kwargs, "end_y", cmd),
         )
     else:
-        return BenchmarkAction(type="done")
+        raise ActionParseError(f"Unsupported action command: {cmd!r}")
 
 
 def _obs_to_pil(obs: BenchmarkObservation) -> Image.Image | None:
@@ -377,13 +399,13 @@ class WAADesktopEnv(_GymImageEnvBase):
         if self._use_fractional and action.type in ("click", "scroll", "drag"):
             w, h = env.screen_size
             if action.x is not None:
-                action.x = int(action.x * w)
+                action.x = _fraction_to_pixel(action.x, w, "x")
             if action.y is not None:
-                action.y = int(action.y * h)
+                action.y = _fraction_to_pixel(action.y, h, "y")
             if action.end_x is not None:
-                action.end_x = int(action.end_x * w)
+                action.end_x = _fraction_to_pixel(action.end_x, w, "end_x")
             if action.end_y is not None:
-                action.end_y = int(action.end_y * h)
+                action.end_y = _fraction_to_pixel(action.end_y, h, "end_y")
 
         # Execute action in a thread
         rollout_step = await asyncio.to_thread(env.step, action)
@@ -398,12 +420,8 @@ class WAADesktopEnv(_GymImageEnvBase):
         info["is_action_valid"] = _ACTION_PATTERN.search(action_str) is not None
 
         if done and self._evaluate_at_done:
-            try:
-                reward = await asyncio.to_thread(env.evaluate)
-                info["success"] = reward > 0.5
-            except Exception:
-                logger.exception("Evaluation failed")
-                info["success"] = False
+            reward = await asyncio.to_thread(env.evaluate)
+            info["success"] = reward >= 1.0
         elif done:
             info["success"] = False
 

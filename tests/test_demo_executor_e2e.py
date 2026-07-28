@@ -17,6 +17,7 @@ from openadapt_evals.adapters.base import BenchmarkAction, BenchmarkObservation
 from openadapt_evals.adapters.rl_env import ResetConfig, RolloutStep
 from openadapt_evals.agents.demo_executor import DemoExecutor
 from openadapt_evals.demo_library import Demo, DemoStep
+from openadapt_evals.errors import ActionExecutionError
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -440,26 +441,21 @@ class TestEdgeCases:
 
     @patch("time.sleep", return_value=None)
     def test_empty_demo(self, _mock_sleep: MagicMock) -> None:
-        """An empty demo should still reset, evaluate, and return."""
         env = MockEnv()
         executor = DemoExecutor(step_delay=0)
 
         demo = _make_demo([])
         task_config = _TaskConfig()
 
-        score, screenshots = executor.run(env, demo, task_config)
+        with pytest.raises(ActionExecutionError, match="no executable steps"):
+            executor.run(env, demo, task_config)
 
         assert len(env.actions) == 0
-        # With no milestones, falls through to evaluate()
-        assert score == pytest.approx(0.75)
-        # Only the reset screenshot
-        assert len(screenshots) == 1
 
     @patch("time.sleep", return_value=None)
-    def test_key_step_with_no_value_skipped(
+    def test_key_step_with_no_value_fails(
         self, _mock_sleep: MagicMock
     ) -> None:
-        """A key step with no action_value should be skipped (no crash)."""
         env = MockEnv()
         executor = DemoExecutor(step_delay=0)
 
@@ -477,17 +473,15 @@ class TestEdgeCases:
         ])
         task_config = _TaskConfig()
 
-        score, screenshots = executor.run(env, demo, task_config)
+        with pytest.raises(ActionExecutionError, match="did not produce an action"):
+            executor.run(env, demo, task_config)
 
-        # Only the second step should execute
-        assert len(env.actions) == 1
-        assert env.actions[0]["key"] == "Return"
+        assert len(env.actions) == 0
 
     @patch("time.sleep", return_value=None)
-    def test_unknown_action_type_skipped(
+    def test_unknown_action_type_fails(
         self, _mock_sleep: MagicMock
     ) -> None:
-        """Unknown action types should be skipped without raising."""
         env = MockEnv()
         executor = DemoExecutor(step_delay=0)
 
@@ -505,10 +499,10 @@ class TestEdgeCases:
         ])
         task_config = _TaskConfig()
 
-        score, screenshots = executor.run(env, demo, task_config)
+        with pytest.raises(ActionExecutionError, match="did not produce an action"):
+            executor.run(env, demo, task_config)
 
-        assert len(env.actions) == 1
-        assert env.actions[0]["key"] == "Escape"
+        assert len(env.actions) == 0
 
     @patch("time.sleep", return_value=None)
     def test_milestones_checked_per_step(

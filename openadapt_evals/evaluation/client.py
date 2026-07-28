@@ -23,12 +23,19 @@ representable:
 """
 
 import logging
+import math
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import requests
+
+from openadapt_evals.evaluation.receipts import (
+    ReceiptValidationError,
+    parse_strict_json_response,
+    require_successful_receipt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +51,10 @@ class EvaluatorsUnavailableError(RuntimeError):
 
 class EvaluationError(RuntimeError):
     """An evaluation could not be carried out (as opposed to failing)."""
+
+
+class EvaluationInfrastructureError(EvaluationError):
+    """The evaluator could not run because its remote dependency failed."""
 
 
 @dataclass
@@ -80,8 +91,10 @@ class EvaluationResult:
         return {
             "success": self.success,
             "score": self.score,
-            "actual": str(self.actual)[:500] if self.actual else None,
-            "expected": str(self.expected)[:500] if self.expected else None,
+            "actual": str(self.actual)[:500] if self.actual is not None else None,
+            "expected": (
+                str(self.expected)[:500] if self.expected is not None else None
+            ),
             "reason": self.reason,
             "metrics": self.metrics,
             "error_type": self.error_type,
@@ -260,9 +273,17 @@ class EvaluatorClient:
             evaluator yields ``score=0.0`` with ``error_type`` set, which is not
             the same thing as a task the agent failed.
         """
+        if not isinstance(task_config, dict):
+            return EvaluationResult(
+                success=False,
+                score=0.0,
+                reason="Task config must be an object",
+                error_type="evaluation",
+                evaluator_source=self.evaluator_source,
+            )
         evaluator_config = task_config.get("evaluator", {})
 
-        if not evaluator_config:
+        if not isinstance(evaluator_config, dict) or not evaluator_config:
             # A task with no evaluator spec cannot be scored at all. This is a
             # configuration error, not a task the agent failed.
             return EvaluationResult(
@@ -293,7 +314,7 @@ class EvaluatorClient:
                 evaluator_source=self.evaluator_source,
             )
 
-        except requests.RequestException as e:
+        except (requests.RequestException, EvaluationInfrastructureError) as e:
             # The VM never answered. Scoring this 0.0 with no marker is how an
             # unreachable backend gets published as a legitimate 0%.
             return EvaluationResult(
@@ -314,11 +335,27 @@ class EvaluatorClient:
 
     def _get_actual_value(self, evaluator_config: Dict[str, Any]) -> Any:
         """Get actual value from VM using getter function."""
-        result_spec = evaluator_config.get("result", {})
+        result_spec = evaluator_config.get("result")
+        if not isinstance(result_spec, dict) or not result_spec:
+            raise EvaluationError(
+                "evaluator result contract must be a non-empty object"
+            )
         getter_type = result_spec.get("type")
 
-        if not getter_type:
-            raise ValueError("No 'type' specified in evaluator.result")
+        if not isinstance(getter_type, str) or not getter_type.strip():
+            raise EvaluationError("No 'type' specified in evaluator.result")
+        getter_type = getter_type.strip()
+
+        required_fields = {
+            "file_content": ("path",),
+            "registry_value": ("key", "value"),
+            "process_running": ("process",),
+            "window_exists": ("title",),
+            "vm_command_line": ("command",),
+            "vm_file": ("path",),
+        }.get(getter_type, ())
+        for field_name in required_fields:
+            self._require_getter_parameter(result_spec, field_name, getter_type)
 
         # Create a mock env object that the getters expect
         class HttpEnv:
@@ -342,7 +379,18 @@ class EvaluatorClient:
                     timeout=self.timeout,
                 )
                 response.raise_for_status()
-                return response.json()
+                try:
+                    payload = parse_strict_json_response(
+                        response,
+                        context="VM command",
+                    )
+                    return require_successful_receipt(
+                        payload,
+                        context="VM command",
+                        require_output=True,
+                    )
+                except ReceiptValidationError as exc:
+                    raise EvaluationInfrastructureError(str(exc)) from exc
 
         env = HttpEnv(self.vm_ip, self.port, self.timeout)
 
@@ -359,23 +407,23 @@ class EvaluatorClient:
         """Fallback getter implementation when WAA evaluators not available."""
         # Common getter types
         if getter_type == "file_content":
-            path = spec.get("path", "")
+            path = self._require_getter_parameter(spec, "path", getter_type)
             result = env.execute(f"type {path}")
             return self._require_output(result, getter_type)
 
         elif getter_type == "registry_value":
-            key = spec.get("key", "")
-            value = spec.get("value", "")
+            key = self._require_getter_parameter(spec, "key", getter_type)
+            value = self._require_getter_parameter(spec, "value", getter_type)
             result = env.execute(f'reg query "{key}" /v "{value}"')
             return self._require_output(result, getter_type)
 
         elif getter_type == "process_running":
-            process = spec.get("process", "")
+            process = self._require_getter_parameter(spec, "process", getter_type)
             result = env.execute(f'tasklist /FI "IMAGENAME eq {process}"')
             return process.lower() in self._require_output(result, getter_type).lower()
 
         elif getter_type == "window_exists":
-            title = spec.get("title", "")
+            title = self._require_getter_parameter(spec, "title", getter_type)
             result = env.execute(f'powershell "Get-Process | Where-Object {{$_.MainWindowTitle -like \'*{title}*\'}}"')
             return bool(self._require_output(result, getter_type).strip())
 
@@ -390,26 +438,51 @@ class EvaluatorClient:
         thing; treating them alike is how a failed command becomes a measured
         empty result.
         """
-        if isinstance(result, dict) and result.get("error"):
-            raise EvaluationError(
-                f"getter '{getter_type}' could not run on the VM: {result['error']}"
+        try:
+            result = require_successful_receipt(
+                result,
+                context=f"getter {getter_type!r}",
+                require_output=True,
             )
-        return (result or {}).get("output", "") or ""
+        except ReceiptValidationError as exc:
+            raise EvaluationInfrastructureError(str(exc)) from exc
+        output = result["output"]
+        assert isinstance(output, str)
+        return output
+
+    @staticmethod
+    def _require_getter_parameter(
+        spec: Dict[str, Any], name: str, getter_type: str
+    ) -> str:
+        """Return one required non-empty string getter parameter."""
+        value = spec.get(name)
+        if not isinstance(value, str) or not value.strip():
+            raise EvaluationError(
+                f"getter '{getter_type}' requires non-empty '{name}'"
+            )
+        return value.strip()
 
     def _get_expected_value(self, evaluator_config: Dict[str, Any]) -> Any:
         """Extract expected value from evaluator config."""
-        expected_spec = evaluator_config.get("expected", {})
+        if "expected" not in evaluator_config:
+            raise EvaluationError("evaluator has no expected-value contract")
+        expected_spec = evaluator_config["expected"]
+        if not isinstance(expected_spec, dict) or not expected_spec:
+            raise EvaluationError("expected-value contract must be a non-empty object")
 
         # Direct value
         if "value" in expected_spec:
-            return expected_spec["value"]
+            value = expected_spec["value"]
+            if value is None:
+                raise EvaluationError("expected-value contract cannot be null")
+            return value
 
         # Rules-based
-        rules = expected_spec.get("rules", {})
-        if "match" in rules:
+        rules = expected_spec.get("rules")
+        if isinstance(rules, dict) and "match" in rules and rules["match"] is not None:
             return rules["match"]
 
-        return None
+        raise EvaluationError("expected-value contract is malformed")
 
     def _run_metric(self, evaluator_config: Dict[str, Any], actual: Any, expected: Any) -> float:
         """Run metric function to compare actual vs expected.
@@ -420,22 +493,38 @@ class EvaluatorClient:
         number nobody asked for.
         """
         func_name = evaluator_config.get("func", "exact_match")
+        if not isinstance(func_name, str) or not func_name:
+            raise EvaluationError("metric name must be a non-empty string")
+        options = evaluator_config.get("options", {})
+        if not isinstance(options, dict):
+            raise EvaluationError("metric options must be an object")
+        if evaluator_config.get("conj", "and") != "and":
+            raise EvaluationError(
+                "EvaluatorClient supports only one metric with conj='and'"
+            )
 
         # Try WAA metric if available
         if self._metrics:
             metric_func = getattr(self._metrics, func_name, None)
             if metric_func:
                 try:
-                    return float(metric_func(actual, expected))
+                    score = metric_func(actual, expected, **options)
                 except Exception as e:
                     raise EvaluationError(
                         f"WAA metric '{func_name}' raised while scoring: {e}"
                     ) from e
+                return self._require_metric_score(score, func_name)
 
         # Fallback metrics
-        return self._fallback_metric(func_name, actual, expected)
+        return self._fallback_metric(func_name, actual, expected, options)
 
-    def _fallback_metric(self, func_name: str, actual: Any, expected: Any) -> float:
+    def _fallback_metric(
+        self,
+        func_name: str,
+        actual: Any,
+        expected: Any,
+        options: dict[str, Any] | None = None,
+    ) -> float:
         """Fallback metric — delegates to shared evaluation.metrics module.
 
         An unknown metric name raises. Silently substituting ``exact_match``
@@ -451,7 +540,24 @@ class EvaluatorClient:
                 f"fallback evaluator; scoring with a different metric would "
                 f"publish a number the task config did not ask for"
             )
-        return float(metric_fn(actual, expected))
+        return self._require_metric_score(
+            metric_fn(actual, expected, **(options or {})),
+            func_name,
+        )
+
+    @staticmethod
+    def _require_metric_score(value: Any, metric_name: str) -> float:
+        """Return one finite score in the closed unit interval."""
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise EvaluationError(
+                f"metric '{metric_name}' returned a non-numeric score"
+            )
+        score = float(value)
+        if not math.isfinite(score) or not 0.0 <= score <= 1.0:
+            raise EvaluationError(
+                f"metric '{metric_name}' returned an invalid score: {value!r}"
+            )
+        return score
 
     def health_check(self) -> bool:
         """Check if WAA server is reachable.

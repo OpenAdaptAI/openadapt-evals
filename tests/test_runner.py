@@ -1,5 +1,6 @@
 """Tests for the evaluation runner."""
 
+import json
 from unittest.mock import Mock
 
 import pytest
@@ -19,13 +20,18 @@ from openadapt_evals.agents import (
     format_accessibility_tree,
     parse_action_response,
 )
+from openadapt_evals.benchmarks.data_collection import ExecutionTraceCollector
 from openadapt_evals.benchmarks.runner import (
     EvaluationConfig,
+    _evaluate_parallel,
+    _evaluate_sequential,
     _run_single_task,
     compute_domain_metrics,
     compute_metrics,
     evaluate_agent_on_benchmark,
 )
+from openadapt_evals.errors import ActionParseError, RolloutInfrastructureError
+from openadapt_evals.integrations.wandb_logger import WandbLogger
 
 
 class TestEvaluationConfig:
@@ -109,6 +115,105 @@ class TestComputeMetrics:
         metrics = compute_metrics(results)
         assert metrics["success_rate"] == 0.0
         assert metrics["avg_score"] == 0.1
+
+    def test_unavailable_attempts_do_not_enter_outcome_rates(self):
+        results = [
+            BenchmarkResult(task_id="pass", success=True, score=1.0),
+            BenchmarkResult(task_id="fail", success=False, score=0.0),
+            BenchmarkResult(
+                task_id="infra",
+                success=True,
+                score=1.0,
+                error_type="infrastructure",
+            ),
+            BenchmarkResult(
+                task_id="evaluation",
+                success=False,
+                score=0.0,
+                error_type="evaluation",
+            ),
+            BenchmarkResult(
+                task_id="agent",
+                success=False,
+                score=0.0,
+                error_type="agent",
+            ),
+        ]
+
+        metrics = compute_metrics(results)
+
+        assert metrics["num_tasks"] == 5
+        assert metrics["num_outcome_tasks"] == 3
+        assert metrics["error_count"] == 3
+        assert metrics["success_rate"] == pytest.approx(1 / 3)
+        assert metrics["avg_score"] == pytest.approx(1 / 3)
+        assert metrics["success_count"] == 1
+        assert metrics["fail_count"] == 2
+        assert metrics["num_infrastructure_failures"] == 1
+        assert metrics["num_evaluation_failures"] == 1
+        assert metrics["num_agent_failures"] == 1
+
+    def test_agent_failures_reduce_the_headline_success_rate(self):
+        results = [BenchmarkResult(task_id="pass", success=True, score=1.0)]
+        results.extend(
+            BenchmarkResult(
+                task_id=f"agent-{index}",
+                success=False,
+                score=0.0,
+                error_type="agent",
+            )
+            for index in range(99)
+        )
+
+        metrics = compute_metrics(results)
+
+        assert metrics["num_outcome_tasks"] == 100
+        assert metrics["success_rate"] == 0.01
+
+    def test_trace_summary_uses_the_same_outcome_denominator(self, tmp_path):
+        collector = ExecutionTraceCollector(
+            benchmark_name="test",
+            run_name="run",
+            output_dir=tmp_path,
+            capture_logs=False,
+        )
+        collector.save_summary(
+            [
+                BenchmarkResult(task_id="measured", success=True, score=1.0),
+                BenchmarkResult(
+                    task_id="unavailable",
+                    success=False,
+                    score=0.0,
+                    error_type="evaluation",
+                ),
+            ]
+        )
+
+        summary = json.loads((collector.run_dir / "summary.json").read_text())
+        assert summary["num_tasks"] == 2
+        assert summary["num_outcome_tasks"] == 1
+        assert summary["error_count"] == 1
+        assert summary["num_success"] == 1
+        assert summary["success_rate"] == 1.0
+
+    def test_wandb_metrics_use_the_same_outcome_denominator(self):
+        results = [
+            BenchmarkResult(task_id="measured", success=True, score=1.0),
+            BenchmarkResult(
+                task_id="unavailable",
+                success=False,
+                score=0.0,
+                error_type="infrastructure",
+            ),
+        ]
+
+        metrics = WandbLogger._compute_metrics(object(), results)
+
+        assert metrics["num_tasks"] == 2
+        assert metrics["num_outcome_tasks"] == 1
+        assert metrics["error_count"] == 1
+        assert metrics["num_success"] == 1
+        assert metrics["success_rate"] == 1.0
 
 
 class TestComputeDomainMetrics:
@@ -556,8 +661,11 @@ class TestRunSingleTask:
         # Should have only taken 0 steps (done before first step execution)
         assert result.num_steps == 0
 
-    def test_agent_error_cannot_be_overwritten_by_successful_evaluation(self):
-        """A terminal agent error cannot be reported as task success."""
+    @pytest.mark.parametrize("claimed_error_type", ["infrastructure", "evaluation"])
+    def test_agent_error_claim_cannot_leave_outcome_denominator(
+        self, claimed_error_type
+    ):
+        """An agent cannot classify its own terminal failure as unavailable."""
         adapter = WAAMockAdapter(num_tasks=1, domains=["browser"])
         task = adapter.list_tasks()[0]
         adapter.evaluate = Mock(
@@ -573,7 +681,7 @@ class TestRunSingleTask:
                     type="error",
                     raw_action={
                         "error": "provider offline",
-                        "error_type": "infrastructure",
+                        "error_type": claimed_error_type,
                     },
                 )
             ]
@@ -590,7 +698,16 @@ class TestRunSingleTask:
         assert result.score == 0.0
         assert result.error == "provider offline"
         assert result.reason == "provider offline"
-        assert result.error_type == "infrastructure"
+        assert result.error_type == "agent"
+        adapter.evaluate.assert_not_called()
+
+        metrics = compute_metrics([result])
+        assert metrics["num_tasks"] == 1
+        assert metrics["num_outcome_tasks"] == 1
+        assert metrics["success_count"] == 0
+        assert metrics["fail_count"] == 1
+        assert metrics["num_agent_failures"] == 1
+        assert metrics["success_rate"] == 0.0
 
     def test_agent_error_without_diagnostics_cannot_report_success(self):
         """The terminal action type alone is sufficient to refuse success."""
@@ -617,3 +734,287 @@ class TestRunSingleTask:
             0.0,
             "agent",
         )
+        adapter.evaluate.assert_not_called()
+
+    def test_agent_parse_exception_is_reported_as_agent_error(self):
+        adapter = WAAMockAdapter(num_tasks=1, domains=["browser"])
+        task = adapter.list_tasks()[0]
+        agent = Mock(spec=BenchmarkAgent)
+        agent.reset = Mock()
+        agent.act.side_effect = ActionParseError("invalid model output")
+
+        result = _run_single_task(
+            agent,
+            adapter,
+            task,
+            EvaluationConfig(
+                verbose=False,
+                save_execution_traces=False,
+                enable_live_tracking=False,
+            ),
+        )
+
+        assert result.success is False
+        assert result.error_type == "agent"
+
+    def test_done_gate_evaluation_exception_is_not_accepted_as_done(self):
+        adapter = WAAMockAdapter(num_tasks=1, domains=["browser"])
+        task = adapter.list_tasks()[0]
+        adapter.evaluate = Mock(side_effect=RuntimeError("evaluator offline"))
+        agent = ScriptedAgent([BenchmarkAction(type="done")])
+
+        result = _run_single_task(
+            agent,
+            adapter,
+            task,
+            EvaluationConfig(
+                done_gate=True,
+                verbose=False,
+                save_execution_traces=False,
+                enable_live_tracking=False,
+            ),
+        )
+
+        assert result.success is False
+        assert result.error_type == "evaluation"
+        assert "evaluator offline" in (result.error or "")
+        assert adapter.evaluate.call_count == 1
+
+    @pytest.mark.parametrize("error_type", ["infrastructure", "evaluation"])
+    def test_done_gate_unscored_result_is_not_accepted_as_done(self, error_type):
+        adapter = WAAMockAdapter(num_tasks=1, domains=["browser"])
+        task = adapter.list_tasks()[0]
+        adapter.evaluate = Mock(
+            return_value=BenchmarkResult(
+                task_id=task.task_id,
+                success=False,
+                score=0.0,
+                reason="result unavailable",
+                error_type=error_type,
+            )
+        )
+        agent = ScriptedAgent([BenchmarkAction(type="done")])
+
+        result = _run_single_task(
+            agent,
+            adapter,
+            task,
+            EvaluationConfig(
+                done_gate=True,
+                verbose=False,
+                save_execution_traces=False,
+                enable_live_tracking=False,
+            ),
+        )
+
+        assert result.success is False
+        assert result.error_type == error_type
+        assert result.error == "result unavailable"
+
+    def test_done_gate_refresh_never_dispatches_synthetic_input(self):
+        adapter = WAAMockAdapter(num_tasks=1, domains=["browser"])
+        task = adapter.list_tasks()[0]
+        adapter.evaluate = Mock(
+            return_value=BenchmarkResult(
+                task_id=task.task_id,
+                success=False,
+                score=0.0,
+            )
+        )
+        adapter.step = Mock(side_effect=AssertionError("must not dispatch input"))
+        adapter.observe = Mock(return_value=adapter.reset(task))
+        agent = ScriptedAgent(
+            [BenchmarkAction(type="done"), BenchmarkAction(type="done")]
+        )
+
+        result = _run_single_task(
+            agent,
+            adapter,
+            task,
+            EvaluationConfig(
+                done_gate=True,
+                done_gate_max_overrides=1,
+                verbose=False,
+                save_execution_traces=False,
+                enable_live_tracking=False,
+            ),
+        )
+
+        assert result.error_type is None
+        assert result.success is False
+        adapter.observe.assert_called_once_with()
+        adapter.step.assert_not_called()
+
+    def test_done_gate_stops_unscored_when_observation_refresh_is_missing(self):
+        adapter = WAAMockAdapter(num_tasks=1, domains=["browser"])
+        task = adapter.list_tasks()[0]
+        adapter.evaluate = Mock(
+            return_value=BenchmarkResult(
+                task_id=task.task_id,
+                success=False,
+                score=0.0,
+            )
+        )
+        agent = Mock(spec=BenchmarkAgent)
+        agent.reset = Mock()
+        agent.act = Mock(
+            side_effect=[BenchmarkAction(type="done"), BenchmarkAction(type="done")]
+        )
+
+        result = _run_single_task(
+            agent,
+            adapter,
+            task,
+            EvaluationConfig(
+                done_gate=True,
+                verbose=False,
+                save_execution_traces=False,
+                enable_live_tracking=False,
+            ),
+        )
+
+        assert result.success is False
+        assert result.error_type == "infrastructure"
+        assert "cannot provide a fresh observation" in (result.error or "")
+        assert agent.act.call_count == 1
+        assert adapter.evaluate.call_count == 1
+
+    def test_done_gate_stops_unscored_when_observation_refresh_fails(self):
+        adapter = WAAMockAdapter(num_tasks=1, domains=["browser"])
+        task = adapter.list_tasks()[0]
+        adapter.evaluate = Mock(
+            return_value=BenchmarkResult(
+                task_id=task.task_id,
+                success=False,
+                score=0.0,
+            )
+        )
+        adapter.observe = Mock(side_effect=RuntimeError("frame source offline"))
+        agent = Mock(spec=BenchmarkAgent)
+        agent.reset = Mock()
+        agent.act = Mock(
+            side_effect=[BenchmarkAction(type="done"), BenchmarkAction(type="done")]
+        )
+
+        result = _run_single_task(
+            agent,
+            adapter,
+            task,
+            EvaluationConfig(
+                done_gate=True,
+                verbose=False,
+                save_execution_traces=False,
+                enable_live_tracking=False,
+            ),
+        )
+
+        assert result.success is False
+        assert result.error_type == "infrastructure"
+        assert "fresh observation failed: frame source offline" in (result.error or "")
+        assert agent.act.call_count == 1
+        assert adapter.evaluate.call_count == 1
+
+    def test_final_evaluation_exception_is_classified_as_evaluation_error(self):
+        adapter = WAAMockAdapter(num_tasks=1, domains=["browser"])
+        task = adapter.list_tasks()[0]
+        adapter.evaluate = Mock(side_effect=RuntimeError("no evaluator response"))
+        agent = ScriptedAgent([BenchmarkAction(type="done")])
+
+        result = _run_single_task(
+            agent,
+            adapter,
+            task,
+            EvaluationConfig(
+                verbose=False,
+                save_execution_traces=False,
+                enable_live_tracking=False,
+            ),
+        )
+
+        assert result.error_type == "evaluation"
+        assert "no evaluator response" in (result.error or "")
+
+    def test_unavailable_evaluator_stays_unmeasured_through_public_runner(
+        self, monkeypatch
+    ):
+        adapter = WAAMockAdapter(num_tasks=1, domains=["browser"])
+        task = adapter.list_tasks()[0]
+        adapter.evaluate = Mock(
+            return_value=BenchmarkResult(
+                task_id=task.task_id,
+                success=False,
+                score=0.0,
+                error_type="evaluation",
+                reason="evaluator unavailable",
+            )
+        )
+        completed_event = Mock()
+        monkeypatch.setattr(
+            "openadapt_evals.benchmarks.runner.track_agent_run_completed",
+            completed_event,
+        )
+
+        results = evaluate_agent_on_benchmark(
+            ScriptedAgent([BenchmarkAction(type="done")]),
+            adapter,
+            config=EvaluationConfig(
+                verbose=False,
+                save_execution_traces=False,
+                enable_live_tracking=False,
+            ),
+        )
+
+        metrics = compute_metrics(results)
+        assert results[0].error_type == "evaluation"
+        assert metrics["num_tasks"] == 1
+        assert metrics["num_outcome_tasks"] == 0
+        assert metrics["error_count"] == 1
+        assert metrics["success_count"] == 0
+        completed_event.assert_called_once()
+        event = completed_event.call_args.kwargs
+        assert event["num_tasks"] == 1
+        assert event["attempt_count"] == 1
+        assert event["outcome_count"] == 0
+        assert event["error_count"] == 1
+
+    def test_parallel_fallback_preserves_typed_error(self, monkeypatch):
+        adapter = WAAMockAdapter(num_tasks=1, domains=["browser"])
+        task = adapter.list_tasks()[0]
+
+        def _raise(*_args, **_kwargs):
+            raise RolloutInfrastructureError("worker lost")
+
+        monkeypatch.setattr(
+            "openadapt_evals.benchmarks.runner._run_single_task", _raise
+        )
+        results = _evaluate_parallel(
+            Mock(spec=BenchmarkAgent),
+            adapter,
+            [task],
+            EvaluationConfig(verbose=False),
+        )
+
+        assert len(results) == 1
+        assert results[0].error_type == "infrastructure"
+        assert results[0].reason == "worker lost"
+
+    def test_sequential_fallback_preserves_typed_error(self, monkeypatch):
+        adapter = WAAMockAdapter(num_tasks=1, domains=["browser"])
+        task = adapter.list_tasks()[0]
+
+        def _raise(*_args, **_kwargs):
+            raise ActionParseError("worker parse failed")
+
+        monkeypatch.setattr(
+            "openadapt_evals.benchmarks.runner._run_single_task", _raise
+        )
+        results = _evaluate_sequential(
+            Mock(spec=BenchmarkAgent),
+            adapter,
+            [task],
+            EvaluationConfig(verbose=False),
+        )
+
+        assert len(results) == 1
+        assert results[0].error_type == "agent"
+        assert results[0].reason == "worker parse failed"
