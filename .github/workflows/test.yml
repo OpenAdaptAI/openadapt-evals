@@ -58,6 +58,11 @@ jobs:
       - name: Lint
         run: uv run --no-sources ruff check .
 
+      - name: Build and verify the public distribution boundary
+        run: |
+          uv build --no-sources
+          python scripts/check_source_boundary.py --require-dist
+
       - name: Run tests
         run: |
           uv run --no-sources pytest tests/ -q \
