@@ -375,22 +375,29 @@ class PlannerGrounderAgent(BenchmarkAgent):
                 },
             )
 
-        if decision == "FAIL":
+        if decision in ("FAIL", "ERROR"):
             self._action_history.append("FAIL()")
+            error = (
+                planner_output.get("error")
+                or reasoning
+                or "planner reported failure"
+            )
             return BenchmarkAction(
-                type="done",
+                type="error",
                 raw_action={
                     "planner_output": planner_output,
                     "source": "planner",
                     "fail_reason": reasoning,
+                    "error": error,
+                    "error_type": planner_output.get("error_type", "agent"),
                 },
             )
 
         if not instruction and not action_type:
-            logger.warning("Planner returned empty instruction, treating as DONE")
-            self._action_history.append("DONE() [empty instruction]")
+            logger.warning("Planner returned an empty instruction")
+            self._action_history.append("ERROR() [empty instruction]")
             return BenchmarkAction(
-                type="done",
+                type="error",
                 raw_action={
                     "planner_output": planner_output,
                     "parse_error": "empty_instruction",
@@ -831,7 +838,11 @@ class PlannerGrounderAgent(BenchmarkAgent):
             if action.type != "done":
                 return action
 
-            logger.warning("Grounder retry also failed, returning done")
+            logger.warning("Grounder retry also failed")
+            return BenchmarkAction(
+                type="error",
+                raw_action={"parse_error": "grounder output was not actionable"},
+            )
 
         return action
 
@@ -892,7 +903,10 @@ class PlannerGrounderAgent(BenchmarkAgent):
             raw = resp.json()["choices"][0]["message"]["content"]
         except Exception as exc:
             logger.error("HTTP grounder call failed: %s", exc)
-            return BenchmarkAction(type="done")
+            return BenchmarkAction(
+                type="error",
+                raw_action={"error": f"HTTP grounder call failed: {exc}"},
+            )
 
         logger.info("HTTP grounder raw output: %s", raw[:200])
 
@@ -932,7 +946,13 @@ class PlannerGrounderAgent(BenchmarkAgent):
         if not match:
             # Last resort: try parse_action_json
             from openadapt_evals.training.trl_rollout import parse_action_json
-            return parse_action_json(raw)
+            action = parse_action_json(raw)
+            if action.type == "done":
+                return BenchmarkAction(
+                    type="error",
+                    raw_action={"parse_error": "grounder output was not actionable"},
+                )
+            return action
 
         nums = [float(x) for x in match.groups() if x is not None]
 
@@ -944,7 +964,10 @@ class PlannerGrounderAgent(BenchmarkAgent):
             x, y = nums[0], nums[1]
         else:
             logger.warning("Unexpected number count in bbox: %s", nums)
-            return BenchmarkAction(type="done")
+            return BenchmarkAction(
+                type="error",
+                raw_action={"parse_error": f"unexpected bbox values: {nums}"},
+            )
 
         # Normalize coordinates
         if x > 1 and y > 1:
@@ -976,6 +999,22 @@ def _action_to_planner_output(action: BenchmarkAction) -> dict[str, Any]:
             "decision": "DONE",
             "instruction": "",
             "reasoning": action.raw_action.get("reasoning", "") if action.raw_action else "",
+        }
+
+    if action.type == "error":
+        raw_action = action.raw_action or {}
+        error = (
+            raw_action.get("reason")
+            or raw_action.get("error")
+            or raw_action.get("parse_error")
+            or "planner reported failure"
+        )
+        return {
+            "decision": "ERROR",
+            "instruction": "",
+            "reasoning": str(error),
+            "error": str(error),
+            "error_type": raw_action.get("error_type", "agent"),
         }
 
     # Use the action string representation as the instruction.

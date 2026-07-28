@@ -384,11 +384,11 @@ class TestParseActionResponse:
         assert action.type == "click"
         assert action.target_node_id == "1"
 
-    def test_parse_invalid_returns_done(self):
-        """Test that invalid response returns done action."""
+    def test_parse_invalid_returns_error(self):
+        """An invalid response is not a completion decision."""
         response = "I don't know what to do"
         action = parse_action_response(response)
-        assert action.type == "done"
+        assert action.type == "error"
 
     def test_coordinate_normalization(self, sample_observation):
         """Test that pixel coordinates are normalized."""
@@ -555,3 +555,65 @@ class TestRunSingleTask:
 
         # Should have only taken 0 steps (done before first step execution)
         assert result.num_steps == 0
+
+    def test_agent_error_cannot_be_overwritten_by_successful_evaluation(self):
+        """A terminal agent error cannot be reported as task success."""
+        adapter = WAAMockAdapter(num_tasks=1, domains=["browser"])
+        task = adapter.list_tasks()[0]
+        adapter.evaluate = Mock(
+            return_value=BenchmarkResult(
+                task_id=task.task_id,
+                success=True,
+                score=1.0,
+            )
+        )
+        agent = ScriptedAgent(
+            [
+                BenchmarkAction(
+                    type="error",
+                    raw_action={
+                        "error": "provider offline",
+                        "error_type": "infrastructure",
+                    },
+                )
+            ]
+        )
+        config = EvaluationConfig(
+            verbose=False,
+            save_execution_traces=False,
+            enable_live_tracking=False,
+        )
+
+        result = _run_single_task(agent, adapter, task, config)
+
+        assert result.success is False
+        assert result.score == 0.0
+        assert result.error == "provider offline"
+        assert result.reason == "provider offline"
+        assert result.error_type == "infrastructure"
+
+    def test_agent_error_without_diagnostics_cannot_report_success(self):
+        """The terminal action type alone is sufficient to refuse success."""
+        adapter = WAAMockAdapter(num_tasks=1, domains=["browser"])
+        task = adapter.list_tasks()[0]
+        adapter.evaluate = Mock(
+            return_value=BenchmarkResult(
+                task_id=task.task_id,
+                success=True,
+                score=1.0,
+            )
+        )
+        agent = ScriptedAgent([BenchmarkAction(type="error")])
+        config = EvaluationConfig(
+            verbose=False,
+            save_execution_traces=False,
+            enable_live_tracking=False,
+        )
+
+        result = _run_single_task(agent, adapter, task, config)
+
+        assert (result.success, result.score, result.error_type) == (
+            False,
+            0.0,
+            "agent",
+        )

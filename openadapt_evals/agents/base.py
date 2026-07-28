@@ -155,9 +155,10 @@ def parse_action_response(
                 break
 
     if not action_line:
-        # Could not parse action, return done
+        # Parsing did not produce an agent decision. Keep that distinct from
+        # the model explicitly issuing DONE().
         raw_action["parse_error"] = "No action pattern found"
-        return BenchmarkAction(type="done", raw_action=raw_action)
+        return BenchmarkAction(type="error", raw_action=raw_action)
 
     # Parse CLICK action
     click_match = re.match(
@@ -292,4 +293,4 @@ def parse_action_response(
 
     # Unknown action format
     raw_action["parse_error"] = f"Unknown action format: {action_line}"
-    return BenchmarkAction(type="done", raw_action=raw_action)
+    return BenchmarkAction(type="error", raw_action=raw_action)

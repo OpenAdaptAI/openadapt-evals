@@ -68,19 +68,31 @@ def _dismiss_lock_screen(server: str) -> bool:
 
     Returns True if lock screen was dismissed or wasn't present.
     """
-    try:
-        # Check for LogonUI.exe process
+    def lock_state() -> bool | None:
+        """Return True when locked, False when unlocked, or None if unknown."""
         resp = requests.post(
             f"{server}/execute",
             json={"command": 'powershell -Command "(Get-Process LogonUI -ErrorAction SilentlyContinue) -ne $null"'},
             timeout=10,
         )
         if not resp.ok:
-            return True  # Can't check, assume OK
+            print(f"  Lock screen check failed: HTTP {resp.status_code}")
+            return None
 
         output = resp.json().get("output", "").strip()
-        if output != "True":
-            return True  # Not locked
+        if output == "True":
+            return True
+        if output == "False":
+            return False
+        print(f"  Lock screen check returned an unreadable state: {output!r}")
+        return None
+
+    try:
+        state = lock_state()
+        if state is None:
+            return False
+        if state is False:
+            return True
 
         print("  Lock screen detected (LogonUI.exe running), dismissing...")
 
@@ -91,16 +103,19 @@ def _dismiss_lock_screen(server: str) -> bool:
             timeout=15,
         )
         if resp.ok:
-            print("  Lock screen dismissed, waiting for desktop...")
+            print("  Unlock input sent, waiting for desktop...")
             time.sleep(5)  # Wait for desktop to load
-            return True
+            unlocked = lock_state() is False
+            if not unlocked:
+                print("  Lock screen remained present or could not be rechecked")
+            return unlocked
         else:
             print(f"  Failed to dismiss lock screen: {resp.text}")
             return False
 
     except Exception as e:
         print(f"  Lock screen check error: {e}")
-        return True  # Don't block on check failures
+        return False
 
 
 def _probe(server: str, timeout: int = 10) -> bool:
@@ -165,8 +180,7 @@ def ensure_waa_ready(
     """
     # Step 1: Quick probe
     if _probe(server) and (evaluate_url is None or _probe(evaluate_url)):
-        _dismiss_lock_screen(server)
-        return True
+        return _dismiss_lock_screen(server)
 
     # Step 2: Reconnect tunnel
     print("  WAA unreachable, reconnecting tunnel...")
@@ -176,8 +190,7 @@ def ensure_waa_ready(
         time.sleep(3)
         if _probe(server) and (evaluate_url is None or _probe(evaluate_url)):
             print("  Tunnel reconnected, WAA ready!")
-            _dismiss_lock_screen(server)
-            return True
+            return _dismiss_lock_screen(server)
 
     # Step 3: Tunnel up but WAA not responding → container restart
     print("  Tunnel OK but WAA server dead, restarting container...")
@@ -202,8 +215,7 @@ def ensure_waa_ready(
             last_print = elapsed
         if _probe(server, timeout=10) and (evaluate_url is None or _probe(evaluate_url, timeout=10)):
             print(f"  WAA ready after {elapsed}s!")
-            _dismiss_lock_screen(server)
-            return True
+            return _dismiss_lock_screen(server)
         time.sleep(10)
 
     print(f"  TIMEOUT: WAA not ready after {max_wait}s")

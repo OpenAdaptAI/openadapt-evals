@@ -509,10 +509,24 @@ def _run_single_task(
         logger.info("Evaluating task result")
         result = adapter.evaluate(task)
 
-        # Propagate error_type from agent error action
-        if action is not None and action.type == "error" and action.raw_action:
-            result.error_type = action.raw_action.get("error_type", "agent")
-            result.error = result.error or action.raw_action.get("reason")
+        # An evaluator observes target state, not whether the agent itself
+        # completed this attempt safely. A pre-existing target state can score
+        # as successful even after the agent reported a provider or parse
+        # failure, so the terminal agent error remains authoritative.
+        if action is not None and action.type == "error":
+            raw_action = action.raw_action or {}
+            error_reason = (
+                raw_action.get("reason")
+                or raw_action.get("error")
+                or raw_action.get("parse_error")
+                or raw_action.get("fail_reason")
+                or "agent reported a terminal error"
+            )
+            result.success = False
+            result.score = 0.0
+            result.error_type = raw_action.get("error_type", "agent")
+            result.error = str(error_reason)
+            result.reason = str(error_reason)
 
         # Update result with trajectory info
         result.steps = history if config.save_trajectories else []

@@ -143,7 +143,7 @@ class BaselineAgent(BenchmarkAgent):
         screenshot = self._observation_to_image(observation)
         if screenshot is None:
             logger.warning("No screenshot in observation")
-            return BenchmarkAction(type="done", raw_action={"error": "No screenshot"})
+            return BenchmarkAction(type="error", raw_action={"error": "No screenshot"})
 
         # Format accessibility tree
         a11y_tree = self._format_a11y_tree(observation.accessibility_tree)
@@ -161,7 +161,7 @@ class BaselineAgent(BenchmarkAgent):
             )
         except Exception as e:
             logger.error(f"Adapter predict failed: {e}")
-            return BenchmarkAction(type="done", raw_action={"error": str(e)})
+            return BenchmarkAction(type="error", raw_action={"error": str(e)})
 
         # Convert ParsedAction to BenchmarkAction
         return self._convert_action(parsed, observation)
@@ -245,7 +245,7 @@ class BaselineAgent(BenchmarkAgent):
                     raw_action=raw_action,
                 )
 
-            return BenchmarkAction(type="done", raw_action={**raw_action, "error": "Missing coords"})
+            return BenchmarkAction(type="error", raw_action={**raw_action, "error": "Missing coords"})
 
         elif action_type == "type":
             return BenchmarkAction(
@@ -273,7 +273,7 @@ class BaselineAgent(BenchmarkAgent):
 
         else:
             return BenchmarkAction(
-                type="done",
+                type="error",
                 raw_action={**raw_action, "error": f"Unknown action: {action_type}"},
             )
 

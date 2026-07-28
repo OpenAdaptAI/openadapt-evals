@@ -166,12 +166,12 @@ class TestParseQwenAction:
 
     def test_no_action_found(self):
         action = parse_qwen_action("I don't know what to do")
-        assert action.type == "done"
+        assert action.type == "error"
         assert "parse_error" in action.raw_action
 
     def test_empty_response(self):
         action = parse_qwen_action("")
-        assert action.type == "done"
+        assert action.type == "error"
         assert "parse_error" in action.raw_action
 
     def test_viewport_stored_in_raw_action(self):
@@ -223,9 +223,9 @@ class TestThinkBlocks:
         assert "thinking" not in action.raw_action
 
     def test_think_block_only_no_action(self):
-        """If think block is present but no action follows, return done."""
+        """Reasoning without an action is a parse error."""
         action = parse_qwen_action("<think>I'm not sure what to do</think>")
-        assert action.type == "done"
+        assert action.type == "error"
 
     def test_think_with_finished(self):
         response = (
@@ -530,9 +530,9 @@ class TestEdgeCases:
         assert abs(action.x - 0.5) < 1e-6
 
     def test_press_empty_keys(self):
-        """press(keys=[]) with empty list should return done."""
+        """An empty key list is a parse error."""
         action = parse_qwen_action("press(keys=[])")
-        assert action.type == "done"
+        assert action.type == "error"
         assert "parse_error" in action.raw_action
 
     def test_type_empty_string(self):
@@ -549,7 +549,7 @@ class TestEdgeCases:
 
     def test_whitespace_only_response(self):
         action = parse_qwen_action("   \n  \t  ")
-        assert action.type == "done"
+        assert action.type == "error"
 
     def test_multiline_think_then_action(self):
         """Realistic model output with thinking then action."""
