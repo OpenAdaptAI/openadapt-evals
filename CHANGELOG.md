@@ -1,6 +1,110 @@
 # CHANGELOG
 
 
+## v0.90.2 (2026-07-28)
+
+### Bug Fixes
+
+- **evals**: Make "could not measure" representable everywhere it produced a number
+  ([#277](https://github.com/OpenAdaptAI/openadapt-evals/pull/277),
+  [`6a15180`](https://github.com/OpenAdaptAI/openadapt-evals/commit/6a1518026e49212038b804e31d1a1aa4a8d22dca))
+
+A lint sweep exposed one failure class across this repo: a failure rendered as a successful empty
+  result. In an evaluation repo that does not crash anything -- it publishes a WRONG NUMBER. An
+  unreachable backend that scores 0% and is reported as a legitimate 0% is the worst instance, and
+  this repo had several.
+
+The named defect. `EvaluatorClient._load_evaluators` swallowed `ImportError`, so a broken WAA
+  evaluators install and a healthy one produced the same client and every later run was silently
+  scored by the built-in fallback evaluator. PR #275 added a `logger.warning` and returned the same
+  fallback-configured client: the same bug with better documentation. A caller still could not tell.
+
+Now the distinction is representable -- `EvaluatorsUnavailableError` at construction by default, an
+  opt-in `require_waa_evaluators=False` for deliberate fallback, and
+  `evaluator_source`/`error_type`/`scored` on every `EvaluationResult`. Also in that class: an
+  unreachable VM no longer returns `reason='Metric returned score 0.0'`, a failed VM command is no
+  longer read as empty output, and an unknown metric name is no longer silently rescored with
+  `exact_match`.
+
+Deliberate optional-dependency probes (torch/transformers/trl/peft/unsloth/ wandb/azure-sdk `except
+  ImportError`) were left alone -- they degrade correctly and never produce a number.
+
+Sweep, ranked by blast radius:
+
+- `RLEnvironment.evaluate` flattened `BenchmarkResult` to a float, discarding the `error_type` the
+  adapters take real trouble to set. Now raises `EvaluationUnavailableError`; `evaluate_result()`
+  exposes the tri-state; an unscored result is no longer backfilled as a GRPO reward. -
+  `evaluate_dense`'s `except Exception: binary_score = 0.0` published the milestone high-water mark
+  as a task score when the binary evaluator was down. Now raises unless a local check actually stood
+  in. - `compare_models.py` had no infra bucket at all: a model whose server failed to start scored
+  0.00 cells against one whose server came up. Unscored rows now leave the matrix and the averages.
+  - `run_meta` recorded a CRASHED verifier as `replay_success=False, verifier_score=0.0`, and `error
+  = error or ...` discarded the verify error whenever the policy had also failed. `replay_success`
+  is now tri-state (the shape `flow/replay_runner` already used), with `verifier_error`;
+  `inspect_export` drops unscored samples from the accuracy DENOMINATOR and emits `accuracy: null`
+  rather than 0.0 when nothing was scored. - `AzureWAAOrchestrator._fetch_worker_results`
+  synthesized one zero-score `BenchmarkResult` per task, producing a complete, filterable-by-nothing
+  "Success rate: 0.0%" for a run that never touched a VM. It now raises, and the poll loop no longer
+  swallows that forever. - The WAA `/evaluate` server answered a dead VM with HTTP 200 and
+  `{"success": false, "score": 0.0}`. Getter/metric failures now raise and the response carries
+  `scored`/`error_type`, which `WAALiveAdapter` propagates (along with the missing `error_type` on
+  its 404-fallback and 5xx paths). - `ContainerHealthChecker._get_job_logs` was a stub returning
+  `""`, so every health verdict derived from it was a false negative -- `StuckJobDetector` with
+  `auto_cancel=True` would cancel every healthy job it looked at. It now raises,
+  `HealthCheckResult.healthy` is tri-state, and an unknown verdict is never grounds for cancelling.
+  - `resource_tracker` returned `[]` when `az` failed, and RESOURCES.md then asserted "All Azure
+  resources are deallocated or stopped" while VMs billed. - `AWSVMManager.set_auto_shutdown`
+  returned True without inspecting the SSH result -- a cost safety net reporting itself armed
+  without checking. - `HTTPAgent` returned `type="done"` when the endpoint was unreachable, which
+  the eval loop reads as a clean agent finish; a sidecar that OOMed at step 0 produced a
+  genuine-looking 0%. Now `type="error"` with an `error_type`. - `verify_calculator_open` ANDed two
+  `IMAGENAME` filters, so it could never return True and that task's verified success rate was
+  pinned at 0%; the Parallels verifiers also discarded `returncode`, turning a dead exec channel
+  into a measured task failure. - `check_published_evidence_freshness` printed "is bound to the
+  current release" after SKIPPING that comparison -- in a CI log where only the last line is read,
+  an unreachable PyPI read as a passing freshness check.
+
+Every fix has a regression test, and every test was mutation-checked: with the production change
+  reverted to origin/main, 23 of the 29 sweep tests fail (the remaining 6 are deliberate controls
+  that pin the healthy path). Full CI suite: 1696 passed.
+
+Fake-gate audit of `.github/workflows/`: no `|| true`, `continue-on-error`, `exit 0`, or `set +e`
+  anywhere. All four workflows fail loudly.
+
+Claude-Session: https://claude.ai/code/session_01NyCHrzA1psrKMFfroYbzaM
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Continuous Integration
+
+- Enforce the ruff config this repo already declares
+  ([#276](https://github.com/OpenAdaptAI/openadapt-evals/pull/276),
+  [`4dc70d0`](https://github.com/OpenAdaptAI/openadapt-evals/commit/4dc70d0544fa11d98c49a44b19460d0710b8b273))
+
+`[tool.ruff]` has existed here for a long time with nothing running it. By the time PR #275 looked,
+  the tree had drifted to 478 findings against its own declared rule set -- among them three
+  undefined names that no reviewer would have let through if anything had been checking. #275
+  cleared all of them and made the config honest; this makes it stay honest.
+
+The step goes in the existing `test` job, which already runs `uv sync --locked --extra dev` and
+  therefore already has ruff installed. It adds no runner, no install step and no workflow: `ruff
+  check .` takes about 40 ms on this tree, so the marginal cost is the step overhead, roughly 10
+  seconds.
+
+It cannot go red because ruff shipped a release. `#275` bounded the linter to `ruff>=0.16,<0.17` and
+  pinned it in `uv.lock`, and the rule set is stated explicitly as `select = ["E","F","I","W"]`.
+  Both have to be changed by a person before the answer can move -- which is the whole point of this
+  change and #275.
+
+Verified against this exact tree with the locked ruff 0.16.0: `All checks passed!`
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Claude-Session: https://claude.ai/code/session_01NyCHrzA1psrKMFfroYbzaM
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.90.1 (2026-07-28)
 
 ### Bug Fixes
