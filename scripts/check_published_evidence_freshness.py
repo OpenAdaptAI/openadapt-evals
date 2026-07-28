@@ -17,6 +17,9 @@ What is checked, against ``docs/eval_results/PUBLISHED_EVIDENCE.json``:
 3. Its pinned version equals the newest non-yanked release on PyPI.
 4. Its pinned wheel digest equals that release's published wheel digest.
 5. Every ``superseded`` set names the set that replaced it.
+6. Flow 1.26.0+ results bind separate oracle fields, verifier/runner code,
+   observation code, and dependency versions.  Current verifier code drift
+   invalidates the evidence.
 
 Checks 1, 2 and 5 are offline and always run.  Checks 3 and 4 need PyPI: pass
 ``--current-version``/``--current-wheel-sha256`` to supply the release
@@ -28,7 +31,10 @@ drift always exits non-zero.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import importlib.util
 import json
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -38,6 +44,23 @@ from typing import Any, Optional
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = REPO_ROOT / "docs" / "eval_results" / "PUBLISHED_EVIDENCE.json"
 PYPI_URL = "https://pypi.org/pypi/{package}/json"
+VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+
+# The scheduled network check intentionally installs no package dependencies.
+# Load the stdlib-only contract module by path instead of importing the
+# ``openadapt_evals.evaluation`` package, whose normal API has HTTP dependencies.
+_CONTRACT_PATH = REPO_ROOT / "openadapt_evals" / "evaluation" / "oracle_contract.py"
+_CONTRACT_SPEC = importlib.util.spec_from_file_location(
+    "_openadapt_evals_oracle_contract",
+    _CONTRACT_PATH,
+)
+if _CONTRACT_SPEC is None or _CONTRACT_SPEC.loader is None:
+    raise RuntimeError(f"cannot load oracle contract module: {_CONTRACT_PATH}")
+_CONTRACT_MODULE = importlib.util.module_from_spec(_CONTRACT_SPEC)
+sys.modules[_CONTRACT_SPEC.name] = _CONTRACT_MODULE
+_CONTRACT_SPEC.loader.exec_module(_CONTRACT_MODULE)
+OracleContractError = _CONTRACT_MODULE.OracleContractError
+validate_evidence_document = _CONTRACT_MODULE.validate_evidence_document
 
 
 class DriftError(Exception):
@@ -79,7 +102,32 @@ def check_superseded_links(manifest: dict[str, Any]) -> list[str]:
     return problems
 
 
-def check_entry_matches_artifact(entry: dict[str, Any], repo_root: Path) -> list[str]:
+def check_contract_policy(manifest: dict[str, Any]) -> list[str]:
+    """Require the migration gate that makes the next campaign exact-bound."""
+
+    policy = manifest.get("oracle_contract_policy")
+    if manifest.get("schema_version") != 2 or not isinstance(policy, dict):
+        return ["published evidence manifest requires schema 2 and oracle_contract_policy"]
+    try:
+        _version_tuple(policy.get("effective_flow_version"))
+    except DriftError as exc:
+        return [f"oracle_contract_policy: {exc}"]
+    if policy.get("minimum_results_schema") != 2:
+        return ["oracle_contract_policy must require results schema 2"]
+    return []
+
+
+def _version_tuple(value: object) -> tuple[int, int, int]:
+    if not isinstance(value, str) or not (match := VERSION_RE.fullmatch(value)):
+        raise DriftError(f"expected a stable X.Y.Z version, got {value!r}")
+    return tuple(int(part) for part in match.groups())  # type: ignore[return-value]
+
+
+def check_entry_matches_artifact(
+    entry: dict[str, Any],
+    repo_root: Path,
+    contract_policy: Optional[dict[str, Any]] = None,
+) -> list[str]:
     """The manifest must agree with the results.json it describes."""
 
     problems: list[str] = []
@@ -105,6 +153,38 @@ def check_entry_matches_artifact(entry: dict[str, Any], repo_root: Path) -> list
             f"{entry.get('wheel_sha256')!r} but results.json recorded "
             f"{recorded_sha!r}"
         )
+    policy = contract_policy or {}
+    effective_version = policy.get("effective_flow_version")
+    minimum_schema = policy.get("minimum_results_schema")
+    try:
+        contract_required = effective_version is not None and _version_tuple(
+            recorded_version
+        ) >= _version_tuple(effective_version)
+    except DriftError as exc:
+        problems.append(f"{entry['path']}: {exc}")
+        contract_required = True
+
+    schema_version = document.get("schema_version")
+    if contract_required and schema_version != minimum_schema:
+        problems.append(
+            f"{entry['path']}: Flow {recorded_version} evidence requires results "
+            f"schema {minimum_schema} with a version-bound oracle contract"
+        )
+    if schema_version == 2:
+        try:
+            validate_evidence_document(document, repo_root=repo_root)
+        except OracleContractError as exc:
+            problems.append(f"{entry['path']}: invalid oracle contract: {exc}")
+        oracle = document.get("oracle")
+        contract = oracle.get("contract") if isinstance(oracle, dict) else None
+        contract_sha = contract.get("contract_sha256") if isinstance(contract, dict) else None
+        if entry.get("oracle_contract_sha256") != contract_sha:
+            problems.append(
+                f"{entry['path']}: manifest oracle_contract_sha256 does not match results.json"
+            )
+        results_sha = hashlib.sha256(results.read_bytes()).hexdigest()
+        if entry.get("results_sha256") != results_sha:
+            problems.append(f"{entry['path']}: manifest results_sha256 does not match results.json")
     return problems
 
 
@@ -178,7 +258,14 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     problems.extend(check_superseded_links(manifest))
-    problems.extend(check_entry_matches_artifact(entry, args.repo_root))
+    problems.extend(check_contract_policy(manifest))
+    problems.extend(
+        check_entry_matches_artifact(
+            entry,
+            args.repo_root,
+            manifest.get("oracle_contract_policy"),
+        )
+    )
 
     release_version = args.current_version
     release_wheel = args.current_wheel_sha256
@@ -209,8 +296,7 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"Published evidence {entry['path']} passed its OFFLINE checks. "
             f"The release-freshness comparison against the current {package} "
-            f"release was SKIPPED"
-            + (" (--offline)." if args.offline else " (PyPI unreachable).")
+            f"release was SKIPPED" + (" (--offline)." if args.offline else " (PyPI unreachable).")
         )
         return 0
 

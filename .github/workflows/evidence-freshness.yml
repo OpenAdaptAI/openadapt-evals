@@ -12,7 +12,10 @@ on:
     branches: [main]
     paths:
       - 'docs/eval_results/**'
+      - 'openadapt_evals/evaluation/oracle_contract.py'
+      - 'openadapt_evals/evaluation/synthetic_mockmed_oracle.py'
       - 'scripts/check_published_evidence_freshness.py'
+      - 'scripts/run_current_flow_local_benchmark.py'
       - '.github/workflows/evidence-freshness.yml'
 
 concurrency:

@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "package": "openadapt-flow",
   "comment": [
     "Every published evidence set in docs/eval_results and the engine release it",
@@ -7,8 +7,16 @@
     "when a set marked current no longer pins the current published release, or",
     "when a pinned wheel digest does not match that release on PyPI.",
     "Mark a set superseded (never delete it) when a newer set replaces it: the",
-    "old numbers stay reproducible against the wheel they were measured on."
+    "old numbers stay reproducible against the wheel they were measured on.",
+    "Flow 1.26.0 and later evidence must use results schema 2. That schema",
+    "binds separate expected fields, the Evals-owned verifier, the runner,",
+    "the observation provider, and exact dependency versions. A verifier",
+    "change invalidates current evidence until the campaign runs again."
   ],
+  "oracle_contract_policy": {
+    "effective_flow_version": "1.26.0",
+    "minimum_results_schema": 2
+  },
   "evidence": [
     {
       "path": "docs/eval_results/current_flow_v1_16_1_local_20260718",

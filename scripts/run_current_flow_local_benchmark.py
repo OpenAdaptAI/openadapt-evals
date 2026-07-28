@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import importlib.metadata
 import json
 import math
@@ -36,6 +37,28 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from openadapt_evals.evaluation.oracle_contract import (
+    build_oracle_contract,
+    classify_outcome,
+    file_sha256,
+    unavailable_verdict,
+)
+from openadapt_evals.evaluation.synthetic_mockmed_oracle import (
+    EXPECTED_FIELDS as MOCKMED_EXPECTED_FIELDS,
+)
+from openadapt_evals.evaluation.synthetic_mockmed_oracle import (
+    TARGET_PATIENT as MOCKMED_TARGET_PATIENT,
+)
+from openadapt_evals.evaluation.synthetic_mockmed_oracle import (
+    expected_fields as mockmed_expected_fields,
+)
+from openadapt_evals.evaluation.synthetic_mockmed_oracle import (
+    verify_final_state as verify_mockmed_final_state,
+)
+from openadapt_evals.evaluation.synthetic_mockmed_oracle import (
+    wrong_action_rules as mockmed_wrong_action_rules,
+)
 
 ARMS = ("compiled", "dom", "dom_named")
 CONDITIONS = ("clean", "theme", "rename")
@@ -87,6 +110,25 @@ def _source_binding(root: Path) -> dict[str, Any]:
     }
 
 
+def _dependency_versions_for_modules(*module_names: str) -> dict[str, str]:
+    """Bind the exact distributions that provide the oracle's imported modules."""
+
+    providers = importlib.metadata.packages_distributions()
+    versions: dict[str, str] = {}
+    for module_name in module_names:
+        module = importlib.import_module(module_name)
+        distributions = sorted(set(providers.get(module_name, [])))
+        if len(distributions) == 1:
+            provider = distributions[0]
+            version = importlib.metadata.version(provider)
+        else:
+            provider = module_name
+            version = str(getattr(module, "__version__", "unknown"))
+        module_file = Path(module.__file__).resolve()
+        versions[module_name] = f"{provider}=={version};module_sha256={file_sha256(module_file)}"
+    return dict(sorted(versions.items()))
+
+
 def _extract_wheel(wheel: Path, destination: Path) -> None:
     with zipfile.ZipFile(wheel) as archive:
         for member in archive.infolist():
@@ -114,6 +156,13 @@ def _reported_complete(row: dict[str, Any]) -> bool:
 
 
 def _classify(row: dict[str, Any]) -> str:
+    oracle_status = row.get("oracle_status")
+    if oracle_status is not None:
+        return classify_outcome(
+            actor_reported_complete=_reported_complete(row),
+            oracle_status=oracle_status,
+            wrong_action=row.get("wrong_action") is True,
+        )
     oracle_success = row.get("success") is True
     reported_complete = _reported_complete(row)
     if oracle_success and reported_complete:
@@ -153,6 +202,7 @@ def _aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "wrong_action_count": sum(bool(row.get("wrong_action")) for row in rows),
         "over_halt_count": taxonomy["over_halt"],
         "halt_or_error_count": taxonomy["halt_or_error"],
+        "oracle_indeterminate_count": taxonomy["oracle_indeterminate"],
         "failure_taxonomy": dict(sorted(taxonomy.items())),
         "steady_wall_s_median": statistics.median(steady) if steady else 0.0,
         "steady_wall_s_p95_nearest_rank": _nearest_rank(steady, 0.95),
@@ -204,10 +254,10 @@ def _render_markdown(report: dict[str, Any]) -> str:
         "",
         (
             "| Condition | Arm | Runs | Task success | Silent incorrect | "
-            "Wrong action | Over-halt | Halt/error | Steady median | "
+            "Wrong action | Over-halt | Halt/error | Oracle unavailable | Steady median | "
             "Steady p95 | End-to-end median | End-to-end p95 | Model calls | Cost |"
         ),
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for condition in report["conditions"]:
         for arm in report["arms"]:
@@ -218,6 +268,7 @@ def _render_markdown(report: dict[str, Any]) -> str:
                 f"{cell['silent_incorrect_success_count']} | "
                 f"{cell['wrong_action_count']} | {cell['over_halt_count']} | "
                 f"{cell['halt_or_error_count']} | "
+                f"{cell['oracle_indeterminate_count']} | "
                 f"{cell['steady_wall_s_median']:.3f}s | "
                 f"{cell['steady_wall_s_p95_nearest_rank']:.3f}s | "
                 f"{cell['end_to_end_wall_s_median']:.3f}s | "
@@ -241,7 +292,9 @@ def _render_markdown(report: dict[str, Any]) -> str:
             "write to the wrong patient or encounter type; **over-halt** means "
             "the arm reported halt/incomplete while the independent oracle "
             "confirmed the intended effect; **halt/error** means the arm "
-            "stopped and the intended effect was absent. The same definitions "
+            "stopped and the intended effect was absent; **oracle unavailable** "
+            "means the run remained unscored because the oracle could not observe "
+            "all required fields. The same definitions "
             "apply to every arm. The selector controls therefore can count as "
             "over-halts when alternate final-state evidence contradicts them; "
             "their rename failures did not, because the oracle confirmed no "
@@ -360,11 +413,9 @@ def run_benchmark(
     sys.path.insert(0, str(artifact_root))
 
     from openadapt_flow.benchmark.dom_arm import (  # noqa: PLC0415
-        TARGET_PATIENT,
         condition_url,
         dom_run,
         note_for_slot,
-        verify_final_state,
     )
     from openadapt_flow.benchmark.run_benchmark import (  # noqa: PLC0415
         _compiled_run,
@@ -372,6 +423,7 @@ def run_benchmark(
     from openadapt_flow.compiler import compile_recording  # noqa: PLC0415
     from openadapt_flow.demo_driver import record_triage_demo  # noqa: PLC0415
     from openadapt_flow.mockmed.server import serve  # noqa: PLC0415
+    from openadapt_flow.vision import ocr as flow_ocr  # noqa: PLC0415
 
     imported = Path(sys.modules["openadapt_flow"].__file__).resolve()
     if artifact_root not in imported.parents:
@@ -382,7 +434,44 @@ def run_benchmark(
         raise RuntimeError(f"source commit is not tagged {release_tag}: {source['tags']}")
 
     evals_root = Path(__file__).resolve().parents[1]
-    evals_commit = _git(evals_root, "rev-parse", "HEAD")
+    evals_source = _source_binding(evals_root)
+    oracle_module = importlib.import_module(verify_mockmed_final_state.__module__)
+    observer_module = importlib.import_module(flow_ocr.__module__)
+    oracle_contract = build_oracle_contract(
+        repo_root=evals_root,
+        verifier_file=Path(oracle_module.__file__).resolve(),
+        runner_file=Path(__file__).resolve(),
+        evals_commit=evals_source["commit"],
+        arms=ARMS,
+        expected_fields=mockmed_expected_fields(),
+        wrong_action_rules=mockmed_wrong_action_rules(),
+        observation_provider={
+            "distribution": "openadapt-flow",
+            "version": flow_version,
+            "module": flow_ocr.__module__,
+            "path_in_artifact": Path(observer_module.__file__)
+            .resolve()
+            .relative_to(artifact_root)
+            .as_posix(),
+            "sha256": file_sha256(Path(observer_module.__file__).resolve()),
+        },
+        dependency_versions=_dependency_versions_for_modules(
+            "numpy",
+            "cv2",
+            "onnxruntime",
+            "PIL",
+            "rapidocr_onnxruntime",
+        ),
+    )
+
+    def verify_final_state(screen_png: bytes, note_text: str) -> Any:
+        return verify_mockmed_final_state(
+            screen_png,
+            note_text,
+            ocr_fn=flow_ocr,
+            patient_name=MOCKMED_TARGET_PATIENT,
+        )
+
     out_dir.mkdir(parents=True, exist_ok=False)
     finals_temp = tempfile.TemporaryDirectory(prefix="oa-current-flow-finals-")
     finals = Path(finals_temp.name)
@@ -454,7 +543,9 @@ def run_benchmark(
                                 row = dom_run(
                                     target,
                                     note,
-                                    target_patient=(TARGET_PATIENT if arm == "dom_named" else None),
+                                    target_patient=(
+                                        MOCKMED_TARGET_PATIENT if arm == "dom_named" else None
+                                    ),
                                     verify_fn=verify_final_state,
                                     save_final_to=final_path,
                                     headed=headed,
@@ -470,6 +561,12 @@ def run_benchmark(
                                 "error": f"{type(exc).__name__}: {exc}",
                                 "wrong_action": False,
                             }
+                            row.update(
+                                unavailable_verdict(
+                                    MOCKMED_EXPECTED_FIELDS,
+                                    error_type="run_exception_before_observation",
+                                ).model_dump(exclude={"success"})
+                            )
                         end_to_end = time.monotonic() - started
                         row["condition"] = condition
                         row["trial"] = trial
@@ -516,26 +613,35 @@ def run_benchmark(
         row.pop("identity_armed_steps", None)
         row.pop("identity_unarmed", None)
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "scope": "exact-current local deterministic runtime overhead and robustness",
         "task": (
             "MockMed triage: sign in, open intended referral, create Triage "
             "encounter, enter a trial-unique note, save"
         ),
-        "oracle": (
-            "arm-independent screenshot/OCR final-state check: exact note and "
-            "saved banner, Triage row, intended patient, no wrong-type write"
-        ),
+        "oracle": {
+            "description": (
+                "Evals-owned final-frame OCR check with separate saved-banner, "
+                "saved-row, patient-identity, and wrong-type-absence fields"
+            ),
+            "contract": oracle_contract,
+        },
         "outcome_definitions": {
             "correct": ("arm reported completion and independent oracle confirmed effect"),
             "silent_incorrect_success": (
                 "arm reported completion but independent oracle did not confirm effect"
             ),
             "wrong_action": ("independent oracle observed a wrong-patient or wrong-type write"),
+            "wrong_action_after_halt_or_error": (
+                "arm reported halt/incomplete and the oracle observed a wrong-target write"
+            ),
             "over_halt": ("arm reported halt/incomplete but independent oracle confirmed effect"),
             "halt_or_error": (
                 "arm reported halt/incomplete and independent oracle found effect absent"
+            ),
+            "oracle_indeterminate": (
+                "the oracle could not observe every required field; the run is unscored"
             ),
         },
         "trials_per_arm_condition": trials,
@@ -552,7 +658,7 @@ def run_benchmark(
                     "import_mode": "locally extracted published wheel",
                 },
             },
-            "evals": {"commit": evals_commit},
+            "evals": evals_source,
             "runner_sha256": _sha256(Path(__file__).resolve()),
         },
         "environment": {

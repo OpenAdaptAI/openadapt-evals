@@ -34,6 +34,12 @@ def test_repo_manifest_names_exactly_one_current_evidence_set() -> None:
     assert (ROOT / entry["path"]).is_dir()
 
 
+def test_repo_manifest_keeps_the_flow_1_26_oracle_migration_gate() -> None:
+    manifest = MODULE.load_manifest(MANIFEST)
+
+    assert MODULE.check_contract_policy(manifest) == []
+
+
 def test_drift_is_detected_when_a_newer_release_is_published() -> None:
     manifest = MODULE.load_manifest(MANIFEST)
     entry = MODULE.current_entry(manifest)
@@ -107,3 +113,40 @@ def test_manifest_that_disagrees_with_its_artifact_is_drift(tmp_path: Path) -> N
     problems = MODULE.check_entry_matches_artifact(entry, tmp_path)
 
     assert problems and "results.json recorded" in problems[0]
+
+
+def test_flow_1_26_evidence_requires_the_version_bound_oracle_schema(
+    tmp_path: Path,
+) -> None:
+    directory = tmp_path / "docs" / "eval_results" / "set"
+    directory.mkdir(parents=True)
+    (directory / "results.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source": {
+                    "flow": {
+                        "version": "1.26.0",
+                        "artifact": {"sha256": "a" * 64},
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    entry = {
+        "path": "docs/eval_results/set",
+        "flow_version": "1.26.0",
+        "wheel_sha256": "a" * 64,
+    }
+
+    problems = MODULE.check_entry_matches_artifact(
+        entry,
+        tmp_path,
+        {
+            "effective_flow_version": "1.26.0",
+            "minimum_results_schema": 2,
+        },
+    )
+
+    assert any("version-bound oracle contract" in problem for problem in problems)
