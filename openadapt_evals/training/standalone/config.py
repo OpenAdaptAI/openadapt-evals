@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 
@@ -62,3 +63,24 @@ class TrainingConfig:
     use_unsloth: bool = False
     # Weave project for LLM tracing (empty = disabled)
     weave_project: str = ""
+
+    def validate_for_training(self) -> None:
+        """Reject configurations that cannot perform a measured training step."""
+        positive_integer_fields = (
+            "num_training_steps",
+            "num_rollouts_per_step",
+            "max_steps_per_episode",
+            "save_every_steps",
+        )
+        for name in positive_integer_fields:
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+
+        if (
+            isinstance(self.learning_rate, bool)
+            or not isinstance(self.learning_rate, (int, float))
+            or not math.isfinite(float(self.learning_rate))
+            or self.learning_rate <= 0
+        ):
+            raise ValueError("learning_rate must be finite and positive")

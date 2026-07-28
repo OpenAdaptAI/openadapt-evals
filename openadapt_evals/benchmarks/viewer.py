@@ -37,12 +37,42 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from openadapt_evals.adapters.base import (
+    UNSCORED_BENCHMARK_ERROR_TYPES,
+    normalize_benchmark_result_artifact,
+)
 from openadapt_evals.shared_ui import (
     get_keyboard_shortcuts_css,
     get_keyboard_shortcuts_js,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_execution_artifact(
+    execution: object,
+    task_id: str,
+) -> dict[str, Any]:
+    """Preserve trace fields while normalizing its result envelope."""
+    raw = dict(execution) if isinstance(execution, dict) else {}
+    result = normalize_benchmark_result_artifact(
+        execution,
+        expected_task_id=task_id,
+        context=f"viewer execution artifact for {task_id}",
+    )
+    raw.update(
+        {
+            "task_id": result.task_id,
+            "success": result.success,
+            "score": result.score,
+            "num_steps": result.num_steps,
+            "total_time_seconds": result.total_time_seconds,
+            "error": result.error,
+            "reason": result.reason,
+            "error_type": result.error_type,
+        }
+    )
+    return raw
 
 
 def load_benchmark_metadata(benchmark_dir: Path) -> dict[str, Any]:
@@ -125,9 +155,13 @@ def load_task_results(benchmark_dir: Path) -> list[dict[str, Any]]:
         execution_json = task_dir / "execution.json"
         if execution_json.exists():
             with open(execution_json) as f:
-                task_data["execution"] = json.load(f)
+                execution = json.load(f)
         else:
-            task_data["execution"] = {"steps": [], "success": False, "num_steps": 0}
+            execution = None
+        task_data["execution"] = _normalize_execution_artifact(
+            execution,
+            task_dir.name,
+        )
 
         # Load screenshot paths
         screenshots_dir = task_dir / "screenshots"
@@ -174,15 +208,30 @@ def _get_domain_stats(tasks: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
 
     for task in tasks:
         domain = task.get("definition", {}).get("domain", "unknown")
-        success = task.get("execution", {}).get("success", False)
+        task_id = str(task.get("task_id") or "unknown")
+        result = normalize_benchmark_result_artifact(
+            task.get("execution"),
+            expected_task_id=task_id,
+            context=f"viewer domain artifact for {task_id}",
+        )
 
         if domain not in domain_stats:
-            domain_stats[domain] = {"total": 0, "success": 0, "fail": 0}
+            domain_stats[domain] = {
+                "total": 0,
+                "outcomes": 0,
+                "success": 0,
+                "fail": 0,
+                "unscored": 0,
+            }
 
         domain_stats[domain]["total"] += 1
-        if success:
+        if result.error_type in UNSCORED_BENCHMARK_ERROR_TYPES:
+            domain_stats[domain]["unscored"] += 1
+        elif result.success:
+            domain_stats[domain]["outcomes"] += 1
             domain_stats[domain]["success"] += 1
         else:
+            domain_stats[domain]["outcomes"] += 1
             domain_stats[domain]["fail"] += 1
 
     return domain_stats
@@ -371,21 +420,26 @@ def _generate_benchmark_viewer_html(
 
     # Calculate aggregate metrics
     num_tasks = len(tasks)
-    num_success = sum(1 for t in tasks if t.get("execution", {}).get("success", False))
-    success_rate = (num_success / num_tasks * 100) if num_tasks > 0 else 0
-    num_infra = sum(
-        1
-        for t in tasks
-        if (t.get("execution", {}) or {}).get("error_type") == "infrastructure"
+    executions = [
+        normalize_benchmark_result_artifact(
+            task.get("execution"),
+            expected_task_id=str(task.get("task_id") or "unknown"),
+            context="viewer aggregate artifact",
+        )
+        for task in tasks
+    ]
+    outcomes = [
+        result
+        for result in executions
+        if result.error_type not in UNSCORED_BENCHMARK_ERROR_TYPES
+    ]
+    num_outcomes = len(outcomes)
+    num_success = sum(1 for result in outcomes if result.success)
+    num_failed = num_outcomes - num_success
+    num_unscored = num_tasks - num_outcomes
+    success_rate = (
+        num_success / num_outcomes * 100 if num_outcomes > 0 else 0
     )
-    num_non_infra = max(0, num_tasks - num_infra)
-    non_infra_success = sum(
-        1
-        for t in tasks
-        if (t.get("execution", {}) or {}).get("error_type") != "infrastructure"
-        and (t.get("execution", {}) or {}).get("success", False)
-    )
-    adj_success_rate = (non_infra_success / num_non_infra * 100) if num_non_infra > 0 else 0
 
     body_class = ' class="compact"' if compact else ''
 
@@ -651,6 +705,10 @@ def _generate_benchmark_viewer_html(
             color: var(--error);
         }}
         .task-item .task-status.infra {{
+            background: rgba(245, 158, 11, 0.2);
+            color: #f59e0b;
+        }}
+        .task-item .task-status.unscored {{
             background: rgba(245, 158, 11, 0.2);
             color: #f59e0b;
         }}
@@ -1178,24 +1236,24 @@ def _generate_benchmark_viewer_html(
                     <div class="stat-label">Total Tasks</div>
                 </div>
                 <div class="stat-card">
+                    <div class="stat-value">{num_outcomes}</div>
+                    <div class="stat-label">Measured Outcomes</div>
+                </div>
+                <div class="stat-card">
                     <div class="stat-value success">{num_success}</div>
                     <div class="stat-label">Passed</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-value error">{num_tasks - num_success}</div>
+                    <div class="stat-value error">{num_failed}</div>
                     <div class="stat-label">Failed</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-value" style="color:#f59e0b;">{num_infra}</div>
-                    <div class="stat-label">Infra Fails</div>
+                    <div class="stat-value" style="color:#f59e0b;">{num_unscored}</div>
+                    <div class="stat-label">Unscored Errors</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-value {'success' if success_rate >= 50 else 'error'}">{success_rate:.1f}%</div>
                     <div class="stat-label">Success Rate</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value {'success' if adj_success_rate >= 50 else 'error'}">{adj_success_rate:.1f}%</div>
-                    <div class="stat-label">Adj Success</div>
                 </div>
             </div>
             <div class="domain-breakdown" id="domain-breakdown"></div>
@@ -1226,6 +1284,7 @@ def _generate_benchmark_viewer_html(
                     <option value="success">Passed</option>
                     <option value="fail">Failed</option>
                     <option value="infra">Infra</option>
+                    <option value="unscored">Unscored</option>
                 </select>
             </div>
             <span class="filter-count" id="filter-count">{num_tasks} tasks</span>
@@ -1282,11 +1341,11 @@ def _generate_benchmark_viewer_html(
         const container = document.getElementById('domain-breakdown');
         let html = '';
         for (const [domain, stats] of Object.entries(domainStats)) {{
-            const rate = stats.total > 0 ? (stats.success / stats.total * 100).toFixed(0) : 0;
+            const rate = stats.outcomes > 0 ? (stats.success / stats.outcomes * 100).toFixed(0) : 0;
             html += `
                 <div class="domain-tag">
                     <span class="domain-name">${{domain}}</span>
-                    <span class="domain-stats">${{stats.success}}/${{stats.total}} (${{rate}}%)</span>
+                    <span class="domain-stats">${{stats.success}}/${{stats.outcomes}} (${{rate}}%) · ${{stats.total}} attempts</span>
                 </div>
             `;
         }}
@@ -1309,11 +1368,12 @@ def _generate_benchmark_viewer_html(
         tasks.forEach((task, idx) => {{
             const def = task.definition || {{}};
             const exec = task.execution || {{}};
-            const success = exec.success || false;
+            const success = exec.success === true;
             const errorType = exec.error_type || '';
             const isInfra = errorType === 'infrastructure';
-            const statusKey = success ? 'success' : (isInfra ? 'infra' : 'fail');
-            const statusLabel = success ? 'PASS' : (isInfra ? 'INFRA' : 'FAIL');
+            const isUnscored = isInfra || errorType === 'evaluation';
+            const statusKey = success ? 'success' : (isInfra ? 'infra' : (isUnscored ? 'unscored' : 'fail'));
+            const statusLabel = success ? 'PASS' : (isInfra ? 'INFRA' : (isUnscored ? 'UNSCORED' : 'FAIL'));
             const domain = def.domain || 'unknown';
             const numSteps = exec.num_steps || 0;
 
@@ -1473,10 +1533,11 @@ def _generate_benchmark_viewer_html(
         const def = task.definition || {{}};
         const exec = task.execution || {{}};
         const steps = exec.steps || [];
-        const success = exec.success || false;
+        const success = exec.success === true;
         const isInfra = (exec.error_type || '') === 'infrastructure';
-        const statusColor = success ? 'var(--success)' : (isInfra ? '#f59e0b' : 'var(--error)');
-        const statusLabel = success ? 'PASSED' : (isInfra ? 'INFRA FAILURE' : 'FAILED');
+        const isUnscored = isInfra || (exec.error_type || '') === 'evaluation';
+        const statusColor = success ? 'var(--success)' : (isUnscored ? '#f59e0b' : 'var(--error)');
+        const statusLabel = success ? 'PASSED' : (isInfra ? 'INFRA ERROR' : (isUnscored ? 'UNSCORED' : 'FAILED'));
 
         const container = document.getElementById('task-detail-content');
         container.innerHTML = `
@@ -2191,11 +2252,6 @@ def _generate_benchmark_viewer_html(
             // Update summary stats
             if (liveData.total_tasks) {{
                 document.querySelector('.stat-card:nth-child(1) .stat-value').textContent = liveData.total_tasks;
-            }}
-            if (liveData.tasks_completed !== undefined) {{
-                document.querySelector('.stat-card:nth-child(2) .stat-value').textContent = liveData.tasks_completed;
-                const failed = liveData.total_tasks - liveData.tasks_completed;
-                document.querySelector('.stat-card:nth-child(3) .stat-value').textContent = failed;
             }}
 
             // Show live indicator

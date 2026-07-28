@@ -22,6 +22,7 @@ from openadapt_evals.adapters.base import (
     BenchmarkTask,
 )
 from openadapt_evals.adapters.rl_env import RLEnvironment
+from openadapt_evals.errors import ActionParseError
 from openadapt_evals.task_config import Milestone, TaskCheck, TaskConfig
 from openadapt_evals.training.areal_workflow import (
     SYSTEM_PROMPT,
@@ -59,14 +60,20 @@ def _make_mock_adapter(steps_to_done: int = 3) -> MagicMock:
         call_count["n"] += 1
         done = call_count["n"] >= steps_to_done
         return (
-            BenchmarkObservation(screenshot=fake_png, raw_observation={}),
+            BenchmarkObservation(
+                screenshot=fake_png,
+                viewport=(1920, 1200),
+                raw_observation={},
+            ),
             done,
             {"step": call_count["n"]},
         )
 
     adapter.step.side_effect = mock_step
     adapter.reset.return_value = BenchmarkObservation(
-        screenshot=fake_png, raw_observation={}
+        screenshot=fake_png,
+        viewport=(1920, 1200),
+        raw_observation={},
     )
     adapter.load_task.return_value = BenchmarkTask(
         task_id="test-task", instruction="Test instruction", domain="desktop"
@@ -301,8 +308,7 @@ class TestWAADesktopWorkflow:
         # 1/2 milestones = 0.5, binary = 0.0, max = 0.5
         assert reward == pytest.approx(0.5)
 
-    def test_unparseable_llm_output_treated_as_done(self):
-        """Garbage LLM output should parse as 'done' and end episode."""
+    def test_unparseable_llm_output_is_not_task_completion(self):
         adapter = _make_mock_adapter(steps_to_done=10)
         env = RLEnvironment(adapter, default_task_id="test-task")
 
@@ -313,20 +319,19 @@ class TestWAADesktopWorkflow:
 
         with patch.object(wf, "_create_env", return_value=env):
             with patch("openadapt_evals.training.areal_workflow.AsyncOpenAI", return_value=mock_client):
-                reward = asyncio.run(
-                    wf.run(
-                        data={
-                            "task_id": "test-task",
-                            "instruction": "Do something",
-                            "max_steps": 5,
-                        },
-                        base_url="http://fake:8000/v1",
-                        api_key="fake-key",
+                with pytest.raises(ActionParseError):
+                    asyncio.run(
+                        wf.run(
+                            data={
+                                "task_id": "test-task",
+                                "instruction": "Do something",
+                                "max_steps": 5,
+                            },
+                            base_url="http://fake:8000/v1",
+                            api_key="fake-key",
+                        )
                     )
-                )
 
-        assert isinstance(reward, float)
-        # Unparseable -> done -> no env steps
         assert adapter.step.call_count == 0
 
     def test_type_action_no_coordinates(self):

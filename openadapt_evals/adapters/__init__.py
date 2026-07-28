@@ -34,6 +34,7 @@ Example:
 """
 
 from openadapt_evals.adapters.base import (
+    BENCHMARK_ERROR_TYPES,
     BenchmarkAction,
     BenchmarkAdapter,
     BenchmarkObservation,
@@ -42,6 +43,7 @@ from openadapt_evals.adapters.base import (
     EvaluationUnavailableError,
     StaticDatasetAdapter,
     UIElement,
+    normalize_benchmark_result,
 )
 from openadapt_evals.adapters.local import LocalAdapter
 from openadapt_evals.adapters.rl_env import (
@@ -73,6 +75,8 @@ __all__ = [
     "BenchmarkObservation",
     "BenchmarkAction",
     "BenchmarkResult",
+    "BENCHMARK_ERROR_TYPES",
+    "normalize_benchmark_result",
     "EvaluationUnavailableError",
     "StaticDatasetAdapter",
     "UIElement",

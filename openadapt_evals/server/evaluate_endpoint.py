@@ -27,8 +27,16 @@ See also:
 from __future__ import annotations
 
 import logging
+import math
 from pathlib import Path
 from typing import Any, Callable
+
+import requests
+
+from openadapt_evals.evaluation.receipts import (
+    parse_strict_json_response,
+    require_successful_receipt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -151,8 +159,23 @@ def get_actual_value(
     if getters is None:
         getters, _ = _load_waa_evaluators()
 
-    result_spec = evaluator_config.get("result", {})
-    result_type = result_spec.get("type", "vm_command_line")
+    if "result" not in evaluator_config:
+        raise EvaluationNotRunError("evaluator has no result contract")
+    result_spec = evaluator_config["result"]
+    if not isinstance(result_spec, dict) or not result_spec:
+        raise EvaluationNotRunError("evaluator result contract must be a non-empty object")
+    result_type = result_spec.get("type")
+    if not isinstance(result_type, str) or not result_type:
+        raise EvaluationNotRunError("evaluator result contract requires an explicit type")
+    required_field = {"vm_command_line": "command", "vm_file": "path"}.get(
+        result_type
+    )
+    if required_field is not None:
+        required_value = result_spec.get(required_field)
+        if not isinstance(required_value, str) or not required_value.strip():
+            raise EvaluationNotRunError(
+                f"evaluator result type {result_type!r} requires {required_field}"
+            )
 
     # Get the getter function
     getter_name = f"get_{result_type}"
@@ -203,38 +226,57 @@ def get_expected_value(
     if getters is None:
         getters, _ = _load_waa_evaluators()
 
-    expected_spec = evaluator_config.get("expected", {})
+    if "expected" not in evaluator_config:
+        raise EvaluationNotRunError("evaluator has no expected-value contract")
+
+    expected_spec = evaluator_config["expected"]
+    if not isinstance(expected_spec, dict):
+        if expected_spec is None:
+            raise EvaluationNotRunError("expected-value contract cannot be null")
+        return expected_spec
+    if not expected_spec:
+        raise EvaluationNotRunError("expected-value contract is empty")
 
     # Handle different expected value formats
     expected_type = expected_spec.get("type")
 
     if expected_type == "rule":
         # Rule-based matching - return the rules dict
-        return expected_spec.get("rules", {})
+        rules = expected_spec.get("rules")
+        if not isinstance(rules, dict) or not rules:
+            raise EvaluationNotRunError("expected rule contract is missing its rules")
+        return rules
 
     if expected_type == "literal" or "value" in expected_spec:
         # Direct literal value
-        return expected_spec.get("value")
+        if "value" not in expected_spec or expected_spec["value"] is None:
+            raise EvaluationNotRunError("expected literal contract has no value")
+        return expected_spec["value"]
 
     if expected_type:
         # Get via getter function
         getter_name = f"get_{expected_type}"
         getter_func = getattr(getters, getter_name, None)
 
-        if getter_func:
-            try:
-                return getter_func(env, expected_spec)
-            except Exception as e:
-                logger.error(f"Expected getter {getter_name} failed: {e}")
-                return None
+        if getter_func is None:
+            raise EvaluationNotRunError(
+                f"expected getter '{getter_name}' is not implemented"
+            )
+        try:
+            value = getter_func(env, expected_spec)
+        except Exception as e:
+            logger.error(f"Expected getter {getter_name} failed: {e}")
+            raise EvaluationNotRunError(
+                f"expected getter '{getter_name}' raised: {e}",
+                error_type="infrastructure",
+            ) from e
+        if value is None:
+            raise EvaluationNotRunError(
+                f"expected getter '{getter_name}' returned no value"
+            )
+        return value
 
-    # Fallback: check for direct 'expected' value
-    if "expected" in evaluator_config and not isinstance(
-        evaluator_config["expected"], dict
-    ):
-        return evaluator_config["expected"]
-
-    return None
+    raise EvaluationNotRunError("expected-value contract is malformed")
 
 
 def run_metric(
@@ -256,6 +298,8 @@ def run_metric(
     Returns:
         Score from 0.0 to 1.0.
     """
+    if not isinstance(metric_name, str) or not metric_name:
+        raise EvaluationNotRunError("metric name must be a non-empty string")
     if metrics is None:
         _, metrics = _load_waa_evaluators()
 
@@ -276,12 +320,21 @@ def run_metric(
 
     try:
         score = metric_func(actual, expected, **options)
-        return float(score)
     except Exception as e:
         logger.error(f"Metric {metric_name} failed: {e}")
         raise EvaluationNotRunError(
             f"metric '{metric_name}' raised while scoring: {e}"
         ) from e
+    if (
+        isinstance(score, bool)
+        or not isinstance(score, (int, float))
+        or not math.isfinite(float(score))
+        or not 0.0 <= float(score) <= 1.0
+    ):
+        raise EvaluationNotRunError(
+            f"metric '{metric_name}' returned an invalid score: {score!r}"
+        )
+    return float(score)
 
 
 def evaluate_task_state(
@@ -314,6 +367,8 @@ def evaluate_task_state(
             "metrics": list, # Per-metric results if multiple
         }
     """
+    if not isinstance(task_config, dict):
+        return _not_scored("Task config must be an object", "evaluation")
     if env is None:
         env = MockEnv()
 
@@ -325,25 +380,37 @@ def evaluate_task_state(
 
     evaluator_config = task_config.get("evaluator", {})
 
-    if not evaluator_config:
+    if not isinstance(evaluator_config, dict) or not evaluator_config:
         return _not_scored("No evaluator configuration in task", "evaluation")
 
-    # Handle infeasible tasks
-    # If task is marked infeasible and agent reported FAIL, that's success
-    if evaluator_config.get("infeasible"):
+    # Handle infeasible tasks. The marker is part of the scoring contract, so
+    # truthy strings or numbers must not turn an agent refusal into success.
+    infeasible = evaluator_config.get("infeasible", False)
+    if not isinstance(infeasible, bool):
+        return _not_scored("Evaluator infeasible must be a boolean", "evaluation")
+    if infeasible:
         # Check if agent's last action was a FAIL/infeasible signal
         agent_last_action = task_config.get("agent_last_action", "")
+        if not isinstance(agent_last_action, str):
+            return _not_scored("Agent last action must be a string", "evaluation")
         if agent_last_action.upper() in ("FAIL", "INFEASIBLE", "IMPOSSIBLE"):
             return {
                 "success": True,
                 "score": 1.0,
                 "reason": "Correctly identified infeasible task",
+                "scored": True,
+                "error_type": None,
             }
 
     # Run postconfig if present (e.g., activate windows for inspection)
     postconfig = evaluator_config.get("postconfig", [])
+    if "postconfig" in evaluator_config and not isinstance(postconfig, list):
+        return _not_scored("Evaluator postconfig must be a list", "evaluation")
     if postconfig:
-        _run_postconfig(postconfig, env)
+        try:
+            _run_postconfig(postconfig, env)
+        except EvaluationNotRunError as e:
+            return _not_scored(str(e), e.error_type)
 
     # Get actual value from VM
     try:
@@ -358,12 +425,20 @@ def evaluate_task_state(
     func_spec = evaluator_config.get("func", "exact_match")
     options = evaluator_config.get("options", {})
     conjunction = evaluator_config.get("conj", "and")  # "and" or "or"
+    if not isinstance(options, dict):
+        return _not_scored("Metric options must be an object", "evaluation")
+    if conjunction not in ("and", "or"):
+        return _not_scored("Metric conjunction must be 'and' or 'or'", "evaluation")
 
     # Handle single or multiple metrics
     if isinstance(func_spec, str):
         func_names = [func_spec]
-    else:
+    elif isinstance(func_spec, list) and all(
+        isinstance(name, str) and name for name in func_spec
+    ):
         func_names = func_spec
+    else:
+        return _not_scored("Metric func must name one or more metrics", "evaluation")
 
     # Run each metric
     metric_results = []
@@ -448,40 +523,80 @@ def _run_postconfig(postconfig: list, env: MockEnv) -> None:
         postconfig: List of postconfig command specs.
         env: Environment object.
     """
-    import requests
 
-    for cmd in postconfig:
+    for index, cmd in enumerate(postconfig):
+        if not isinstance(cmd, dict):
+            raise EvaluationNotRunError(
+                f"postconfig item {index} must be an object"
+            )
+        cmd_type = cmd.get("type")
+        if cmd_type not in {"activate_window", "wait", "execute"}:
+            raise EvaluationNotRunError(
+                f"postconfig item {index} has unsupported type: {cmd_type!r}"
+            )
+
+        if cmd_type == "wait":
+            seconds = cmd.get("seconds", 1.0)
+            if (
+                isinstance(seconds, bool)
+                or not isinstance(seconds, (int, float))
+                or not math.isfinite(float(seconds))
+                or seconds < 0
+            ):
+                raise EvaluationNotRunError(
+                    f"postconfig wait item {index} has invalid seconds"
+                )
+            import time
+
+            time.sleep(float(seconds))
+            continue
+
+        if cmd_type == "activate_window":
+            field = "name"
+            endpoint = "setup/activate_window"
+            timeout = 10.0
+        else:
+            field = "command"
+            endpoint = "execute_windows"
+            timeout = 30.0
+        value = cmd.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise EvaluationNotRunError(
+                f"postconfig {cmd_type} item {index} requires {field}"
+            )
+
         try:
-            cmd_type = cmd.get("type", "")
-
-            if cmd_type == "activate_window":
-                # Send activate window command to VM
-                window_name = cmd.get("name", "")
-                requests.post(
-                    f"http://{env.vm_ip}:{env.port}/setup/activate_window",
-                    json={"name": window_name},
-                    timeout=10.0,
-                )
-
-            elif cmd_type == "wait":
-                import time
-
-                time.sleep(cmd.get("seconds", 1.0))
-
-            elif cmd_type == "execute":
-                # Run a command on the VM
-                command = cmd.get("command", "")
-                requests.post(
-                    f"http://{env.vm_ip}:{env.port}/execute_windows",
-                    json={"command": command},
-                    timeout=30.0,
-                )
-
-            else:
-                logger.debug(f"Unknown postconfig type: {cmd_type}")
-
+            response = requests.post(
+                f"http://{env.vm_ip}:{env.port}/{endpoint}",
+                json={field: value},
+                timeout=timeout,
+            )
         except Exception as e:
-            logger.warning(f"Postconfig command failed: {e}")
+            raise EvaluationNotRunError(
+                f"postconfig {cmd_type} item {index} request failed: {e}",
+                error_type="infrastructure",
+            ) from e
+        if not 200 <= response.status_code < 300:
+            raise EvaluationNotRunError(
+                f"postconfig {cmd_type} item {index} failed with "
+                f"HTTP {response.status_code}",
+                error_type="infrastructure",
+            )
+        try:
+            payload = parse_strict_json_response(
+                response,
+                context=f"postconfig {cmd_type} item {index}",
+            )
+            require_successful_receipt(
+                payload,
+                context=f"postconfig {cmd_type} item {index}",
+            )
+        except (TypeError, ValueError) as e:
+            raise EvaluationNotRunError(
+                f"postconfig {cmd_type} item {index} returned an invalid "
+                f"success receipt: {e}",
+                error_type="infrastructure",
+            ) from e
 
 
 def _truncate_value(value: Any, max_len: int = 500) -> str:
@@ -583,12 +698,12 @@ class StandaloneMetrics:
     continue to work.
     """
 
-    from openadapt_evals.evaluation.metrics import (
-        contains,
-        exact_match,
-        file_exists,
-        fuzzy_match,
-    )
+    from openadapt_evals.evaluation import metrics as _metrics
+
+    contains = staticmethod(_metrics.contains)
+    exact_match = staticmethod(_metrics.exact_match)
+    file_exists = staticmethod(_metrics.file_exists)
+    fuzzy_match = staticmethod(_metrics.fuzzy_match)
 
 
 class StandaloneGetters:
@@ -606,17 +721,21 @@ class StandaloneGetters:
         import requests
 
         path = config.get("path", "")
-        try:
-            resp = requests.post(
-                f"{self.server_url}/execute_windows",
-                json={"command": f"Get-Content -Path '{path}'", "shell": "powershell"},
-                timeout=30.0,
+        resp = requests.post(
+            f"{self.server_url}/execute_windows",
+            json={"command": f"Get-Content -Path '{path}'", "shell": "powershell"},
+            timeout=30.0,
+        )
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"file getter returned HTTP {resp.status_code} for {path!r}"
             )
-            if resp.status_code == 200:
-                return resp.json().get("output", "")
-        except Exception as e:
-            logger.error(f"Failed to get file {path}: {e}")
-        return None
+        payload = require_successful_receipt(
+            parse_strict_json_response(resp, context="standalone file getter"),
+            context="standalone file getter",
+            require_output=True,
+        )
+        return payload["output"]
 
     def get_vm_command_line(self, env: MockEnv, config: dict) -> str | None:
         """Execute command on VM and return output."""
@@ -625,17 +744,21 @@ class StandaloneGetters:
         command = config.get("command", "")
         shell = config.get("shell", "powershell")
 
-        try:
-            resp = requests.post(
-                f"{self.server_url}/execute_windows",
-                json={"command": command, "shell": shell},
-                timeout=60.0,
+        resp = requests.post(
+            f"{self.server_url}/execute_windows",
+            json={"command": command, "shell": shell},
+            timeout=60.0,
+        )
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"command getter returned HTTP {resp.status_code}"
             )
-            if resp.status_code == 200:
-                return resp.json().get("output", "")
-        except Exception as e:
-            logger.error(f"Failed to run command: {e}")
-        return None
+        payload = require_successful_receipt(
+            parse_strict_json_response(resp, context="standalone command getter"),
+            context="standalone command getter",
+            require_output=True,
+        )
+        return payload["output"]
 
 
 def create_standalone_evaluator(
@@ -664,46 +787,114 @@ def create_standalone_evaluator(
     metrics = StandaloneMetrics()
 
     def evaluate(task_config: dict) -> dict:
+        if not isinstance(task_config, dict):
+            return _not_scored("Standalone task config must be an object", "evaluation")
         evaluator_config = task_config.get("evaluator", {})
 
-        if not evaluator_config:
-            return {
-                "success": False,
-                "score": 0.0,
-                "reason": "No evaluator configuration",
-            }
+        if not isinstance(evaluator_config, dict) or not evaluator_config:
+            return _not_scored("No evaluator configuration", "evaluation")
 
         # Get result spec
-        result_spec = evaluator_config.get("result", {})
-        result_type = result_spec.get("type", "vm_command_line")
+        result_spec = evaluator_config.get("result")
+        if not isinstance(result_spec, dict) or not result_spec:
+            return _not_scored(
+                "standalone result contract must be a non-empty object",
+                "evaluation",
+            )
+        result_type = result_spec.get("type")
+        if not isinstance(result_type, str) or not result_type:
+            return _not_scored("standalone result type is invalid", "evaluation")
+        required_result_field = {
+            "vm_command_line": "command",
+            "vm_file": "path",
+        }.get(result_type)
+        if required_result_field is None:
+            return _not_scored(
+                f"standalone result type {result_type!r} is not supported",
+                "evaluation",
+            )
+        required_result_value = result_spec.get(required_result_field)
+        if (
+            not isinstance(required_result_value, str)
+            or not required_result_value.strip()
+        ):
+            return _not_scored(
+                f"standalone result type {result_type!r} requires "
+                f"{required_result_field}",
+                "evaluation",
+            )
+
+        postconfig = evaluator_config.get("postconfig", [])
+        if "postconfig" in evaluator_config and not isinstance(postconfig, list):
+            return _not_scored("standalone postconfig must be a list", "evaluation")
+        if postconfig:
+            return _not_scored(
+                "standalone evaluator does not implement postconfig",
+                "evaluation",
+            )
 
         # Get actual value
         getter_name = f"get_{result_type}"
         getter_func = getattr(getters, getter_name, None)
-
-        actual = None
-        if getter_func:
-            try:
-                actual = getter_func(MockEnv(), result_spec)
-            except Exception as e:
-                logger.error(f"Getter failed: {e}")
+        if getter_func is None:
+            return _not_scored(
+                f"standalone getter '{getter_name}' is not implemented",
+                "evaluation",
+            )
+        try:
+            actual = getter_func(MockEnv(), result_spec)
+        except Exception as e:
+            return _not_scored(
+                f"standalone getter '{getter_name}' raised: {e}",
+                "infrastructure",
+            )
+        if actual is None:
+            return _not_scored(
+                f"standalone getter '{getter_name}' returned no value",
+                "evaluation",
+            )
 
         # Get expected value
-        expected_spec = evaluator_config.get("expected", {})
+        expected_spec = evaluator_config.get("expected")
+        if not isinstance(expected_spec, dict):
+            return _not_scored("standalone expected contract is missing", "evaluation")
         if expected_spec.get("type") == "rule":
-            expected = expected_spec.get("rules", {}).get("match")
+            rules = expected_spec.get("rules")
+            if not isinstance(rules, dict) or "match" not in rules:
+                return _not_scored(
+                    "standalone expected rule requires rules.match", "evaluation"
+                )
+            expected = rules["match"]
+        elif "value" in expected_spec and expected_spec["value"] is not None:
+            expected = expected_spec["value"]
         else:
-            expected = expected_spec.get("value")
+            return _not_scored(
+                "standalone expected literal requires value", "evaluation"
+            )
 
         # Run metric
         func_name = evaluator_config.get("func", "exact_match")
-        metric_func = getattr(metrics, func_name, metrics.exact_match)
-
+        if not isinstance(func_name, str) or not func_name:
+            return _not_scored("standalone metric name is invalid", "evaluation")
+        options = evaluator_config.get("options", {})
+        if not isinstance(options, dict):
+            return _not_scored("standalone metric options must be an object", "evaluation")
+        conjunction = evaluator_config.get("conj", "and")
+        if conjunction != "and":
+            return _not_scored(
+                "standalone evaluator supports only one metric with conj='and'",
+                "evaluation",
+            )
         try:
-            score = metric_func(actual, expected)
-        except Exception as e:
-            logger.error(f"Metric failed: {e}")
-            score = 0.0
+            score = run_metric(
+                func_name,
+                actual,
+                expected,
+                options=options,
+                metrics=metrics,
+            )
+        except EvaluationNotRunError as e:
+            return _not_scored(str(e), e.error_type)
 
         success = score >= 1.0
 
@@ -713,6 +904,8 @@ def create_standalone_evaluator(
             "actual": _truncate_value(actual),
             "expected": _truncate_value(expected),
             "reason": "Standalone evaluation",
+            "scored": True,
+            "error_type": None,
         }
 
     return evaluate

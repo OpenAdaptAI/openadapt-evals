@@ -342,9 +342,11 @@ class TestSummary:
         analyzer = TraceAnalyzer(full_eval_jsonl)
         s = analyzer.summary()
         assert s["total_episodes"] == 5
-        assert s["success_rate"] == 0.4
+        assert s["outcome_episodes"] == 4
+        assert s["unscored_episodes"] == 1
+        assert s["success_rate"] == 0.5
         assert s["total_steps"] == 33
-        assert s["avg_score"] == 0.5
+        assert s["avg_score"] == 0.625
         assert s["model"] == "claude-sonnet-4-6"
         assert s["cost_estimate_usd"] > 0
 

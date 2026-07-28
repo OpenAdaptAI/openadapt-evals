@@ -23,6 +23,11 @@ def test_parse_failures_are_error_actions():
     assert parse_qwen_action("not an action").type == "error"
     assert parse_smol_action("not an action").type == "error"
 
+    agent = ApiAgent.__new__(ApiAgent)
+    action = agent._parse_computer_action("computer.unknown()", BenchmarkObservation())
+    assert action.type == "error"
+    assert action.raw_action["error_type"] == "agent"
+
 
 def test_api_agent_keeps_terminal_decisions_distinct():
     agent = ApiAgent.__new__(ApiAgent)

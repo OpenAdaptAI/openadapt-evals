@@ -13,8 +13,11 @@ Example:
 
 from __future__ import annotations
 
+import math
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
+from numbers import Real
 from typing import TYPE_CHECKING, Any, Iterator
 
 # Canonical Benchmark* task/observation/action types now live in the shared
@@ -78,6 +81,165 @@ class BenchmarkResult:
 
     # Timing
     total_time_seconds: float = 0.0
+
+
+BENCHMARK_ERROR_TYPES = frozenset({None, "agent", "infrastructure", "evaluation"})
+UNSCORED_BENCHMARK_ERROR_TYPES = frozenset({"infrastructure", "evaluation"})
+
+
+def normalize_benchmark_result(
+    result: object,
+    *,
+    expected_task_id: str | None = None,
+    context: str = "benchmark result",
+) -> BenchmarkResult:
+    """Return a valid result or an explicit unscored evaluation failure.
+
+    Adapters are plugin boundaries. A malformed adapter result must not reach a
+    done gate, a report, or aggregate metrics as a measured outcome. Partial
+    scores are valid, so coherence only fixes the unambiguous endpoint cases:
+    success cannot have a zero score and failure cannot have a full score.
+    """
+    issues: list[str] = []
+
+    if not isinstance(result, BenchmarkResult):
+        issues.append(f"expected BenchmarkResult, got {type(result).__name__}")
+        candidate: BenchmarkResult | None = None
+    else:
+        candidate = result
+
+    task_id = expected_task_id
+    if candidate is not None:
+        if not isinstance(candidate.task_id, str) or not candidate.task_id:
+            issues.append("task_id must be a non-empty string")
+        elif expected_task_id is not None and candidate.task_id != expected_task_id:
+            issues.append(
+                f"task_id {candidate.task_id!r} does not match {expected_task_id!r}"
+            )
+        elif task_id is None:
+            task_id = candidate.task_id
+
+        if type(candidate.success) is not bool:
+            issues.append("success must be a bool")
+
+        score_valid = (
+            not isinstance(candidate.score, bool)
+            and isinstance(candidate.score, Real)
+            and math.isfinite(float(candidate.score))
+            and 0.0 <= float(candidate.score) <= 1.0
+        )
+        if not score_valid:
+            issues.append("score must be a finite number in [0, 1]")
+
+        error_type_valid = (
+            candidate.error_type is None
+            or (
+                isinstance(candidate.error_type, str)
+                and candidate.error_type in BENCHMARK_ERROR_TYPES
+            )
+        )
+        if not error_type_valid:
+            issues.append(f"unknown error_type {candidate.error_type!r}")
+
+        if (
+            isinstance(candidate.num_steps, bool)
+            or not isinstance(candidate.num_steps, int)
+            or candidate.num_steps < 0
+        ):
+            issues.append("num_steps must be a non-negative integer")
+
+        if (
+            isinstance(candidate.total_time_seconds, bool)
+            or not isinstance(candidate.total_time_seconds, Real)
+            or not math.isfinite(float(candidate.total_time_seconds))
+            or float(candidate.total_time_seconds) < 0.0
+        ):
+            issues.append("total_time_seconds must be a finite non-negative number")
+
+        if candidate.error is not None and not isinstance(candidate.error, str):
+            issues.append("error must be a string or null")
+        if candidate.reason is not None and not isinstance(candidate.reason, str):
+            issues.append("reason must be a string or null")
+
+        if (
+            type(candidate.success) is bool
+            and score_valid
+            and error_type_valid
+        ):
+            score = float(candidate.score)
+            if candidate.error_type is None and candidate.success and score == 0.0:
+                issues.append("a successful result cannot have score=0.0")
+            elif (
+                candidate.error_type is None
+                and not candidate.success
+                and score == 1.0
+            ):
+                issues.append("a failed result cannot have score=1.0")
+
+    if not issues and candidate is not None:
+        if candidate.error_type is not None and (
+            candidate.success or float(candidate.score) != 0.0
+        ):
+            return replace(candidate, success=False, score=0.0)
+        return candidate
+
+    safe_task_id = task_id if isinstance(task_id, str) and task_id else "unknown"
+    message = f"Malformed {context}: {'; '.join(issues)}"
+    return BenchmarkResult(
+        task_id=safe_task_id,
+        success=False,
+        score=0.0,
+        error=message,
+        reason=message,
+        error_type="evaluation",
+    )
+
+
+def normalize_benchmark_result_artifact(
+    record: object,
+    *,
+    expected_task_id: str | None = None,
+    context: str = "benchmark result artifact",
+) -> BenchmarkResult:
+    """Parse one persisted result row through the runtime result contract.
+
+    JSON decoders preserve strings such as ``"false"``. Constructing reports
+    directly from their Python truthiness turns those strings into successful
+    outcomes. This parser keeps raw artifact types intact until
+    :func:`normalize_benchmark_result` validates them.
+    """
+    if not isinstance(record, Mapping):
+        return normalize_benchmark_result(
+            record,
+            expected_task_id=expected_task_id,
+            context=context,
+        )
+
+    raw_steps = record.get("num_steps", record.get("steps", 0))
+    num_steps = len(raw_steps) if isinstance(raw_steps, list) else raw_steps
+    candidate = BenchmarkResult(
+        task_id=record.get("task_id", expected_task_id),  # type: ignore[arg-type]
+        success=record.get("success"),  # type: ignore[arg-type]
+        score=record.get("score"),  # type: ignore[arg-type]
+        num_steps=num_steps,  # type: ignore[arg-type]
+        error=record.get("error"),  # type: ignore[arg-type]
+        reason=record.get("reason"),  # type: ignore[arg-type]
+        error_type=record.get("error_type"),  # type: ignore[arg-type]
+        total_time_seconds=record.get(
+            "total_time_seconds",
+            record.get("elapsed_seconds", 0.0),
+        ),  # type: ignore[arg-type]
+    )
+    return normalize_benchmark_result(
+        candidate,
+        expected_task_id=expected_task_id,
+        context=context,
+    )
+
+
+def benchmark_result_is_scored(result: BenchmarkResult) -> bool:
+    """Return whether a result belongs in measured-outcome denominators."""
+    return result.error_type not in UNSCORED_BENCHMARK_ERROR_TYPES
 
 
 @dataclass

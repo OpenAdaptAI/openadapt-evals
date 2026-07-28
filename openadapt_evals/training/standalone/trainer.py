@@ -14,13 +14,16 @@ from __future__ import annotations
 import argparse
 import io
 import logging
+import math
 import re
 import time
+from numbers import Real
 from pathlib import Path
 from typing import Any
 
 from PIL import Image
 
+from openadapt_evals.errors import RolloutInfrastructureError, RolloutLossError
 from openadapt_evals.telemetry import (
     track_checkpoint_saved,
     track_rollout_collected,
@@ -46,9 +49,31 @@ logger = logging.getLogger(__name__)
 def policy_gradient_loss(current_logps, old_logps, advantages, epsilon=0.2):
     """PPO-clipped policy gradient. Single-epoch: reduces to REINFORCE."""
     import torch
+
+    if not isinstance(epsilon, Real) or not math.isfinite(float(epsilon)):
+        raise RolloutLossError("Policy loss epsilon must be finite")
+    if not 0.0 <= float(epsilon) < 1.0:
+        raise RolloutLossError("Policy loss epsilon must be within [0, 1)")
+    for name, value in (
+        ("current log probabilities", current_logps),
+        ("old log probabilities", old_logps),
+        ("advantages", advantages),
+    ):
+        try:
+            finite = bool(torch.isfinite(value).all().item())
+        except Exception as exc:
+            raise RolloutLossError(f"Policy loss {name} are not numeric tensors") from exc
+        if not finite:
+            raise RolloutLossError(f"Policy loss {name} must be finite")
+
     ratio = torch.exp(current_logps - old_logps)
+    if not bool(torch.isfinite(ratio).all().item()):
+        raise RolloutLossError("Policy loss ratio must be finite")
     clipped = torch.clamp(ratio, 1 - epsilon, 1 + epsilon)
-    return -torch.min(ratio * advantages, clipped * advantages).mean()
+    loss = -torch.min(ratio * advantages, clipped * advantages).mean()
+    if not bool(torch.isfinite(loss).all().item()):
+        raise RolloutLossError("Policy loss must be finite")
+    return loss
 
 
 class GRPOTrainer:
@@ -200,10 +225,9 @@ class GRPOTrainer:
             try:
                 screenshot = self._env.screenshot()
             except Exception as e:
-                logger.warning(
-                    "Screenshot failed at step %d after retries: %s", step_idx, e,
-                )
-                break
+                raise RolloutInfrastructureError(
+                    f"Screenshot failed at step {step_idx} after retries"
+                ) from e
             recent.append(screenshot)
             if self._env.is_stuck(recent, window=self._config.stuck_window):
                 logger.info("Stuck at step %d", step_idx)
@@ -220,9 +244,10 @@ class GRPOTrainer:
                 try:
                     screenshot = self._env.screenshot()
                     image = Image.open(io.BytesIO(screenshot))
-                except Exception:
-                    logger.error("Screenshot retry also failed, skipping step")
-                    break
+                except Exception as exc:
+                    raise RolloutInfrastructureError(
+                        f"Screenshot remained unreadable at step {step_idx}"
+                    ) from exc
             if image.mode != "RGB":
                 image = image.convert("RGB")
                 # .convert() drops .format; restore it for outlines.Image
@@ -301,12 +326,11 @@ class GRPOTrainer:
 
         # Fresh screenshot for evaluation
         tc = self._task_configs.get(task_id)
-        if tc and getattr(tc, "milestones", None):
-            try:
-                rollout.reward = evaluate_milestones_screenshot(
-                    tc, self._env.screenshot(), model=self._config.eval_model)
-            except Exception as e:
-                logger.warning("Milestone eval failed: %s", e)
+        if not tc:
+            raise RolloutInfrastructureError(f"Task configuration {task_id!r} is missing")
+        rollout.reward = evaluate_milestones_screenshot(
+            tc, self._env.screenshot(), model=self._config.eval_model
+        )
         return rollout
 
     def _collect_group(self, task_id: str) -> list[Rollout]:
@@ -320,12 +344,9 @@ class GRPOTrainer:
         # to a full group of rollouts (avoids wasting time on a dead server).
         probe = self._env.probe()
         if not probe.get("screenshot_ok"):
-            logger.error(
-                "Pre-rollout health check FAILED for task %s: %s — "
-                "skipping group (returning empty rollouts)",
-                task_id, probe,
+            raise RolloutInfrastructureError(
+                f"Pre-rollout health check failed for task {task_id}: {probe}"
             )
-            return []
 
         tc = self._task_configs.get(task_id)
         instruction = getattr(tc, "name", "") or task_id if tc else task_id
@@ -350,18 +371,35 @@ class GRPOTrainer:
 
     def _compute_rollout_loss(self, rollout: Rollout, advantage: float, scale: float) -> float:
         """Compute GRPO loss for one rollout. Per-step backward to avoid OOM."""
-        import torch
-        device = next(self._model.parameters()).device
-        valid = [s for s in rollout.steps if s.screenshot]
-        if not valid:
-            return 0.0
-        total, n = 0.0, len(valid)
+        if isinstance(advantage, bool) or not isinstance(advantage, Real):
+            raise RolloutLossError("Rollout advantage must be numeric")
+        if not math.isfinite(float(advantage)):
+            raise RolloutLossError("Rollout advantage must be finite")
+        if isinstance(scale, bool) or not isinstance(scale, Real):
+            raise RolloutLossError("Rollout loss scale must be numeric")
+        if not math.isfinite(float(scale)) or float(scale) <= 0.0:
+            raise RolloutLossError("Rollout loss scale must be finite and positive")
+        if not rollout.steps:
+            raise RolloutLossError("Cannot compute loss for an empty rollout")
+        if any(not step.screenshot for step in rollout.steps):
+            raise RolloutLossError("Every rollout step requires screenshot evidence")
 
-        for step in valid:
+        images = []
+        for index, step in enumerate(rollout.steps):
             try:
                 image = Image.open(io.BytesIO(step.screenshot))
-            except Exception:
-                continue
+                image.load()
+            except Exception as exc:
+                raise RolloutLossError(
+                    f"Rollout step {index} has an unreadable screenshot"
+                ) from exc
+            images.append(image)
+
+        import torch
+        device = next(self._model.parameters()).device
+        total, n = 0.0, len(rollout.steps)
+
+        for index, (step, image) in enumerate(zip(rollout.steps, images)):
             if image.mode != "RGB":
                 image = image.convert("RGB")
                 image.format = "PNG"
@@ -399,7 +437,7 @@ class GRPOTrainer:
             action_ids = inner_tok(action_text, add_special_tokens=False, return_tensors="pt")["input_ids"]
             n_action = action_ids.shape[1]
             if n_action <= 0:
-                continue
+                raise RolloutLossError(f"Rollout step {index} has no action tokens")
 
             full_text = prompt_text + action_text
             full_inputs = self._processor(
@@ -428,6 +466,10 @@ class GRPOTrainer:
 
             full_inputs = {k: v.to(device) for k, v in full_inputs.items()}
             outputs = self._model(**full_inputs)
+            if not bool(torch.isfinite(outputs.logits).all().item()):
+                raise RolloutLossError(
+                    f"Rollout step {index} produced non-finite model logits"
+                )
 
             # Action logits are the last n_action positions in the output
             seq_len = outputs.logits.shape[1]
@@ -439,16 +481,33 @@ class GRPOTrainer:
             slp = tlp.sum()
             adv = torch.tensor(advantage, device=device, dtype=slp.dtype)
             loss = policy_gradient_loss(slp.unsqueeze(0), slp.detach().unsqueeze(0), adv.unsqueeze(0))
-            (loss * scale / n).backward()
-            total += loss.detach().item()
-        return total / max(n, 1)
+            scaled_loss = loss * scale / n
+            if not bool(torch.isfinite(scaled_loss).all().item()):
+                raise RolloutLossError(
+                    f"Rollout step {index} produced a non-finite scaled loss"
+                )
+            scaled_loss.backward()
+            loss_value = float(loss.detach().item())
+            if not math.isfinite(loss_value):
+                raise RolloutLossError(
+                    f"Rollout step {index} produced a non-finite loss"
+                )
+            total += loss_value
+        average_loss = total / n
+        if not math.isfinite(average_loss):
+            raise RolloutLossError("Rollout average loss must be finite")
+        return average_loss
 
     def _training_step(self, rollouts: list[Rollout]) -> dict[str, float]:
         """Single GRPO gradient step."""
-        import torch
+        if not rollouts:
+            raise RolloutLossError("Cannot train from an empty rollout group")
+
         rewards = [r.reward for r in rollouts]
         advantages = compute_group_advantages(rewards)
-        reward_mean = sum(rewards) / len(rewards) if rewards else 0.0
+        reward_mean = sum(float(reward) for reward in rewards) / len(rewards)
+        if not math.isfinite(reward_mean):
+            raise RolloutLossError("Mean reward must be finite")
         valid = [(r, a) for r, a in zip(rollouts, advantages) if abs(a) >= 1e-8]
         if not valid:
             return {"reward_mean": reward_mean, "loss": 0.0, "skipped": True}
@@ -458,24 +517,64 @@ class GRPOTrainer:
         losses = []
         for r, a in valid:
             loss = self._compute_rollout_loss(r, a, 1.0 / n)
+            if isinstance(loss, bool) or not isinstance(loss, Real):
+                raise RolloutLossError("Rollout loss must be numeric")
+            if not math.isfinite(float(loss)):
+                raise RolloutLossError("Rollout loss must be finite")
             losses.append(loss)
-        grad_norm = torch.nn.utils.clip_grad_norm_(
-            [p for p in self._model.parameters() if p.requires_grad],
-            max_norm=self._config.max_grad_norm,
-        )
+
+        avg_loss = sum(losses) / n
+        abs_loss = sum(abs(loss) for loss in losses) / n
+        if not math.isfinite(avg_loss) or not math.isfinite(abs_loss):
+            raise RolloutLossError("Training loss metrics must be finite")
+
+        import torch
+
+        trainable_parameters = [
+            parameter
+            for parameter in self._model.parameters()
+            if parameter.requires_grad
+        ]
+        if not trainable_parameters:
+            raise RolloutLossError("The model has no trainable parameters")
+        gradient_parameters = [
+            parameter for parameter in trainable_parameters if parameter.grad is not None
+        ]
+        if not gradient_parameters:
+            raise RolloutLossError("Training produced no gradients")
+        for parameter in gradient_parameters:
+            if not bool(torch.isfinite(parameter.grad).all().item()):
+                raise RolloutLossError("Training produced a non-finite gradient")
+        max_grad_norm = self._config.max_grad_norm
+        if (
+            isinstance(max_grad_norm, bool)
+            or not isinstance(max_grad_norm, Real)
+            or not math.isfinite(float(max_grad_norm))
+            or float(max_grad_norm) <= 0.0
+        ):
+            raise RolloutLossError("Maximum gradient norm must be finite and positive")
+        try:
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                trainable_parameters,
+                max_norm=max_grad_norm,
+                error_if_nonfinite=True,
+            )
+        except Exception as exc:
+            raise RolloutLossError(
+                "Gradient norm could not be measured as finite"
+            ) from exc
         gn = grad_norm.item() if hasattr(grad_norm, "item") else float(grad_norm)
+        if not math.isfinite(gn):
+            raise RolloutLossError("Gradient norm must be finite")
         if gn > 10 * self._config.max_grad_norm:
             logger.warning(
                 "grad_norm=%.1f is %.0fx the clip threshold (%.1f). "
                 "Gradients are dominated by clipping, not learning signal. "
                 "Consider lowering learning_rate (current: %.1e).",
-                gn, gn / self._config.max_grad_norm,
-                self._config.max_grad_norm, self._config.learning_rate,
+                gn, gn / max_grad_norm,
+                max_grad_norm, self._config.learning_rate,
             )
         self._optimizer.step()
-
-        avg_loss = sum(losses) / max(n, 1)
-        abs_loss = sum(abs(loss) for loss in losses) / max(n, 1)
 
         return {
             "reward_mean": reward_mean,
@@ -497,6 +596,8 @@ class GRPOTrainer:
 
     def train(self) -> str:
         """Run GRPO training loop. Returns path to final checkpoint."""
+        self._config.validate_for_training()
+
         import torch
 
         logger.info(
@@ -544,19 +645,16 @@ class GRPOTrainer:
         Path(self._config.output_dir).mkdir(parents=True, exist_ok=True)
         t0 = time.time()
         last_reward_mean: float | None = None
+        optimizer_updates = 0
         for step in range(self._config.num_training_steps):
             ts = time.time()
             task_id = self._config.task_ids[step % len(self._config.task_ids)]
             self._model.eval()
             rollouts = self._collect_group(task_id)
             self._model.train()
-            if not rollouts:
-                logger.warning(
-                    "Step %d/%d: no rollouts collected (server may be down), skipping.",
-                    step + 1, self._config.num_training_steps,
-                )
-                continue
             m = self._training_step(rollouts)
+            if not m.get("skipped", False):
+                optimizer_updates += 1
             m.update({"step": step, "task_id": task_id, "elapsed": time.time() - t0, "step_time": time.time() - ts})
             last_reward_mean = m.get("reward_mean")
             logger.info(
@@ -584,12 +682,20 @@ class GRPOTrainer:
             if self._on_step_complete is not None:
                 self._on_step_complete(step, rollouts, m)
 
-            if (step + 1) % self._config.save_every_steps == 0:
+            if (
+                optimizer_updates > 0
+                and (step + 1) % self._config.save_every_steps == 0
+            ):
                 self._save_checkpoint(step + 1)
                 try:
                     track_checkpoint_saved(step=step + 1)
                 except Exception:
                     pass
+
+        if optimizer_updates == 0:
+            raise RolloutLossError(
+                "Training completed no optimizer updates; refusing a trained checkpoint"
+            )
 
         self._save_checkpoint(self._config.num_training_steps)
         try:

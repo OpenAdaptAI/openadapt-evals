@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -20,6 +22,13 @@ from openadapt_evals.adapters.base import (
     BenchmarkTask,
 )
 from openadapt_evals.adapters.local import LocalAdapter
+from openadapt_evals.adapters.local.adapter import _get_input_monitor_geometry
+from openadapt_evals.errors import (
+    ActionDeliveredObservationError,
+    ActionDeliveryState,
+    ActionDeliveryUncertainError,
+    ActionExecutionError,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -62,6 +71,11 @@ def _make_mock_observe(adapter):
     """Patch adapter.observe to return a fake observation without screen capture."""
 
     def _fake_observe():
+        adapter._record_capture_geometry(
+            {"left": 0, "top": 0, "width": 1920, "height": 1080},
+            (1920, 1080),
+            {"left": 0.0, "top": 0.0, "width": 1920.0, "height": 1080.0},
+        )
         return BenchmarkObservation(
             screenshot=MINIMAL_PNG,
             viewport=(1920, 1080),
@@ -129,6 +143,42 @@ class TestLocalAdapterReset:
         adapter._step_count = 5
         adapter.reset(sample_task)
         assert adapter._step_count == 0
+
+    @pytest.mark.parametrize(
+        "action",
+        [
+            BenchmarkAction(type="click", x=1, y=1),
+            BenchmarkAction(type="type", text="sensitive"),
+            BenchmarkAction(type="key", key="enter"),
+        ],
+    )
+    def test_failed_reset_invalidates_task_and_geometry(
+        self,
+        adapter,
+        sample_task,
+        action,
+    ):
+        _make_mock_observe(adapter)
+        adapter.reset(sample_task)
+
+        with (
+            patch.object(adapter, "observe", side_effect=RuntimeError("capture failed")),
+            pytest.raises(RuntimeError, match="capture failed"),
+        ):
+            adapter.reset(sample_task)
+
+        with (
+            patch.object(adapter, "_execute_action") as execute,
+            pytest.raises(ActionExecutionError, match=r"reset\(\)"),
+        ):
+            adapter.step(action)
+
+        execute.assert_not_called()
+        assert adapter._current_task is None
+        assert adapter._last_viewport is None
+        assert adapter._capture_origin is None
+        assert adapter._capture_scale is None
+        assert adapter._capture_pixel_size is None
 
 
 # ---------------------------------------------------------------------------
@@ -198,15 +248,103 @@ class TestLocalAdapterStep:
             _, done, _ = adapter.step(BenchmarkAction(type="error"))
         assert done is True
 
-    def test_step_handles_execution_error(self, adapter, sample_task):
+    def test_step_does_not_report_execution_error_as_completion(self, adapter, sample_task):
         _make_mock_observe(adapter)
         adapter.reset(sample_task)
 
         with patch.object(adapter, "_execute_action", side_effect=RuntimeError("perm")):
-            obs, done, info = adapter.step(BenchmarkAction(type="click", x=1, y=1))
+            with pytest.raises(ActionDeliveryUncertainError, match="perm") as raised:
+                adapter.step(BenchmarkAction(type="click", x=1, y=1))
 
-        assert done is True
-        assert "error" in info
+        assert adapter._step_count == 0
+        assert raised.value.delivery_state is ActionDeliveryState.UNCERTAIN
+        assert raised.value.retry_safe is False
+
+    @pytest.mark.parametrize(
+        ("action", "message"),
+        [
+            (BenchmarkAction(type="unknown"), "Unsupported local action"),
+            (BenchmarkAction(type="click", x=None, y=2), "requires x"),
+            (BenchmarkAction(type="click", x=1, y=None), "requires y"),
+            (BenchmarkAction(type="type", text=None), "requires text"),
+            (BenchmarkAction(type="key", key=None), "requires key"),
+            (
+                BenchmarkAction(type="scroll", scroll_direction=None),
+                "requires direction",
+            ),
+            (
+                BenchmarkAction(type="scroll", scroll_direction="diagonal"),
+                "requires direction",
+            ),
+            (
+                BenchmarkAction(type="drag", x=1, y=2, end_x=3, end_y=None),
+                "requires end_y",
+            ),
+        ],
+    )
+    def test_invalid_action_is_rejected_before_dispatch(
+        self, adapter, sample_task, action, message
+    ):
+        _make_mock_observe(adapter)
+        adapter.reset(sample_task)
+
+        with (
+            patch.object(adapter, "_execute_action") as execute,
+            pytest.raises(ActionExecutionError, match=message),
+        ):
+            adapter.step(action)
+
+        execute.assert_not_called()
+        assert adapter._step_count == 0
+
+    def test_explicit_empty_text_remains_valid(self, adapter, sample_task):
+        _make_mock_observe(adapter)
+        adapter.reset(sample_task)
+
+        with patch.object(adapter, "_execute_action") as execute:
+            adapter.step(BenchmarkAction(type="type", text=""))
+
+        execute.assert_called_once()
+        assert adapter._step_count == 1
+
+    @pytest.mark.parametrize(
+        "action",
+        [
+            BenchmarkAction(type="click", x=-1, y=20),
+            BenchmarkAction(type="click", x=1920, y=20),
+            BenchmarkAction(type="drag", x=1, y=2, end_x=30, end_y=1080),
+        ],
+    )
+    def test_out_of_viewport_pointer_action_is_rejected(
+        self, adapter, sample_task, action
+    ):
+        _make_mock_observe(adapter)
+        adapter._last_viewport = (1920, 1080)
+        adapter.reset(sample_task)
+
+        with pytest.raises(ActionExecutionError, match="viewport|non-negative") as raised:
+            adapter.step(action)
+
+        assert raised.value.delivery_state is ActionDeliveryState.NOT_DELIVERED
+        assert raised.value.retry_safe is True
+        assert adapter._step_count == 0
+
+    def test_observation_failure_preserves_confirmed_delivery(
+        self, adapter, sample_task
+    ):
+        _make_mock_observe(adapter)
+        adapter.reset(sample_task)
+
+        with (
+            patch.object(adapter, "_execute_action"),
+            patch.object(adapter, "observe", side_effect=RuntimeError("capture failed")),
+            pytest.raises(ActionDeliveredObservationError) as raised,
+        ):
+            adapter.step(BenchmarkAction(type="click", x=1, y=1))
+
+        assert raised.value.delivery_state is ActionDeliveryState.DELIVERED
+        assert raised.value.retry_safe is False
+        assert adapter._step_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +362,7 @@ class TestLocalAdapterEvaluate:
         result = adapter.evaluate(sample_task)
         assert result.score == 0.0
         assert result.success is False
+        assert result.error_type == "evaluation"
 
 
 # ---------------------------------------------------------------------------
@@ -258,14 +397,53 @@ class TestLocalAdapterContextManager:
 
 class TestLocalAdapterScaling:
     def test_to_logical_scale_1(self, adapter):
-        adapter._scale = 1.0
+        adapter._record_capture_geometry(
+            {"left": 0, "top": 0, "width": 1920, "height": 1080},
+            (1920, 1080),
+            {"left": 0.0, "top": 0.0, "width": 1920.0, "height": 1080.0},
+        )
         assert adapter._to_logical(100, 200) == (100.0, 200.0)
 
-    def test_to_logical_scale_2(self, adapter):
-        adapter._scale = 2.0
+    def test_to_logical_uses_retina_secondary_monitor_input_geometry(self, adapter):
+        adapter._record_capture_geometry(
+            {"left": -2560, "top": 240, "width": 2560, "height": 1440},
+            (2560, 1440),
+            {"left": -1280.0, "top": 120.0, "width": 1280.0, "height": 720.0},
+        )
         lx, ly = adapter._to_logical(200, 400)
-        assert lx == pytest.approx(100.0)
-        assert ly == pytest.approx(200.0)
+        assert lx == pytest.approx(-1180.0)
+        assert ly == pytest.approx(320.0)
+
+    def test_to_logical_rejects_missing_geometry(self, adapter):
+        with pytest.raises(ActionExecutionError, match="capture geometry"):
+            adapter._to_logical(100, 200)
+
+    def test_to_logical_rejects_viewport_geometry_mismatch(self, adapter):
+        adapter._record_capture_geometry(
+            {"left": 0, "top": 0, "width": 1280, "height": 720},
+            (2560, 1440),
+            {"left": 0.0, "top": 0.0, "width": 1280.0, "height": 720.0},
+        )
+        adapter._last_viewport = (1280, 720)
+
+        with pytest.raises(ActionExecutionError, match="matching capture geometry"):
+            adapter._to_logical(100, 200)
+
+    def test_rotated_macos_display_refuses_unmodeled_transform(self):
+        quartz = SimpleNamespace(
+            kCGErrorSuccess=0,
+            CGGetActiveDisplayList=lambda *_args: (0, [42], 1),
+            CGDisplayRotation=lambda _display_id: 90.0,
+        )
+        with (
+            patch("platform.system", return_value="Darwin"),
+            patch.dict(sys.modules, {"Quartz": quartz}),
+            pytest.raises(ActionExecutionError, match="bind the selected macOS display"),
+        ):
+            _get_input_monitor_geometry(
+                1,
+                {"left": 0, "top": 0, "width": 1440, "height": 2560},
+            )
 
 
 # ---------------------------------------------------------------------------

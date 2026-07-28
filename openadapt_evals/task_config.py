@@ -35,7 +35,11 @@ from typing import Any
 
 import yaml
 
-from openadapt_evals.adapters.base import BenchmarkTask
+from openadapt_evals.adapters.base import BenchmarkTask, EvaluationUnavailableError
+from openadapt_evals.evaluation.receipts import (
+    ReceiptValidationError,
+    parse_strict_json_response,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -391,53 +395,193 @@ class TaskConfig:
         passed = 0
         total = len(self.milestones)
         if total == 0:
-            return 0, 0
+            raise EvaluationUnavailableError(
+                "No milestone evaluation contract is configured",
+                error_type="evaluation",
+            )
 
         for ms in self.milestones:
             try:
                 if ms.check.check == "screenshot":
+                    if not ms.check.description:
+                        raise ValueError("Screenshot milestone has no description")
                     from openadapt_evals.vlm_evaluator import vlm_judge
 
-                    success, _ = vlm_judge(screenshot, ms.check.description or "")
+                    success, _ = vlm_judge(screenshot, ms.check.description)
                     if success:
                         passed += 1
                 elif ms.check.check == "command":
-                    result = self._run_vm_command(ms.check.run or "", server_url)
-                    if self._check_match(result, ms.check.expect or "", ms.check.match):
+                    if not isinstance(ms.check.run, str) or not ms.check.run.strip():
+                        raise ValueError("Command milestone has no command")
+                    if ms.check.expect is None:
+                        raise ValueError("Command milestone has no expected result")
+                    result = self._run_vm_command(ms.check.run, server_url)
+                    if self._check_match(result, ms.check.expect, ms.check.match):
                         passed += 1
                 else:
-                    logger.warning("Milestone check type '%s' not yet supported", ms.check.check)
+                    raise ValueError(
+                        f"Unsupported milestone check type: {ms.check.check!r}"
+                    )
             except Exception as exc:
-                logger.warning("Milestone '%s' evaluation failed: %s", ms.name, exc)
+                if isinstance(exc, EvaluationUnavailableError):
+                    raise
+                raise EvaluationUnavailableError(
+                    f"Milestone {ms.name!r} could not be evaluated: {exc}",
+                    error_type="evaluation",
+                ) from exc
 
         logger.info("Milestones: %d/%d passed", passed, total)
         return passed, total
 
     @staticmethod
     def _run_vm_command(command: str, server_url: str) -> str:
-        """Execute a shell command on the VM and return stdout.
+        """Execute a shell command and return stdout from a proved receipt.
 
         WAA's /execute_windows endpoint runs Python code via exec().
         Shell commands (PowerShell, cmd) must be wrapped in subprocess.
         """
+        import json
+
         import requests
 
-        # Wrap shell command in Python subprocess so /execute_windows can exec() it
-        escaped = command.replace("\\", "\\\\").replace("'", "\\'")
+        if not isinstance(command, str) or not command.strip():
+            raise EvaluationUnavailableError(
+                "VM command must be a non-empty string",
+                error_type="evaluation",
+            )
+
+        # Print one structured receipt. Plain stdout cannot distinguish an
+        # empty successful command from a failed command that produced no text.
         python_code = (
-            "import subprocess; "
-            f"r = subprocess.run('{escaped}', shell=True, capture_output=True, text=True); "
-            "print(r.stdout.strip())"
+            "import json, subprocess; "
+            f"r = subprocess.run({json.dumps(command)}, shell=True, "
+            "capture_output=True, text=True); "
+            "print(json.dumps({'returncode': r.returncode, "
+            "'stdout': r.stdout, 'stderr': r.stderr}))"
         )
 
-        resp = requests.post(
-            f"{server_url}/execute_windows",
-            json={"command": python_code},
-            timeout=30,
-        )
-        if resp.status_code == 200:
-            return resp.json().get("output", "").strip()
-        return ""
+        try:
+            resp = requests.post(
+                f"{server_url}/execute_windows",
+                json={"command": python_code},
+                timeout=30,
+            )
+        except requests.RequestException as exc:
+            raise EvaluationUnavailableError(
+                f"VM command request failed: {exc}",
+                error_type="infrastructure",
+            ) from exc
+        if resp.status_code != 200:
+            raise EvaluationUnavailableError(
+                f"VM command returned HTTP {resp.status_code}",
+                error_type="infrastructure",
+            )
+        try:
+            payload = parse_strict_json_response(resp, context="VM command")
+        except ReceiptValidationError as exc:
+            raise EvaluationUnavailableError(
+                "VM command response was not valid JSON",
+                error_type="infrastructure",
+            ) from exc
+        if not isinstance(payload, dict):
+            raise EvaluationUnavailableError(
+                "VM command response was not an object",
+                error_type="infrastructure",
+            )
+        for success_field in ("success", "ok"):
+            if success_field in payload and payload[success_field] is not True:
+                raise EvaluationUnavailableError(
+                    f"VM command endpoint returned {success_field}="
+                    f"{payload[success_field]!r}",
+                    error_type="infrastructure",
+                )
+        if "failed" in payload and payload["failed"] is not False:
+            raise EvaluationUnavailableError(
+                f"VM command endpoint returned failed={payload['failed']!r}",
+                error_type="infrastructure",
+            )
+        if (
+            "delivery_state" in payload
+            and payload["delivery_state"] != "delivered"
+        ):
+            raise EvaluationUnavailableError(
+                "VM command endpoint did not confirm delivery: "
+                f"{payload['delivery_state']!r}",
+                error_type="infrastructure",
+            )
+        for response_field in ("error", "stderr"):
+            value = payload.get(response_field)
+            if value not in (None, ""):
+                raise EvaluationUnavailableError(
+                    f"VM command endpoint returned {response_field}: {value}",
+                    error_type="infrastructure",
+                )
+        outer_returncode = payload.get("returncode")
+        if outer_returncode is not None and (
+            isinstance(outer_returncode, bool)
+            or not isinstance(outer_returncode, int)
+            or outer_returncode != 0
+        ):
+            raise EvaluationUnavailableError(
+                f"VM command endpoint returned status {outer_returncode!r}",
+                error_type="infrastructure",
+            )
+
+        output = payload.get("output")
+        if not isinstance(output, str):
+            raise EvaluationUnavailableError(
+                "VM command response did not contain a string receipt",
+                error_type="infrastructure",
+            )
+        def reject_duplicate_fields(
+            pairs: list[tuple[str, Any]],
+        ) -> dict[str, Any]:
+            parsed: dict[str, Any] = {}
+            for key, value in pairs:
+                if key in parsed:
+                    raise ValueError(f"duplicate field {key!r}")
+                parsed[key] = value
+            return parsed
+
+        try:
+            receipt = json.loads(output, object_pairs_hook=reject_duplicate_fields)
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise EvaluationUnavailableError(
+                "VM command response did not contain a command receipt",
+                error_type="evaluation",
+            ) from exc
+        if not isinstance(receipt, dict) or set(receipt) != {
+            "returncode",
+            "stdout",
+            "stderr",
+        }:
+            raise EvaluationUnavailableError(
+                "VM command receipt was malformed",
+                error_type="evaluation",
+            )
+        returncode = receipt["returncode"]
+        stdout = receipt["stdout"]
+        stderr = receipt["stderr"]
+        if (
+            isinstance(returncode, bool)
+            or not isinstance(returncode, int)
+            or returncode != 0
+        ):
+            raise EvaluationUnavailableError(
+                f"VM command failed with return code {returncode!r}",
+                error_type="evaluation",
+            )
+        if not isinstance(stdout, str) or not isinstance(stderr, str):
+            raise EvaluationUnavailableError(
+                "VM command receipt output fields were malformed",
+                error_type="evaluation",
+            )
+        if stderr.strip():
+            raise EvaluationUnavailableError(
+                f"VM command wrote to stderr: {stderr.strip()}",
+                error_type="evaluation",
+            )
+        return stdout.strip()
 
     def evaluate_checks_local(
         self, screenshot: bytes, server_url: str,
@@ -452,47 +596,78 @@ class TaskConfig:
             1.0 if checks pass (respecting ``combine`` mode), else 0.0.
         """
         if not self.checks:
-            return 0.0
+            raise EvaluationUnavailableError(
+                "No local evaluation checks are configured",
+                error_type="evaluation",
+            )
 
         results: list[bool] = []
         for check in self.checks:
             try:
                 if check.check == "screenshot":
+                    if not check.description:
+                        raise ValueError("Screenshot check has no description")
                     from openadapt_evals.vlm_evaluator import vlm_judge
-                    success, _ = vlm_judge(screenshot, check.description or "")
+                    success, _ = vlm_judge(screenshot, check.description)
                     results.append(success)
                 elif check.check == "command":
-                    result = self._run_vm_command(check.run or "", server_url)
+                    if not isinstance(check.run, str) or not check.run.strip():
+                        raise ValueError("Command check has no command")
+                    if check.expect is None:
+                        raise ValueError("Command check has no expected result")
+                    result = self._run_vm_command(check.run, server_url)
                     results.append(
-                        self._check_match(result, check.expect or "", check.match)
+                        self._check_match(result, check.expect, check.match)
                     )
                 else:
-                    results.append(False)
+                    raise ValueError(
+                        f"Unsupported local check type: {check.check!r}"
+                    )
             except Exception as exc:
-                logger.warning("evaluate_checks_local: %s", exc)
-                results.append(False)
+                if isinstance(exc, EvaluationUnavailableError):
+                    raise
+                raise EvaluationUnavailableError(
+                    f"Local {check.check!r} check could not be evaluated: {exc}",
+                    error_type="evaluation",
+                ) from exc
 
         if not results:
-            return 0.0
+            raise EvaluationUnavailableError(
+                "Local evaluation produced no check results",
+                error_type="evaluation",
+            )
 
         if self.combine == "or":
             return 1.0 if any(results) else 0.0
-        return 1.0 if all(results) else 0.0
+        if self.combine == "and":
+            return 1.0 if all(results) else 0.0
+        raise EvaluationUnavailableError(
+            f"Unsupported local check combination: {self.combine!r}",
+            error_type="evaluation",
+        )
 
     @staticmethod
     def _check_match(actual: str, expected: str, match_type: str) -> bool:
         """Check if actual matches expected using the specified method."""
+        if not isinstance(actual, str) or not isinstance(expected, str):
+            raise ValueError("Check values must be strings")
         if match_type == "exact":
             return actual.strip() == expected.strip()
         elif match_type == "contains":
+            if not expected.strip():
+                raise ValueError("Contains checks require a non-empty expected value")
             return expected.strip() in actual
         elif match_type == "regex":
             import re
+            if not expected.strip():
+                raise ValueError("Regex checks require a non-empty expected pattern")
             return bool(re.search(expected, actual))
         elif match_type == "fuzzy":
             import difflib
+            if not expected.strip():
+                raise ValueError("Fuzzy checks require a non-empty expected value")
             return difflib.SequenceMatcher(None, actual, expected).ratio() >= 0.8
-        return False
+        raise ValueError(f"Unsupported match type: {match_type!r}")
 
 
 def evaluate_milestones_screenshot(
@@ -501,11 +676,11 @@ def evaluate_milestones_screenshot(
     *,
     model: str = "gpt-4.1-mini",
 ) -> float:
-    """Evaluate milestones using VLM screenshot checks only.
+    """Evaluate a screenshot-only milestone contract using a VLM.
 
-    Returns milestones_passed / total as a float [0, 1].
-    Skips non-screenshot milestones (command, file checks).
-    No WAA server needed -- runs entirely client-side.
+    Every required milestone must be measurable from the screenshot. A caller
+    must use :meth:`TaskConfig.evaluate_milestones` for mixed screenshot and
+    command contracts.
 
     Args:
         task_config: A TaskConfig with milestones defined.
@@ -513,26 +688,53 @@ def evaluate_milestones_screenshot(
         model: VLM model name for screenshot evaluation.
 
     Returns:
-        Fraction of screenshot milestones passed (0.0 to 1.0).
-        Returns 0.0 if there are no screenshot milestones.
+        Fraction of milestones passed (0.0 to 1.0).
+
+    Raises:
+        EvaluationUnavailableError: If the contract is empty or any required
+            milestone cannot be measured from the screenshot.
     """
-    screenshot_milestones = [
-        m for m in task_config.milestones if m.check.check == "screenshot"
+    if not task_config.milestones:
+        raise EvaluationUnavailableError(
+            "No milestone evaluation contract is configured",
+            error_type="evaluation",
+        )
+    unsupported = [
+        milestone.name
+        for milestone in task_config.milestones
+        if milestone.check.check != "screenshot"
     ]
-    if not screenshot_milestones:
-        return 0.0
+    if unsupported:
+        raise EvaluationUnavailableError(
+            "Screenshot-only evaluation cannot measure required milestones: "
+            + ", ".join(repr(name) for name in unsupported),
+            error_type="evaluation",
+        )
 
     from openadapt_evals.vlm_evaluator import vlm_judge
 
     passed = 0
-    for milestone in screenshot_milestones:
-        success, _confidence = vlm_judge(
-            screenshot, milestone.check.description or "", model=model
-        )
+    for milestone in task_config.milestones:
+        if not milestone.check.description:
+            raise EvaluationUnavailableError(
+                f"Screenshot milestone {milestone.name!r} has no description",
+                error_type="evaluation",
+            )
+        try:
+            success, _confidence = vlm_judge(
+                screenshot, milestone.check.description, model=model
+            )
+        except Exception as exc:
+            if isinstance(exc, EvaluationUnavailableError):
+                raise
+            raise EvaluationUnavailableError(
+                f"Milestone {milestone.name!r} could not be evaluated: {exc}",
+                error_type="evaluation",
+            ) from exc
         if success:
             passed += 1
 
-    return passed / len(screenshot_milestones)
+    return passed / len(task_config.milestones)
 
 
 # ---------------------------------------------------------------------------

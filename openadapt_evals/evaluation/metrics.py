@@ -7,12 +7,13 @@ evaluator (evaluation/client.py) and the server-side evaluate endpoint
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 
 def exact_match(result: Any, expected: Any, **options) -> float:
     """Exact string/value match."""
+    if result is None or expected is None:
+        raise ValueError("exact_match requires observed and expected values")
     if result == expected:
         return 1.0
     if str(result).strip() == str(expected).strip():
@@ -27,6 +28,8 @@ def fuzzy_match(
 
     Falls back to substring containment when rapidfuzz is not installed.
     """
+    if result is None or expected is None or str(expected).strip() == "":
+        raise ValueError("fuzzy_match requires a non-empty expected value")
     try:
         from rapidfuzz import fuzz
 
@@ -42,6 +45,8 @@ def fuzzy_match(
 
 def contains(result: Any, expected: Any, **options) -> float:
     """Check if result contains expected (case-insensitive)."""
+    if result is None or expected is None or str(expected).strip() == "":
+        raise ValueError("contains requires a non-empty expected value")
     result_str = str(result).lower()
     expected_str = str(expected).lower()
     return 1.0 if expected_str in result_str else 0.0
@@ -49,15 +54,28 @@ def contains(result: Any, expected: Any, **options) -> float:
 
 def boolean(result: Any, expected: Any, **options) -> float:
     """Boolean equality check."""
-    return 1.0 if bool(result) == bool(expected) else 0.0
+    return 1.0 if _parse_boolean(result) == _parse_boolean(expected) else 0.0
 
 
 def file_exists(result: Any, expected: Any, **options) -> float:
-    """Check if file exists."""
-    path = result if result else expected
-    if path and Path(path).exists():
-        return 1.0
-    return 0.0
+    """Compare explicit remote file-existence evidence."""
+    del options
+    return 1.0 if _parse_boolean(result) == _parse_boolean(expected) else 0.0
+
+
+def _parse_boolean(value: Any) -> bool:
+    """Parse an explicit Boolean value without Python truthiness."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in {0, 1}:
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1"}:
+            return True
+        if normalized in {"false", "0"}:
+            return False
+    raise ValueError(f"expected an explicit boolean value, got {value!r}")
 
 
 def get_metric(name: str):

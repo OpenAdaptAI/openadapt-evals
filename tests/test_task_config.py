@@ -2,14 +2,24 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import textwrap
 from unittest.mock import patch
 
 import pytest
+from PIL import Image
 
+from openadapt_evals.adapters.base import EvaluationUnavailableError
+from openadapt_evals.errors import RolloutEvaluationError
 from openadapt_evals.task_config import Milestone, TaskCheck, TaskConfig
+
+
+def _tiny_png() -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", (2, 2)).save(buffer, format="PNG")
+    return buffer.getvalue()
 
 # ---------------------------------------------------------------------------
 # YAML loading tests
@@ -316,9 +326,25 @@ class TestMilestones:
             max_steps=15,
             milestones=[],
         )
-        passed, total = task.evaluate_milestones(b"fake", "http://localhost:5001")
-        assert passed == 0
-        assert total == 0
+        with pytest.raises(EvaluationUnavailableError, match="No milestone"):
+            task.evaluate_milestones(_tiny_png(), "http://localhost:5001")
+
+    def test_unmeasured_milestone_is_not_counted_as_failed(self):
+        task = TaskConfig(
+            name="Test",
+            id="test-001",
+            domain="desktop",
+            setup=[],
+            checks=[],
+            combine="and",
+            max_steps=15,
+            milestones=[
+                Milestone(name="Unknown", check=TaskCheck(check="file")),
+            ],
+        )
+
+        with pytest.raises(EvaluationUnavailableError, match="could not be evaluated"):
+            task.evaluate_milestones(_tiny_png(), "http://localhost:5001")
 
 
 # ---------------------------------------------------------------------------
@@ -332,7 +358,7 @@ class TestVlmEvaluator:
         mock_vlm.return_value = '{"verdict": "YES", "confidence": 0.95, "explanation": "Font is Arial"}'
         from openadapt_evals.vlm_evaluator import vlm_judge
 
-        success, confidence = vlm_judge(b"fake-png", "Font is Arial")
+        success, confidence = vlm_judge(_tiny_png(), "Font is Arial")
         assert success is True
         assert confidence == 0.95
 
@@ -341,26 +367,44 @@ class TestVlmEvaluator:
         mock_vlm.return_value = '{"verdict": "NO", "confidence": 0.8, "explanation": "Font is Times"}'
         from openadapt_evals.vlm_evaluator import vlm_judge
 
-        success, confidence = vlm_judge(b"fake-png", "Font is Arial")
+        success, confidence = vlm_judge(_tiny_png(), "Font is Arial")
         assert success is False
         assert confidence == 0.8
 
     @patch("openadapt_evals.vlm.vlm_call")
-    def test_vlm_judge_bad_json_fallback(self, mock_vlm):
+    def test_vlm_judge_bad_json_is_unmeasured(self, mock_vlm):
         mock_vlm.return_value = "YES, the font looks like Arial to me."
         from openadapt_evals.vlm_evaluator import vlm_judge
 
-        success, confidence = vlm_judge(b"fake-png", "Font is Arial")
-        assert success is True
-        assert confidence == 0.5  # fallback confidence
+        with pytest.raises(RolloutEvaluationError, match="required JSON"):
+            vlm_judge(_tiny_png(), "Font is Arial")
 
     @patch("openadapt_evals.vlm.vlm_call")
-    def test_vlm_judge_no_fallback(self, mock_vlm):
-        mock_vlm.return_value = "NO, I don't see that."
+    def test_vlm_judge_rejects_non_exact_verdict(self, mock_vlm):
+        mock_vlm.return_value = '{"verdict":"YES, probably","confidence":0.8}'
         from openadapt_evals.vlm_evaluator import vlm_judge
 
-        success, confidence = vlm_judge(b"fake-png", "Font is Arial")
-        assert success is False
+        with pytest.raises(RolloutEvaluationError, match="exactly"):
+            vlm_judge(_tiny_png(), "Font is Arial")
+
+    @pytest.mark.parametrize("confidence", [-0.1, 1.1, float("nan"), "0.9", True])
+    @patch("openadapt_evals.vlm.vlm_call")
+    def test_vlm_judge_rejects_invalid_confidence(self, mock_vlm, confidence):
+        mock_vlm.return_value = json.dumps(
+            {"verdict": "YES", "confidence": confidence}
+        )
+        from openadapt_evals.vlm_evaluator import vlm_judge
+
+        with pytest.raises(RolloutEvaluationError, match="confidence"):
+            vlm_judge(_tiny_png(), "Font is Arial")
+
+    @patch("openadapt_evals.vlm.vlm_call")
+    def test_vlm_judge_rejects_unreadable_screenshot_before_model_call(self, mock_vlm):
+        from openadapt_evals.vlm_evaluator import vlm_judge
+
+        with pytest.raises(RolloutEvaluationError, match="decodable"):
+            vlm_judge(b"not an image", "Font is Arial")
+        mock_vlm.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

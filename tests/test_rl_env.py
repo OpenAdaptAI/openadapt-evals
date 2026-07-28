@@ -5,13 +5,17 @@ Uses WAAMockAdapter so no VM or network connection is required.
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from openadapt_evals.adapters import (
     BenchmarkAction,
     BenchmarkObservation,
+    BenchmarkTask,
     WAAMockAdapter,
 )
+from openadapt_evals.adapters.base import BenchmarkResult, EvaluationUnavailableError
 from openadapt_evals.adapters.rl_env import (
     ResetConfig,
     RLEnvironment,
@@ -47,6 +51,33 @@ class TestReset:
         other_id = tasks[-1].task_id
         obs = mock_env.reset(ResetConfig(task_id=other_id))
         assert isinstance(obs, BenchmarkObservation)
+
+    def test_failed_reset_invalidates_prior_episode_state(self) -> None:
+        adapter = MagicMock()
+        first_task = BenchmarkTask(
+            task_id="first", instruction="First", domain="desktop"
+        )
+        second_task = BenchmarkTask(
+            task_id="second", instruction="Second", domain="desktop"
+        )
+        observation = BenchmarkObservation(viewport=(640, 480))
+        adapter.load_task.side_effect = [first_task, second_task]
+        adapter.reset.side_effect = [observation, RuntimeError("reset failed")]
+        adapter.step.return_value = (observation, False, {})
+        env = RLEnvironment(adapter=adapter, default_task_id="first")
+        env.reset()
+        env.step(BenchmarkAction(type="wait"))
+
+        with pytest.raises(RuntimeError, match="reset failed"):
+            env.reset(ResetConfig(task_id="second"))
+
+        with pytest.raises(RuntimeError, match=r"reset\(\) before step"):
+            env.step(BenchmarkAction(type="wait"))
+        with pytest.raises(RuntimeError, match=r"reset\(\) before evaluate"):
+            env.evaluate_result()
+        with pytest.raises(RuntimeError, match="No measured viewport"):
+            _ = env.screen_size
+        assert env.trajectory == []
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +120,104 @@ class TestEvaluate:
         assert isinstance(score, float)
         assert 0.0 <= score <= 1.0
 
+    def test_terminal_error_cannot_be_reclassified_as_success(self) -> None:
+        adapter = WAAMockAdapter(num_tasks=1, domains=["notepad"])
+        task_id = adapter.list_tasks()[0].task_id
+        env = RLEnvironment(adapter=adapter, default_task_id=task_id)
+        env.reset()
+        env.step(BenchmarkAction(type="error"))
+
+        with (
+            patch.object(
+                adapter,
+                "evaluate",
+                return_value=BenchmarkResult(task_id=task_id, success=True, score=1.0),
+            ) as evaluate,
+            pytest.raises(EvaluationUnavailableError, match="terminal error"),
+        ):
+            env.evaluate()
+
+        evaluate.assert_not_called()
+        assert env.trajectory[-1].reward == 0.0
+
+    def test_dense_evaluation_rejects_terminal_error_without_evaluator(self) -> None:
+        adapter = WAAMockAdapter(num_tasks=1, domains=["notepad"])
+        task_id = adapter.list_tasks()[0].task_id
+        env = RLEnvironment(adapter=adapter, default_task_id=task_id)
+        env.reset()
+        env.step(BenchmarkAction(type="error"))
+
+        with (
+            patch.object(
+                adapter,
+                "evaluate",
+                return_value=BenchmarkResult(task_id=task_id, success=True, score=1.0),
+            ) as evaluate,
+            pytest.raises(EvaluationUnavailableError, match="terminal error"),
+        ):
+            env.evaluate_dense()
+
+        evaluate.assert_not_called()
+        assert env.trajectory[-1].reward == 0.0
+
+    @pytest.mark.parametrize(
+        "result",
+        [
+            BenchmarkResult(task_id="other", success=True, score=1.0),
+            BenchmarkResult(task_id="expected", success="false", score=1.0),
+            BenchmarkResult(task_id="expected", success=False, score=1.0),
+        ],
+    )
+    def test_malformed_adapter_result_is_unscored(self, result) -> None:
+        adapter = MagicMock()
+        task = BenchmarkTask(
+            task_id="expected", instruction="Expected", domain="desktop"
+        )
+        observation = BenchmarkObservation(viewport=(640, 480))
+        adapter.load_task.return_value = task
+        adapter.reset.return_value = observation
+        adapter.step.return_value = (observation, True, {})
+        adapter.evaluate.return_value = result
+        env = RLEnvironment(adapter=adapter, default_task_id=task.task_id)
+        env.reset()
+        env.step(BenchmarkAction(type="done"))
+
+        normalized = env.evaluate_result()
+
+        assert normalized.success is False
+        assert normalized.score == 0.0
+        assert normalized.error_type == "evaluation"
+        assert env.trajectory[-1].reward == 0.0
+        with pytest.raises(EvaluationUnavailableError, match="was not scored"):
+            env.evaluate()
+
+    def test_per_step_malformed_result_is_unscored(self) -> None:
+        adapter = MagicMock()
+        task = BenchmarkTask(
+            task_id="expected", instruction="Expected", domain="desktop"
+        )
+        observation = BenchmarkObservation(viewport=(640, 480))
+        adapter.load_task.return_value = task
+        adapter.reset.return_value = observation
+        adapter.step.return_value = (observation, False, {})
+        adapter.evaluate.return_value = BenchmarkResult(
+            task_id="other",
+            success=True,
+            score=1.0,
+        )
+        env = RLEnvironment(
+            adapter=adapter,
+            default_task_id=task.task_id,
+            evaluate_every_step=True,
+        )
+        env.reset()
+
+        step = env.step(BenchmarkAction(type="wait"))
+
+        assert "evaluation_score" not in step.info
+        assert step.info["evaluation_error_type"] == "evaluation"
+        assert step.reward == 0.0
+
 
 # ---------------------------------------------------------------------------
 # pixel_action
@@ -116,6 +245,56 @@ class TestPixelAction:
         # WAAMockAdapter viewport is (1920, 1200)
         assert result.action.x == int(0.5 * 1920)
         assert result.action.y == int(0.25 * 1200)
+
+    def test_delegated_fraction_uses_observed_viewport_before_dispatch(self) -> None:
+        adapter = MagicMock()
+        task = adapter.load_task.return_value
+        task.task_id = "measured-viewport"
+        task.instruction = "Click the measured target"
+        initial = BenchmarkObservation(viewport=(640, 480))
+        adapter.reset.return_value = initial
+        adapter.pixel_action.return_value = (initial, False, {})
+        env = RLEnvironment(adapter=adapter, default_task_id="measured-viewport")
+        env.reset()
+
+        result = env.pixel_action(x_frac=0.5, y_frac=0.25)
+
+        assert (result.action.x, result.action.y) == (320, 120)
+        assert adapter.pixel_action.call_args.kwargs["x"] == 320
+        assert adapter.pixel_action.call_args.kwargs["y"] == 120
+        assert adapter.pixel_action.call_args.kwargs["x_frac"] is None
+        assert adapter.pixel_action.call_args.kwargs["y_frac"] is None
+
+    def test_delegated_error_action_is_terminal_and_unscored(self) -> None:
+        adapter = MagicMock()
+        task = adapter.load_task.return_value
+        task.task_id = "terminal-error"
+        task.instruction = "Return a parser error"
+        observation = BenchmarkObservation(viewport=(640, 480))
+        adapter.reset.return_value = observation
+        adapter.pixel_action.return_value = (observation, False, {})
+        env = RLEnvironment(adapter=adapter, default_task_id="terminal-error")
+        env.reset()
+
+        result = env.pixel_action(action_type="error")
+
+        assert result.done is True
+        assert env.done is True
+        assert result.reward == 0.0
+        assert result.info["evaluation_error_type"] == "agent"
+
+    def test_pixel_action_normalized_edge_stays_inside_viewport(
+        self, mock_env: RLEnvironment
+    ) -> None:
+        mock_env.reset()
+        result = mock_env.pixel_action(x_frac=1.0, y_frac=1.0)
+
+        assert (result.action.x, result.action.y) == (1919, 1199)
+
+    def test_pixel_action_rejects_invalid_fraction(self, mock_env: RLEnvironment) -> None:
+        mock_env.reset()
+        with pytest.raises(ValueError, match="between 0 and 1"):
+            mock_env.pixel_action(x_frac=1.1, y_frac=0.5)
 
     def test_pixel_action_type_text(self, mock_env: RLEnvironment) -> None:
         """pixel_action with action_type='type' and text sends a type action."""
@@ -157,6 +336,23 @@ class TestObserve:
 
 
 class TestCollectRollout:
+    @pytest.mark.parametrize("max_steps", [0, -1, True, 1.5])
+    def test_collect_rollout_requires_positive_integer_steps(
+        self,
+        mock_env: RLEnvironment,
+        max_steps,
+    ) -> None:
+        with (
+            patch.object(mock_env, "reset") as reset,
+            pytest.raises(ValueError, match="positive integer"),
+        ):
+            mock_env.collect_rollout(
+                agent_fn=lambda _obs: BenchmarkAction(type="done"),
+                max_steps=max_steps,
+            )
+
+        reset.assert_not_called()
+
     def test_collect_rollout(self, mock_env: RLEnvironment) -> None:
         """collect_rollout with a mock agent_fn produces the expected number of steps."""
         mock_env.reset()
@@ -224,6 +420,27 @@ class TestCollectRollout:
         # Should terminate early because screenshots are identical
         assert len(rollout) < 15
 
+    def test_terminal_error_rollout_stays_failed_without_evaluator(self) -> None:
+        adapter = WAAMockAdapter(num_tasks=1, domains=["notepad"])
+        task_id = adapter.list_tasks()[0].task_id
+        env = RLEnvironment(adapter=adapter, default_task_id=task_id)
+
+        with patch.object(
+            adapter,
+            "evaluate",
+            return_value=BenchmarkResult(task_id=task_id, success=True, score=1.0),
+        ) as evaluate:
+            rollout = env.collect_rollout(
+                agent_fn=lambda _obs: BenchmarkAction(type="error"),
+                max_steps=3,
+            )
+
+        evaluate.assert_not_called()
+        assert len(rollout) == 1
+        assert rollout[-1].action.type == "error"
+        assert rollout[-1].reward == 0.0
+        assert rollout[-1].info["evaluation_error_type"] == "agent"
+
 
 # ---------------------------------------------------------------------------
 # screen_size
@@ -242,3 +459,19 @@ class TestScreenSize:
         width, height = env.screen_size
         assert width == 1920
         assert height == 1200
+
+    def test_screen_size_refuses_without_measured_viewport(self) -> None:
+        adapter = WAAMockAdapter(num_tasks=1, domains=["notepad"])
+        env = RLEnvironment(adapter=adapter)
+
+        with pytest.raises(RuntimeError, match="No measured viewport"):
+            _ = env.screen_size
+
+    @pytest.mark.parametrize("viewport", [None, (0, 720), (1920, -1)])
+    def test_screen_size_refuses_invalid_measured_viewport(self, viewport) -> None:
+        adapter = WAAMockAdapter(num_tasks=1, domains=["notepad"])
+        env = RLEnvironment(adapter=adapter)
+        env._last_obs = BenchmarkObservation(viewport=viewport)
+
+        with pytest.raises((RuntimeError, ValueError), match="viewport"):
+            _ = env.screen_size

@@ -48,6 +48,7 @@ from openadapt_evals.adapters.base import (
     BenchmarkObservation,
     BenchmarkResult,
     BenchmarkTask,
+    normalize_benchmark_result,
 )
 from openadapt_evals.agents.base import BenchmarkAgent
 from openadapt_evals.agents.claude_computer_use_agent import _parse_multilevel_demo
@@ -245,8 +246,30 @@ class DemoController:
 
         # Reset agent and environment
         logger.info("Resetting agent and environment for task %s", task.task_id)
-        self.agent.reset()
-        obs = self.adapter.reset(task)
+        try:
+            self.agent.reset()
+        except Exception as e:
+            logger.error("Agent reset failed: %s", e)
+            return self._failure_result(
+                task,
+                start_time,
+                history,
+                0,
+                f"Agent reset error: {e}",
+                "agent",
+            )
+        try:
+            obs = self.adapter.reset(task)
+        except Exception as e:
+            logger.error("Environment reset failed: %s", e)
+            return self._failure_result(
+                task,
+                start_time,
+                history,
+                0,
+                f"Environment reset error: {e}",
+                "infrastructure",
+            )
 
         for step_idx in range(max_steps):
             self.plan_state.total_attempts += 1
@@ -257,13 +280,23 @@ class DemoController:
                     "All %d plan steps completed, verifying goal",
                     len(self.plan_state.steps),
                 )
-                if self._verify_goal(obs):
+                try:
+                    goal_verified = self._verify_goal(obs)
+                except Exception as e:
+                    logger.error("Goal verification failed: %s", e)
+                    return self._failure_result(
+                        task,
+                        start_time,
+                        history,
+                        step_idx,
+                        f"Goal verification error: {e}",
+                        self._evaluator_error_type(e),
+                    )
+                if goal_verified:
                     logger.info("[SUCCESS] Goal verified after %d agent steps", step_idx)
-                    result = self.adapter.evaluate(task)
-                    result.steps = history
-                    result.num_steps = step_idx
-                    result.total_time_seconds = time.perf_counter() - start_time
-                    return result
+                    return self._evaluate_task(
+                        task, start_time, history, step_idx
+                    )
                 else:
                     logger.warning(
                         "All steps done but goal not verified; "
@@ -317,6 +350,8 @@ class DemoController:
                     steps=history,
                     num_steps=step_idx,
                     error=f"Agent error: {e}",
+                    reason=f"Agent error: {e}",
+                    error_type="agent",
                     total_time_seconds=time.perf_counter() - start_time,
                 )
 
@@ -341,18 +376,33 @@ class DemoController:
             # Handle error actions
             if action.type == "error":
                 logger.error("Agent returned error: %s", action.raw_action)
+                raw_action = (
+                    action.raw_action if isinstance(action.raw_action, dict) else {}
+                )
+                claimed_error_type = raw_action.get("error_type")
+                if claimed_error_type not in (None, "agent"):
+                    logger.warning(
+                        "Agent terminal error claimed error_type=%r; classifying the "
+                        "attempt as an agent outcome",
+                        claimed_error_type,
+                    )
+                error_reason = (
+                    raw_action.get("reason")
+                    or raw_action.get("error")
+                    or raw_action.get("parse_error")
+                    or raw_action.get("fail_reason")
+                    or action.raw_action
+                    or "agent reported a terminal error"
+                )
                 return BenchmarkResult(
                     task_id=task.task_id,
                     success=False,
                     score=0.0,
                     steps=history,
                     num_steps=step_idx,
-                    error=str(action.raw_action),
-                    error_type=(
-                        action.raw_action.get("error_type", "agent")
-                        if isinstance(action.raw_action, dict)
-                        else "agent"
-                    ),
+                    error=str(error_reason),
+                    reason=str(error_reason),
+                    error_type="agent",
                     total_time_seconds=time.perf_counter() - start_time,
                 )
 
@@ -368,6 +418,8 @@ class DemoController:
                     steps=history,
                     num_steps=step_idx,
                     error=f"Environment error: {e}",
+                    reason=f"Environment error: {e}",
+                    error_type="infrastructure",
                     total_time_seconds=time.perf_counter() - start_time,
                 )
 
@@ -376,7 +428,18 @@ class DemoController:
             # Verify step completion
             screenshot_bytes = self._get_screenshot_bytes(obs)
             if screenshot_bytes is not None:
-                vr = self._verify_step(screenshot_bytes, current.expect)
+                try:
+                    vr = self._verify_step(screenshot_bytes, current.expect)
+                except Exception as e:
+                    logger.error("Step verification failed: %s", e)
+                    return self._failure_result(
+                        task,
+                        start_time,
+                        history,
+                        step_idx + 1,
+                        f"Step verification error: {e}",
+                        self._evaluator_error_type(e),
+                    )
                 current.verification_result = vr
 
                 if vr.effectively_verified:
@@ -437,11 +500,71 @@ class DemoController:
         if step_idx >= max_steps - 1:
             logger.warning("Reached maximum steps (%d)", max_steps)
 
-        result = self.adapter.evaluate(task)
+        return self._evaluate_task(task, start_time, history, len(history))
+
+    @staticmethod
+    def _evaluator_error_type(error: Exception) -> str:
+        """Preserve only typed evaluator availability classifications."""
+        error_type = getattr(error, "error_type", "evaluation")
+        if error_type not in ("infrastructure", "evaluation"):
+            return "evaluation"
+        return error_type
+
+    @staticmethod
+    def _failure_result(
+        task: BenchmarkTask,
+        start_time: float,
+        history: list[tuple[BenchmarkObservation, BenchmarkAction]],
+        num_steps: int,
+        message: str,
+        error_type: str,
+    ) -> BenchmarkResult:
+        """Return one explicit failed result for an execution boundary error."""
+        return BenchmarkResult(
+            task_id=task.task_id,
+            success=False,
+            score=0.0,
+            steps=history,
+            num_steps=num_steps,
+            error=message,
+            reason=message,
+            error_type=error_type,
+            total_time_seconds=time.perf_counter() - start_time,
+        )
+
+    def _evaluate_task(
+        self,
+        task: BenchmarkTask,
+        start_time: float,
+        history: list[tuple[BenchmarkObservation, BenchmarkAction]],
+        num_steps: int,
+    ) -> BenchmarkResult:
+        """Evaluate the task and keep evaluator failures unscored."""
+        try:
+            result = self.adapter.evaluate(task)
+        except Exception as e:
+            logger.error("Task evaluation failed: %s", e)
+            return self._failure_result(
+                task,
+                start_time,
+                history,
+                num_steps,
+                f"Evaluation error: {e}",
+                self._evaluator_error_type(e),
+            )
+        result = normalize_benchmark_result(
+            result,
+            expected_task_id=task.task_id,
+            context="demo controller adapter result",
+        )
         result.steps = history
-        result.num_steps = len(history)
+        result.num_steps = num_steps
         result.total_time_seconds = time.perf_counter() - start_time
-        return result
+        return normalize_benchmark_result(
+            result,
+            expected_task_id=task.task_id,
+            context="demo controller final result",
+        )
 
     # ------------------------------------------------------------------
     # State machine operations

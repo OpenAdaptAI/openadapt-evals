@@ -182,6 +182,44 @@ WAIT
         assert result["status"] == "terminal"
         assert result["action"] == "WAIT"
 
+    @pytest.mark.parametrize(
+        "decision", ["NOT DONE", "DONE AND FAIL", "FAIL: NOT DONE", "MAYBE"]
+    )
+    def test_ambiguous_terminal_decision_is_rejected(self, mock_agent, decision):
+        result = mock_agent._parse_api_response(
+            f"```decision\n{decision}\n```", 1920, 1200, {}
+        )
+
+        assert result["status"] == "failed"
+
+    def test_terminal_decision_cannot_compete_with_action(self, mock_agent):
+        result = mock_agent._parse_api_response(
+            "```decision\nDONE\n```\n```python\ncomputer.click(1, 2)\n```",
+            1920,
+            1200,
+            {},
+        )
+
+        assert result["status"] == "failed"
+
+    @pytest.mark.parametrize(
+        "response",
+        [
+            "computer.click(1, 2) computer.press('enter')",
+            'computer.click(1, 2) {"type":"press","key":"enter"}',
+            "```python\ncomputer.click(1, 2)\n```\n"
+            '{"type":"press","key":"enter"}',
+            "```decision\nCONTINUE\n```\n```python\ncomputer.click(1, 2)\n```\n"
+            "```json\n{\"type\":\"press\",\"key\":\"enter\"}\n```",
+            "```\ncomputer.click(1, 2)\n"
+            '{"type":"press","key":"enter"}\n```',
+        ],
+    )
+    def test_competing_action_envelopes_are_rejected(self, mock_agent, response):
+        result = mock_agent._parse_api_response(response, 1920, 1200, {})
+
+        assert result["status"] == "failed"
+
     def test_parse_failure(self, mock_agent):
         """Test handling of unparseable response."""
         response = """I'm not sure what to do here. Let me think about it."""

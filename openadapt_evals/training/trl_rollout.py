@@ -67,16 +67,21 @@ from __future__ import annotations
 
 import hashlib
 import io
-import json
 import logging
-import re
+import math
 import time
 from typing import Any, Callable, Optional
 
 from pydantic import BaseModel
 
+from openadapt_evals.action_envelope import (
+    parse_single_dsl_action,
+    parse_single_json_object,
+    require_exact_fields,
+)
 from openadapt_evals.adapters.base import BenchmarkAction
 from openadapt_evals.adapters.rl_env import ResetConfig, RLEnvironment
+from openadapt_evals.errors import ActionParseError, RolloutInfrastructureError
 
 # Re-exported on purpose, not merely imported: this module must use the SAME
 # system prompt object as the standalone trainer, and
@@ -87,6 +92,73 @@ from openadapt_evals.adapters.rl_env import ResetConfig, RLEnvironment
 from openadapt_evals.training.standalone.prompt import SYSTEM_PROMPT  # noqa: F401
 
 logger = logging.getLogger(__name__)
+
+
+def _required_fraction(data: dict, key: str, action_type: str) -> float:
+    """Return one required finite normalized coordinate."""
+    if key not in data:
+        raise ActionParseError(f"{action_type} requires {key}")
+    try:
+        value = float(data[key])
+    except (TypeError, ValueError) as exc:
+        raise ActionParseError(
+            f"{action_type} has invalid {key}: {data[key]!r}"
+        ) from exc
+    if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+        raise ActionParseError(f"{action_type} {key} must be between 0 and 1")
+    return value
+
+
+def _parse_json_action(data: dict) -> BenchmarkAction:
+    """Validate one JSON action without inventing missing arguments."""
+    action_type = data.get("type")
+    if action_type == "click":
+        _require_json_fields(data, {"type", "x", "y"})
+        return BenchmarkAction(
+            type=action_type,
+            x=_required_fraction(data, "x", action_type),
+            y=_required_fraction(data, "y", action_type),
+        )
+    if action_type == "scroll":
+        _require_json_fields(data, {"type", "x", "y", "direction"})
+        direction = data.get("direction")
+        if direction not in ("up", "down"):
+            raise ActionParseError("scroll requires direction='up' or direction='down'")
+        return BenchmarkAction(
+            type="scroll",
+            x=_required_fraction(data, "x", action_type),
+            y=_required_fraction(data, "y", action_type),
+            scroll_direction=direction,
+        )
+    if action_type == "type":
+        _require_json_fields(data, {"type", "text"})
+        if "text" not in data or not isinstance(data["text"], str):
+            raise ActionParseError("type requires string text")
+        return BenchmarkAction(type="type", text=data["text"])
+    if action_type == "key":
+        _require_json_fields(data, {"type", "key"})
+        if not isinstance(data.get("key"), str) or not data["key"]:
+            raise ActionParseError("key requires non-empty string key")
+        return BenchmarkAction(type="key", key=data["key"])
+    if action_type in ("done", "noop"):
+        _require_json_fields(data, {"type"})
+        return BenchmarkAction(type=action_type)
+    raise ActionParseError(f"Unsupported JSON action type: {action_type!r}")
+
+
+def _require_json_fields(data: dict, required: set[str]) -> None:
+    """Reject missing or unrelated fields in one JSON action object."""
+    fields = set(data) - {"reasoning"}
+    missing = required - fields
+    extra = fields - required
+    if missing:
+        raise ActionParseError(
+            f"JSON action requires {', '.join(sorted(missing))}"
+        )
+    if extra:
+        raise ActionParseError(
+            f"JSON action has unsupported fields: {', '.join(sorted(extra))}"
+        )
 
 # ---------------------------------------------------------------------------
 # Constrained decoding regex -- ported from standalone trainer
@@ -181,85 +253,39 @@ def parse_action_json(text: str) -> BenchmarkAction:
     Returns:
         BenchmarkAction parsed from the text.
     """
-    # --- Try JSON first ---
-    stripped = text.strip()
-    stripped = re.sub(r"```json\s*", "", stripped)
-    stripped = re.sub(r"```\s*$", "", stripped)
-
-    match = re.search(r"\{[^{}]*\}", stripped)
-    if match:
-        try:
-            data = json.loads(match.group())
-            action_type = data.get("type", "done")
-            if action_type not in ("click", "type", "key", "scroll", "done", "noop"):
-                action_type = "done"
-            return BenchmarkAction(
-                type=action_type,
-                x=data.get("x"),
-                y=data.get("y"),
-                text=data.get("text"),
-                key=data.get("key"),
-            )
-        except json.JSONDecodeError:
-            pass  # Fall through to DSL parsing
+    data = parse_single_json_object(text)
+    if data is not None:
+        return _parse_json_action(data)
 
     # --- DSL fallback (Thought/Action format from standalone trainer) ---
     # This handles output from constrained decoding and existing checkpoints.
     # Extract fractional coordinates directly from DSL rather than using
     # parse_vlm_output_to_action (which converts to pixels). The TRL path
     # needs fractional coords for pixel_action(x_frac=, y_frac=).
-    action_line = text
-    action_match = re.search(r"Action:\s*(.+)", text, re.IGNORECASE)
-    if action_match:
-        action_line = action_match.group(1).strip()
-
-    click_m = re.search(r"CLICK\(x=(-?[\d.]+),\s*y=(-?[\d.]+)\)", action_line, re.IGNORECASE)
-    if click_m:
-        try:
-            x = max(0.0, min(1.0, float(click_m.group(1))))
-            y = max(0.0, min(1.0, float(click_m.group(2))))
-            return BenchmarkAction(type="click", x=x, y=y)
-        except (ValueError, TypeError):
-            pass
-
-    type_m = re.search(r"""TYPE\(text=["']([^"'\\]*(?:\\.[^"'\\]*)*)["']\)""", action_line, re.IGNORECASE)
-    if type_m:
-        t = type_m.group(1).replace("\\\\", "\\").replace('\\"', '"').replace("\\'", "'")
-        return BenchmarkAction(type="type", text=t)
-
-    if re.search(r"\bWAIT\s*\(\s*\)", action_line, re.IGNORECASE):
+    command, arguments = parse_single_dsl_action(
+        text,
+        allowed_commands={"CLICK", "TYPE", "WAIT", "DONE"},
+    )
+    if command == "CLICK":
+        require_exact_fields(arguments, {"x", "y"}, command)
+        return BenchmarkAction(
+            type="click",
+            x=_required_fraction(arguments, "x", command),
+            y=_required_fraction(arguments, "y", command),
+        )
+    if command == "TYPE":
+        require_exact_fields(arguments, {"text"}, command)
+        value = arguments["text"]
+        value = value.replace("\\\\", "\\").replace('\\"', '"').replace("\\'", "'")
+        return BenchmarkAction(type="type", text=value)
+    if command == "WAIT":
+        require_exact_fields(arguments, set(), command)
         return BenchmarkAction(type="wait")
-    if re.search(r"\bDONE\s*\(\s*\)", action_line, re.IGNORECASE):
+    if command == "DONE":
+        require_exact_fields(arguments, set(), command)
         return BenchmarkAction(type="done")
 
-    logger.warning("Could not parse VLM output (no JSON or DSL): %s", text[:200])
-    return BenchmarkAction(type="done")
-
-
-def _empty_rollout_result(
-    prompts: list[str],
-    num_generations: int,
-) -> dict[str, list]:
-    """Return a zero-reward rollout result with the correct dict shape.
-
-    Used when the WAA server is unreachable or unhealthy so that TRL receives
-    a consistent output structure (empty token lists, zero rewards) instead of
-    crashing.
-
-    Args:
-        prompts: List of prompt strings from the trainer.
-        num_generations: Number of generations per prompt.
-
-    Returns:
-        Dict with prompt_ids, completion_ids, logprobs, env_reward -- all zeroed.
-    """
-    total = len(prompts) * num_generations
-    return {
-        "prompt_ids": [[] for _ in range(total)],
-        "completion_ids": [[] for _ in range(total)],
-        "logprobs": [[] for _ in range(total)],
-        "env_reward": [0.0] * total,
-    }
+    raise ActionParseError(f"Unsupported action command: {command!r}")
 
 
 def _run_episode(
@@ -331,7 +357,9 @@ def _run_episode(
             break
 
         # Handle fractional coordinates
-        if action.x is not None and action.y is not None:
+        if action.type in ("click", "double_click", "right_click"):
+            if action.x is None or action.y is None:
+                raise ActionParseError(f"{action.type} requires x and y")
             if 0 <= action.x <= 1 and 0 <= action.y <= 1:
                 step_result = env.pixel_action(
                     x_frac=action.x, y_frac=action.y,
@@ -342,8 +370,6 @@ def _run_episode(
                     x=int(action.x), y=int(action.y),
                     action_type=action.type, text=action.text, key=action.key,
                 )
-        elif action.type in ("type", "key"):
-            step_result = env.step(action)
         else:
             step_result = env.step(action)
 
@@ -396,8 +422,8 @@ def make_waa_rollout_func(
             Ported from the standalone trainer's WAADirect.is_stuck().
         on_before_collect: ``(task_id, env) -> None`` callback fired before
             each episode begins. Useful for health checks, logging, or
-            pre-rollout setup. A raised exception is caught and logged as
-            a warning (does not abort the episode).
+            pre-rollout setup. A raised exception aborts collection so stale
+            state cannot be evaluated as the requested task.
         on_rollout_complete: ``(rollout, index) -> None`` callback fired
             after each episode completes. ``rollout`` is a dict with keys
             ``prompt``, ``task_id``, ``reward``, ``gen_idx``. A raised
@@ -406,12 +432,39 @@ def make_waa_rollout_func(
     Returns:
         A callable suitable for GRPOTrainer(rollout_func=...).
     """
-    # Index task configs by name for lookup
+    positive_integer_options = {
+        "max_steps": max_steps,
+        "max_new_tokens": max_new_tokens,
+        "screenshot_retries": screenshot_retries,
+    }
+    for name, value in positive_integer_options.items():
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"{name} must be a positive integer")
+    if (
+        isinstance(stuck_threshold, bool)
+        or not isinstance(stuck_threshold, int)
+        or stuck_threshold < 0
+    ):
+        raise ValueError("stuck_threshold must be a non-negative integer")
+    if (
+        isinstance(temperature, bool)
+        or not isinstance(temperature, (int, float))
+        or not math.isfinite(float(temperature))
+        or temperature <= 0
+    ):
+        raise ValueError("temperature must be finite and positive")
+
+    # Index task configs by exact prompt identity for lookup.
     config_map: dict[str, Any] = {}
     if task_configs:
         for tc in task_configs:
-            config_map[tc.name] = tc
-            config_map[tc.id] = tc
+            for key in (tc.name, tc.id):
+                if not isinstance(key, str) or not key:
+                    raise ValueError("Task config names and IDs must be non-empty strings")
+                existing = config_map.get(key)
+                if existing is not None and existing is not tc:
+                    raise ValueError(f"Duplicate task prompt identity: {key!r}")
+                config_map[key] = tc
 
     # Outlines generator is created lazily on first rollout call
     # (needs the trainer's model and processor which aren't available yet).
@@ -456,6 +509,14 @@ def make_waa_rollout_func(
         device = next(model.parameters()).device
 
         num_generations = getattr(trainer.args, "num_generations", 8)
+        if (
+            isinstance(num_generations, bool)
+            or not isinstance(num_generations, int)
+            or num_generations <= 0
+        ):
+            raise RolloutInfrastructureError(
+                "trainer.args.num_generations must be a positive integer"
+            )
 
         # --- Pre-rollout health check (P0) ---
         _mod = getattr(type(adapter), "__module__", "") or ""
@@ -465,23 +526,18 @@ def make_waa_rollout_func(
             try:
                 health_obs = adapter.observe()
                 screenshot = getattr(health_obs, "screenshot", None)
-                if screenshot is not None and isinstance(screenshot, bytes) \
-                        and len(screenshot) < 100:
-                    logger.warning(
-                        "WAA server health check failed (screenshot=%d bytes) "
-                        "-- returning zero rewards for %d prompts",
-                        len(screenshot),
-                        len(prompts),
+                if not isinstance(screenshot, bytes) or len(screenshot) < 100:
+                    size = len(screenshot) if isinstance(screenshot, bytes) else None
+                    raise RolloutInfrastructureError(
+                        "WAA server health check returned an invalid screenshot "
+                        f"({size} bytes)"
                     )
-                    return _empty_rollout_result(prompts, num_generations)
             except Exception as exc:
-                logger.warning(
-                    "WAA server unreachable: %s -- returning zero rewards for "
-                    "%d prompts",
-                    exc,
-                    len(prompts),
-                )
-                return _empty_rollout_result(prompts, num_generations)
+                if isinstance(exc, RolloutInfrastructureError):
+                    raise
+                raise RolloutInfrastructureError(
+                    f"WAA server health check failed: {exc}"
+                ) from exc
 
         # Lazy-init Outlines generator on first call
         if constrained_decoding and not _outlines_state["attempted"]:
@@ -519,12 +575,10 @@ def make_waa_rollout_func(
                         )
                         time.sleep(screenshot_retry_delay)
                     else:
-                        logger.error(
-                            "Screenshot corrupt after %d attempts, "
-                            "returning DONE action",
-                            screenshot_retries,
-                        )
-                        return "done", [], []
+                        raise RolloutInfrastructureError(
+                            "Screenshot remained unreadable after "
+                            f"{screenshot_retries} attempts"
+                        ) from exc
 
             # Use the SAME message construction as the standalone trainer.
             # This includes the "Goal:" prefix, format guidance, and the
@@ -706,23 +760,30 @@ def make_waa_rollout_func(
             return text, completion_ids, logprobs
 
         for prompt in prompts:
+            if not isinstance(prompt, str) or not prompt:
+                raise RolloutInfrastructureError(
+                    "Every rollout prompt must be a non-empty task identity"
+                )
             tc = config_map.get(prompt)
+            if tc is None:
+                raise RolloutInfrastructureError(
+                    f"Rollout prompt {prompt!r} has no exact TaskConfig match"
+                )
 
             for gen_idx in range(num_generations):
                 env = RLEnvironment(adapter, task_config=tc)
 
-                task_id = tc.id if tc else "default"
+                task_id = tc.id
 
                 # --- on_before_collect callback ---
                 if on_before_collect is not None:
                     try:
                         on_before_collect(task_id, env)
                     except Exception as exc:
-                        logger.warning(
-                            "on_before_collect callback raised for "
-                            "task_id=%s gen=%d: %s",
-                            task_id, gen_idx, exc,
-                        )
+                        raise RolloutInfrastructureError(
+                            "on_before_collect failed for "
+                            f"task_id={task_id} gen={gen_idx}: {exc}"
+                        ) from exc
 
                 try:
                     p_ids, c_ids, lps, reward = _run_episode(
@@ -733,7 +794,7 @@ def make_waa_rollout_func(
                         "Rollout failed for prompt=%s gen=%d: %s",
                         prompt[:50], gen_idx, exc,
                     )
-                    p_ids, c_ids, lps, reward = [], [], [], 0.0
+                    raise
 
                 # --- on_rollout_complete callback ---
                 if on_rollout_complete is not None:

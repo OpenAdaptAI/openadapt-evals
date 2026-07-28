@@ -31,6 +31,11 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+from openadapt_evals.adapters.base import (
+    UNSCORED_BENCHMARK_ERROR_TYPES,
+    normalize_benchmark_result_artifact,
+)
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -182,16 +187,21 @@ def _load_full_eval_jsonl(path: Path) -> tuple[list[Episode], dict[str, Any]]:
         if not task_id:
             continue
 
+        result = normalize_benchmark_result_artifact(
+            record,
+            expected_task_id=task_id,
+            context=f"full-eval artifact for {task_id}",
+        )
         episodes.append(
             Episode(
                 episode_id=task_id,
                 task_id=task_id,
-                score=record.get("score", 0.0),
-                success=record.get("success", False),
-                num_steps=record.get("steps", 0),
-                elapsed_seconds=record.get("elapsed_seconds", 0.0),
-                error=record.get("error"),
-                error_type=record.get("error_type"),
+                score=result.score,
+                success=result.success,
+                num_steps=result.num_steps,
+                elapsed_seconds=result.total_time_seconds,
+                error=result.error,
+                error_type=result.error_type,
                 started_at=record.get("started_at"),
                 finished_at=record.get("finished_at"),
                 milestones_passed=record.get("milestones_passed"),
@@ -264,17 +274,35 @@ def _load_trajectory_dir(path: Path) -> tuple[list[Episode], dict[str, Any]]:
                 task_instruction = rec.get("task_instruction", "")
 
         reward = records[0].get("episode_reward")
-        success = (reward is not None and reward > 0) if reward is not None else False
-        score = reward if reward is not None else 0.0
+        reward_is_number = (
+            not isinstance(reward, bool)
+            and isinstance(reward, (int, float))
+            and 0.0 <= float(reward) <= 1.0
+        )
+        result_record = {
+            "task_id": eid,
+            "score": reward,
+            "success": reward_is_number and float(reward) >= 1.0,
+            "num_steps": len(steps),
+            "error_type": None if reward is not None else "evaluation",
+            "reason": None if reward is not None else "episode reward is missing",
+        }
+        result = normalize_benchmark_result_artifact(
+            result_record,
+            expected_task_id=eid,
+            context=f"trajectory artifact for {eid}",
+        )
 
         episodes.append(
             Episode(
                 episode_id=eid,
                 task_id=eid,
                 task_instruction=task_instruction,
-                score=score,
-                success=success,
-                num_steps=len(steps),
+                score=result.score,
+                success=result.success,
+                num_steps=result.num_steps,
+                error=result.error,
+                error_type=result.error_type,
                 steps=steps,
             )
         )
@@ -300,7 +328,7 @@ def _load_benchmark_dir(path: Path) -> tuple[list[Episode], dict[str, Any]]:
 
         task_id = task_dir.name
         definition: dict[str, Any] = {}
-        execution: dict[str, Any] = {}
+        execution_artifact: object = {}
 
         task_json = task_dir / "task.json"
         if task_json.exists():
@@ -308,7 +336,10 @@ def _load_benchmark_dir(path: Path) -> tuple[list[Episode], dict[str, Any]]:
 
         exec_json = task_dir / "execution.json"
         if exec_json.exists():
-            execution = json.loads(exec_json.read_text(encoding="utf-8"))
+            execution_artifact = json.loads(exec_json.read_text(encoding="utf-8"))
+        execution = (
+            execution_artifact if isinstance(execution_artifact, dict) else {}
+        )
 
         # Collect screenshot paths
         screenshots_dir = task_dir / "screenshots"
@@ -333,15 +364,26 @@ def _load_benchmark_dir(path: Path) -> tuple[list[Episode], dict[str, Any]]:
                 )
             )
 
+        result = normalize_benchmark_result_artifact(
+            (
+                {**execution, "task_id": execution.get("task_id", task_id)}
+                if isinstance(execution_artifact, dict)
+                else execution_artifact
+            ),
+            expected_task_id=task_id,
+            context=f"benchmark artifact for {task_id}",
+        )
         episodes.append(
             Episode(
                 episode_id=f"waa_{task_id}",
                 task_id=task_id,
                 task_instruction=definition.get("instruction", ""),
-                score=execution.get("score", 0.0),
-                success=execution.get("success", False),
-                num_steps=len(steps),
-                elapsed_seconds=execution.get("total_time_seconds", 0.0),
+                score=result.score,
+                success=result.success,
+                num_steps=result.num_steps,
+                elapsed_seconds=result.total_time_seconds,
+                error=result.error,
+                error_type=result.error_type,
                 steps=steps,
                 model=metadata.get("model_id"),
                 raw={"definition": definition, "execution": execution},
@@ -384,6 +426,8 @@ def _load_mixed_dir(path: Path) -> tuple[list[Episode], dict[str, Any]]:
             episode_id=path.name,
             task_id=path.name,
             num_steps=len(steps),
+            error="No benchmark result artifact was present",
+            error_type="evaluation",
             steps=steps,
         )
         return [ep], {}
@@ -539,6 +583,8 @@ class TraceAnalyzer:
         if not self._episodes:
             return {
                 "total_episodes": 0,
+                "outcome_episodes": 0,
+                "unscored_episodes": 0,
                 "total_steps": 0,
                 "success_rate": 0.0,
                 "avg_score": 0.0,
@@ -551,10 +597,16 @@ class TraceAnalyzer:
             }
 
         total = len(self._episodes)
-        successes = sum(1 for ep in self._episodes if ep.success)
+        outcomes = [
+            ep
+            for ep in self._episodes
+            if ep.error_type not in UNSCORED_BENCHMARK_ERROR_TYPES
+        ]
+        outcome_total = len(outcomes)
+        successes = sum(1 for ep in outcomes if ep.success)
         total_steps = sum(ep.num_steps for ep in self._episodes)
         total_time = sum(ep.elapsed_seconds for ep in self._episodes)
-        scores = [ep.score for ep in self._episodes]
+        scores = [ep.score for ep in outcomes]
 
         # Status breakdown
         status_counts: dict[str, int] = Counter()
@@ -563,6 +615,8 @@ class TraceAnalyzer:
                 status_counts["passed"] += 1
             elif ep.error_type == "infrastructure":
                 status_counts["infra_error"] += 1
+            elif ep.error_type == "evaluation":
+                status_counts["evaluation_error"] += 1
             elif ep.error:
                 status_counts["error"] += 1
             else:
@@ -576,9 +630,15 @@ class TraceAnalyzer:
 
         return {
             "total_episodes": total,
+            "outcome_episodes": outcome_total,
+            "unscored_episodes": total - outcome_total,
             "total_steps": total_steps,
-            "success_rate": round(successes / total, 4) if total else 0.0,
-            "avg_score": round(sum(scores) / total, 4) if total else 0.0,
+            "success_rate": (
+                round(successes / outcome_total, 4) if outcome_total else 0.0
+            ),
+            "avg_score": (
+                round(sum(scores) / outcome_total, 4) if outcome_total else 0.0
+            ),
             "avg_steps_per_episode": round(total_steps / total, 2) if total else 0.0,
             "avg_time_per_episode": round(total_time / total, 2) if total else 0.0,
             "total_time": round(total_time, 2),

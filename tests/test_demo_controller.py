@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from openadapt_evals.adapters.base import (
     BenchmarkAction,
     BenchmarkObservation,
@@ -20,6 +22,7 @@ from openadapt_evals.demo_controller import (
     PlanStep,
     run_with_controller,
 )
+from openadapt_evals.errors import RolloutInfrastructureError
 from openadapt_evals.plan_verify import VerificationResult
 
 # ---------------------------------------------------------------------------
@@ -679,7 +682,174 @@ class TestExecuteLoop:
         result = controller.execute(task, max_steps=30)
 
         assert result.success is False
+        assert result.error_type == "agent"
+        mock_adapter.evaluate.assert_not_called()
+
+    @patch("openadapt_evals.demo_controller.verify_step")
+    def test_agent_exception_is_agent_failure(self, mock_verify_step):
+        controller, mock_agent, mock_adapter, _, _ = self._make_controller()
+        mock_agent.act.side_effect = RuntimeError("provider rejected output")
+
+        result = controller.execute(_make_task(), max_steps=1)
+
+        assert result.success is False
+        assert result.error_type == "agent"
+        assert "provider rejected output" in (result.error or "")
+        mock_adapter.step.assert_not_called()
+        mock_adapter.evaluate.assert_not_called()
+
+    def test_agent_reset_exception_is_agent_failure(self):
+        controller, mock_agent, mock_adapter, _, _ = self._make_controller()
+        mock_agent.reset.side_effect = RuntimeError("agent reset failed")
+
+        result = controller.execute(_make_task(), max_steps=1)
+
+        assert result.success is False
+        assert result.error_type == "agent"
+        mock_adapter.reset.assert_not_called()
+        mock_adapter.evaluate.assert_not_called()
+
+    def test_environment_reset_exception_is_infrastructure_failure(self):
+        controller, _, mock_adapter, _, _ = self._make_controller()
+        mock_adapter.reset.side_effect = RuntimeError("desktop reset failed")
+
+        result = controller.execute(_make_task(), max_steps=1)
+
+        assert result.success is False
         assert result.error_type == "infrastructure"
+        assert "desktop reset failed" in (result.error or "")
+        mock_adapter.evaluate.assert_not_called()
+
+    @patch("openadapt_evals.demo_controller.verify_step")
+    def test_environment_exception_is_infrastructure_failure(self, mock_verify_step):
+        controller, _, mock_adapter, _, _ = self._make_controller()
+        mock_adapter.step.side_effect = RuntimeError("desktop transport offline")
+
+        result = controller.execute(_make_task(), max_steps=1)
+
+        assert result.success is False
+        assert result.error_type == "infrastructure"
+        assert "desktop transport offline" in (result.error or "")
+        mock_adapter.evaluate.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("error", "expected_type"),
+        [
+            (RuntimeError("oracle failed"), "evaluation"),
+            (RolloutInfrastructureError("evaluator host offline"), "infrastructure"),
+        ],
+    )
+    @patch("openadapt_evals.demo_controller.verify_step")
+    def test_evaluator_exception_keeps_stable_type(
+        self, mock_verify_step, error, expected_type
+    ):
+        controller, _, mock_adapter, _, _ = self._make_controller()
+        mock_verify_step.return_value = _make_unclear()
+        mock_adapter.evaluate.side_effect = error
+
+        result = controller.execute(_make_task(), max_steps=1)
+
+        assert result.success is False
+        assert result.score == 0.0
+        assert result.error_type == expected_type
+        assert str(error) in (result.error or "")
+
+    @pytest.mark.parametrize(
+        "malformed",
+        [
+            BenchmarkResult(
+                task_id="test-task-001",
+                success="false",  # type: ignore[arg-type]
+                score=0.0,
+            ),
+            BenchmarkResult(
+                task_id="test-task-001",
+                success=False,
+                score=float("nan"),
+            ),
+            BenchmarkResult(
+                task_id="test-task-001",
+                success=True,
+                score=1.1,
+            ),
+            BenchmarkResult(
+                task_id="wrong-task",
+                success=True,
+                score=1.0,
+            ),
+            BenchmarkResult(
+                task_id="test-task-001",
+                success=True,
+                score=0.0,
+            ),
+            BenchmarkResult(
+                task_id="test-task-001",
+                success=False,
+                score=1.0,
+            ),
+        ],
+    )
+    @patch("openadapt_evals.demo_controller.verify_step")
+    def test_malformed_adapter_result_is_unscored_evaluation_failure(
+        self, mock_verify_step, malformed
+    ):
+        controller, _, _, _, _ = self._make_controller(eval_result=malformed)
+        mock_verify_step.return_value = _make_unclear()
+
+        result = controller.execute(_make_task(), max_steps=1)
+
+        assert result.task_id == "test-task-001"
+        assert result.success is False
+        assert result.score == 0.0
+        assert result.error_type == "evaluation"
+        assert "Malformed demo controller adapter result" in (result.error or "")
+
+    @pytest.mark.parametrize(
+        ("error", "expected_type"),
+        [
+            (RuntimeError("verifier failed"), "evaluation"),
+            (RolloutInfrastructureError("verifier host offline"), "infrastructure"),
+        ],
+    )
+    @patch("openadapt_evals.demo_controller.verify_step")
+    def test_step_verifier_exception_keeps_stable_type(
+        self, mock_verify_step, error, expected_type
+    ):
+        controller, _, mock_adapter, _, _ = self._make_controller()
+        mock_verify_step.side_effect = error
+
+        result = controller.execute(_make_task(), max_steps=1)
+
+        assert result.success is False
+        assert result.score == 0.0
+        assert result.error_type == expected_type
+        assert str(error) in (result.error or "")
+        mock_adapter.evaluate.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("error", "expected_type"),
+        [
+            (RuntimeError("goal verifier failed"), "evaluation"),
+            (RolloutInfrastructureError("goal verifier offline"), "infrastructure"),
+        ],
+    )
+    @patch("openadapt_evals.demo_controller.verify_goal_completion")
+    def test_goal_verifier_exception_keeps_stable_type(
+        self, mock_verify_goal, error, expected_type
+    ):
+        controller, mock_agent, mock_adapter, _, _ = self._make_controller()
+        for step in controller.plan_state.steps:
+            step.status = "done"
+        mock_verify_goal.side_effect = error
+
+        result = controller.execute(_make_task(), max_steps=1)
+
+        assert result.success is False
+        assert result.score == 0.0
+        assert result.error_type == expected_type
+        assert str(error) in (result.error or "")
+        mock_agent.act.assert_not_called()
+        mock_adapter.evaluate.assert_not_called()
 
     @patch("openadapt_evals.demo_controller.verify_goal_completion")
     @patch("openadapt_evals.demo_controller.verify_step")

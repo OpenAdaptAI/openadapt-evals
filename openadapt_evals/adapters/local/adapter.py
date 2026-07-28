@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import io
 import logging
+import math
 import platform
 import time
 from typing import Any
@@ -35,44 +36,80 @@ from openadapt_evals.adapters.base import (
     BenchmarkResult,
     BenchmarkTask,
 )
+from openadapt_evals.errors import (
+    ActionDeliveredObservationError,
+    ActionDeliveryUncertainError,
+    ActionExecutionError,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def _get_display_scale_factor() -> float:
-    """Detect the HiDPI / Retina scale factor for the primary display.
-
-    On macOS Retina displays, ``mss`` captures at physical pixel resolution
-    while ``pynput`` operates in logical points. This function returns the
-    ratio (physical / logical) so callers can convert between the two
-    coordinate systems.
-
-    Returns:
-        Scale factor (e.g. 2.0 on Retina, 1.0 on standard displays).
-    """
+def _get_input_monitor_geometry(
+    monitor_index: int,
+    capture_monitor: dict[str, int],
+) -> dict[str, float]:
+    """Return the selected monitor bounds in the input controller's space."""
     if platform.system() != "Darwin":
-        return 1.0
+        return {
+            name: float(capture_monitor[name])
+            for name in ("left", "top", "width", "height")
+        }
+
+    if monitor_index <= 0:
+        raise ActionExecutionError(
+            "Local pointer actions cannot safely use the combined macOS monitor capture"
+        )
 
     try:
-        import mss
+        import Quartz  # type: ignore[import-not-found]
 
-        with mss.mss() as sct:
-            monitor = sct.monitors[1]  # primary monitor
-            physical_width = monitor["width"]
+        error, display_ids, display_count = Quartz.CGGetActiveDisplayList(
+            32, None, None
+        )
+        if error != Quartz.kCGErrorSuccess:
+            raise RuntimeError(f"CGGetActiveDisplayList returned {error}")
+        active_displays = list(display_ids)[: int(display_count)]
+        display_id = active_displays[monitor_index - 1]
+        rotation = float(Quartz.CGDisplayRotation(display_id)) % 360.0
+        if not math.isclose(rotation, 0.0, abs_tol=1e-6):
+            raise RuntimeError(
+                f"rotated macOS display ({rotation:g} degrees) is not supported"
+            )
+        bounds = Quartz.CGDisplayBounds(display_id)
+        logical = {
+            "left": float(bounds.origin.x),
+            "top": float(bounds.origin.y),
+            "width": float(bounds.size.width),
+            "height": float(bounds.size.height),
+        }
 
-        # Quartz gives us the logical width
-        from Quartz import CGDisplayBounds, CGMainDisplayID  # type: ignore[import-not-found]
-
-        main_display = CGMainDisplayID()
-        bounds = CGDisplayBounds(main_display)
-        logical_width = int(bounds.size.width)
-
-        if logical_width > 0:
-            return physical_width / logical_width
-    except Exception:
-        logger.debug("Could not detect display scale factor, defaulting to 1.0")
-
-    return 1.0
+        # MSS and Quartz both enumerate CGGetActiveDisplayList in this order.
+        # Check that the selected capture still resembles either the logical
+        # or backing-pixel size. This rejects a stale or incompatible mapping.
+        capture_size = (
+            int(capture_monitor["width"]),
+            int(capture_monitor["height"]),
+        )
+        logical_size = (round(logical["width"]), round(logical["height"]))
+        backing_size = (
+            int(Quartz.CGDisplayPixelsWide(display_id)),
+            int(Quartz.CGDisplayPixelsHigh(display_id)),
+        )
+        valid_sizes = {
+            logical_size,
+            backing_size,
+        }
+        if capture_size not in valid_sizes:
+            raise RuntimeError(
+                f"capture size {capture_size!r} does not match selected display "
+                f"logical/backing sizes {logical_size!r}/{backing_size!r}"
+            )
+        return logical
+    except Exception as exc:
+        raise ActionExecutionError(
+            "Local capture could not bind the selected macOS display to input geometry"
+        ) from exc
 
 
 class LocalAdapter(BenchmarkAdapter):
@@ -95,9 +132,12 @@ class LocalAdapter(BenchmarkAdapter):
     ):
         self._action_delay = action_delay
         self._monitor_index = monitor_index
-        self._scale: float | None = None
         self._current_task: BenchmarkTask | None = None
         self._step_count = 0
+        self._last_viewport: tuple[int, int] | None = None
+        self._capture_origin: tuple[float, float] | None = None
+        self._capture_scale: tuple[float, float] | None = None
+        self._capture_pixel_size: tuple[int, int] | None = None
 
     # ------------------------------------------------------------------
     # BenchmarkAdapter properties
@@ -115,18 +155,78 @@ class LocalAdapter(BenchmarkAdapter):
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _ensure_scale(self) -> float:
-        """Lazily compute and cache the display scale factor."""
-        if self._scale is None:
-            self._scale = _get_display_scale_factor()
-            if self._scale != 1.0:
-                logger.info("HiDPI detected: scale factor = %.1f", self._scale)
-        return self._scale
+    def _record_capture_geometry(
+        self,
+        capture_monitor: dict[str, int],
+        pixel_size: tuple[int, int],
+        input_monitor: dict[str, float] | None = None,
+    ) -> None:
+        """Bind screenshot pixels to the captured monitor's global coordinates.
+
+        Screenshot bounds and input-controller bounds are independent on
+        platforms such as macOS Retina. The scale comes from the exact image
+        and the selected display's OS input bounds, never from the primary
+        display or from the MSS dimensions alone.
+        """
+        monitor = input_monitor or {
+            name: float(capture_monitor[name])
+            for name in ("left", "top", "width", "height")
+        }
+        try:
+            left = float(monitor["left"])
+            top = float(monitor["top"])
+            logical_width = float(monitor["width"])
+            logical_height = float(monitor["height"])
+            pixel_width = int(pixel_size[0])
+            pixel_height = int(pixel_size[1])
+        except (KeyError, TypeError, ValueError, IndexError) as exc:
+            raise ActionExecutionError(
+                "Local capture did not provide usable monitor geometry"
+            ) from exc
+
+        values = (left, top, logical_width, logical_height)
+        if not all(math.isfinite(value) for value in values):
+            raise ActionExecutionError(
+                "Local capture provided non-finite monitor geometry"
+            )
+        if logical_width <= 0 or logical_height <= 0:
+            raise ActionExecutionError(
+                "Local capture provided non-positive monitor dimensions"
+            )
+        if pixel_width <= 0 or pixel_height <= 0:
+            raise ActionExecutionError(
+                "Local capture provided non-positive screenshot dimensions"
+            )
+
+        scale_x = pixel_width / logical_width
+        scale_y = pixel_height / logical_height
+        if not math.isfinite(scale_x) or not math.isfinite(scale_y):
+            raise ActionExecutionError("Local capture scale is not finite")
+
+        self._capture_origin = (left, top)
+        self._capture_scale = (scale_x, scale_y)
+        self._capture_pixel_size = (pixel_width, pixel_height)
+        self._last_viewport = self._capture_pixel_size
+
+    def _require_capture_geometry(self) -> None:
+        if (
+            self._capture_origin is None
+            or self._capture_scale is None
+            or self._capture_pixel_size is None
+            or self._last_viewport != self._capture_pixel_size
+        ):
+            raise ActionExecutionError(
+                "Local pointer action requires fresh, matching capture geometry"
+            )
 
     def _to_logical(self, x: float, y: float) -> tuple[float, float]:
-        """Convert physical pixel coordinates to logical points."""
-        s = self._ensure_scale()
-        return x / s, y / s
+        """Map monitor-relative screenshot pixels to global input coordinates."""
+        self._require_capture_geometry()
+        assert self._capture_origin is not None
+        assert self._capture_scale is not None
+        origin_x, origin_y = self._capture_origin
+        scale_x, scale_y = self._capture_scale
+        return origin_x + x / scale_x, origin_y + y / scale_y
 
     # ------------------------------------------------------------------
     # Observation
@@ -153,9 +253,15 @@ class LocalAdapter(BenchmarkAdapter):
             pil_img.save(buf, format="PNG")
             png_bytes = buf.getvalue()
 
+            pixel_size = (int(img.size.width), int(img.size.height))
+            input_monitor = _get_input_monitor_geometry(
+                self._monitor_index,
+                monitor,
+            )
+            self._record_capture_geometry(monitor, pixel_size, input_monitor)
             return BenchmarkObservation(
                 screenshot=png_bytes,
-                viewport=(monitor["width"], monitor["height"]),
+                viewport=self._last_viewport,
             )
 
     # ------------------------------------------------------------------
@@ -193,10 +299,25 @@ class LocalAdapter(BenchmarkAdapter):
         Returns:
             Initial observation (screenshot of current screen).
         """
-        self._current_task = task
+        # A failed fresh observation must invalidate the prior task and its
+        # coordinate transform before any later input can be delivered.
+        self._current_task = None
         self._step_count = 0
+        self._last_viewport = None
+        self._capture_origin = None
+        self._capture_scale = None
+        self._capture_pixel_size = None
         logger.info("LocalAdapter reset for task: %s", task.task_id)
-        return self.observe()
+        try:
+            observation = self.observe()
+        except Exception:
+            self._last_viewport = None
+            self._capture_origin = None
+            self._capture_scale = None
+            self._capture_pixel_size = None
+            raise
+        self._current_task = task
+        return observation
 
     def step(
         self, action: BenchmarkAction
@@ -219,19 +340,32 @@ class LocalAdapter(BenchmarkAdapter):
         Returns:
             Tuple of (observation, done, info).
         """
-        self._step_count += 1
+        if self._current_task is None and action.type not in {"done", "error"}:
+            raise ActionExecutionError("Call reset() before a local action")
+
+        self._validate_action(action)
         done = action.type in ("done", "error")
 
         try:
             self._execute_action(action)
+        except ActionExecutionError:
+            raise
         except Exception as e:
             logger.error("Failed to execute action %s: %s", action.type, e)
-            return self.observe(), True, {"step": self._step_count, "error": str(e)}
+            raise ActionDeliveryUncertainError(
+                f"Failed to execute local action {action.type!r}: {e}"
+            ) from e
 
+        self._step_count += 1
         if self._action_delay > 0 and not done:
             time.sleep(self._action_delay)
 
-        obs = self.observe()
+        try:
+            obs = self.observe()
+        except Exception as exc:
+            raise ActionDeliveredObservationError(
+                f"Local action {action.type!r} was delivered, but observation failed: {exc}"
+            ) from exc
         return obs, done, {"step": self._step_count}
 
     def evaluate(self, task: BenchmarkTask) -> BenchmarkResult:
@@ -249,6 +383,7 @@ class LocalAdapter(BenchmarkAdapter):
             success=False,
             score=0.0,
             num_steps=self._step_count,
+            error_type="evaluation",
             reason="LocalAdapter does not implement built-in evaluation. "
             "Use an external evaluator or VLM judge.",
         )
@@ -256,6 +391,79 @@ class LocalAdapter(BenchmarkAdapter):
     # ------------------------------------------------------------------
     # Action execution
     # ------------------------------------------------------------------
+
+    def _validate_coordinate(
+        self, value: float | None, field: str, action_type: str
+    ) -> None:
+        if value is None:
+            raise ActionExecutionError(
+                f"Local {action_type!r} action requires {field}"
+            )
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ActionExecutionError(
+                f"Local {action_type!r} action requires numeric {field}"
+            )
+        if not math.isfinite(float(value)):
+            raise ActionExecutionError(
+                f"Local {action_type!r} action requires finite {field}"
+            )
+        if value < 0:
+            raise ActionExecutionError(
+                f"Local {action_type!r} action requires non-negative {field}"
+            )
+        self._require_capture_geometry()
+        assert self._last_viewport is not None
+        width, height = self._last_viewport
+        limit = width if field in {"x", "end_x"} else height
+        if value >= limit:
+            raise ActionExecutionError(
+                f"Local {action_type!r} action {field} is outside the captured viewport"
+            )
+
+    def _validate_action(self, action: BenchmarkAction) -> None:
+        """Reject incomplete actions before input delivery or step accounting."""
+        supported = {
+            "click",
+            "double_click",
+            "right_click",
+            "type",
+            "key",
+            "scroll",
+            "drag",
+            "done",
+            "wait",
+            "error",
+        }
+        if action.type not in supported:
+            raise ActionExecutionError(f"Unsupported local action type: {action.type!r}")
+
+        if action.type in {"click", "double_click", "right_click"}:
+            self._validate_coordinate(action.x, "x", action.type)
+            self._validate_coordinate(action.y, "y", action.type)
+        elif action.type == "type" and action.text is None:
+            raise ActionExecutionError("Local 'type' action requires text")
+        elif action.type == "key" and not action.key:
+            raise ActionExecutionError("Local 'key' action requires key")
+        elif action.type == "scroll":
+            if action.scroll_direction not in {"up", "down", "left", "right"}:
+                raise ActionExecutionError(
+                    "Local 'scroll' action requires direction up, down, left, or right"
+                )
+            if action.scroll_amount is not None:
+                if (
+                    isinstance(action.scroll_amount, bool)
+                    or not isinstance(action.scroll_amount, (int, float))
+                    or not math.isfinite(float(action.scroll_amount))
+                    or action.scroll_amount <= 0
+                ):
+                    raise ActionExecutionError(
+                        "Local 'scroll' action requires a positive finite amount"
+                    )
+        elif action.type == "drag":
+            self._validate_coordinate(action.x, "x", action.type)
+            self._validate_coordinate(action.y, "y", action.type)
+            self._validate_coordinate(action.end_x, "end_x", action.type)
+            self._validate_coordinate(action.end_y, "end_y", action.type)
 
     def _execute_action(self, action: BenchmarkAction) -> None:
         """Dispatch and execute a single action via pynput."""
@@ -274,7 +482,7 @@ class LocalAdapter(BenchmarkAdapter):
         elif action_type in ("done", "wait", "error"):
             pass  # No-op
         else:
-            logger.warning("Unknown action type: %s", action_type)
+            raise ActionExecutionError(f"Unsupported local action type: {action_type!r}")
 
     def _do_click(self, action: BenchmarkAction) -> None:
         """Execute a mouse click action."""

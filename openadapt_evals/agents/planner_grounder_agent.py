@@ -56,6 +56,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from openadapt_evals.action_envelope import parse_single_json_object
 from openadapt_evals.adapters.base import (
     BenchmarkAction,
     BenchmarkObservation,
@@ -66,6 +67,7 @@ from openadapt_evals.agents.base import (
     action_to_string,
     format_accessibility_tree,
 )
+from openadapt_evals.errors import ActionParseError
 
 try:
     from openadapt_evals.integrations.weave_integration import weave_op
@@ -329,12 +331,16 @@ class PlannerGrounderAgent(BenchmarkAgent):
         # -- Step 1: Call planner ------------------------------------------
         planner_output = self._call_planner(observation, task)
 
-        decision = planner_output.get("decision", "COMMAND").upper()
+        raw_decision = planner_output.get("decision", "COMMAND")
+        decision = raw_decision.upper() if isinstance(raw_decision, str) else ""
         reasoning = planner_output.get("reasoning", "")
 
         # Extract structured fields (new format) with backward-compat
         # fallback to the old "instruction" field.
-        action_type = planner_output.get("action_type", "").lower()
+        raw_action_type = planner_output.get("action_type", "")
+        action_type = (
+            raw_action_type.lower() if isinstance(raw_action_type, str) else ""
+        )
         action_value = planner_output.get("action_value", "")
         target_description = planner_output.get("target_description", "")
         instruction = planner_output.get("instruction", target_description)
@@ -390,6 +396,70 @@ class PlannerGrounderAgent(BenchmarkAgent):
                     "fail_reason": reasoning,
                     "error": error,
                     "error_type": planner_output.get("error_type", "agent"),
+                },
+            )
+
+        if decision != "COMMAND":
+            logger.warning("Planner returned an unknown decision: %r", raw_decision)
+            self._action_history.append("ERROR() [invalid decision]")
+            return BenchmarkAction(
+                type="error",
+                raw_action={
+                    "planner_output": planner_output,
+                    "parse_error": "invalid_decision",
+                    "error": f"unknown planner decision: {raw_decision!r}",
+                    "error_type": "agent",
+                },
+            )
+
+        supported_action_types = {"click", "double_click", "type", "key", "scroll"}
+        if not isinstance(raw_action_type, str) or (
+            action_type and action_type not in supported_action_types
+        ):
+            logger.warning(
+                "Planner returned an unknown structured action_type: %r",
+                raw_action_type,
+            )
+            self._action_history.append("ERROR() [invalid action type]")
+            return BenchmarkAction(
+                type="error",
+                raw_action={
+                    "planner_output": planner_output,
+                    "parse_error": "invalid_action_type",
+                    "error": f"unknown structured action type: {raw_action_type!r}",
+                    "error_type": "agent",
+                },
+            )
+
+        if action_type == "scroll" and (
+            not isinstance(action_value, str)
+            or action_value.strip().lower() not in {"up", "down"}
+        ):
+            logger.warning("Planner returned an invalid scroll direction: %r", action_value)
+            self._action_history.append("ERROR() [invalid scroll direction]")
+            return BenchmarkAction(
+                type="error",
+                raw_action={
+                    "planner_output": planner_output,
+                    "parse_error": "invalid_scroll_direction",
+                    "error": f"invalid scroll direction: {action_value!r}",
+                    "error_type": "agent",
+                },
+            )
+
+        if action_type in {"click", "double_click"} and (
+            not isinstance(target_description, str)
+            or not target_description.strip()
+        ):
+            logger.warning("Structured pointer action has no target description")
+            self._action_history.append("ERROR() [missing target description]")
+            return BenchmarkAction(
+                type="error",
+                raw_action={
+                    "planner_output": planner_output,
+                    "parse_error": "missing_target_description",
+                    "error": "structured pointer action requires a target description",
+                    "error_type": "agent",
                 },
             )
 
@@ -559,7 +629,7 @@ class PlannerGrounderAgent(BenchmarkAgent):
             return BenchmarkAction(type="key", key=key_str.lower())
 
         if action_type == "scroll":
-            direction = action_value.lower() if action_value else "down"
+            direction = action_value.strip().lower()
             logger.info("Structured planner output: SCROLL %s", direction)
             return BenchmarkAction(type="scroll", scroll_direction=direction)
 
@@ -813,13 +883,17 @@ class PlannerGrounderAgent(BenchmarkAgent):
 
         logger.debug("Grounder raw output: %s", raw[:500])
 
+        from openadapt_evals.errors import ActionParseError
         from openadapt_evals.training.trl_rollout import parse_action_json
 
-        action = parse_action_json(raw)
+        try:
+            action = parse_action_json(raw)
+        except ActionParseError:
+            action = BenchmarkAction(type="error")
 
         # If parsing fell through to "done" (no JSON found) and we haven't
         # retried yet, try once more with a simplified prompt.
-        if action.type == "done" and _retry:
+        if action.type in ("done", "error") and _retry:
             logger.info("Grounder parse failed, retrying with simplified prompt")
             simplified_prompt = (
                 f"Where should I click to: {instruction}\n"
@@ -834,7 +908,10 @@ class PlannerGrounderAgent(BenchmarkAgent):
                 max_tokens=128,
                 cost_label="grounder_retry",
             )
-            action = parse_action_json(raw2)
+            try:
+                action = parse_action_json(raw2)
+            except ActionParseError:
+                action = BenchmarkAction(type="error")
             if action.type != "done":
                 return action
 
@@ -924,59 +1001,91 @@ class PlannerGrounderAgent(BenchmarkAgent):
 
         Returns BenchmarkAction with the center of the bbox.
         """
+        import math
         import re
 
-        # Try JSON parse first (for non-bbox grounders)
+        def parse_error(reason: str) -> BenchmarkAction:
+            return BenchmarkAction(
+                type="error",
+                raw_action={"parse_error": reason},
+            )
+
+        def finite_number(value: Any, name: str) -> float:
+            if isinstance(value, bool):
+                raise ValueError(f"{name} must be a number")
+            parsed = float(value)
+            if not math.isfinite(parsed):
+                raise ValueError(f"{name} must be finite")
+            return parsed
+
+        # Try one strict JSON action first (for non-bbox grounders).
         try:
-            import json
-            data = json.loads(raw.strip())
-            if isinstance(data, dict) and "x" in data and "y" in data:
+            data = parse_single_json_object(raw)
+            if data is not None:
+                if set(data) != {"type", "x", "y"}:
+                    return parse_error(
+                        "grounder JSON must contain exactly type, x, and y"
+                    )
+                if data["type"] != "click":
+                    return parse_error("grounder JSON must contain type='click'")
+                x = finite_number(data["x"], "x")
+                y = finite_number(data["y"], "y")
+                if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
+                    return parse_error(
+                        "grounder JSON coordinates must both be normalized to [0, 1]"
+                    )
                 return BenchmarkAction(
-                    type=data.get("type", "click"),
-                    x=float(data["x"]),
-                    y=float(data["y"]),
-                    text=data.get("text"),
-                    key=data.get("key"),
+                    type="click",
+                    x=x,
+                    y=y,
                 )
-        except (json.JSONDecodeError, ValueError, KeyError):
-            pass
+        except ActionParseError as exc:
+            return parse_error(str(exc))
+        except (TypeError, ValueError, KeyError) as exc:
+            return parse_error(str(exc))
 
         # Find list of numbers (bbox format)
-        match = re.search(r"\[?\s*(\d+\.?\d*)\s*,\s*(\d+\.?\d*)\s*(?:,\s*(\d+\.?\d*)\s*,\s*(\d+\.?\d*))?\s*\]?", raw)
+        number = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
+        match = re.fullmatch(
+            rf"\s*\[\s*({number})\s*,\s*({number})"
+            rf"(?:\s*,\s*({number})\s*,\s*({number}))?\s*\]\s*",
+            raw,
+        )
         if not match:
             # Last resort: try parse_action_json
             from openadapt_evals.training.trl_rollout import parse_action_json
-            action = parse_action_json(raw)
-            if action.type == "done":
-                return BenchmarkAction(
-                    type="error",
-                    raw_action={"parse_error": "grounder output was not actionable"},
-                )
+            try:
+                action = parse_action_json(raw)
+            except ActionParseError:
+                return parse_error("grounder output was not actionable")
+            if action.type != "click":
+                return parse_error("grounder output must resolve to one click")
             return action
 
         nums = [float(x) for x in match.groups() if x is not None]
 
         if len(nums) == 4:
-            # [x1, y1, x2, y2] → center
-            x = (nums[0] + nums[2]) / 2
-            y = (nums[1] + nums[3]) / 2
+            x1, y1, x2, y2 = nums
+            if not all(0.0 <= value <= 1000.0 for value in nums):
+                return parse_error("grounder bbox values must be in [0, 1000]")
+            if x1 > x2 or y1 > y2:
+                return parse_error("grounder bbox corners are reversed")
+            # UI-Venus uses a fixed 1000 by 1000 canvas.
+            x = ((x1 + x2) / 2) / 1000
+            y = ((y1 + y2) / 2) / 1000
         elif len(nums) == 2:
             x, y = nums[0], nums[1]
+            normalized = 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0
+            canvas = 1.0 < x <= 1000.0 and 1.0 < y <= 1000.0
+            if canvas:
+                x, y = x / 1000, y / 1000
+            elif not normalized:
+                return parse_error(
+                    "grounder coordinate pair mixes coordinate spaces or is out of range"
+                )
         else:
             logger.warning("Unexpected number count in bbox: %s", nums)
-            return BenchmarkAction(
-                type="error",
-                raw_action={"parse_error": f"unexpected bbox values: {nums}"},
-            )
-
-        # Normalize coordinates
-        if x > 1 and y > 1:
-            if x <= 1000 and y <= 1000:
-                # Canvas [0-1000]
-                x, y = x / 1000, y / 1000
-            else:
-                # Pixel coords — leave as-is, run script handles conversion
-                pass
+            return parse_error(f"unexpected bbox values: {nums}")
 
         logger.info("Grounder: bbox=%s → click=(%.3f, %.3f)", nums, x, y)
         return BenchmarkAction(type="click", x=x, y=y)

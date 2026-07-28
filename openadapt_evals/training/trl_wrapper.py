@@ -70,6 +70,8 @@ class GRPOTrainer:
 
     def train(self) -> str:
         """Run GRPO training via TRL. Returns path to final checkpoint."""
+        self._config.validate_for_training()
+
         from datasets import Dataset
         from trl import GRPOConfig
         from trl import GRPOTrainer as _TRLTrainer
@@ -96,11 +98,14 @@ class GRPOTrainer:
                     len(filtered), len(task_configs) + len(filtered) - len(filtered),
                 )
             else:
-                logger.warning(
+                raise ValueError(
                     "task_ids=%s matched no tasks from task_dir=%s. "
-                    "Available: %s. Using all tasks.",
-                    self._config.task_ids, self._config.task_dir,
-                    [tc.id for tc in task_configs],
+                    "Available: %s"
+                    % (
+                        self._config.task_ids,
+                        self._config.task_dir,
+                        [tc.id for tc in task_configs],
+                    )
                 )
 
         if not task_configs:

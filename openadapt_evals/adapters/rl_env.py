@@ -57,6 +57,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -67,6 +68,7 @@ from openadapt_evals.adapters.base import (
     BenchmarkResult,
     BenchmarkTask,
     EvaluationUnavailableError,
+    normalize_benchmark_result,
 )
 
 # Avoid circular import — TaskConfig imported lazily.
@@ -79,6 +81,32 @@ if TYPE_CHECKING:
     import PIL.Image
 
     from openadapt_evals.task_config import TaskConfig
+
+
+def _fraction_to_pixel(value: float, size: int, name: str) -> int:
+    """Map an inclusive normalized coordinate to one valid pixel index."""
+    if size <= 0:
+        raise ValueError(f"{name} screen dimension must be positive")
+    if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+        raise ValueError(f"{name}_frac must be a finite value between 0 and 1")
+    return min(int(value * size), size - 1)
+
+
+def _measured_score(result: BenchmarkResult) -> float:
+    """Return one finite benchmark score in the declared unit interval."""
+    score = result.score
+    if (
+        isinstance(score, bool)
+        or not isinstance(score, (int, float))
+        or not math.isfinite(score)
+        or not 0.0 <= score <= 1.0
+    ):
+        raise EvaluationUnavailableError(
+            f"task {result.task_id} returned invalid score {score!r}",
+            error_type="evaluation",
+        )
+    return float(score)
+
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +179,7 @@ class RLEnvironment:
         self._current_task: BenchmarkTask | None = None
         self._step_count = 0
         self._done = False
+        self._terminal_error = False
         self._trajectory: list[RolloutStep] = []
         self._last_obs: BenchmarkObservation | None = None
 
@@ -159,6 +188,7 @@ class RLEnvironment:
         # This is the "high-water mark" — once a milestone passes, it
         # stays passed even if the transient state disappears.
         self._milestone_passed: set[int] = set()
+        self._milestone_evaluated: set[int] = set()
 
     @property
     def adapter(self) -> BenchmarkAdapter:
@@ -182,21 +212,36 @@ class RLEnvironment:
 
     @property
     def screen_size(self) -> tuple[int, int]:
-        """Actual screen dimensions (width, height) from the last observation.
+        """Measured screen dimensions from the last observation.
 
-        Falls back to the adapter's configured size if no observation has been
-        captured yet.
+        Coordinate conversion must use the frame that the agent observed. A
+        configured or conventional desktop size is not actuation evidence.
         """
-        if self._last_obs is not None and self._last_obs.viewport is not None:
-            return self._last_obs.viewport
-        if hasattr(self._adapter, "screen_size"):
-            return self._adapter.screen_size
-        config = getattr(self._adapter, "config", None)
-        if config is not None:
-            width = getattr(config, "screen_width", 1920)
-            height = getattr(config, "screen_height", 1200)
-            return (width, height)
-        return (1920, 1200)
+        if self._last_obs is None or self._last_obs.viewport is None:
+            raise RuntimeError(
+                "No measured viewport is available; capture an observation before "
+                "converting coordinates"
+            )
+        viewport = self._last_obs.viewport
+        if len(viewport) != 2:
+            raise ValueError(f"Invalid measured viewport: {viewport!r}")
+        width, height = viewport
+        if (
+            isinstance(width, bool)
+            or isinstance(height, bool)
+            or not isinstance(width, (int, float))
+            or not isinstance(height, (int, float))
+            or not math.isfinite(float(width))
+            or not math.isfinite(float(height))
+            or int(width) != width
+            or int(height) != height
+        ):
+            raise ValueError(f"Invalid measured viewport: {viewport!r}")
+        if width <= 0 or height <= 0:
+            raise ValueError(
+                f"Measured viewport dimension must be positive: {viewport!r}"
+            )
+        return int(width), int(height)
 
     def load_task_config(self, task_config: TaskConfig) -> None:
         """Set a TaskConfig for dense reward evaluation.
@@ -232,6 +277,17 @@ class RLEnvironment:
             ValueError: If no task_id is provided and no default was set.
             RuntimeError: If the adapter cannot connect to the WAA server.
         """
+        # Invalidate the prior episode before any operation that can fail. A
+        # failed reset must not leave an old task, frame, or trajectory usable.
+        self._current_task = None
+        self._step_count = 0
+        self._done = False
+        self._terminal_error = False
+        self._trajectory = []
+        self._last_obs = None
+        self._milestone_passed = set()
+        self._milestone_evaluated = set()
+
         config = config or ResetConfig()
         task_id = config.task_id or self._default_task_id
 
@@ -243,26 +299,23 @@ class RLEnvironment:
 
         # Load the task — prefer TaskConfig if available (avoids server lookup)
         if self._task_config and self._task_config.id == task_id:
-            self._current_task = self._task_config.to_benchmark_task()
+            candidate_task = self._task_config.to_benchmark_task()
         elif hasattr(self._adapter, "load_task_from_json") and self._task_config:
-            self._current_task = self._adapter.load_task_from_json(
+            candidate_task = self._adapter.load_task_from_json(
                 task_id, self._task_config.to_waa_config()
             )
         else:
-            self._current_task = self._adapter.load_task(task_id)
-        obs = self._adapter.reset(self._current_task)
+            candidate_task = self._adapter.load_task(task_id)
+        obs = self._adapter.reset(candidate_task)
 
-        # Reset episode state
-        self._step_count = 0
-        self._done = False
-        self._trajectory = []
+        # Publish the task and observation only after reset succeeds.
+        self._current_task = candidate_task
         self._last_obs = obs
-        self._milestone_passed = set()
 
         logger.info(
             "Environment reset: task=%s, instruction=%s",
             task_id,
-            self._current_task.instruction[:80],
+            candidate_task.instruction[:80],
         )
         return obs
 
@@ -285,9 +338,7 @@ class RLEnvironment:
             raise RuntimeError("Call reset() before step().")
 
         if self._done:
-            raise RuntimeError(
-                "Episode is done. Call reset() to start a new episode."
-            )
+            raise RuntimeError("Episode is done. Call reset() to start a new episode.")
 
         obs, done, info = self._adapter.step(action)
         self._step_count += 1
@@ -296,14 +347,23 @@ class RLEnvironment:
         # Check for terminal actions
         if action.type in ("done", "error"):
             done = True
+        if action.type == "error":
+            self._terminal_error = True
 
         self._done = done
         info["step"] = self._step_count
 
         # Optional per-step evaluation for RL training loops
-        if self._evaluate_every_step and self._current_task is not None:
+        if self._terminal_error:
+            info["evaluation_error"] = "agent returned a terminal error action"
+            info["evaluation_error_type"] = "agent"
+        elif self._evaluate_every_step and self._current_task is not None:
             try:
-                result = self._adapter.evaluate(self._current_task)
+                result = normalize_benchmark_result(
+                    self._adapter.evaluate(self._current_task),
+                    expected_task_id=self._current_task.task_id,
+                    context="per-step adapter evaluation",
+                )
                 if result.error_type:
                     # Not scored. Recording a 0.0 here would look identical to
                     # a step the agent genuinely failed.
@@ -312,7 +372,7 @@ class RLEnvironment:
                     )
                     info["evaluation_error_type"] = result.error_type
                 else:
-                    info["evaluation_score"] = result.score
+                    info["evaluation_score"] = _measured_score(result)
                     info["evaluation_success"] = result.success
             except Exception as e:
                 logger.warning("Per-step evaluation failed at step %d: %s", self._step_count, e)
@@ -362,32 +422,45 @@ class RLEnvironment:
             if self._current_task is None:
                 raise RuntimeError("Call reset() before pixel_action().")
             if self._done:
-                raise RuntimeError(
-                    "Episode is done. Call reset() to start a new episode."
-                )
+                raise RuntimeError("Episode is done. Call reset() to start a new episode.")
+
+            fractional_size = None
+            dispatch_x = x
+            dispatch_y = y
+            if x_frac is not None or y_frac is not None:
+                fractional_size = self.screen_size
+                width, height = fractional_size
+                if x_frac is not None:
+                    dispatch_x = _fraction_to_pixel(x_frac, width, "x")
+                if y_frac is not None:
+                    dispatch_y = _fraction_to_pixel(y_frac, height, "y")
 
             obs, done, info = self._adapter.pixel_action(
-                x=x,
-                y=y,
+                x=dispatch_x,
+                y=dispatch_y,
                 action_type=action_type,
                 text=text,
                 key=key,
-                x_frac=x_frac,
-                y_frac=y_frac,
+                x_frac=None,
+                y_frac=None,
             )
             self._step_count += 1
             self._last_obs = obs
             self._done = done
+            if action_type == "error":
+                done = True
+                self._done = True
+                self._terminal_error = True
+                info["evaluation_error"] = "agent returned a terminal error action"
+                info["evaluation_error_type"] = "agent"
             info["step"] = self._step_count
 
             # Reconstruct the action for the trajectory record
             resolved_x = x
             resolved_y = y
-            if x_frac is not None or y_frac is not None:
-                if hasattr(self._adapter, "screen_size"):
-                    w, h = self._adapter.screen_size
-                    resolved_x = int((x_frac or 0.0) * w)
-                    resolved_y = int((y_frac or 0.0) * h)
+            if fractional_size is not None:
+                resolved_x = dispatch_x
+                resolved_y = dispatch_y
 
             action = BenchmarkAction(
                 type=action_type, x=resolved_x, y=resolved_y, text=text, key=key
@@ -404,19 +477,11 @@ class RLEnvironment:
 
         # Fallback: convert fracs to pixels manually and use step()
         if x_frac is not None or y_frac is not None:
-            # Try to get screen size from adapter
-            if hasattr(self._adapter, "screen_size"):
-                w, h = self._adapter.screen_size
-            else:
-                w, h = 1920, 1200  # WAA default
-                logger.warning(
-                    "Adapter has no screen_size property; "
-                    "using default %dx%d for frac conversion",
-                    w,
-                    h,
-                )
-            x = int((x_frac or 0.0) * w)
-            y = int((y_frac or 0.0) * h)
+            w, h = self.screen_size
+            if x_frac is not None:
+                x = _fraction_to_pixel(x_frac, w, "x")
+            if y_frac is not None:
+                y = _fraction_to_pixel(y_frac, h, "y")
 
         action = BenchmarkAction(type=action_type, x=x, y=y, text=text, key=key)
         return self.step(action)
@@ -486,12 +551,33 @@ class RLEnvironment:
         if self._current_task is None:
             raise RuntimeError("Call reset() before evaluate().")
 
-        result = self._adapter.evaluate(self._current_task)
+        if self._terminal_error:
+            result = BenchmarkResult(
+                task_id=self._current_task.task_id,
+                success=False,
+                score=0.0,
+                num_steps=self._step_count,
+                error_type="agent",
+                reason="Agent returned a terminal error action",
+            )
+            if self._trajectory:
+                self._trajectory[-1].reward = 0.0
+                self._trajectory[-1].info["evaluation_error_type"] = "agent"
+                self._trajectory[-1].info["evaluation_error"] = result.reason
+            return result
+
+        result = normalize_benchmark_result(
+            self._adapter.evaluate(self._current_task),
+            expected_task_id=self._current_task.task_id,
+            context="adapter evaluation",
+        )
 
         # Backfill reward on the last trajectory step only when the score is a
         # real measurement; an infrastructure 0.0 is not a reward signal.
         if self._trajectory and not result.error_type:
-            self._trajectory[-1].reward = result.score
+            self._trajectory[-1].reward = _measured_score(result)
+        elif not result.error_type:
+            _measured_score(result)
 
         logger.info(
             "Evaluation: task=%s, success=%s, score=%.2f, error_type=%s",
@@ -526,14 +612,14 @@ class RLEnvironment:
         """
         result = self.evaluate_result()
 
-        if result.error_type in ("infrastructure", "evaluation"):
+        if result.error_type:
             raise EvaluationUnavailableError(
                 f"task {result.task_id} was not scored "
                 f"({result.error_type}): {result.reason or result.error}",
                 error_type=result.error_type,
             )
 
-        return result.score
+        return _measured_score(result)
 
     def check_milestones_incremental(
         self,
@@ -570,9 +656,7 @@ class RLEnvironment:
             except Exception:
                 screenshot = b""
 
-        server_url = getattr(
-            getattr(self._adapter, "config", None), "server_url", ""
-        ) or ""
+        server_url = getattr(getattr(self._adapter, "config", None), "server_url", "") or ""
 
         for i, ms in enumerate(self._task_config.milestones):
             if i in self._milestone_passed:
@@ -580,28 +664,40 @@ class RLEnvironment:
             try:
                 if ms.check.check == "screenshot":
                     from openadapt_evals.vlm_evaluator import vlm_judge
+
                     success, _ = vlm_judge(screenshot, ms.check.description or "")
                     if success:
                         self._milestone_passed.add(i)
                         logger.info(
                             "Milestone %d/%d PASSED (high-water): %s",
-                            i + 1, total, ms.name,
+                            i + 1,
+                            total,
+                            ms.name,
                         )
+                    self._milestone_evaluated.add(i)
                 elif ms.check.check == "command":
                     result = self._task_config._run_vm_command(
-                        ms.check.run or "", server_url,
+                        ms.check.run or "",
+                        server_url,
                     )
                     if self._task_config._check_match(
-                        result, ms.check.expect or "", ms.check.match,
+                        result,
+                        ms.check.expect or "",
+                        ms.check.match,
                     ):
                         self._milestone_passed.add(i)
                         logger.info(
                             "Milestone %d/%d PASSED (high-water): %s",
-                            i + 1, total, ms.name,
+                            i + 1,
+                            total,
+                            ms.name,
                         )
+                    self._milestone_evaluated.add(i)
             except Exception as exc:
                 logger.debug(
-                    "Milestone %d check failed (non-fatal): %s", i, exc,
+                    "Milestone %d check failed (non-fatal): %s",
+                    i,
+                    exc,
                 )
 
         passed = len(self._milestone_passed)
@@ -623,6 +719,9 @@ class RLEnvironment:
         if self._current_task is None:
             raise RuntimeError("Call reset() before evaluate_dense().")
 
+        if self._terminal_error:
+            return self.evaluate()
+
         # Try milestone evaluation first
         if self._task_config and self._task_config.milestones:
             # Take a FRESH screenshot for the final evaluation pass.
@@ -637,8 +736,8 @@ class RLEnvironment:
                     )
             except Exception as e:
                 logger.warning(
-                    "evaluate_dense: failed to take fresh screenshot, "
-                    "falling back to cached: %s", e,
+                    "evaluate_dense: failed to take fresh screenshot, falling back to cached: %s",
+                    e,
                 )
                 if self._last_obs and self._last_obs.screenshot:
                     screenshot = self._last_obs.screenshot
@@ -669,40 +768,45 @@ class RLEnvironment:
                     # publishes the milestone high-water mark as a task score.
                     binary_unavailable = exc
                     logger.warning(
-                        "evaluate_dense: binary evaluation did not run: %s", exc,
+                        "evaluate_dense: binary evaluation did not run: %s",
+                        exc,
                     )
 
                 # If binary eval returned 0.0 (endpoint down or task
                 # failed), try local evaluation via task config checks.
                 local_check_ran = False
-                if (
-                    binary_score == 0.0
-                    and self._task_config.checks
-                    and screenshot
-                ):
-                    server_url = getattr(
-                        getattr(self._adapter, "config", None),
-                        "server_url", "",
-                    ) or ""
+                if binary_score == 0.0 and self._task_config.checks and screenshot:
+                    server_url = (
+                        getattr(
+                            getattr(self._adapter, "config", None),
+                            "server_url",
+                            "",
+                        )
+                        or ""
+                    )
                     try:
-                        binary_score = (
-                            self._task_config.evaluate_checks_local(
-                                screenshot, server_url,
-                            )
+                        binary_score = self._task_config.evaluate_checks_local(
+                            screenshot,
+                            server_url,
                         )
                         local_check_ran = True
                         if binary_score > 0:
                             logger.info(
-                                "evaluate_dense: local check fallback "
-                                "returned %.2f", binary_score,
+                                "evaluate_dense: local check fallback returned %.2f",
+                                binary_score,
                             )
                     except Exception as exc:
                         logger.debug(
-                            "evaluate_dense: local check fallback "
-                            "failed: %s", exc,
+                            "evaluate_dense: local check fallback failed: %s",
+                            exc,
                         )
 
-                if binary_unavailable is not None and not local_check_ran:
+                milestones_measured = len(self._milestone_evaluated) == total
+                if (
+                    binary_unavailable is not None
+                    and not local_check_ran
+                    and not milestones_measured
+                ):
                     # Nothing scored this task: the binary evaluator could not
                     # run and no local check stood in for it. The milestone
                     # high-water mark is a progress signal, not a task score,
@@ -712,10 +816,13 @@ class RLEnvironment:
                         f"task {self._current_task.task_id} was not scored: "
                         f"binary evaluation did not run "
                         f"({binary_unavailable}) and no local check fallback "
-                        f"was available; the milestone high-water mark "
-                        f"({milestone_score:.2f}) is not a task score",
+                        f"was available; only "
+                        f"{len(self._milestone_evaluated)}/{total} milestone "
+                        "contracts were measured",
                         error_type=getattr(
-                            binary_unavailable, "error_type", "infrastructure",
+                            binary_unavailable,
+                            "error_type",
+                            "infrastructure",
                         ),
                     ) from binary_unavailable
 
@@ -733,7 +840,11 @@ class RLEnvironment:
                 logger.info(
                     "Dense evaluation: milestones=%d/%d (%.2f) [high-water], "
                     "binary=%.2f, final=%.2f",
-                    passed, total, milestone_score, binary_score, score,
+                    passed,
+                    total,
+                    milestone_score,
+                    binary_score,
+                    score,
                 )
                 return score
 
@@ -769,6 +880,9 @@ class RLEnvironment:
             List of RolloutStep objects. The last step's reward contains the
             evaluation score; all other rewards are 0.0.
         """
+        if isinstance(max_steps, bool) or not isinstance(max_steps, int) or max_steps <= 0:
+            raise ValueError("max_steps must be a positive integer")
+
         config = ResetConfig(task_id=task_id)
         obs = self.reset(config)
 
@@ -803,6 +917,19 @@ class RLEnvironment:
 
             if rollout_step.done:
                 break
+
+        if self._terminal_error:
+            if self._trajectory:
+                self._trajectory[-1].reward = 0.0
+                self._trajectory[-1].info["evaluation_error_type"] = "agent"
+                self._trajectory[-1].info["evaluation_error"] = (
+                    "Agent returned a terminal error action"
+                )
+            logger.info(
+                "Rollout stopped after terminal agent error: %d steps",
+                self._step_count,
+            )
+            return list(self._trajectory)
 
         # Evaluate and backfill reward — use dense rewards if milestones exist
         if self._task_config and self._task_config.milestones:

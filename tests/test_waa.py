@@ -1,5 +1,7 @@
 """Tests for WAA benchmark adapter."""
 
+from unittest.mock import MagicMock
+
 import pytest
 
 from openadapt_evals import (
@@ -9,10 +11,127 @@ from openadapt_evals import (
     BenchmarkTask,
     RandomAgent,
     ScriptedAgent,
+    WAAAdapter,
     WAAMockAdapter,
     compute_metrics,
     evaluate_agent_on_benchmark,
 )
+from openadapt_evals.errors import RolloutEvaluationError, RolloutInfrastructureError
+
+
+class TestWAAAdapterEvaluation:
+    """Tests for strict native WAA evaluator result handling."""
+
+    @staticmethod
+    def _adapter(tmp_path, response=None, error=None):
+        adapter = WAAAdapter(waa_repo_path=tmp_path)
+        adapter._desktop_env = MagicMock()
+        if error is not None:
+            adapter._desktop_env.evaluate.side_effect = error
+        else:
+            adapter._desktop_env.evaluate.return_value = response
+        return adapter
+
+    @pytest.mark.parametrize(
+        "response",
+        [
+            None,
+            [],
+            {},
+            True,
+            float("nan"),
+            float("inf"),
+            -0.1,
+            1.1,
+            {"success": 1, "score": 1.0},
+            {"success": True, "score": True},
+            {"success": False, "score": float("nan")},
+            {"success": False, "score": float("inf")},
+            {"success": False, "score": -0.1},
+            {"success": True, "score": 1.1},
+            {"success": True, "score": 0.5},
+            {"success": False, "score": 1.0},
+        ],
+    )
+    def test_malformed_measurement_stays_unscored(self, tmp_path, response):
+        task = BenchmarkTask(task_id="task", instruction="test", domain="desktop")
+        result = self._adapter(tmp_path, response=response).evaluate(task)
+
+        assert result.success is False
+        assert result.score == 0.0
+        assert result.error_type == "evaluation"
+        assert result.reason and result.reason.startswith(
+            "Malformed evaluation response:"
+        )
+
+    @pytest.mark.parametrize("error_type", ["infrastructure", "evaluation"])
+    def test_unavailable_response_preserves_type(self, tmp_path, error_type):
+        task = BenchmarkTask(task_id="task", instruction="test", domain="desktop")
+        response = {
+            "success": False,
+            "score": 0.0,
+            "scored": False,
+            "error_type": error_type,
+            "reason": "evaluator unavailable",
+        }
+
+        result = self._adapter(tmp_path, response=response).evaluate(task)
+
+        assert (result.success, result.score, result.error_type) == (
+            False,
+            0.0,
+            error_type,
+        )
+        assert result.reason == "evaluator unavailable"
+
+    @pytest.mark.parametrize(
+        ("error", "expected_type"),
+        [
+            (RuntimeError("invalid evaluator"), "evaluation"),
+            (RolloutInfrastructureError("VM offline"), "infrastructure"),
+            (RolloutEvaluationError("oracle offline"), "evaluation"),
+        ],
+    )
+    def test_evaluator_exception_preserves_stable_type(
+        self, tmp_path, error, expected_type
+    ):
+        task = BenchmarkTask(task_id="task", instruction="test", domain="desktop")
+
+        result = self._adapter(tmp_path, error=error).evaluate(task)
+
+        assert result.success is False
+        assert result.score == 0.0
+        assert result.error_type == expected_type
+        assert result.error == str(error)
+
+    @pytest.mark.parametrize(
+        ("response", "expected"),
+        [
+            ({"success": False, "score": 0.25}, (False, 0.25)),
+            ({"success": True, "score": 1.0}, (True, 1.0)),
+        ],
+    )
+    def test_valid_measurement_is_preserved(self, tmp_path, response, expected):
+        task = BenchmarkTask(task_id="task", instruction="test", domain="desktop")
+
+        result = self._adapter(tmp_path, response=response).evaluate(task)
+
+        assert (result.success, result.score) == expected
+        assert result.error_type is None
+
+    @pytest.mark.parametrize(
+        ("response", "expected"),
+        [(0.0, (False, 0.0)), (0.25, (False, 0.25)), (1.0, (True, 1.0))],
+    )
+    def test_native_scalar_measurement_is_preserved(
+        self, tmp_path, response, expected
+    ):
+        task = BenchmarkTask(task_id="task", instruction="test", domain="desktop")
+
+        result = self._adapter(tmp_path, response=response).evaluate(task)
+
+        assert (result.success, result.score) == expected
+        assert result.error_type is None
 
 
 class TestWAAMockAdapter:

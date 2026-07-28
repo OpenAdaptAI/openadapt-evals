@@ -29,6 +29,7 @@ from typing import Any
 
 from openadapt_evals.adapters.base import BenchmarkAction, BenchmarkObservation
 from openadapt_evals.demo_library import Demo, DemoStep
+from openadapt_evals.errors import ActionExecutionError
 from openadapt_evals.grounding import (
     GroundingTarget,
     check_state_preconditions,
@@ -110,6 +111,9 @@ class DemoExecutor:
         _tier1 = 0
         _tier2 = 0
 
+        if not demo.steps:
+            raise ActionExecutionError("Demo has no executable steps")
+
         try:
             from openadapt_evals.telemetry import track_demo_execution
             track_demo_execution(
@@ -156,8 +160,14 @@ class DemoExecutor:
 
             action = self._execute_step(step, obs)
             if action is None:
-                logger.warning("Step %d: no action produced, skipping", i + 1)
-                continue
+                raise ActionExecutionError(
+                    f"Demo step {i + 1} did not produce an action"
+                )
+            if action.type == "error":
+                raise ActionExecutionError(
+                    f"Demo step {i + 1} failed before actuation: "
+                    f"{action.raw_action or {}}"
+                )
 
             # Count tiers for telemetry
             tier = (action.raw_action or {}).get("tier", 2)
@@ -437,7 +447,10 @@ class DemoExecutor:
             raw = resp.json()["choices"][0]["message"]["content"]
         except Exception as exc:
             logger.error("HTTP grounder failed: %s", exc)
-            return BenchmarkAction(type="click", x=0.5, y=0.5)
+            return BenchmarkAction(
+                type="error",
+                raw_action={"grounder_error": str(exc)},
+            )
 
         logger.info("HTTP grounder: %s", raw[:200])
 
@@ -475,21 +488,33 @@ class DemoExecutor:
             cost_label="demo_executor_grounder",
         )
 
+        from openadapt_evals.errors import ActionParseError
         from openadapt_evals.training.trl_rollout import parse_action_json
-        action = parse_action_json(raw)
 
-        if action.type == "done":
-            logger.warning(
-                "Grounder could not find %r -- returning click at center",
-                description,
+        try:
+            action = parse_action_json(raw)
+        except ActionParseError as exc:
+            return BenchmarkAction(
+                type="error",
+                raw_action={"grounder_error": str(exc)},
             )
-            return BenchmarkAction(type="click", x=0.5, y=0.5)
 
+        if action.type != "click":
+            return BenchmarkAction(
+                type="error",
+                raw_action={
+                    "grounder_error": (
+                        f"grounder returned {action.type!r}; click required"
+                    )
+                },
+            )
         return action
 
     def _dispatch_action(self, env, action: BenchmarkAction):
         """Execute an action through the environment."""
-        if action.x is not None and action.y is not None:
+        if action.type in ("click", "double_click", "right_click"):
+            if action.x is None or action.y is None:
+                raise ActionExecutionError(f"{action.type} requires x and y")
             x, y = float(action.x), float(action.y)
             if 0 <= x <= 1 and 0 <= y <= 1:
                 return env.pixel_action(

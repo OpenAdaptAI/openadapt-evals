@@ -17,9 +17,11 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import sys
 import time
 from dataclasses import dataclass
+from numbers import Real
 from pathlib import Path
 from typing import Any
 
@@ -292,20 +294,86 @@ class WAAAdapter(BenchmarkAdapter):
         # Run WAA's evaluator
         try:
             result = self._desktop_env.evaluate()
-            success = result.get("success", False)
-            score = 1.0 if success else 0.0
-            reason = result.get("reason", None)
         except Exception as e:
             logger.error(f"Evaluation failed for task {task.task_id}: {e}")
-            success = False
-            score = 0.0
-            reason = str(e)
+            error_type = getattr(e, "error_type", "evaluation")
+            if error_type not in ("infrastructure", "evaluation"):
+                error_type = "evaluation"
+            return BenchmarkResult(
+                task_id=task.task_id,
+                success=False,
+                score=0.0,
+                reason=str(e),
+                error=str(e),
+                error_type=error_type,
+            )
+
+        return self._result_from_evaluate_response(task, result)
+
+    def _result_from_evaluate_response(
+        self, task: BenchmarkTask, result: Any
+    ) -> BenchmarkResult:
+        """Validate one native WAA evaluator result without inventing a score."""
+
+        def invalid(reason: str) -> BenchmarkResult:
+            return BenchmarkResult(
+                task_id=task.task_id,
+                success=False,
+                score=0.0,
+                reason=f"Malformed evaluation response: {reason}",
+                error_type="evaluation",
+            )
+
+        if isinstance(result, Real) and not isinstance(result, bool):
+            score = float(result)
+            if not math.isfinite(score) or not 0.0 <= score <= 1.0:
+                return invalid("scalar score must be a finite number between 0 and 1")
+            return BenchmarkResult(
+                task_id=task.task_id,
+                success=score >= 1.0,
+                score=score,
+            )
+
+        if not isinstance(result, dict):
+            return invalid("body must be an object")
+
+        success = result.get("success")
+        if not isinstance(success, bool):
+            return invalid("success must be a boolean")
+
+        score = result.get("score")
+        if (
+            isinstance(score, bool)
+            or not isinstance(score, (int, float))
+            or not math.isfinite(float(score))
+            or not 0.0 <= float(score) <= 1.0
+        ):
+            return invalid("score must be a finite number between 0 and 1")
+        score = float(score)
+
+        scored = result.get("scored")
+        if scored is not None and not isinstance(scored, bool):
+            return invalid("scored must be a boolean when present")
+
+        error_type = result.get("error_type")
+        if error_type not in (None, "infrastructure", "evaluation"):
+            return invalid("error_type must be infrastructure, evaluation, or null")
+        if scored is True and error_type is not None:
+            return invalid("a scored result cannot carry an error_type")
+        if success != (score >= 1.0):
+            return invalid("success contradicts score")
+
+        if scored is False and error_type is None:
+            error_type = "evaluation"
+        if error_type is not None and (success or score != 0.0):
+            return invalid("an unscored result must have success=false and score=0")
 
         return BenchmarkResult(
             task_id=task.task_id,
             success=success,
             score=score,
-            reason=reason,
+            reason=result.get("reason"),
+            error_type=error_type,
         )
 
     def close(self) -> None:
