@@ -1,6 +1,123 @@
 # CHANGELOG
 
 
+## v0.90.1 (2026-07-28)
+
+### Bug Fixes
+
+- Bound ruff, declare an explicit lint rule set, and fix what it found
+  ([#275](https://github.com/OpenAdaptAI/openadapt-evals/pull/275),
+  [`c4b7e9b`](https://github.com/OpenAdaptAI/openadapt-evals/commit/c4b7e9bf3e7b6215da07ae6bbf1681c4f5026d59))
+
+`ruff>=0.1.0` was unbounded and `[tool.ruff]` set only `line-length`, so the effective rule set was
+  whatever ruff the resolver happened to pick. ruff 0.16.0 grew its DEFAULT set from 59 rules to
+  413; this repo silently went from its old implicit defaults to 1653 findings without a code
+  change. There is no ruff step in `.github/workflows/test.yml`, so nothing went red — the exposure
+  was that every developer and agent running `ruff check` got a different, ever-moving answer.
+
+Bound the dependency to `ruff>=0.16,<0.17`, pin `target-version = "py310"`, and declare `select =
+  ["E", "F", "I", "W"]` with `ignore = ["E501"]` — the set already used by openadapt-capture,
+  -privacy, -telemetry, -crier, -herald, -desktop and OpenAdapt. The repo did not pass that set (478
+  findings), so it is cleared here rather than declared aspirationally. `uv.lock` now resolves ruff
+  0.16.0.
+
+Real defects fixed, not just noise:
+
+- `openadapt_evals/evaluation/client.py` swallowed the `ImportError` from loading the WAA evaluators
+  with a bare `pass`. A missing evaluators package and a broken one were indistinguishable from a
+  healthy load, and every subsequent evaluation silently ran on the built-in fallback. Now logged
+  with the path and the exception. - `openadapt_evals/analysis/report_generator.py` computed
+  `steps_class`, `steps_arrow`, `cost_class` and `cost_arrow` for the run-comparison report and
+  never rendered them, so Avg Steps and Est. Cost had no delta card. Added the two cards. Also
+  removed `_stat_row`, a dead helper that ignored three of its five parameters. - Three F821
+  undefined names: `PIL.Image.Image` in `openadapt_evals/adapters/rl_env.py` and
+  `openadapt_evals/adapters/waa/live.py`, and `requests.Response` in the latter. Each names a module
+  imported only inside a method body, so `typing.get_type_hints()` on those classes raised
+  NameError. Added `TYPE_CHECKING` imports; the runtime import path is unchanged. -
+  `scripts/run_full_eval.py` counted total errors and printed only the infra/agent subsets, so an
+  error with no `error_type` appeared in the per-task table as ERROR but was absent from the
+  summary. - `openadapt_evals/workflow/pipeline/transcript.py` declared
+  `total_input_tokens`/`total_output_tokens` accumulators that were never incremented and never
+  passed to `EpisodeTranscript`, reading as if per- transcript token totals were collected. Replaced
+  with a note that `vlm_call` reports usage to the global cost tracker instead.
+
+Suppressions are per-file and justified inline: E402 where `sys.path`, `load_dotenv()`,
+  `logging.basicConfig()` or `pytest.importorskip()` must run before an import, and I001 on
+  `scripts/report_openadapt_performance.py`, whose SHA-256 is embedded in a published evidence
+  report that a test reproduces byte for byte.
+
+Two intentional re-exports that the F401 autofix removed were restored explicitly rather than left
+  implicit: `BenchmarkAgent` in `openadapt_evals/agents/base.py` (14 importers, now in `__all__`)
+  and `SYSTEM_PROMPT` in `openadapt_evals/training/trl_rollout.py`, whose object identity with the
+  standalone trainer's prompt is asserted by `tests/test_trl_parity.py`.
+
+Verified locally: `uv sync --locked --extra dev --no-sources`, the CI heavy-import guard,
+  `scripts/check_published_evidence_freshness.py --offline`, the exact CI pytest invocation (1659
+  passed, 54 skipped), an import smoke test over every package module, and `ruff check .` clean
+  under the locked 0.16.0.
+
+Claude-Session: https://claude.ai/code/session_01NyCHrzA1psrKMFfroYbzaM
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Chores
+
+- Gitignore .private/ ([#274](https://github.com/OpenAdaptAI/openadapt-evals/pull/274),
+  [`8bd4afe`](https://github.com/OpenAdaptAI/openadapt-evals/commit/8bd4afe31615423efc2929d34d89834b7d21bdb3))
+
+`.private/` is the workspace-wide convention for material that must never be published. It was not
+  ignored here, so a directory created inside this checkout was one stray `git add` from being
+  committed. Ignore it mechanically rather than relying on that never happening.
+
+Claude-Session: https://claude.ai/code/session_01NyCHrzA1psrKMFfroYbzaM
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Documentation
+
+- **evidence**: Correct the 1.16.1 vs 1.24.0 apples-to-apples claim
+  ([#273](https://github.com/OpenAdaptAI/openadapt-evals/pull/273),
+  [`1801027`](https://github.com/OpenAdaptAI/openadapt-evals/commit/18010273c834bebc78b3204511069959b7d74bc6))
+
+* docs(evidence): correct the 1.16.1 vs 1.24.0 apples-to-apples claim
+
+`REPRODUCE.md` stated that the two measurements "differ only in the engine under test". That is
+  false. MockMed ships *inside* the Flow wheel (`openadapt_flow/mockmed/`), so repinning the wheel
+  repins the engine AND the application it is measured against. `static/app.js` and
+  `static/styles.css` both differ between `v1.16.1` and `v1.24.0`.
+
+The load-bearing fixture change is openadapt-flow `c416b7d`, which added a patient banner to the top
+  of the New Encounter form. That made the band the 1.16.1 bundle had mined as its `step_010`
+  `region_stable` postcondition identical before and after the Save click, so the compiler's
+  largest-changed-region search moved down onto the saved-encounter row -- which renders the run's
+  `note` parameter. Each trial's verdict then turned on the glyphs of that trial's unique note,
+  which is why the `clean` over-halt counted 2/3 rather than 3/3. It is not an engine reliability
+  regression.
+
+Corrected in three places that carried the claim or its consequence:
+
+- `REPRODUCE.md` sec. 5: the runner digest establishes an identical HARNESS, not an identical
+  target; states the fixture also differs and names `c416b7d`. - `COMPARISON_TO_v1_16_1.md`: adds
+  the "not held constant: the target application" caveat, a fixture row in the exact-binding table,
+  and an "Attribution" subsection replacing the engine-regression reading. - `README.md`:
+  "Regressed." -> "Moved.", with the cause named.
+
+No measured number changes. The counts, timings, digests, and JSON artifacts are exactly as
+  published; only the attribution is corrected -- which is why this is an edit rather than a re-run:
+  re-running cannot fix a false statement about what varied between two already-published
+  measurements.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+Claude-Session: https://claude.ai/code/session_01NyCHrzA1psrKMFfroYbzaM
+
+* fix(evidence): bind reproduction to measured Flow release
+
+---------
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.90.0 (2026-07-27)
 
 ### Documentation
