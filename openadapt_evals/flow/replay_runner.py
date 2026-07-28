@@ -248,7 +248,13 @@ def run_demonstrate_then_replay(
         if evaluator is not None:
             try:
                 verified, reason = evaluator(task.task_id)
-                metrics.waa_verified_success = bool(verified)
+                # `None` means the verifier could not run. Leave
+                # waa_verified_success unset so aggregate_replay_metrics
+                # excludes this task from the rate's denominator rather than
+                # counting an unperformed check as a failure.
+                metrics.waa_verified_success = (
+                    None if verified is None else bool(verified)
+                )
                 if reason and not metrics.error:
                     metrics.error = reason if not verified else None
             except Exception as e:  # noqa: BLE001

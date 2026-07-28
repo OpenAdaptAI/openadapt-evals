@@ -62,7 +62,12 @@ DEFAULT_VM_UUID = "d4f9c29a-52e1-4793-9334-7e971c3d0ab3"
 DEFAULT_AGENT_PORT = 5000
 
 # A verifier: (vm) -> (success, reason). Reads ground-truth in-guest state.
-VerifyFn = Callable[[Any], "tuple[bool, Optional[str]]"]
+# A verifier returns (verdict, reason). `verdict is None` means the check
+# could not be performed at all -- the exec channel failed, the guest agent is
+# dead, the VM was reverted -- which the runner records as UNSCORED rather than
+# as a failed task. Returning False for "I could not look" pins the verified
+# success rate at 0% regardless of ground truth.
+VerifyFn = Callable[[Any], "tuple[Optional[bool], Optional[str]]"]
 
 
 def parallels_enabled(config: "Optional[ParallelsConfig]" = None) -> bool:
@@ -107,23 +112,53 @@ _NOTEPAD_OUT = r"C:\oa\eval\notepad_out.txt"
 _NOTEPAD_EXPECTED = "openadapt-flow replay ok"
 
 
+def _exec_output(proc: Any, what: str) -> "tuple[Optional[str], Optional[str]]":
+    """Return ``(stdout, None)`` or ``(None, why_it_could_not_be_read)``.
+
+    ``exec_ps``/``exec_cmd`` hand back a CompletedProcess-shaped object whose
+    ``returncode`` used to be discarded. A dead ``win_agent``, a ``prlctl``
+    failure, an auth rejection and a reverted VM all produce empty stdout,
+    which then compares unequal to the expected value and is recorded as the
+    task having failed -- ground-truth verification silently degrading into a
+    measured failure.
+    """
+    returncode = getattr(proc, "returncode", None)
+    if returncode not in (0, None):
+        stderr = (getattr(proc, "stderr", "") or "").strip()[:200]
+        return None, f"{what} could not run (exit {returncode}): {stderr!r}"
+    return (getattr(proc, "stdout", "") or ""), None
+
+
 def verify_notepad_file(
     vm: Any, *, path: str = _NOTEPAD_OUT, expected: str = _NOTEPAD_EXPECTED
-) -> "tuple[bool, Optional[str]]":
+) -> "tuple[Optional[bool], Optional[str]]":
     """Success iff the Notepad task wrote ``expected`` into ``path`` in-guest."""
     ps = f"if (Test-Path '{path}') {{ Get-Content -Raw '{path}' }} else {{ 'MISSING' }}"
     proc = vm.exec_ps(ps)
-    out = (getattr(proc, "stdout", "") or "").strip()
+    out, unavailable = _exec_output(proc, "notepad file read")
+    if unavailable is not None:
+        return None, unavailable
+    out = out.strip()
     ok = expected in out
     return ok, f"notepad file contents: {out!r}"
 
 
-def verify_calculator_open(vm: Any) -> "tuple[bool, Optional[str]]":
+def verify_calculator_open(vm: Any) -> "tuple[Optional[bool], Optional[str]]":
     """Success iff a Calculator window/process is present in-guest (trivial check)."""
-    proc = vm.exec_cmd('tasklist /FI "IMAGENAME eq CalculatorApp.exe" /FI "IMAGENAME eq Calculator.exe"')
-    out = (getattr(proc, "stdout", "") or "")
-    ok = "alculator" in out
-    return ok, f"tasklist: {out.strip()[:120]!r}"
+    # One /FI per call: `tasklist` ANDs multiple IMAGENAME filters, so asking
+    # for CalculatorApp.exe AND Calculator.exe is unsatisfiable and always
+    # prints "No tasks are running which match" -- this check could never
+    # return True, pinning the task's verified success rate at 0%.
+    reasons = []
+    for image in ("CalculatorApp.exe", "Calculator.exe"):
+        proc = vm.exec_cmd(f'tasklist /FI "IMAGENAME eq {image}"')
+        out, unavailable = _exec_output(proc, "tasklist")
+        if unavailable is not None:
+            return None, unavailable
+        reasons.append(f"{image}: {out.strip()[:80]!r}")
+        if "alculator" in out:
+            return True, f"tasklist: {out.strip()[:120]!r}"
+    return False, "tasklist: " + "; ".join(reasons)
 
 
 def builtin_tasks(bundles_dir: Optional[Path] = None) -> list[ParallelsTask]:
@@ -270,10 +305,12 @@ def make_parallels_evaluator(
 ) -> "Callable[[str], tuple[bool, Optional[str]]]":
     """Build a WAA-style verifier callable over our built-in ground-truth checks."""
 
-    def _evaluate(task_id: str) -> "tuple[bool, Optional[str]]":
+    def _evaluate(task_id: str) -> "tuple[Optional[bool], Optional[str]]":
         task = tasks_by_id.get(task_id)
         if task is None:
-            return False, f"unknown parallels task {task_id!r}"
+            # We were never asked to score a task we know about; that is a
+            # harness bug, not a task the replay failed.
+            return None, f"unknown parallels task {task_id!r}"
         return task.verify(vm)
 
     return _evaluate

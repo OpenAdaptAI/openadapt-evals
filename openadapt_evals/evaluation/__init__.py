@@ -30,7 +30,12 @@ Example usage:
     result = registry.verify("my_task", adapter)
 """
 
-from .client import EvaluationResult, EvaluatorClient
+from .client import (
+    EvaluationError,
+    EvaluationResult,
+    EvaluatorClient,
+    EvaluatorsUnavailableError,
+)
 from .discovery import DiscoveryMethod, VMIPDiscovery, discover_vm_ip
 from .verifier_registry import (
     TaskVerifierRegistry,
@@ -45,6 +50,8 @@ __all__ = [
     "discover_vm_ip",
     "EvaluatorClient",
     "EvaluationResult",
+    "EvaluationError",
+    "EvaluatorsUnavailableError",
     "TaskVerifierRegistry",
     "VerificationResult",
     "register",

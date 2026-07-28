@@ -103,7 +103,11 @@ class MetaMetricsRow:
     env: str
     task_id: str
     mode: str
-    replay_success: bool
+    #: Tri-state. ``True``/``False`` are the verifier's verdict; ``None`` means
+    #: the verifier did not run, which is NOT a failure. ``flow/replay_runner``
+    #: already models unscored tasks this way and excludes them from its rate;
+    #: this row must too, or a crashed verifier is published as a failed task.
+    replay_success: Optional[bool]
     structural_rung_rate: float
     model_calls: int
     effect_verdict: Optional[str]
@@ -111,19 +115,30 @@ class MetaMetricsRow:
     cost_usd: float
     # Diagnostics (never override replay_success).
     reported_success: bool = False
-    verifier_score: float = 0.0
+    #: ``None`` when ``replay_success`` is ``None`` -- there is no score.
+    verifier_score: Optional[float] = 0.0
     verifier_source: Optional[str] = None
+    #: Why the verifier could not produce a verdict, when it could not.
+    verifier_error: Optional[str] = None
     num_steps: int = 0
     heal_count: int = 0
     structural_rung_counts: dict[str, int] = field(default_factory=dict)
     error: Optional[str] = None
+
+    @property
+    def scored(self) -> bool:
+        """True only when the env verifier actually produced a verdict."""
+        return self.replay_success is not None
 
     def as_dict(self) -> dict:
         d = asdict(self)
         d["structural_rung_rate"] = round(self.structural_rung_rate, 4)
         d["wall_ms"] = round(self.wall_ms, 2)
         d["cost_usd"] = round(self.cost_usd, 6)
-        d["verifier_score"] = round(self.verifier_score, 4)
+        d["verifier_score"] = (
+            round(self.verifier_score, 4) if self.verifier_score is not None else None
+        )
+        d["scored"] = self.scored
         return d
 
 
@@ -170,18 +185,33 @@ def run_meta(
         error = str(e)
 
     # Ground truth: the ENV's own verifier, never the policy's self-report.
+    # A verifier that CRASHED did not say "the task failed" -- it said nothing.
+    # Collapsing that into replay_success=False / verifier_score=0.0 makes an
+    # unscored task indistinguishable from a scored failure, and the accuracy
+    # computed over these rows silently gains a wrong denominator.
     verifier_result = None
+    verifier_error: Optional[str] = None
     try:
         verifier_result = env.verify(task)
+        if verifier_result is None:
+            verifier_error = "verify() returned None"
     except Exception as e:  # noqa: BLE001
         logger.warning("verify() failed for %s: %s", getattr(task, "task_id", "?"), e)
-        error = error or f"verify error: {e}"
+        verifier_error = f"verify error: {e}"
+        # Keep the verify failure even when the policy already errored; `error`
+        # used to swallow it whole via `error = error or ...`.
+        error = f"{error}; {verifier_error}" if error else verifier_error
 
     wall_ms = (time.monotonic() - start) * 1000.0
 
-    success = bool(getattr(verifier_result, "success", False))
-    score = float(getattr(verifier_result, "score", 0.0) or 0.0)
-    details = getattr(verifier_result, "details", {}) or {}
+    if verifier_error is not None:
+        success: Optional[bool] = None
+        score: Optional[float] = None
+        details: dict = {}
+    else:
+        success = bool(getattr(verifier_result, "success", False))
+        score = float(getattr(verifier_result, "score", 0.0) or 0.0)
+        details = getattr(verifier_result, "details", {}) or {}
 
     row = MetaMetricsRow(
         env=env_name,
@@ -196,6 +226,7 @@ def run_meta(
         reported_success=outcome.reported_success,
         verifier_score=score,
         verifier_source=details.get("source"),
+        verifier_error=verifier_error,
         num_steps=outcome.num_steps,
         heal_count=outcome.heal_count,
         structural_rung_counts=dict(outcome.structural_rung_counts),
