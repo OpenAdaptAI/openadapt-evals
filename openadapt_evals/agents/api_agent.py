@@ -400,13 +400,17 @@ class ApiAgent(BenchmarkAgent):
         self._last_step_logs = logs
 
         # Parse response into BenchmarkAction
-        if actions and actions[0] in ("DONE", "FAIL", "WAIT"):
-            return BenchmarkAction(type="done", raw_action={"waa_action": actions[0]})
+        if actions and actions[0] == "DONE":
+            return BenchmarkAction(type="done", raw_action={"waa_action": "DONE"})
+        if actions and actions[0] == "FAIL":
+            return BenchmarkAction(type="error", raw_action={"waa_action": "FAIL"})
+        if actions and actions[0] == "WAIT":
+            return BenchmarkAction(type="wait", raw_action={"waa_action": "WAIT"})
 
         if actions and actions[0].startswith("computer."):
             return self._parse_computer_action(actions[0], observation)
 
-        return BenchmarkAction(type="done", raw_action={"error": "Could not parse action"})
+        return BenchmarkAction(type="error", raw_action={"error": "Could not parse action"})
 
     def predict(self, instruction: str, obs: dict) -> tuple:
         """WAA-compatible interface: Predict the next action based on observation.

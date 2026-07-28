@@ -384,11 +384,11 @@ class TestParseActionResponse:
         assert action.type == "click"
         assert action.target_node_id == "1"
 
-    def test_parse_invalid_returns_done(self):
-        """Test that invalid response returns done action."""
+    def test_parse_invalid_returns_error(self):
+        """An invalid response is not a completion decision."""
         response = "I don't know what to do"
         action = parse_action_response(response)
-        assert action.type == "done"
+        assert action.type == "error"
 
     def test_coordinate_normalization(self, sample_observation):
         """Test that pixel coordinates are normalized."""

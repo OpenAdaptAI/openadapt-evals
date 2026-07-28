@@ -297,7 +297,7 @@ def parse_qwen_action(
         raw["action_string"] = action_str
     else:
         raw["parse_error"] = "No action found in response"
-        return BenchmarkAction(type="done", raw_action=raw)
+        return BenchmarkAction(type="error", raw_action=raw)
 
     # --- finished() ---
     if _RE_FINISHED.search(action_str):
@@ -382,7 +382,7 @@ def parse_qwen_action(
                 type="key", key=keys[-1], modifiers=keys[:-1], raw_action=raw
             )
         raw["parse_error"] = "Empty keys list in press()"
-        return BenchmarkAction(type="done", raw_action=raw)
+        return BenchmarkAction(type="error", raw_action=raw)
 
     # --- scroll(direction="<dir>", amount=<int>) ---
     m = _RE_SCROLL.search(action_str)
@@ -416,7 +416,7 @@ def parse_qwen_action(
 
     # Unknown action format
     raw["parse_error"] = f"Unknown action format: {action_str}"
-    return BenchmarkAction(type="done", raw_action=raw)
+    return BenchmarkAction(type="error", raw_action=raw)
 
 
 # ---------------------------------------------------------------------------
@@ -631,7 +631,7 @@ class Qwen3VLAgent(BenchmarkAgent):
         if image is None:
             logger.error("No screenshot available in observation")
             return BenchmarkAction(
-                type="done", raw_action={"error": "no_screenshot"}
+                type="error", raw_action={"error": "no_screenshot"}
             )
 
         # Build user content (aligned with convert_demos training format)
@@ -647,7 +647,7 @@ class Qwen3VLAgent(BenchmarkAgent):
         except Exception as e:
             logger.error(f"Inference failed: {e}")
             return BenchmarkAction(
-                type="done", raw_action={"error": f"inference_failed: {e}"}
+                type="error", raw_action={"error": f"inference_failed: {e}"}
             )
 
         logger.info(f"Step {self._step_count} raw response: {response_text!r}")

@@ -456,8 +456,8 @@ class TestEdgeCases:
         assert action.raw_action["reason"] == "api_call_failed"
         assert action.raw_action["error_type"] == "infrastructure"
 
-    def test_unknown_action_returns_done(self, agent, mock_anthropic_client):
-        """Unknown action type returns done."""
+    def test_unknown_action_returns_error(self, agent, mock_anthropic_client):
+        """An unknown tool action is not task completion."""
         response = create_mock_response(
             create_tool_use_block("unknown_action_xyz")
         )
@@ -465,7 +465,7 @@ class TestEdgeCases:
 
         action = agent.act(make_observation(), make_task())
 
-        assert action.type == "done"
+        assert action.type == "error"
 
     def test_key_with_multiple_modifiers(self, agent, mock_anthropic_client):
         """Key with multiple modifiers splits correctly."""

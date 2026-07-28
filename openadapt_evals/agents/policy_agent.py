@@ -122,7 +122,7 @@ class PolicyAgent(BenchmarkAgent):
             return action
         except Exception as e:
             logger.error(f"Inference failed: {e}")
-            return BenchmarkAction(type="done", raw_action={"error": str(e)})
+            return BenchmarkAction(type="error", raw_action={"error": str(e)})
 
     def _build_prompt(
         self,

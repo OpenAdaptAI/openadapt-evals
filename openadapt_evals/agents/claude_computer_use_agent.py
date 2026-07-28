@@ -983,12 +983,15 @@ class ClaudeComputerUseAgent(BenchmarkAgent):
                 f"'{action_type}' reached _map_action (should be handled by "
                 "act() loop). Treating as no-op."
             )
-            return BenchmarkAction(type="done", raw_action=raw)
+            return BenchmarkAction(
+                type="error",
+                raw_action={"error": f"Unexpected internal action: {action_type}", **raw},
+            )
 
         # Unknown action
         logger.warning(f"Unknown computer_use action: {action_type}")
         return BenchmarkAction(
-            type="done",
+            type="error",
             raw_action={"error": f"Unknown action: {action_type}", **raw},
         )
 

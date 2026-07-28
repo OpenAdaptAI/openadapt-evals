@@ -173,12 +173,12 @@ class TestSpecialActions:
 
     def test_unknown_action(self):
         action = parse_smol_action("some_unknown_action()")
-        assert action.type == "done"
+        assert action.type == "error"
         assert "parse_error" in action.raw_action
 
     def test_empty_response(self):
         action = parse_smol_action("")
-        assert action.type == "done"
+        assert action.type == "error"
         assert "parse_error" in action.raw_action
 
 

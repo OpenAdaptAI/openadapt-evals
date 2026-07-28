@@ -229,7 +229,7 @@ class TestVLMBasedPipeline:
     @patch("openadapt_evals.vlm.vlm_call")
     @patch("openadapt_evals.vlm.extract_json")
     def test_vlm_planner_fail(self, mock_extract, mock_vlm, observation, task):
-        """VLM planner outputs FAIL, agent returns done with fail reason."""
+        """VLM planner FAIL stays distinct from DONE."""
         mock_vlm.return_value = '{"decision": "FAIL"}'
         mock_extract.return_value = {
             "decision": "FAIL",
@@ -245,7 +245,7 @@ class TestVLMBasedPipeline:
         )
         action = agent.act(observation, task)
 
-        assert action.type == "done"
+        assert action.type == "error"
         assert "fail_reason" in action.raw_action
 
     @patch("openadapt_evals.vlm.vlm_call")
@@ -296,10 +296,10 @@ class TestGrounderRetry:
 
     @patch("openadapt_evals.vlm.vlm_call")
     @patch("openadapt_evals.training.trl_rollout.parse_action_json")
-    def test_grounder_returns_done_after_both_fail(
+    def test_grounder_returns_error_after_both_fail(
         self, mock_parse, mock_vlm, observation, task
     ):
-        """Grounder returns done when both attempts fail to parse."""
+        """Two parse failures do not become task completion."""
         mock_parse.return_value = BenchmarkAction(type="done")
         mock_vlm.return_value = "unparseable gibberish"
 
@@ -310,7 +310,7 @@ class TestGrounderRetry:
         )
         action = agent.act(observation, task)
 
-        assert action.type == "done"
+        assert action.type == "error"
 
 
 # -- Tests: HTTP grounder ----------------------------------------------------
