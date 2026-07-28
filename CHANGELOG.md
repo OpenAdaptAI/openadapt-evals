@@ -1,6 +1,24 @@
 # CHANGELOG
 
 
+## v0.90.3 (2026-07-28)
+
+### Bug Fixes
+
+- Preserve agent and readiness failures
+  ([`e6083f3`](https://github.com/OpenAdaptAI/openadapt-evals/commit/e6083f3d3c3f54b1dd20380edfcfc52656521d3f))
+
+Preserve terminal agent, parser, provider, evaluator, and readiness failures as failures.
+
+### Chores
+
+- **release**: Enforce source-policy boundary
+  ([`2493705`](https://github.com/OpenAdaptAI/openadapt-evals/commit/24937051bdca81d9572942c6ce37a333d7bfee56))
+
+Add the generated fail-closed source-policy guard. Validate the tracked repository tree and built
+  wheel and sdist artifacts before release.
+
+
 ## v0.90.2 (2026-07-28)
 
 ### Bug Fixes
