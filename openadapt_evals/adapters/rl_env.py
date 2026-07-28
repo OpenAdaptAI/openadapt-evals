@@ -67,9 +67,15 @@ from openadapt_evals.adapters.base import (
     BenchmarkTask,
 )
 
-# Avoid circular import — TaskConfig imported lazily
+# Avoid circular import — TaskConfig imported lazily.
+# PIL is also type-only here: `observe_pil()` is annotated `PIL.Image.Image`
+# but imports Pillow inside the function body, so without this the annotation
+# named an undefined module and `typing.get_type_hints()` on this class raised
+# NameError.
 TYPE_CHECKING = False
 if TYPE_CHECKING:
+    import PIL.Image
+
     from openadapt_evals.task_config import TaskConfig
 
 logger = logging.getLogger(__name__)

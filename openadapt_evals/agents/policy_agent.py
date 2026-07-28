@@ -15,14 +15,13 @@ Example:
 from __future__ import annotations
 
 import logging
-from typing import Any
 
-from openadapt_evals.agents.base import BenchmarkAgent
 from openadapt_evals.adapters.base import (
     BenchmarkAction,
     BenchmarkObservation,
     BenchmarkTask,
 )
+from openadapt_evals.agents.base import BenchmarkAgent
 
 logger = logging.getLogger("openadapt_evals.agents.policy")
 

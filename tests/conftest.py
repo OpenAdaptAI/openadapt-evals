@@ -11,7 +11,6 @@ from openadapt_evals.adapters import (
     WAAMockAdapter,
 )
 from openadapt_evals.agents import (
-    BenchmarkAgent,
     ScriptedAgent,
     SmartMockAgent,
 )

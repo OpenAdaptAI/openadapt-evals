@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "check_published_evidence_freshness.py"
 MANIFEST = ROOT / "docs" / "eval_results" / "PUBLISHED_EVIDENCE.json"

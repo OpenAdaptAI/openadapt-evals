@@ -327,8 +327,8 @@ def update_resources_file(status: dict) -> None:
             f"  - Daily cost: ${paused_pool['daily_cost']:.2f}/day "
             f"(accumulated: ${paused_pool['accumulated_cost']:.2f})"
         )
-        lines.append(f"  - Resume: `oa-vm pool-resume`")
-        lines.append(f"  - Delete: `oa-vm pool-cleanup -y`")
+        lines.append("  - Resume: `oa-vm pool-resume`")
+        lines.append("  - Delete: `oa-vm pool-cleanup -y`")
         lines.append("")
 
     # Commands reference

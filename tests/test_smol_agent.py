@@ -4,11 +4,9 @@ import pytest
 
 from openadapt_evals.agents.smol_agent import (
     SmolOperatorAgent,
-    parse_smol_action,
     _extract_action_string,
+    parse_smol_action,
 )
-from openadapt_evals.adapters.base import BenchmarkAction, BenchmarkObservation
-
 
 # ---------------------------------------------------------------------------
 # Action string extraction

@@ -25,7 +25,6 @@ Prerequisites:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
 import tempfile
@@ -124,7 +123,7 @@ def main():
     logger.info("Planner: %s via %s", args.planner_model, args.planner_provider)
 
     # Create environment
-    from openadapt_evals.adapters.rl_env import RLEnvironment, ResetConfig
+    from openadapt_evals.adapters.rl_env import ResetConfig, RLEnvironment
 
     env = RLEnvironment(adapter, task_config=task_config)
 

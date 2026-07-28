@@ -568,7 +568,7 @@ def cmd_pool_status(args):
     init_logging()
 
     from openadapt_evals.infrastructure.pool import PoolManager
-    from openadapt_evals.infrastructure.vm_monitor import VMMonitor, VMConfig
+    from openadapt_evals.infrastructure.vm_monitor import VMConfig, VMMonitor
 
     vm_manager = _create_vm_manager(getattr(args, "cloud", None))
     manager = PoolManager(vm_manager=vm_manager, log_fn=log)
@@ -1066,7 +1066,7 @@ def cmd_pool_logs(args):
     Use Ctrl+C to stop.
     """
     import threading
-    from queue import Queue, Empty
+    from queue import Empty, Queue
 
     init_logging()
 
@@ -5386,8 +5386,8 @@ def get_azure_ml_dedicated_quota(subscription_id: str, location: str) -> dict:
     # Resource name for dedicated quota is "standardDDSv4Family" (no spaces, camelCase)
     url = f"https://management.azure.com/subscriptions/{subscription_id}/providers/Microsoft.MachineLearningServices/locations/{location}/usages?api-version=2024-04-01"
 
-    import urllib.request
     import urllib.error
+    import urllib.request
 
     req = urllib.request.Request(url)
     req.add_header("Authorization", f"Bearer {token}")
@@ -6186,6 +6186,7 @@ def cmd_azure_ml_status(args):
     try:
         from azure.ai.ml import MLClient
         from azure.identity import DefaultAzureCredential
+
         from openadapt_evals.config import settings
     except ImportError:
         log("AZURE-ML", "ERROR: Azure ML SDK not installed. Run: uv add azure-ai-ml")
@@ -6240,6 +6241,7 @@ def cmd_azure_ml_vnc(args):
     try:
         from azure.ai.ml import MLClient
         from azure.identity import DefaultAzureCredential
+
         from openadapt_evals.config import settings
     except ImportError:
         log("AZURE-ML", "ERROR: Azure ML SDK not installed")
@@ -6363,10 +6365,12 @@ def cmd_azure_ml_monitor(args):
     init_logging()
 
     try:
+        from datetime import datetime, timezone
+
         from azure.ai.ml import MLClient
         from azure.identity import DefaultAzureCredential
+
         from openadapt_evals.config import settings
-        from datetime import datetime, timezone
     except ImportError:
         log("AZURE-ML", "ERROR: Azure ML SDK not installed")
         return 1
@@ -6461,8 +6465,8 @@ def cmd_azure_ml_logs(args):
     This provides actual stdout from the job container.
     """
     init_logging()
-    import time
     import tempfile
+    import time
 
     from openadapt_evals.config import settings
 
@@ -7866,8 +7870,9 @@ def cmd_gpu_setup(args):
         print(f"ERROR: Setup script not found: {setup_script}")
         return 1
 
-    from openadapt_evals.infrastructure.azure_vm import SSH_OPTS
     import subprocess
+
+    from openadapt_evals.infrastructure.azure_vm import SSH_OPTS
 
     print("Uploading setup script...")
     subprocess.run(
@@ -7925,8 +7930,9 @@ def cmd_gpu_train(args):
     if not args.skip_setup:
         setup_script = Path(__file__).parent.parent.parent / "scripts" / "setup_gpu_training.sh"
         if setup_script.exists():
-            from openadapt_evals.infrastructure.azure_vm import SSH_OPTS
             import subprocess
+
+            from openadapt_evals.infrastructure.azure_vm import SSH_OPTS
             subprocess.run(
                 ["scp", *SSH_OPTS, str(setup_script), f"{username}@{ip}:/tmp/setup_gpu_training.sh"],
                 check=True,

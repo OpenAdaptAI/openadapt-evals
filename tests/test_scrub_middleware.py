@@ -15,7 +15,6 @@ from openadapt_evals.adapters.base import (
 )
 from openadapt_evals.adapters.scrub_middleware import ScrubMiddleware
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

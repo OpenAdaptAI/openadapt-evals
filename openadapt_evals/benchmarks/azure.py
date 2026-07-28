@@ -44,13 +44,13 @@ from typing import Any, Callable
 
 from tenacity import (
     retry,
+    retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
-    retry_if_exception_type,
 )
 
-from openadapt_evals.agents import BenchmarkAgent
 from openadapt_evals.adapters import BenchmarkResult, BenchmarkTask
+from openadapt_evals.agents import BenchmarkAgent
 
 logger = logging.getLogger(__name__)
 
@@ -638,7 +638,7 @@ class AzureMLClient:
             Job name/ID.
         """
         from azure.ai.ml import command as ml_command
-        from azure.ai.ml.entities import Environment, CommandJobLimits
+        from azure.ai.ml.entities import CommandJobLimits, Environment
 
         # Create environment with Docker image
         env = Environment(
@@ -955,15 +955,15 @@ class AzureWAAOrchestrator:
             # Provision VMs in parallel
             print(f"[2/5] Provisioning {num_workers} Azure VM(s)... (this takes 3-5 minutes)")
             self._provision_workers(workers)
-            print(f"      VM(s) ready")
+            print("      VM(s) ready")
 
             # Submit jobs to workers
-            print(f"[3/5] Submitting evaluation jobs...")
+            print("[3/5] Submitting evaluation jobs...")
             self._submit_worker_jobs(workers, task_batches, agent, max_steps_per_task, timeout_hours)
-            print(f"      Jobs submitted")
+            print("      Jobs submitted")
 
             # Wait for completion and collect results
-            print(f"[4/5] Waiting for workers to complete...")
+            print("[4/5] Waiting for workers to complete...")
             results = self._wait_and_collect_results(workers, on_worker_complete)
 
             self._current_run.status = "completed"
@@ -984,9 +984,9 @@ class AzureWAAOrchestrator:
         finally:
             # ALWAYS cleanup, even on error or interruption
             if cleanup_on_complete:
-                print(f"[5/5] Cleaning up compute instances...")
+                print("[5/5] Cleaning up compute instances...")
                 self._cleanup_workers(workers)
-                print(f"      Cleanup complete.")
+                print("      Cleanup complete.")
 
     def _distribute_tasks(
         self, tasks: list[BenchmarkTask], num_workers: int
@@ -1319,7 +1319,7 @@ class AzureWAAOrchestrator:
 
             elif parsed["type"] == "step" and current_task:
                 # Record step
-                from openadapt_evals.adapters import BenchmarkObservation, BenchmarkAction
+                from openadapt_evals.adapters import BenchmarkAction, BenchmarkObservation
 
                 obs = BenchmarkObservation(screenshot=None)
                 action = BenchmarkAction(type=parsed["action_type"].lower())

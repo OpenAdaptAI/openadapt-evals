@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from openadapt_evals.training.vlm_wrapper import patch_model_for_trl, VLMModelWrapper
+from openadapt_evals.training.vlm_wrapper import VLMModelWrapper, patch_model_for_trl
 
 
 class _FakeModel:
@@ -120,7 +120,7 @@ class TestPatchModelForTRL:
     def test_attributes_preserved(self):
         """Model attributes remain accessible after patching."""
         model = _FakeModel()
-        patch_fn = patch_model_for_trl(model)
+        patch_model_for_trl(model)
 
         assert model.config is not None
         assert model.parameters() == model._params
@@ -186,7 +186,7 @@ class TestPatchModelE2E:
 
     @staticmethod
     def _make_tiny_vlm():
-        torch = pytest.importorskip("torch")
+        pytest.importorskip("torch")
         import torch.nn as nn
 
         class TinyVLM(nn.Module):

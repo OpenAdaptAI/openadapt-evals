@@ -284,8 +284,8 @@ def _flow_estimate_main(argv=None) -> int:
     the numbers match ``scripts/eval_flow_on_waa.py``.
     """
     import argparse
-    from pathlib import Path
     import sys as _sys
+    from pathlib import Path
 
     _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from openadapt_evals.flow.cost import MODELS as FLOW_MODELS

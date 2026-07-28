@@ -7,27 +7,27 @@ This module provides integrations with:
 - TRL TrainerCallback for telemetry during GRPO training
 """
 
-from openadapt_evals.integrations.wandb_logger import WandbLogger
+from openadapt_evals.integrations.fixtures import (
+    Scenario,
+    generate_best_case_data,
+    generate_median_case_data,
+    generate_noise_data,
+    generate_worst_case_data,
+)
+from openadapt_evals.integrations.trl_callbacks import TelemetryCallback
 from openadapt_evals.integrations.wandb_callbacks import (
     wandb_model_loaded,
     wandb_rollout_logger,
     wandb_step_logger,
 )
-from openadapt_evals.integrations.fixtures import (
-    generate_noise_data,
-    generate_best_case_data,
-    generate_worst_case_data,
-    generate_median_case_data,
-    Scenario,
-)
-from openadapt_evals.integrations.trl_callbacks import TelemetryCallback
+from openadapt_evals.integrations.wandb_logger import WandbLogger
 
 # Import report generator (may fail if wandb reports API not available)
 try:
     from openadapt_evals.integrations.wandb_reports import (
         WandbReportGenerator,
-        generate_standard_report,
         generate_demo_report,
+        generate_standard_report,
     )
     _REPORTS_AVAILABLE = True
 except ImportError:

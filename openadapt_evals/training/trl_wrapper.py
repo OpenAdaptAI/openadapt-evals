@@ -31,7 +31,6 @@ Usage:
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +71,8 @@ class GRPOTrainer:
     def train(self) -> str:
         """Run GRPO training via TRL. Returns path to final checkpoint."""
         from datasets import Dataset
-        from trl import GRPOConfig, GRPOTrainer as _TRLTrainer
+        from trl import GRPOConfig
+        from trl import GRPOTrainer as _TRLTrainer
 
         from openadapt_evals.task_config import TaskConfig
         from openadapt_evals.training.trl_rollout import make_waa_rollout_func

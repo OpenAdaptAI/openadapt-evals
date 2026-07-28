@@ -33,12 +33,12 @@ from typing import Any
 
 from PIL import Image
 
-from openadapt_evals.agents.base import BenchmarkAgent
 from openadapt_evals.adapters.base import (
     BenchmarkAction,
     BenchmarkObservation,
     BenchmarkTask,
 )
+from openadapt_evals.agents.base import BenchmarkAgent
 
 logger = logging.getLogger("openadapt_evals.agents.api")
 

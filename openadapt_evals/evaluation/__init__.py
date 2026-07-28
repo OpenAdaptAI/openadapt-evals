@@ -30,8 +30,8 @@ Example usage:
     result = registry.verify("my_task", adapter)
 """
 
-from .discovery import VMIPDiscovery, DiscoveryMethod, discover_vm_ip
-from .client import EvaluatorClient, EvaluationResult
+from .client import EvaluationResult, EvaluatorClient
+from .discovery import DiscoveryMethod, VMIPDiscovery, discover_vm_ip
 from .verifier_registry import (
     TaskVerifierRegistry,
     VerificationResult,

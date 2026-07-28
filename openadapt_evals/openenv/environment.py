@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import base64
 import logging
-from typing import Any, Optional
+from typing import Any
 from uuid import uuid4
 
 from openadapt_evals.openenv.models import WAAAction, WAAObservation, WAAState

@@ -21,21 +21,24 @@ from typing import Any
 
 from PIL import Image
 
-from openadapt_evals.training.standalone.config import TrainingConfig
-from openadapt_evals.training.standalone.model_loader import load_model_and_processor
-from openadapt_evals.training.standalone.prompt import (
-    build_agent_messages, format_action_as_text, parse_vlm_output_to_action,
-)
-from openadapt_evals.training.standalone.reward import (
-    compute_group_advantages, evaluate_milestones_screenshot,
-)
-from openadapt_evals.training.standalone.waa_direct import Rollout, RolloutStep, WAADirect
 from openadapt_evals.telemetry import (
     track_checkpoint_saved,
     track_rollout_collected,
     track_training_run,
     track_training_step,
 )
+from openadapt_evals.training.standalone.config import TrainingConfig
+from openadapt_evals.training.standalone.model_loader import load_model_and_processor
+from openadapt_evals.training.standalone.prompt import (
+    build_agent_messages,
+    format_action_as_text,
+    parse_vlm_output_to_action,
+)
+from openadapt_evals.training.standalone.reward import (
+    compute_group_advantages,
+    evaluate_milestones_screenshot,
+)
+from openadapt_evals.training.standalone.waa_direct import Rollout, RolloutStep, WAADirect
 
 logger = logging.getLogger(__name__)
 
@@ -454,8 +457,8 @@ class GRPOTrainer:
         n = len(valid)
         losses = []
         for r, a in valid:
-            l = self._compute_rollout_loss(r, a, 1.0 / n)
-            losses.append(l)
+            loss = self._compute_rollout_loss(r, a, 1.0 / n)
+            losses.append(loss)
         grad_norm = torch.nn.utils.clip_grad_norm_(
             [p for p in self._model.parameters() if p.requires_grad],
             max_norm=self._config.max_grad_norm,
@@ -472,7 +475,7 @@ class GRPOTrainer:
         self._optimizer.step()
 
         avg_loss = sum(losses) / max(n, 1)
-        abs_loss = sum(abs(l) for l in losses) / max(n, 1)
+        abs_loss = sum(abs(loss) for loss in losses) / max(n, 1)
 
         return {
             "reward_mean": reward_mean,

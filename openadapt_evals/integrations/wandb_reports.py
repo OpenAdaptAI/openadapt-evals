@@ -33,7 +33,6 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime
-from typing import Any
 
 from dotenv import load_dotenv
 
@@ -45,7 +44,7 @@ logger = logging.getLogger(__name__)
 # Try to import wandb, fail gracefully if not installed
 try:
     import wandb
-    from wandb.apis.reports import Report, PanelGrid, RunSet, LinePlot, BarPlot, ScatterPlot
+    from wandb.apis.reports import BarPlot, LinePlot, PanelGrid, Report, RunSet, ScatterPlot
 
     WANDB_REPORTS_AVAILABLE = True
 except ImportError:

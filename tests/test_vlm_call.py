@@ -5,23 +5,17 @@ council path and the single-model fallback path.
 """
 
 import base64
-import json
-from unittest import mock
-
-import pytest
-
 
 # We import the functions under test from the script module.
 # The script is designed to be used with Fire, so we import directly.
-import importlib
 import sys
 from pathlib import Path
+from unittest import mock
 
 # Add scripts/ to path so we can import record_waa_demos
 _SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 sys.path.insert(0, str(_SCRIPTS_DIR))
 import record_waa_demos  # noqa: E402
-
 
 # A minimal 1x1 red PNG for testing
 _TINY_PNG = (

@@ -19,7 +19,6 @@ import json
 from types import SimpleNamespace
 
 import pytest
-
 from openadapt_types import BenchmarkAction, BenchmarkObservation
 
 from openadapt_evals.adapters.waa.mock import WAAMockAdapter
@@ -42,7 +41,6 @@ from openadapt_evals.harness import (
     to_inspect_eval_log,
     write_inspect_eval_log,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fakes

@@ -7,12 +7,15 @@ Fallback metrics are provided by ``evaluation.metrics`` (shared with
 ``server/evaluate_endpoint.py``).
 """
 
+import logging
 import sys
-import json
-import requests
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
-from dataclasses import dataclass, field
+
+import requests
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -122,8 +125,16 @@ class EvaluatorClient:
             self._getters = getters
             self._metrics = metrics
         except ImportError as e:
-            # Evaluators not available, will use fallback
-            pass
+            # Evaluators not available, will use fallback. Log it: a missing
+            # WAA evaluators package and a broken one both land here, and
+            # silently swallowing the reason made a degraded fallback
+            # evaluation indistinguishable from a healthy one.
+            logger.warning(
+                "WAA evaluators not importable from %s (%s); "
+                "falling back to built-in evaluation",
+                self._evaluators_path,
+                e,
+            )
 
     def evaluate(self, task_config: Dict[str, Any]) -> EvaluationResult:
         """Evaluate a benchmark task.
@@ -272,7 +283,7 @@ class EvaluatorClient:
 
     def _fallback_metric(self, func_name: str, actual: Any, expected: Any) -> float:
         """Fallback metric — delegates to shared evaluation.metrics module."""
-        from openadapt_evals.evaluation.metrics import get_metric, exact_match
+        from openadapt_evals.evaluation.metrics import exact_match, get_metric
 
         metric_fn = get_metric(func_name)
         if metric_fn is not None:

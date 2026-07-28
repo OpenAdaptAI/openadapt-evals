@@ -67,23 +67,24 @@ Example:
     ```
 """
 
+from openadapt_evals.agents.api_agent import ApiAgent
 from openadapt_evals.agents.base import (
     BenchmarkAgent,
     action_to_string,
     format_accessibility_tree,
     parse_action_response,
 )
+from openadapt_evals.agents.claude_computer_use_agent import ClaudeComputerUseAgent
+from openadapt_evals.agents.demo_guided_agent import DemoGuidedAgent
+from openadapt_evals.agents.http_agent import HttpAgent
+from openadapt_evals.agents.planner_grounder_agent import PlannerGrounderAgent
+from openadapt_evals.agents.retrieval_agent import RetrievalAugmentedAgent
 from openadapt_evals.agents.scripted_agent import (
     RandomAgent,
     ScriptedAgent,
     SmartMockAgent,
 )
-from openadapt_evals.agents.api_agent import ApiAgent
-from openadapt_evals.agents.claude_computer_use_agent import ClaudeComputerUseAgent
-from openadapt_evals.agents.http_agent import HttpAgent
-from openadapt_evals.agents.retrieval_agent import RetrievalAugmentedAgent
-from openadapt_evals.agents.planner_grounder_agent import PlannerGrounderAgent
-from openadapt_evals.agents.demo_guided_agent import DemoGuidedAgent
+
 
 # Lazy imports for agents requiring additional dependencies
 def __getattr__(name: str):

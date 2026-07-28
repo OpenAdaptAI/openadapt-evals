@@ -12,17 +12,16 @@ import pytest
 
 from openadapt_evals.adapters.rl_env import RLEnvironment
 from openadapt_evals.adapters.verl_env import (
+    _ACTION_PATTERN,
     ENV_CLASS_PATH,
     ENV_REGISTRY_KEY,
     WAADesktopEnv,
-    _ACTION_PATTERN,
     _build_obs_dict,
     _parse_action_str,
     generate_env_spec,
     register_in_vagen,
 )
 from openadapt_evals.adapters.waa.mock import WAAMockAdapter
-
 
 # --- Action parsing tests ---
 
@@ -111,8 +110,9 @@ class TestParseActionStr:
 class TestBuildObsDict:
     def test_with_screenshot(self):
         """Test obs dict with PNG bytes."""
-        from PIL import Image
         import io
+
+        from PIL import Image
 
         img = Image.new("RGB", (100, 100), color="red")
         buf = io.BytesIO()

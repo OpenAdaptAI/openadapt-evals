@@ -6,7 +6,6 @@ from openadapt_evals.adapters import (
     BenchmarkAction,
     BenchmarkObservation,
     BenchmarkResult,
-    BenchmarkTask,
     WAAMockAdapter,
 )
 from openadapt_evals.adapters.waa import WAA_DOMAINS

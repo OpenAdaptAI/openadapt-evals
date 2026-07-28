@@ -42,22 +42,22 @@ Example:
 from openadapt_evals.infrastructure.azure_ops_tracker import AzureOpsTracker
 from openadapt_evals.infrastructure.azure_vm import AzureVMManager
 from openadapt_evals.infrastructure.pool import PoolManager, PoolRunResult
-from openadapt_evals.infrastructure.qemu_reset import QEMUResetManager
-from openadapt_evals.infrastructure.screen_stability import (
-    compare_screenshots,
-    wait_for_stable_screen,
-)
-from openadapt_evals.infrastructure.ssh_tunnel import SSHTunnelManager, get_tunnel_manager
-from openadapt_evals.infrastructure.waa_connection import WAAConnection
 from openadapt_evals.infrastructure.probe import (
     MultiLayerProbeResult,
     ProbeLayerResult,
     multi_layer_probe,
     print_probe_results,
 )
+from openadapt_evals.infrastructure.qemu_reset import QEMUResetManager
+from openadapt_evals.infrastructure.screen_stability import (
+    compare_screenshots,
+    wait_for_stable_screen,
+)
+from openadapt_evals.infrastructure.ssh_tunnel import SSHTunnelManager, get_tunnel_manager
 from openadapt_evals.infrastructure.vm_ip import resolve_vm_ip
-from openadapt_evals.infrastructure.vm_monitor import VMMonitor, VMConfig
+from openadapt_evals.infrastructure.vm_monitor import VMConfig, VMMonitor
 from openadapt_evals.infrastructure.vm_provider import VMProvider
+from openadapt_evals.infrastructure.waa_connection import WAAConnection
 
 try:
     from openadapt_evals.infrastructure.aws_vm import AWSVMManager

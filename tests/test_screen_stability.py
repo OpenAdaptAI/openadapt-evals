@@ -7,6 +7,8 @@ from PIL import Image
 
 from openadapt_evals.infrastructure.screen_stability import (
     compare_screenshots as _compare_screenshots,
+)
+from openadapt_evals.infrastructure.screen_stability import (
     wait_for_stable_screen as _wait_for_stable_screen,
 )
 
@@ -83,7 +85,6 @@ class TestCompareScreenshots:
 
     def test_clock_area_diff_above_threshold(self):
         """Simulated clock-area change (0.3% of pixels) stays above 99.5%."""
-        total = 1000 * 1000  # 1M pixels
         clock_pixels = 3000  # ~0.3%
         a = _make_png(width=1000, height=1000, color=(50, 50, 50))
         b = _make_png_with_diff(

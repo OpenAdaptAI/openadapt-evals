@@ -150,9 +150,9 @@ echo "WAA image pulled successfully"
         print("  Docker and WAA installed!")
 
     print("\nSetup complete! Next steps:")
-    print(f"  oa evals vm status          # Check VM status")
-    print(f"  oa evals vm probe --wait    # Wait for WAA server")
-    print(f"  oa evals run --agent gpt-4o # Run evaluation")
+    print("  oa evals vm status          # Check VM status")
+    print("  oa evals vm probe --wait    # Wait for WAA server")
+    print("  oa evals run --agent gpt-4o # Run evaluation")
 
     return 0
 
@@ -240,8 +240,8 @@ def cmd_probe(args: argparse.Namespace) -> int:
         print("VM not found or no public IP")
         return 1
 
-    import urllib.request
     import urllib.error
+    import urllib.request
 
     url = f"http://{ip}:5000/probe"
     wait = getattr(args, "wait", False)

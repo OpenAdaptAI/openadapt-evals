@@ -15,7 +15,6 @@ from typing import Any
 from openadapt_evals.benchmarks.azure import (
     VM_TIER_COSTS,
     VM_TIER_SPOT_COSTS,
-    VM_TIERS,
 )
 
 

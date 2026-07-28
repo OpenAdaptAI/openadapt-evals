@@ -11,7 +11,7 @@ Tests cover:
 
 import base64
 from io import BytesIO
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 from PIL import Image
@@ -654,10 +654,11 @@ class TestParseMultilevelDemo:
 
     def test_parses_real_demo_file(self):
         """Parse the actual multilevel demo file from the repo."""
+        from pathlib import Path
+
         from openadapt_evals.agents.claude_computer_use_agent import (
             _parse_multilevel_demo,
         )
-        from pathlib import Path
 
         demo_path = Path(
             "/Users/abrichr/oa/src/openadapt-evals/.claude/worktrees/eval-fixes/"

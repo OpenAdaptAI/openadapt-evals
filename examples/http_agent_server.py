@@ -18,8 +18,6 @@ Protocol:
 """
 
 import base64
-import io
-import json
 import logging
 
 from flask import Flask, jsonify, request

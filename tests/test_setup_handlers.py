@@ -2,10 +2,9 @@
 
 import sys
 import types
+from unittest.mock import MagicMock, patch
 
 import pytest
-from unittest.mock import patch, MagicMock
-
 
 # ---------------------------------------------------------------------------
 # Mock WAA-internal modules that only exist inside the Docker container.
@@ -46,9 +45,9 @@ def _mock_waa_internals():
 def _import_handlers():
     """Import the setup handler functions from evaluate_server."""
     from openadapt_evals.waa_deploy.evaluate_server import (
-        _setup_verify_apps,
-        _setup_install_apps,
         SETUP_HANDLERS,
+        _setup_install_apps,
+        _setup_verify_apps,
     )
     return _setup_verify_apps, _setup_install_apps, SETUP_HANDLERS
 

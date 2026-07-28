@@ -17,20 +17,20 @@ Example:
     ```
 """
 
+from openadapt_evals.adapters.waa.live import (
+    SYNTHETIC_TASK_PATTERNS,
+    WAA_TASK_ID_PATTERN,
+    SyntheticTaskError,
+    WAALiveAdapter,
+    WAALiveConfig,
+    is_real_waa_task_id,
+    is_synthetic_task_id,
+)
 from openadapt_evals.adapters.waa.mock import (
+    WAA_DOMAINS,
     WAAAdapter,
     WAAConfig,
     WAAMockAdapter,
-    WAA_DOMAINS,
-)
-from openadapt_evals.adapters.waa.live import (
-    WAALiveAdapter,
-    WAALiveConfig,
-    SyntheticTaskError,
-    is_real_waa_task_id,
-    is_synthetic_task_id,
-    WAA_TASK_ID_PATTERN,
-    SYNTHETIC_TASK_PATTERNS,
 )
 
 __all__ = [

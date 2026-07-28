@@ -15,7 +15,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-
 # Path to the waa_deploy directory (source files for Docker build context)
 WAA_DEPLOY_DIR = Path(__file__).resolve().parents[1] / "openadapt_evals" / "waa_deploy"
 EVALUATE_SERVER_PATH = WAA_DEPLOY_DIR / "evaluate_server.py"

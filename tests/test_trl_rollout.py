@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import textwrap
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from openadapt_evals.adapters.base import (
     BenchmarkAction,
@@ -18,7 +15,6 @@ from openadapt_evals.training.trl_rollout import (
     make_waa_rollout_func,
     parse_action_json,
 )
-
 
 # ---------------------------------------------------------------------------
 # parse_action_json tests
@@ -167,13 +163,11 @@ class TestMakeWaaRolloutFunc:
         # Patch _run_episode to avoid needing a real model
         from openadapt_evals.training import trl_rollout
 
-        original_run = trl_rollout._run_episode
-
         def mock_run_episode(env, generate_fn, instruction, task_id, max_steps, **kwargs):
             """Simplified episode that doesn't need a real model."""
             from openadapt_evals.adapters.rl_env import ResetConfig
 
-            obs = env.reset(config=ResetConfig(task_id=task_id))
+            env.reset(config=ResetConfig(task_id=task_id))
 
             # Simulate 2 steps
             for _ in range(2):

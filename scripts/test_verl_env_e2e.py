@@ -19,7 +19,7 @@ async def test_e2e():
     env = WAADesktopEnv(env_config)
 
     # 1. System prompt
-    sys_prompt = await env.system_prompt()
+    await env.system_prompt()
     print("[1] System prompt OK")
 
     # 2. Reset
@@ -53,7 +53,7 @@ async def test_e2e():
     print("=== E2E VALIDATION PASSED ===")
     has_screenshots = "YES" if has_image else "NO"
     print(f"  - Screenshots: {has_screenshots}")
-    print(f"  - Actions executed: YES")
+    print("  - Actions executed: YES")
     print(f"  - Evaluation: reward={reward}")
 
 

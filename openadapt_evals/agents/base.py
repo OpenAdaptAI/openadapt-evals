@@ -17,17 +17,27 @@ from __future__ import annotations
 import re
 from typing import Any
 
-# Import data classes + the BenchmarkAgent interface from the canonical schema
-# package (openadapt-types). BenchmarkAgent is re-exported here for backward
-# compatibility with existing ``from openadapt_evals.agents.base import
-# BenchmarkAgent`` imports. The data classes are re-exported by
-# openadapt_evals.adapters.base (also sourced from openadapt-types).
+from openadapt_types import BenchmarkAgent
+
 from openadapt_evals.adapters.base import (
     BenchmarkAction,
     BenchmarkObservation,
-    BenchmarkTask,
 )
-from openadapt_types import BenchmarkAgent
+
+# The BenchmarkAgent interface and the data classes come from the canonical
+# schema package (openadapt-types); the data classes reach this module via
+# openadapt_evals.adapters.base.
+#
+# BenchmarkAgent is re-exported here, not used, for backward compatibility
+# with the fourteen call sites that still do ``from
+# openadapt_evals.agents.base import BenchmarkAgent``. `__all__` states that
+# intent explicitly instead of leaving the import looking unused.
+__all__ = [
+    "BenchmarkAgent",
+    "action_to_string",
+    "format_accessibility_tree",
+    "parse_action_response",
+]
 
 
 def format_accessibility_tree(tree: dict, indent: int = 0) -> str:

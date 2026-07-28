@@ -1,30 +1,30 @@
 """Tests for the evaluation runner."""
 
+from unittest.mock import Mock
+
 import pytest
-from unittest.mock import Mock, patch, MagicMock
 
 from openadapt_evals.adapters import (
     BenchmarkAction,
-    BenchmarkObservation,
     BenchmarkResult,
     BenchmarkTask,
     WAAMockAdapter,
 )
-from openadapt_evals.benchmarks.runner import (
-    EvaluationConfig,
-    compute_metrics,
-    compute_domain_metrics,
-    evaluate_agent_on_benchmark,
-    _run_single_task,
-)
 from openadapt_evals.agents import (
     BenchmarkAgent,
+    RandomAgent,
     ScriptedAgent,
     SmartMockAgent,
-    RandomAgent,
-    format_accessibility_tree,
     action_to_string,
+    format_accessibility_tree,
     parse_action_response,
+)
+from openadapt_evals.benchmarks.runner import (
+    EvaluationConfig,
+    _run_single_task,
+    compute_domain_metrics,
+    compute_metrics,
+    evaluate_agent_on_benchmark,
 )
 
 

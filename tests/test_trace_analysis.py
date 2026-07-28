@@ -3,24 +3,22 @@
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
 
 import pytest
 
+from openadapt_evals.analysis.report_generator import generate_report
 from openadapt_evals.analysis.trace_analyzer import (
+    _FORMAT_BENCHMARK_DIR,
+    _FORMAT_FULL_EVAL_JSONL,
+    _FORMAT_MIXED_DIR,
+    _FORMAT_TRAJECTORY_DIR,
+    Episode,
+    StepRecord,
     TraceAnalyzer,
     _classify_failure,
     _detect_format,
-    Episode,
-    StepRecord,
-    _FORMAT_FULL_EVAL_JSONL,
-    _FORMAT_TRAJECTORY_DIR,
-    _FORMAT_BENCHMARK_DIR,
-    _FORMAT_MIXED_DIR,
 )
-from openadapt_evals.analysis.report_generator import generate_report
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

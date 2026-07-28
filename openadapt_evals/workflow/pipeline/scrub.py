@@ -6,7 +6,6 @@ Uses openadapt-privacy if available, passes through if not.
 
 from __future__ import annotations
 
-import copy
 import logging
 
 from openadapt_evals.workflow.models import RecordingSession

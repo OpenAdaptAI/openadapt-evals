@@ -8,12 +8,12 @@ This module provides simple agent implementations for testing and baselines:
 
 from __future__ import annotations
 
-from openadapt_evals.agents.base import BenchmarkAgent
 from openadapt_evals.adapters.base import (
     BenchmarkAction,
     BenchmarkObservation,
     BenchmarkTask,
 )
+from openadapt_evals.agents.base import BenchmarkAgent
 
 
 class ScriptedAgent(BenchmarkAgent):

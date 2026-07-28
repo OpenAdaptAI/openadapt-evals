@@ -21,14 +21,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
-from openadapt_evals.agents import BenchmarkAgent
 from openadapt_evals.adapters import (
-    BenchmarkAdapter,
     BenchmarkAction,
+    BenchmarkAdapter,
     BenchmarkObservation,
     BenchmarkResult,
     BenchmarkTask,
 )
+from openadapt_evals.agents import BenchmarkAgent
 from openadapt_evals.telemetry import (
     track_action_executed,
     track_agent_run,

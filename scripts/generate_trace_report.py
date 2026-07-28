@@ -128,7 +128,7 @@ def generate_report(
 
     for step_num, filename in copied_filenames:
         if step_num is None:
-            lines.append(f"## Screenshot")
+            lines.append("## Screenshot")
             lines.append(f"![Screenshot]({filename})")
             lines.append("")
             continue

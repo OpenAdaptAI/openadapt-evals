@@ -56,7 +56,6 @@ import argparse
 import base64
 import json
 import logging
-import os
 import signal
 import sys
 import time
@@ -810,7 +809,7 @@ def main() -> int:
         print(f"Output: {output_dir}")
         print(f"Max steps: {args.max_steps}")
         print(f"Eval model: {args.eval_model}")
-        print(f"\nTasks:")
+        print("\nTasks:")
         for i, tid in enumerate(task_ids, 1):
             tc = task_config_map[tid]
             print(f"  {i:3d}. {tid} - {tc.name[:60]}")
@@ -966,7 +965,7 @@ def main() -> int:
         )
 
     if _shutdown_requested and i < total_tasks:
-        print(f"\nRun was interrupted. Resume with:")
+        print("\nRun was interrupted. Resume with:")
         print(
             f"  python scripts/collect_distillation_data.py "
             f"--resume --output-dir {output_dir} "

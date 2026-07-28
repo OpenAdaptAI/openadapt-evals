@@ -24,15 +24,15 @@ from typing import TYPE_CHECKING, Any
 
 from PIL import Image
 
-from openadapt_evals.agents.base import BenchmarkAgent
 from openadapt_evals.adapters.base import (
     BenchmarkAction,
     BenchmarkObservation,
     BenchmarkTask,
 )
+from openadapt_evals.agents.base import BenchmarkAgent
 
 if TYPE_CHECKING:
-    from openadapt_ml.baselines import BaselineConfig, TrackConfig, UnifiedBaselineAdapter
+    from openadapt_ml.baselines import TrackConfig, UnifiedBaselineAdapter
 
 logger = logging.getLogger("openadapt_evals.agents.baseline")
 
@@ -106,7 +106,7 @@ class BaselineAgent(BenchmarkAgent):
             ImportError: If openadapt-ml is not installed.
         """
         try:
-            from openadapt_ml.baselines import UnifiedBaselineAdapter, TrackConfig
+            from openadapt_ml.baselines import TrackConfig, UnifiedBaselineAdapter
         except ImportError as e:
             raise ImportError(
                 "openadapt-ml is required for BaselineAgent. "

@@ -278,7 +278,8 @@ class LocalAdapter(BenchmarkAdapter):
 
     def _do_click(self, action: BenchmarkAction) -> None:
         """Execute a mouse click action."""
-        from pynput.mouse import Button, Controller as MouseController  # type: ignore[import-untyped]
+        from pynput.mouse import Button  # type: ignore[import-untyped]
+        from pynput.mouse import Controller as MouseController
 
         mouse = MouseController()
         x = action.x if action.x is not None else 0
@@ -303,7 +304,7 @@ class LocalAdapter(BenchmarkAdapter):
 
     def _do_key(self, action: BenchmarkAction) -> None:
         """Execute a key press action, optionally with modifiers."""
-        from pynput.keyboard import Controller as KbdController, Key  # type: ignore[import-untyped]
+        from pynput.keyboard import Controller as KbdController  # type: ignore[import-untyped]
 
         kbd = KbdController()
         key_name = action.key or ""
@@ -347,7 +348,8 @@ class LocalAdapter(BenchmarkAdapter):
 
     def _do_drag(self, action: BenchmarkAction) -> None:
         """Execute a drag action."""
-        from pynput.mouse import Button, Controller as MouseController  # type: ignore[import-untyped]
+        from pynput.mouse import Button  # type: ignore[import-untyped]
+        from pynput.mouse import Controller as MouseController
 
         mouse = MouseController()
 

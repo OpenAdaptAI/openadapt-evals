@@ -8,17 +8,13 @@ Tests cover:
 """
 
 import sys
-from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
-
-import pytest
 
 # Add scripts directory to path so we can import the pipeline module
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 import run_eval_pipeline as pipeline
-
 
 # ---------------------------------------------------------------------------
 # _build_conditions

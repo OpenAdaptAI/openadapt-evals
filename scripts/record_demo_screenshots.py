@@ -294,7 +294,7 @@ def record_screenshots(
         # 1. Take screenshot BEFORE the action
         before_filename = f"step_{i:03d}_before.png"
         before_path = demo_json_dir / before_filename
-        print(f"  Taking screenshot (before)...")
+        print("  Taking screenshot (before)...")
         screenshot_bytes = _take_screenshot(server_url)
         if screenshot_bytes:
             before_path.write_bytes(screenshot_bytes)
@@ -327,7 +327,7 @@ def record_screenshots(
         # 4. Take screenshot AFTER the action
         after_filename = f"step_{i:03d}_after.png"
         after_path = demo_json_dir / after_filename
-        print(f"  Taking screenshot (after)...")
+        print("  Taking screenshot (after)...")
         screenshot_bytes = _take_screenshot(server_url)
         if screenshot_bytes:
             after_path.write_bytes(screenshot_bytes)

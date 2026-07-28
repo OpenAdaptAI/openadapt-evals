@@ -25,7 +25,6 @@ from typing import Callable
 
 from openadapt_evals.adapters import BenchmarkResult
 
-
 # WAA domains (11 domains, 154 tasks total in real benchmark)
 WAA_DOMAINS = [
     "chrome",

@@ -4,7 +4,7 @@ Tests cover instantiation and basic behavior without requiring
 a real SSH connection or WAA server.
 """
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 

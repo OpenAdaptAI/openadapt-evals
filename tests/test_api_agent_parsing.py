@@ -10,9 +10,10 @@ Fixes crash issue: 'str' object has no attribute 'get' in action parser
 Affected runs: 194740, 194940, 195137 (3 of 6 live runs - 50%)
 """
 
-import pytest
-from unittest.mock import Mock, patch, MagicMock
 from io import BytesIO
+from unittest.mock import Mock, patch
+
+import pytest
 from PIL import Image
 
 
@@ -260,7 +261,7 @@ class TestDefensiveErrorHandling:
         response = "```python\ncomputer.click(99999, 99999)\n```"
 
         logs = {}
-        result = mock_agent._parse_api_response(response, 1920, 1200, logs)
+        mock_agent._parse_api_response(response, 1920, 1200, logs)
 
         # The regex fallback may still capture this, but validation should reject it
         # The primary code block strategy should fail due to coordinate bounds
@@ -690,7 +691,7 @@ class TestElementBasedActions:
 
     def test_click_element_scores_success_on_mock_adapter(self, mock_agent):
         """Integration: click_element action with target_node_id scores on mock adapter."""
-        from openadapt_evals.adapters.base import BenchmarkObservation, BenchmarkAction
+        from openadapt_evals.adapters.base import BenchmarkAction, BenchmarkObservation
 
         obs = BenchmarkObservation(viewport=(1920, 1200))
         action = mock_agent._parse_computer_action(

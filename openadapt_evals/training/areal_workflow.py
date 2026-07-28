@@ -34,13 +34,11 @@ Usage standalone (testing without AReaL):
 from __future__ import annotations
 
 import base64
-import io
 import logging
 import os
 from typing import Any
 
-from openadapt_evals.adapters.base import BenchmarkAction, BenchmarkObservation
-from openadapt_evals.adapters.rl_env import RLEnvironment, ResetConfig
+from openadapt_evals.adapters.rl_env import ResetConfig, RLEnvironment
 from openadapt_evals.training.trl_rollout import parse_action_json
 
 # openai is a required dependency of openadapt-evals (listed in pyproject.toml),

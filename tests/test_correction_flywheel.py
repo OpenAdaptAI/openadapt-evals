@@ -3,12 +3,8 @@
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from dataclasses import asdict
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from openadapt_evals.adapters.base import (
     BenchmarkAction,
@@ -17,9 +13,8 @@ from openadapt_evals.adapters.base import (
     BenchmarkTask,
 )
 from openadapt_evals.correction_store import CorrectionEntry, CorrectionStore
-from openadapt_evals.demo_controller import DemoController, PlanState, PlanStep
+from openadapt_evals.demo_controller import DemoController
 from openadapt_evals.plan_verify import VerificationResult
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -311,7 +306,7 @@ class TestDemoControllerCorrections:
             domain="desktop",
         )
 
-        result = controller.execute(task, max_steps=10)
+        controller.execute(task, max_steps=10)
 
         # Verify the correction was used (step was replaced)
         step1 = controller.plan_state.steps[0]
@@ -358,7 +353,7 @@ class TestDemoControllerCorrections:
 
             mock_replan.side_effect = fake_replan
 
-            result = controller.execute(task, max_steps=5)
+            controller.execute(task, max_steps=5)
 
             # Replan should have been called since no corrections existed
             assert mock_replan.called
@@ -510,7 +505,7 @@ class TestCorrectionFlywheelE2E:
             ),
         ]
 
-        result = controller.execute(task, max_steps=10)
+        controller.execute(task, max_steps=10)
 
         # The correction should have been used
         step1 = controller.plan_state.steps[0]

@@ -54,7 +54,6 @@ import json
 import logging
 import os
 import signal
-import socket
 import subprocess
 import sys
 import time
@@ -628,7 +627,7 @@ def _reset_environment_between_phases(
     logger.info("=" * 60)
 
     try:
-        from openadapt_evals.adapters.rl_env import RLEnvironment, ResetConfig
+        from openadapt_evals.adapters.rl_env import ResetConfig, RLEnvironment
         from openadapt_evals.adapters.waa.live import WAALiveAdapter, WAALiveConfig
 
         adapter = WAALiveAdapter(WAALiveConfig(server_url=server_url))
@@ -778,7 +777,7 @@ def _run_live_episode(
 ) -> tuple[float, list[bytes]]:
     """Run one episode against a live WAA server. Returns (score, screenshots)."""
     from openadapt_evals.adapters.base import BenchmarkAction, BenchmarkTask
-    from openadapt_evals.adapters.rl_env import RLEnvironment, ResetConfig
+    from openadapt_evals.adapters.rl_env import ResetConfig, RLEnvironment
     from openadapt_evals.adapters.waa.live import WAALiveAdapter, WAALiveConfig
     from openadapt_evals.agents.planner_grounder_agent import PlannerGrounderAgent
 
@@ -1206,11 +1205,12 @@ def phase3_retry(
             # Use DemoExecutor: execute demo steps directly with tiered
             # intelligence. Keyboard/type steps are deterministic, click
             # steps use the grounder, planner is only for recovery.
-            from openadapt_evals.agents.demo_executor import DemoExecutor
             from openadapt_evals.adapters.rl_env import RLEnvironment
             from openadapt_evals.adapters.waa.live import (
-                WAALiveAdapter, WAALiveConfig,
+                WAALiveAdapter,
+                WAALiveConfig,
             )
+            from openadapt_evals.agents.demo_executor import DemoExecutor
 
             logger.info(
                 "Using DemoExecutor (tiered execution) for %d-step demo",

@@ -10,13 +10,11 @@ Covers:
 
 from __future__ import annotations
 
-import math
 from unittest.mock import patch
 
 import pytest
 
 from openadapt_evals.grounding import (
-    GroundingCandidate,
     GroundingTarget,
     _bbox_center,
     _bbox_distance,
@@ -24,7 +22,6 @@ from openadapt_evals.grounding import (
     ground_by_text,
     run_ocr,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

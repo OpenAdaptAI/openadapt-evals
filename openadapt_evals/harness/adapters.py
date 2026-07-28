@@ -38,6 +38,8 @@ from openadapt_types import (
 from openadapt_evals.evaluation.verifier_registry import (
     TaskVerifierRegistry,
     VerificationResult,
+)
+from openadapt_evals.evaluation.verifier_registry import (
     registry as global_registry,
 )
 from openadapt_evals.harness.protocol import Observation

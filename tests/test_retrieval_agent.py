@@ -4,10 +4,9 @@ These tests use mocks to avoid requiring actual VLM embeddings
 or API calls during testing.
 """
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
-import tempfile
 
 from openadapt_evals.adapters.base import (
     BenchmarkAction,
@@ -267,7 +266,7 @@ class TestActMethod:
                         viewport=(1920, 1080),
                     )
 
-                    action = agent.act(obs, task)
+                    agent.act(obs, task)
 
                     # Verify demo was retrieved
                     mock_retriever.retrieve.assert_called_once()

@@ -4,9 +4,7 @@ Verifies that pixel_action() builds pyautogui commands directly and sends
 them via _send_command(), bypassing the element-based _translate_action path.
 """
 
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import patch
 
 from openadapt_evals.adapters.base import BenchmarkAction, BenchmarkObservation
 from openadapt_evals.adapters.waa.live import WAALiveAdapter, WAALiveConfig
