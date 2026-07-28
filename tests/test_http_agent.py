@@ -86,31 +86,36 @@ class TestAct:
 
     @patch("openadapt_evals.agents.http_agent.requests.post")
     def test_act_connection_error(self, mock_post, agent, observation, task):
-        """act() returns done with error info on connection failure."""
+        """act() returns an infrastructure error, never a clean `done`."""
         import requests
 
         mock_post.side_effect = requests.ConnectionError("refused")
 
         action = agent.act(observation, task)
 
-        assert action.type == "done"
+        # NOT "done": an unreachable agent endpoint is an infrastructure
+        # failure, and `done` reads to the eval loop as a clean agent finish,
+        # producing a genuine-looking 0% for an agent that never ran.
+        assert action.type == "error"
+        assert action.raw_action["error_type"] == "infrastructure"
         assert "connection_failed" in action.raw_action["error"]
 
     @patch("openadapt_evals.agents.http_agent.requests.post")
     def test_act_timeout(self, mock_post, agent, observation, task):
-        """act() returns done with error info on timeout."""
+        """act() returns an infrastructure error on timeout, never done."""
         import requests
 
         mock_post.side_effect = requests.Timeout("timed out")
 
         action = agent.act(observation, task)
 
-        assert action.type == "done"
+        assert action.type == "error"
+        assert action.raw_action["error_type"] == "infrastructure"
         assert "timeout" in action.raw_action["error"]
 
     @patch("openadapt_evals.agents.http_agent.requests.post")
     def test_act_http_error(self, mock_post, agent, observation, task):
-        """act() returns done with error info on HTTP error."""
+        """act() returns an infrastructure error on HTTP error, never done."""
         import requests
 
         mock_resp = MagicMock()
@@ -119,7 +124,8 @@ class TestAct:
 
         action = agent.act(observation, task)
 
-        assert action.type == "done"
+        assert action.type == "error"
+        assert action.raw_action["error_type"] == "infrastructure"
         assert "http_error" in action.raw_action["error"]
 
     @patch("openadapt_evals.agents.http_agent.requests.post")
@@ -250,9 +256,11 @@ class TestParseActionResponse:
         assert action.target_node_id == "btn_42"
         assert action.target_role == "button"
 
-    def test_missing_type_defaults_to_done(self):
+    def test_missing_type_is_an_error_not_a_clean_finish(self):
+        """A body with no `type` is malformed, not a completed task."""
         action = _parse_action_response({})
-        assert action.type == "done"
+        assert action.type == "error"
+        assert action.raw_action["error_type"] == "agent"
 
     def test_raw_action_preserved(self):
         data = {"type": "click", "x": 0.5, "y": 0.5, "extra_field": "kept"}

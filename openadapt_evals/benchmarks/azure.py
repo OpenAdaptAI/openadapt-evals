@@ -69,6 +69,11 @@ VM_TIER_COSTS = {
     "complex": 0.384,  # $0.384/hour
 }
 
+# How many consecutive poll failures for one worker before the run is failed
+# rather than polled forever. A worker we cannot reach has produced NO results,
+# which is not the same as having produced zero-score ones.
+_MAX_WORKER_POLL_ERRORS = 10
+
 # Spot instance hourly costs (approximately 70-80% discount)
 VM_TIER_SPOT_COSTS = {
     "simple": 0.024,   # ~$0.024/hour (75% discount)
@@ -1179,6 +1184,7 @@ class AzureWAAOrchestrator:
     ) -> list[BenchmarkResult]:
         """Wait for all workers and collect results."""
         all_results: list[BenchmarkResult] = []
+        consecutive_errors: dict[int, int] = {}
 
         # Poll workers for completion
         pending_workers = [w for w in workers if w.status == "running"]
@@ -1207,8 +1213,34 @@ class AzureWAAOrchestrator:
                             f"{len(results)} results"
                         )
 
+                except NotImplementedError:
+                    # Never swallow a stub: it would poll forever, and the
+                    # alternative (returning what it has) is a partial result
+                    # set reported as a complete run.
+                    raise
+
                 except Exception as e:
                     logger.warning(f"Error checking worker {worker.worker_id}: {e}")
+                    consecutive_errors[worker.worker_id] = (
+                        consecutive_errors.get(worker.worker_id, 0) + 1
+                    )
+                    if consecutive_errors[worker.worker_id] >= _MAX_WORKER_POLL_ERRORS:
+                        # A worker we can no longer reach has NOT produced zero
+                        # results; it has produced none. Fail the run instead of
+                        # polling it forever or dropping it silently from the
+                        # denominator.
+                        worker.status = "failed"
+                        worker.error = str(e)
+                        pending_workers.remove(worker)
+                        raise RuntimeError(
+                            f"Worker {worker.worker_id} "
+                            f"({worker.compute_name}) could not be polled "
+                            f"{_MAX_WORKER_POLL_ERRORS} times in a row; its "
+                            f"{len(worker.assigned_tasks)} tasks were not "
+                            f"scored. Last error: {e}"
+                        ) from e
+                else:
+                    consecutive_errors[worker.worker_id] = 0
 
             if pending_workers:
                 time.sleep(30)
@@ -1216,20 +1248,26 @@ class AzureWAAOrchestrator:
         return all_results
 
     def _fetch_worker_results(self, worker: WorkerState) -> list[BenchmarkResult]:
-        """Fetch results from a worker's output storage."""
-        # In a real implementation, this would download results from blob storage
-        # For now, return placeholder results
-        results = []
-        for task_id in worker.assigned_tasks:
-            results.append(
-                BenchmarkResult(
-                    task_id=task_id,
-                    success=False,  # Placeholder
-                    score=0.0,
-                    num_steps=0,
-                )
-            )
-        return results
+        """Fetch results from a worker's output storage.
+
+        Not implemented. This used to synthesize one
+        ``BenchmarkResult(success=False, score=0.0)`` per assigned task, with
+        no ``error``/``error_type``/``reason``, which meant a distributed run
+        that never touched a VM produced a complete, legitimate-looking
+        ``Success rate: 0.0%`` that ``compute_metrics`` could not even filter
+        out as infrastructure. A stub must refuse to produce numbers -- see
+        ``harness/external.py``, which raises for exactly this reason.
+
+        Raises:
+            NotImplementedError: Always, until blob-storage retrieval lands.
+        """
+        raise NotImplementedError(
+            "AzureWAAOrchestrator cannot retrieve worker results yet: "
+            "downloading them from blob storage is unimplemented. Refusing to "
+            f"fabricate {len(worker.assigned_tasks)} zero-score results for "
+            f"worker {worker.worker_id}, which would be published as a real "
+            "0% benchmark run."
+        )
 
     def _cleanup_workers(self, workers: list[WorkerState]) -> None:
         """Delete all worker VMs."""

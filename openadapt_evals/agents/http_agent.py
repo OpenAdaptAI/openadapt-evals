@@ -108,29 +108,46 @@ class HttpAgent(BenchmarkAgent):
             )
             resp.raise_for_status()
             data = resp.json()
+        # `done` means "the agent finished the task" and the eval loop breaks
+        # cleanly with no error marker; a sidecar that OOMed at step 0 would be
+        # scored as an agent that ran and failed. `error` with an explicit
+        # error_type is the shape the harness already knows how to exclude
+        # (see claude_computer_use_agent).
         except requests.ConnectionError as e:
             logger.error("Connection failed: %s", e)
             return BenchmarkAction(
-                type="done",
-                raw_action={"error": f"connection_failed: {e}"},
+                type="error",
+                raw_action={
+                    "error": f"connection_failed: {e}",
+                    "error_type": "infrastructure",
+                },
             )
         except requests.Timeout as e:
             logger.error("Request timed out: %s", e)
             return BenchmarkAction(
-                type="done",
-                raw_action={"error": f"timeout: {e}"},
+                type="error",
+                raw_action={
+                    "error": f"timeout: {e}",
+                    "error_type": "infrastructure",
+                },
             )
         except requests.HTTPError as e:
             logger.error("HTTP error: %s", e)
             return BenchmarkAction(
-                type="done",
-                raw_action={"error": f"http_error: {e}"},
+                type="error",
+                raw_action={
+                    "error": f"http_error: {e}",
+                    "error_type": "infrastructure",
+                },
             )
         except (ValueError, KeyError) as e:
             logger.error("Invalid response: %s", e)
             return BenchmarkAction(
-                type="done",
-                raw_action={"error": f"invalid_response: {e}"},
+                type="error",
+                raw_action={
+                    "error": f"invalid_response: {e}",
+                    "error_type": "infrastructure",
+                },
             )
 
         return _parse_action_response(data)
@@ -177,7 +194,17 @@ def _parse_action_response(data: dict[str, Any]) -> BenchmarkAction:
     Returns:
         Parsed BenchmarkAction.
     """
-    action_type = data.get("type", "done")
+    # No default: a body with no `type` is a malformed response, and
+    # defaulting it to "done" reads as a clean agent finish.
+    action_type = data.get("type")
+    if not action_type:
+        return BenchmarkAction(
+            type="error",
+            raw_action={
+                "error": f"response has no 'type' field: {data!r}"[:500],
+                "error_type": "agent",
+            },
+        )
 
     return BenchmarkAction(
         type=action_type,

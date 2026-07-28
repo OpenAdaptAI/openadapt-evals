@@ -32,6 +32,21 @@ from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
+
+class EvaluationNotRunError(RuntimeError):
+    """The evaluation could not be carried out, as opposed to failing.
+
+    Every path that used to answer a broken getter or a raising metric with
+    ``score=0.0`` raises this instead. The endpoint turns it into a response
+    carrying ``scored: false`` and an ``error_type``, so an unreachable VM is
+    never accepted upstream as a legitimate 0% benchmark result.
+    """
+
+    def __init__(self, message: str, error_type: str = "evaluation") -> None:
+        super().__init__(message)
+        self.error_type = error_type
+
+
 # Try to import Flask for blueprint creation
 try:
     from flask import Blueprint, jsonify, request
@@ -144,14 +159,22 @@ def get_actual_value(
     getter_func = getattr(getters, getter_name, None)
 
     if getter_func is None:
-        logger.warning(f"Getter not found: {getter_name}")
-        return None
+        # A getter the deployed evaluators do not implement cannot score this
+        # task. Returning None made it compare unequal to `expected` and score
+        # 0.0, which reads downstream as "the agent failed".
+        raise EvaluationNotRunError(
+            f"getter '{getter_name}' is not implemented by the deployed WAA "
+            f"evaluators; the task was not scored"
+        )
 
     try:
         return getter_func(env, result_spec)
     except Exception as e:
         logger.error(f"Getter {getter_name} failed: {e}")
-        return None
+        raise EvaluationNotRunError(
+            f"getter '{getter_name}' raised while reading the VM: {e}",
+            error_type="infrastructure",
+        ) from e
 
 
 def get_expected_value(
@@ -243,26 +266,22 @@ def run_metric(
     metric_func = getattr(metrics, metric_name, None)
 
     if metric_func is None:
-        # Try common fallbacks
-        fallbacks = ["exact_match", "fuzzy_match"]
-        for fallback in fallbacks:
-            metric_func = getattr(metrics, fallback, None)
-            if metric_func:
-                logger.warning(
-                    f"Metric '{metric_name}' not found, using '{fallback}'"
-                )
-                break
-
-    if metric_func is None:
-        logger.error(f"No valid metric found for '{metric_name}'")
-        return 0.0
+        # Substituting exact_match for a metric the task asked for scores the
+        # task with a different comparison and reports it as if the requested
+        # metric had run. "Metric not implemented" is not "the agent failed".
+        raise EvaluationNotRunError(
+            f"metric '{metric_name}' is not implemented by the deployed WAA "
+            f"evaluators; refusing to substitute a different metric"
+        )
 
     try:
         score = metric_func(actual, expected, **options)
         return float(score)
     except Exception as e:
         logger.error(f"Metric {metric_name} failed: {e}")
-        return 0.0
+        raise EvaluationNotRunError(
+            f"metric '{metric_name}' raised while scoring: {e}"
+        ) from e
 
 
 def evaluate_task_state(
@@ -302,21 +321,12 @@ def evaluate_task_state(
     try:
         getters, metrics = _load_waa_evaluators(evaluators_path)
     except ImportError as e:
-        return {
-            "success": False,
-            "score": 0.0,
-            "reason": f"Failed to load evaluators: {e}",
-            "error": str(e),
-        }
+        return _not_scored(f"Failed to load evaluators: {e}", "evaluation")
 
     evaluator_config = task_config.get("evaluator", {})
 
     if not evaluator_config:
-        return {
-            "success": False,
-            "score": 0.0,
-            "reason": "No evaluator configuration in task",
-        }
+        return _not_scored("No evaluator configuration in task", "evaluation")
 
     # Handle infeasible tasks
     # If task is marked infeasible and agent reported FAIL, that's success
@@ -336,10 +346,13 @@ def evaluate_task_state(
         _run_postconfig(postconfig, env)
 
     # Get actual value from VM
-    actual = get_actual_value(evaluator_config, env, getters)
+    try:
+        actual = get_actual_value(evaluator_config, env, getters)
 
-    # Get expected value
-    expected = get_expected_value(evaluator_config, env, getters)
+        # Get expected value
+        expected = get_expected_value(evaluator_config, env, getters)
+    except EvaluationNotRunError as e:
+        return _not_scored(str(e), e.error_type)
 
     # Get metric function(s)
     func_spec = evaluator_config.get("func", "exact_match")
@@ -355,7 +368,10 @@ def evaluate_task_state(
     # Run each metric
     metric_results = []
     for func_name in func_names:
-        score = run_metric(func_name, actual, expected, options, metrics)
+        try:
+            score = run_metric(func_name, actual, expected, options, metrics)
+        except EvaluationNotRunError as e:
+            return _not_scored(str(e), e.error_type)
         metric_results.append({
             "metric": func_name,
             "score": score,
@@ -364,11 +380,9 @@ def evaluate_task_state(
 
     # Guard empty metric_results (e.g. func_spec was [])
     if not metric_results:
-        return {
-            "success": False,
-            "score": 0.0,
-            "reason": "No metrics could be computed (empty func spec)",
-        }
+        return _not_scored(
+            "No metrics could be computed (empty func spec)", "evaluation",
+        )
 
     # Combine results based on conjunction
     if conjunction == "or":
@@ -399,6 +413,26 @@ def evaluate_task_state(
         "expected": expected_str,
         "reason": reason,
         "metrics": metric_results if len(metric_results) > 1 else None,
+        # This one IS a measurement.
+        "scored": True,
+        "error_type": None,
+    }
+
+
+def _not_scored(reason: str, error_type: str) -> dict:
+    """Build a response for a task that was NOT scored.
+
+    ``score``/``success`` are present for schema compatibility with old
+    consumers, but ``scored: false`` is the field that matters: nothing here
+    was measured, and aggregating this row as a zero publishes a wrong number.
+    """
+    logger.error("evaluation not run (%s): %s", error_type, reason)
+    return {
+        "success": False,
+        "score": 0.0,
+        "reason": reason,
+        "scored": False,
+        "error_type": error_type,
     }
 
 

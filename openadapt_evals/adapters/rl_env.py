@@ -64,7 +64,9 @@ from openadapt_evals.adapters.base import (
     BenchmarkAction,
     BenchmarkAdapter,
     BenchmarkObservation,
+    BenchmarkResult,
     BenchmarkTask,
+    EvaluationUnavailableError,
 )
 
 # Avoid circular import — TaskConfig imported lazily.
@@ -302,8 +304,16 @@ class RLEnvironment:
         if self._evaluate_every_step and self._current_task is not None:
             try:
                 result = self._adapter.evaluate(self._current_task)
-                info["evaluation_score"] = result.score
-                info["evaluation_success"] = result.success
+                if result.error_type:
+                    # Not scored. Recording a 0.0 here would look identical to
+                    # a step the agent genuinely failed.
+                    info["evaluation_error"] = (
+                        f"{result.error_type}: {result.reason or result.error}"
+                    )
+                    info["evaluation_error_type"] = result.error_type
+                else:
+                    info["evaluation_score"] = result.score
+                    info["evaluation_success"] = result.success
             except Exception as e:
                 logger.warning("Per-step evaluation failed at step %d: %s", self._step_count, e)
                 info["evaluation_error"] = str(e)
@@ -460,15 +470,15 @@ class RLEnvironment:
             raise RuntimeError("No screenshot available from adapter")
         return Image.open(io.BytesIO(obs.screenshot))
 
-    def evaluate(self) -> float:
-        """Run the WAA evaluator on the current VM state.
+    def evaluate_result(self) -> BenchmarkResult:
+        """Run the adapter's evaluator and return the full result.
 
-        Returns the task-success score (0.0-1.0). For binary tasks, this is
-        0.0 (failure) or 1.0 (success). Suitable as the terminal reward for
-        GRPO or other RL algorithms.
+        Unlike :meth:`evaluate`, this preserves ``error_type``, so a caller can
+        tell an unreachable VM (``error_type == "infrastructure"``) from a task
+        the agent genuinely failed (``error_type is None, score == 0.0``).
 
         Returns:
-            Score between 0.0 and 1.0.
+            The adapter's :class:`BenchmarkResult`, unmodified.
 
         Raises:
             RuntimeError: If no task has been loaded (call reset() first).
@@ -478,16 +488,51 @@ class RLEnvironment:
 
         result = self._adapter.evaluate(self._current_task)
 
-        # Backfill reward on the last trajectory step
-        if self._trajectory:
+        # Backfill reward on the last trajectory step only when the score is a
+        # real measurement; an infrastructure 0.0 is not a reward signal.
+        if self._trajectory and not result.error_type:
             self._trajectory[-1].reward = result.score
 
         logger.info(
-            "Evaluation: task=%s, success=%s, score=%.2f",
+            "Evaluation: task=%s, success=%s, score=%.2f, error_type=%s",
             self._current_task.task_id,
             result.success,
             result.score,
+            result.error_type,
         )
+        return result
+
+    def evaluate(self) -> float:
+        """Run the WAA evaluator on the current VM state.
+
+        Returns the task-success score (0.0-1.0). For binary tasks, this is
+        0.0 (failure) or 1.0 (success). Suitable as the terminal reward for
+        GRPO or other RL algorithms.
+
+        The adapters go to real trouble to mark infrastructure failures
+        (``BenchmarkResult.error_type``); flattening the result to a bare float
+        used to throw that away, so 40 tasks whose VM stopped answering were
+        published as 40 genuine agent failures. This method now raises rather
+        than returning an unmeasured 0.0. Callers that want the tri-state
+        should use :meth:`evaluate_result`.
+
+        Returns:
+            Score between 0.0 and 1.0.
+
+        Raises:
+            RuntimeError: If no task has been loaded (call reset() first).
+            EvaluationUnavailableError: If the task could not be scored
+                because of an infrastructure or evaluator failure.
+        """
+        result = self.evaluate_result()
+
+        if result.error_type in ("infrastructure", "evaluation"):
+            raise EvaluationUnavailableError(
+                f"task {result.task_id} was not scored "
+                f"({result.error_type}): {result.reason or result.error}",
+                error_type=result.error_type,
+            )
+
         return result.score
 
     def check_milestones_incremental(
@@ -613,13 +658,23 @@ class RLEnvironment:
                 # - Benchmarking: 180s timeout, 3 retries (thorough)
                 # - Training: 15s timeout, 1 retry (fast feedback)
                 # The TRL wrapper sets training-appropriate timeouts.
+                binary_score = 0.0
+                binary_unavailable: Exception | None = None
                 try:
                     binary_score = self.evaluate()
-                except Exception:
-                    binary_score = 0.0
+                except Exception as exc:
+                    # Record WHY rather than folding it into a 0.0. A binary
+                    # evaluator that could not run is not the same as one that
+                    # ran and said "no", and `max(milestone, 0.0)` silently
+                    # publishes the milestone high-water mark as a task score.
+                    binary_unavailable = exc
+                    logger.warning(
+                        "evaluate_dense: binary evaluation did not run: %s", exc,
+                    )
 
                 # If binary eval returned 0.0 (endpoint down or task
                 # failed), try local evaluation via task config checks.
+                local_check_ran = False
                 if (
                     binary_score == 0.0
                     and self._task_config.checks
@@ -635,6 +690,7 @@ class RLEnvironment:
                                 screenshot, server_url,
                             )
                         )
+                        local_check_ran = True
                         if binary_score > 0:
                             logger.info(
                                 "evaluate_dense: local check fallback "
@@ -645,6 +701,23 @@ class RLEnvironment:
                             "evaluate_dense: local check fallback "
                             "failed: %s", exc,
                         )
+
+                if binary_unavailable is not None and not local_check_ran:
+                    # Nothing scored this task: the binary evaluator could not
+                    # run and no local check stood in for it. The milestone
+                    # high-water mark is a progress signal, not a task score,
+                    # so returning it here would publish a number that was
+                    # never measured.
+                    raise EvaluationUnavailableError(
+                        f"task {self._current_task.task_id} was not scored: "
+                        f"binary evaluation did not run "
+                        f"({binary_unavailable}) and no local check fallback "
+                        f"was available; the milestone high-water mark "
+                        f"({milestone_score:.2f}) is not a task score",
+                        error_type=getattr(
+                            binary_unavailable, "error_type", "infrastructure",
+                        ),
+                    ) from binary_unavailable
 
                 # Use the higher of milestone score and binary score
                 score = max(milestone_score, binary_score)

@@ -199,6 +199,21 @@ def main(argv: list[str] | None = None) -> int:
         for problem in problems:
             print(f"DRIFT: {problem}", file=sys.stderr)
         return 1
+
+    if release_version is None:
+        # The release-freshness comparison did not run. Skipping it is
+        # deliberate (see the module docstring) and the exit code stays 0, but
+        # the message must not claim the binding was verified: in a CI log
+        # where only the last line is read, that reads as a passing freshness
+        # check when the check never happened.
+        print(
+            f"Published evidence {entry['path']} passed its OFFLINE checks. "
+            f"The release-freshness comparison against the current {package} "
+            f"release was SKIPPED"
+            + (" (--offline)." if args.offline else " (PyPI unreachable).")
+        )
+        return 0
+
     print(
         f"Published evidence {entry['path']} is bound to the current "
         f"{package} release {entry['flow_version']}."

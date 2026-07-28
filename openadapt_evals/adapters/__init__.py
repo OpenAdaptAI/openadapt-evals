@@ -39,6 +39,7 @@ from openadapt_evals.adapters.base import (
     BenchmarkObservation,
     BenchmarkResult,
     BenchmarkTask,
+    EvaluationUnavailableError,
     StaticDatasetAdapter,
     UIElement,
 )
@@ -72,6 +73,7 @@ __all__ = [
     "BenchmarkObservation",
     "BenchmarkAction",
     "BenchmarkResult",
+    "EvaluationUnavailableError",
     "StaticDatasetAdapter",
     "UIElement",
     # Local adapter

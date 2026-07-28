@@ -596,11 +596,24 @@ class AWSVMManager:
                 return False
 
             minutes = hours * 60
-            ssh_run(
+            proc = ssh_run(
                 ip,
                 f"sudo shutdown -h +{minutes}",
                 username=self.ssh_username,
             )
+            # `ssh_run` does not raise on a non-zero exit. Returning True
+            # without checking asserted that the cost safety net was armed when
+            # it may not have been -- and the instance then bills until someone
+            # notices.
+            returncode = getattr(proc, "returncode", None)
+            if returncode not in (0, None):
+                logger.error(
+                    "Auto-shutdown NOT set for %s: `shutdown` exited %s: %s",
+                    name,
+                    returncode,
+                    (getattr(proc, "stderr", "") or "").strip()[:300],
+                )
+                return False
             logger.info(f"Auto-shutdown set for {name} in {hours} hours")
             return True
 

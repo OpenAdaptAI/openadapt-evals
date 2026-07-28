@@ -7769,6 +7769,13 @@ def cmd_resources(args):
         for warning in status["warnings"]:
             print(f"  - {warning}")
         print()
+    elif status.get("query_failures"):
+        # "Could not ask Azure" must never print as "nothing is running".
+        print("RESOURCE STATE UNKNOWN: one or more Azure queries did not run.")
+        print("Resources may still be billing.")
+        for failure in status["query_failures"]:
+            print(f"  - {failure}")
+        print()
     else:
         print("No running resources detected.")
         print()

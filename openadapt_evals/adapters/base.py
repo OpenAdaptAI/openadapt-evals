@@ -31,6 +31,21 @@ if TYPE_CHECKING:
     pass
 
 
+class EvaluationUnavailableError(RuntimeError):
+    """A task could not be scored, as distinct from having scored badly.
+
+    Adapters signal this condition on a :class:`BenchmarkResult` via
+    ``error_type in {"infrastructure", "evaluation"}``. Any API that flattens a
+    result down to a bare float must raise this instead of returning ``0.0``:
+    an unreachable VM reported as a legitimate 0% is the single worst defect an
+    evaluation harness can have, because the number looks measured.
+    """
+
+    def __init__(self, message: str, error_type: str = "infrastructure") -> None:
+        super().__init__(message)
+        self.error_type = error_type
+
+
 @dataclass
 class BenchmarkResult:
     """Result of a single task evaluation.

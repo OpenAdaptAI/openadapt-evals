@@ -105,8 +105,23 @@ def get_active_pool_warning() -> str | None:
     return None
 
 
+class AzureQueryFailed(RuntimeError):
+    """An ``az`` query did not run, so its result set is unknown.
+
+    An empty list from a failed query and an empty list from an empty
+    subscription are the same value, and the caller turns that value into the
+    positive claim "All Azure resources are deallocated or stopped" -- while
+    VMs keep billing.
+    """
+
+
 def get_azure_vms() -> list[dict]:
-    """Get all VMs in the resource group."""
+    """Get all VMs in the resource group.
+
+    Raises:
+        AzureQueryFailed: If ``az`` could not be run or its output could not be
+            parsed. Callers must not treat that as "no VMs".
+    """
     try:
         result = subprocess.run(
             ["az", "vm", "list", "-g", RESOURCE_GROUP, "--show-details", "-o", "json"],
@@ -114,16 +129,30 @@ def get_azure_vms() -> list[dict]:
             text=True,
             timeout=30,
         )
-        if result.returncode == 0 and result.stdout.strip():
-            return json.loads(result.stdout)
-    except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError):
-        pass
-    return []
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        raise AzureQueryFailed(f"could not run `az vm list`: {e}") from e
+
+    if result.returncode != 0:
+        raise AzureQueryFailed(
+            f"`az vm list` exited {result.returncode}: "
+            f"{(result.stderr or '').strip()[:300]}"
+        )
+    if not result.stdout.strip():
+        raise AzureQueryFailed("`az vm list` produced no output")
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        raise AzureQueryFailed(f"`az vm list` output was not JSON: {e}") from e
 
 
 def get_azure_ml_compute() -> list[dict]:
-    """Get Azure ML compute instances from all known workspaces."""
-    all_compute = []
+    """Get Azure ML compute instances from all known workspaces.
+
+    Raises:
+        AzureQueryFailed: If no workspace could be queried at all.
+    """
+    all_compute: list[dict] = []
+    failures: list[str] = []
 
     # Try to get workspaces from settings, fall back to known defaults
     try:
@@ -163,13 +192,37 @@ def get_azure_ml_compute() -> list[dict]:
                 text=True,
                 timeout=30,
             )
-            if result.returncode == 0 and result.stdout.strip():
-                compute_list = json.loads(result.stdout)
-                for ci in compute_list:
-                    ci["_workspace"] = workspace_name
-                all_compute.extend(compute_list)
-        except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError):
-            pass
+            if result.returncode != 0:
+                # A workspace that does not exist in this subscription is a
+                # normal, expected miss; record it so the caller can tell that
+                # from a workspace we simply failed to query.
+                failures.append(
+                    f"az ml compute list -g {resource_group} -w {workspace_name} "
+                    f"exited {result.returncode}"
+                )
+                continue
+            if not result.stdout.strip():
+                failures.append(
+                    f"az ml compute list -w {workspace_name} produced no output"
+                )
+                continue
+            compute_list = json.loads(result.stdout)
+            for ci in compute_list:
+                ci["_workspace"] = workspace_name
+            all_compute.extend(compute_list)
+        except (
+            subprocess.TimeoutExpired,
+            json.JSONDecodeError,
+            FileNotFoundError,
+        ) as e:
+            failures.append(f"workspace {workspace_name}: {e}")
+
+    if failures and not all_compute:
+        # Every workspace query failed and we found nothing. That is not
+        # evidence that nothing is running.
+        raise AzureQueryFailed(
+            "no Azure ML workspace could be queried: " + "; ".join(failures)
+        )
 
     return all_compute
 
@@ -185,10 +238,17 @@ def check_resources() -> dict:
         "has_running_resources": False,
         "has_paused_pool": False,
         "warnings": [],
+        # Non-empty means at least one probe did not run. While this is
+        # non-empty the report must NOT claim that nothing is running.
+        "query_failures": [],
     }
 
     # Check VMs
-    vms = get_azure_vms()
+    try:
+        vms = get_azure_vms()
+    except AzureQueryFailed as e:
+        vms = []
+        status["query_failures"].append(str(e))
     for vm in vms:
         name = vm.get("name", "unknown")
         power_state = vm.get("powerState", "unknown")
@@ -217,7 +277,11 @@ def check_resources() -> dict:
             )
 
     # Check Azure ML compute
-    compute_instances = get_azure_ml_compute()
+    try:
+        compute_instances = get_azure_ml_compute()
+    except AzureQueryFailed as e:
+        compute_instances = []
+        status["query_failures"].append(str(e))
     for ci in compute_instances:
         name = ci.get("name", "unknown")
         state = ci.get("state", "unknown")
@@ -281,6 +345,20 @@ def update_resources_file(status: dict) -> None:
 
         for warning in status["warnings"]:
             lines.append(f"- {warning}")
+        lines.append("")
+    elif status.get("query_failures"):
+        lines.extend(
+            [
+                "## Resource State UNKNOWN",
+                "",
+                "One or more Azure queries did not run, so this file cannot "
+                "say whether anything is running. Resources may still be "
+                "billing.",
+                "",
+            ]
+        )
+        for failure in status["query_failures"]:
+            lines.append(f"- {failure}")
         lines.append("")
     else:
         lines.extend(

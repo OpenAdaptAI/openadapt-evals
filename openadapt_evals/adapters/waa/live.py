@@ -1064,13 +1064,7 @@ class WAALiveAdapter(BenchmarkAdapter):
 
             if resp.status_code == 200:
                 result = resp.json()
-                return BenchmarkResult(
-                    task_id=task.task_id,
-                    success=result.get("success", False),
-                    score=result.get("score", 0.0),
-                    num_steps=self._step_count,
-                    reason=result.get("reason"),
-                )
+                return self._result_from_evaluate_response(task, result)
 
             elif resp.status_code == 404 or (
                 resp.status_code == 500 and "404 Not Found" in resp.text
@@ -1092,12 +1086,8 @@ class WAALiveAdapter(BenchmarkAdapter):
                             # Cache the working URL for future calls
                             self.config.evaluate_url = fallback_url
                             result = resp2.json()
-                            return BenchmarkResult(
-                                task_id=task.task_id,
-                                success=result.get("success", False),
-                                score=result.get("score", 0.0),
-                                num_steps=self._step_count,
-                                reason=result.get("reason"),
+                            return self._result_from_evaluate_response(
+                                task, result,
                             )
                     except Exception as exc:
                         logger.warning("Fallback evaluate at %s failed: %s", fallback_url, exc)
@@ -1106,7 +1096,12 @@ class WAALiveAdapter(BenchmarkAdapter):
                     f"/evaluate endpoint not found at {evaluate_endpoint}. "
                     "Ensure the evaluate server is running on port 5050."
                 )
-                return self._evaluate_fallback(task)
+                # The evaluate server is not deployed. That is an
+                # infrastructure fact about our harness, not a verdict on the
+                # agent, and it must not be aggregated as a scored 0.0.
+                result = self._evaluate_fallback(task)
+                result.error_type = "infrastructure"
+                return result
 
             else:
                 logger.error(
@@ -1118,6 +1113,9 @@ class WAALiveAdapter(BenchmarkAdapter):
                     score=0.0,
                     num_steps=self._step_count,
                     reason=f"Evaluation failed: HTTP {resp.status_code}",
+                    # The evaluate server erroring is our infrastructure
+                    # failing, not the agent failing the task.
+                    error_type="infrastructure",
                 )
 
         except requests.Timeout:
@@ -1142,6 +1140,30 @@ class WAALiveAdapter(BenchmarkAdapter):
             result = self._evaluate_fallback(task)
             result.error_type = "infrastructure"
             return result
+
+    def _result_from_evaluate_response(
+        self, task: BenchmarkTask, result: dict,
+    ) -> BenchmarkResult:
+        """Build a BenchmarkResult from an /evaluate 200 body.
+
+        The evaluate server distinguishes "measured" from "could not measure"
+        via ``scored``/``error_type``; a 200 carrying ``scored: false`` is an
+        unscored task, and copying only ``success``/``score`` out of it is how
+        an unreachable VM becomes a legitimate 0% row. Bodies from older
+        servers have neither field and are treated as measurements, which is
+        what they were.
+        """
+        error_type = result.get("error_type")
+        if result.get("scored") is False and not error_type:
+            error_type = "evaluation"
+        return BenchmarkResult(
+            task_id=task.task_id,
+            success=result.get("success", False),
+            score=result.get("score", 0.0),
+            num_steps=self._step_count,
+            reason=result.get("reason"),
+            error_type=error_type,
+        )
 
     def _evaluate_fallback(self, task: BenchmarkTask) -> BenchmarkResult:
         """Fallback when proper evaluation unavailable - returns failure.

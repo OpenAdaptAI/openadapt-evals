@@ -38,18 +38,37 @@ class JobStuckError(Exception):
     pass
 
 
+class JobLogsUnavailableError(Exception):
+    """Raised when job logs could not be retrieved.
+
+    Every health verdict in this module is derived from log content. An empty
+    log string used to stand in for "could not fetch", which made
+    ``_has_container_started`` and ``_has_recent_log_activity`` return False
+    unconditionally -- so a perfectly healthy job was reported stuck and, with
+    ``auto_cancel=True``, cancelled. "Could not look" must not be spelled the
+    same way as "looked and saw nothing".
+    """
+    pass
+
+
 @dataclass
 class HealthCheckResult:
     """Result of a health check operation.
 
     Attributes:
-        healthy: Whether the check passed.
+        healthy: Tri-state. True/False are verdicts; ``None`` means the check
+            could not be performed, which is NOT an unhealthy verdict.
         message: Human-readable status message.
         details: Additional diagnostic information.
     """
-    healthy: bool
+    healthy: bool | None
     message: str
     details: dict | None = None
+
+    @property
+    def known(self) -> bool:
+        """True when this result is an actual verdict."""
+        return self.healthy is not None
 
 
 class ContainerHealthChecker:
@@ -106,6 +125,9 @@ class ContainerHealthChecker:
 
         Raises:
             ContainerSetupError: If container startup explicitly failed.
+            JobLogsUnavailableError: If the logs could never be read, so no
+                conclusion about startup is possible. This is distinct from
+                returning False, which asserts the container did not start.
         """
         start_time = time.time()
         logger.info(
@@ -114,6 +136,7 @@ class ContainerHealthChecker:
         )
 
         last_log_content = ""
+        logs_unavailable: str | None = None
 
         while time.time() - start_time < timeout_seconds:
             try:
@@ -140,6 +163,12 @@ class ContainerHealthChecker:
                             f"Container startup failed for {job_name}: {error_msg}"
                         )
 
+            except JobLogsUnavailableError as e:
+                # We never got to look. Timing out on that and reporting
+                # "container did not start" cancels healthy jobs.
+                logs_unavailable = str(e)
+                logger.warning(f"Container status unknown for {job_name}: {e}")
+
             except Exception as e:
                 if isinstance(e, ContainerSetupError):
                     raise
@@ -147,8 +176,16 @@ class ContainerHealthChecker:
 
             time.sleep(poll_interval)
 
-        # Timeout exceeded
         elapsed = time.time() - start_time
+
+        if logs_unavailable is not None:
+            raise JobLogsUnavailableError(
+                f"could not determine whether the container for {job_name} "
+                f"started: logs were unavailable for the whole "
+                f"{elapsed:.1f}s wait ({logs_unavailable})"
+            )
+
+        # Timeout exceeded
         logger.warning(
             f"Container startup timeout for {job_name} "
             f"(elapsed: {elapsed:.1f}s, no startup logs detected)"
@@ -169,7 +206,16 @@ class ContainerHealthChecker:
 
             if job.status == "Running":
                 # Get recent logs to verify activity
-                logs = self._get_job_logs(job_name, last_n_lines=50)
+                try:
+                    logs = self._get_job_logs(job_name, last_n_lines=50)
+                except JobLogsUnavailableError as e:
+                    return HealthCheckResult(
+                        healthy=None,
+                        message=(
+                            f"Job {job_name} health is UNKNOWN: {e}"
+                        ),
+                        details={"status": job.status, "error": str(e)},
+                    )
 
                 if self._has_container_started(logs):
                     return HealthCheckResult(
@@ -235,7 +281,14 @@ class ContainerHealthChecker:
                 )
 
             # Get recent logs
-            logs = self._get_job_logs(job_name)
+            try:
+                logs = self._get_job_logs(job_name)
+            except JobLogsUnavailableError as e:
+                return HealthCheckResult(
+                    healthy=None,
+                    message=f"Job {job_name} progress is UNKNOWN: {e}",
+                    details={"status": job.status, "error": str(e)},
+                )
 
             # Check for recent activity by looking at timestamps in logs
             # If we can't find recent activity, the job may be stuck
@@ -277,23 +330,29 @@ class ContainerHealthChecker:
 
         Returns:
             Log content as string.
+
+        Raises:
+            JobLogsUnavailableError: Always, until real log retrieval lands, or
+                when Azure ML cannot be reached. Never returns "" for either
+                case -- an empty string is a valid log body and would be read
+                as "no container activity".
         """
         try:
-            # Use Azure ML SDK to get logs
-            # Note: This is a simplified implementation
-            # Real implementation would use ml_client.jobs.get_logs() or similar
-            # Result deliberately discarded: this call only confirms the job
-            # exists (it raises otherwise). Real log fetching is the TODO below.
+            # This call only confirms the job exists (it raises otherwise).
             self.ml_client.client.jobs.get(job_name)
-
-            # For now, return empty string as placeholder
-            # In production, this would fetch actual logs
-            # TODO: Implement proper log fetching via Azure ML SDK
-            return ""
-
         except Exception as e:
             logger.warning(f"Failed to fetch logs for {job_name}: {e}")
-            return ""
+            raise JobLogsUnavailableError(
+                f"could not reach Azure ML to fetch logs for {job_name}: {e}"
+            ) from e
+
+        # TODO: Implement proper log fetching via Azure ML SDK
+        # (ml_client.jobs.stream / download job artifacts).
+        raise JobLogsUnavailableError(
+            f"log retrieval for {job_name} is not implemented; every health "
+            "verdict derived from an empty placeholder log was a false "
+            "negative that could cancel a healthy job"
+        )
 
     def _has_container_started(self, logs: str) -> bool:
         """Check if logs indicate successful container startup."""
@@ -376,7 +435,9 @@ class StuckJobDetector:
             auto_cancel: If True, automatically cancel stuck jobs.
 
         Returns:
-            Tuple of (is_stuck, message).
+            Tuple of (is_stuck, message). ``is_stuck`` is False when the check
+            could not be performed -- an unknown verdict is never grounds for
+            cancelling a job.
         """
         # Check for progress
         result = self.container_checker.monitor_job_progress(
@@ -386,6 +447,14 @@ class StuckJobDetector:
 
         if result.healthy:
             return False, result.message
+
+        if result.healthy is None:
+            # We could not tell. Cancelling on "unknown" is how this detector
+            # used to kill every healthy job it looked at.
+            return False, (
+                f"Job {job_name} was NOT checked for progress "
+                f"(not cancelling): {result.message}"
+            )
 
         # Job is stuck
         message = f"Job {job_name} is stuck: {result.message}"

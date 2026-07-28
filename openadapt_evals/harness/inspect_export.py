@@ -21,9 +21,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-# Inspect's canonical value for a correct/incorrect boolean score.
+# Inspect's canonical values for a correct/incorrect boolean score, plus
+# NOANSWER for a sample the scorer could not score at all. A row whose env
+# verifier never ran is NOANSWER, not INCORRECT: counting it as incorrect
+# publishes an accuracy whose denominator includes tasks nobody measured.
 _CORRECT = "C"
 _INCORRECT = "I"
+_NOANSWER = "N"
 
 _SCHEMA_VERSION = 2  # Inspect eval-log major version this subset targets.
 
@@ -61,7 +65,11 @@ def to_inspect_eval_log(
 
     samples = []
     for i, r in enumerate(dict_rows):
-        success = bool(r.get("replay_success", False))
+        replay_success = r.get("replay_success", False)
+        if replay_success is None:
+            value = _NOANSWER
+        else:
+            value = _CORRECT if bool(replay_success) else _INCORRECT
         samples.append(
             {
                 "id": r.get("task_id", f"sample_{i}"),
@@ -70,9 +78,9 @@ def to_inspect_eval_log(
                 "target": _CORRECT,
                 "scores": {
                     "meta_verifier": {
-                        "value": _CORRECT if success else _INCORRECT,
+                        "value": value,
                         "answer": str(r.get("effect_verdict") or r.get("verifier_source") or ""),
-                        "explanation": r.get("error") or "",
+                        "explanation": r.get("verifier_error") or r.get("error") or "",
                         "metadata": {
                             "env": r.get("env"),
                             "mode": r.get("mode"),
@@ -89,11 +97,18 @@ def to_inspect_eval_log(
         )
 
     total = len(samples)
-    correct = sum(1 for s in samples if s["scores"]["meta_verifier"]["value"] == _CORRECT)
+    values = [s["scores"]["meta_verifier"]["value"] for s in samples]
+    unscored = sum(1 for v in values if v == _NOANSWER)
+    scored = total - unscored
+    correct = sum(1 for v in values if v == _CORRECT)
+    # None, not 0.0: an accuracy of zero and "nothing was scored" are different
+    # claims, and only one of them is a measurement.
+    accuracy = (correct / scored) if scored else None
 
     return {
         "version": _SCHEMA_VERSION,
-        "status": "success",
+        # A run in which nothing could be scored did not succeed.
+        "status": "success" if scored else "error",
         "eval": {
             "task": task_name,
             "model": model,
@@ -102,7 +117,9 @@ def to_inspect_eval_log(
         },
         "results": {
             "total_samples": total,
-            "completed_samples": total,
+            # Only rows the env verifier actually scored are "completed".
+            "completed_samples": scored,
+            "unscored_samples": unscored,
             "scores": [
                 {
                     "name": "meta_verifier",
@@ -110,7 +127,9 @@ def to_inspect_eval_log(
                     "metrics": {
                         "accuracy": {
                             "name": "accuracy",
-                            "value": (correct / total) if total else 0.0,
+                            "value": accuracy,
+                            "scored_samples": scored,
+                            "unscored_samples": unscored,
                         }
                     },
                 }
@@ -140,7 +159,11 @@ def from_inspect_eval_log(doc: dict) -> "list[dict]":
                 "task_id": sample.get("id"),
                 "env": smeta.get("env"),
                 "mode": smeta.get("mode"),
-                "replay_success": score.get("value") == _CORRECT,
+                "replay_success": (
+                    None
+                    if score.get("value") == _NOANSWER
+                    else score.get("value") == _CORRECT
+                ),
                 "effect_verdict": score.get("answer") or None,
                 "model_calls": smeta.get("model_calls"),
                 "structural_rung_rate": smeta.get("structural_rung_rate"),

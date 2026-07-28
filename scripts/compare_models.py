@@ -236,7 +236,7 @@ def run_single_task(
     screenshots_dir: Path | None,
 ) -> dict[str, Any]:
     """Run a single task and return a result dict. Never raises."""
-    from openadapt_evals.adapters.base import BenchmarkTask
+    from openadapt_evals.adapters.base import BenchmarkTask, EvaluationUnavailableError
     from openadapt_evals.adapters.rl_env import ResetConfig, RLEnvironment
     from openadapt_evals.adapters.waa.live import WAALiveAdapter, WAALiveConfig
     from openadapt_evals.task_config import TaskConfig
@@ -254,6 +254,10 @@ def run_single_task(
         "steps": 0,
         "actions": [],
         "error": None,
+        # None means "this row is a measurement". Anything else means the task
+        # was not scored and `score` must be excluded from the matrix rather
+        # than rendered as a 0.00 cell in a head-to-head model comparison.
+        "error_type": None,
     }
     try:
         adapter = WAALiveAdapter(WAALiveConfig(server_url=server_url))
@@ -321,8 +325,14 @@ def run_single_task(
         else:
             score = env.evaluate()
         result["score"] = score
+    except EvaluationUnavailableError as e:
+        result["error"] = str(e)
+        result["error_type"] = e.error_type
+        result["traceback"] = traceback.format_exc()
+        logger.error("Task %s was not scored: %s", task_path, e)
     except Exception as e:
         result["error"] = str(e)
+        result["error_type"] = "infrastructure"
         result["traceback"] = traceback.format_exc()
         logger.error("Task %s failed: %s", task_path, e)
 
@@ -549,6 +559,11 @@ def build_summary(results: list[dict], config: ComparisonConfig) -> dict:
     matrix: dict[str, dict[str, float]] = {}
     steps_matrix: dict[str, dict[str, int]] = {}
     time_matrix: dict[str, dict[str, float]] = {}
+    # Rows that were never scored. Averaging their 0.0 into avg_score would
+    # make a model whose SGLang server failed to start look worse than one
+    # whose server came up -- a pure-infrastructure delta published as a
+    # capability delta.
+    unscored: dict[str, dict[str, str]] = {}
     for r in results:
         model = r.get("model_name", "unknown")
         task = r.get("task_path", "unknown")
@@ -556,6 +571,10 @@ def build_summary(results: list[dict], config: ComparisonConfig) -> dict:
             matrix[model] = {}
             steps_matrix[model] = {}
             time_matrix[model] = {}
+            unscored[model] = {}
+        if r.get("error_type"):
+            unscored[model][task] = str(r.get("error_type"))
+            continue
         matrix[model][task] = r.get("score", 0.0)
         steps_matrix[model][task] = r.get("steps", 0)
         time_matrix[model][task] = r.get("elapsed_seconds", 0.0)
@@ -563,10 +582,13 @@ def build_summary(results: list[dict], config: ComparisonConfig) -> dict:
     for model, scores in matrix.items():
         vals = list(scores.values())
         model_averages[model] = {
-            "avg_score": sum(vals) / len(vals) if vals else 0.0,
-            "avg_steps": sum(steps_matrix[model].values()) / len(vals) if vals else 0.0,
-            "avg_time": sum(time_matrix[model].values()) / len(vals) if vals else 0.0,
+            # None, not 0.0: no task of this model's produced a measurement.
+            "avg_score": sum(vals) / len(vals) if vals else None,
+            "avg_steps": sum(steps_matrix[model].values()) / len(vals) if vals else None,
+            "avg_time": sum(time_matrix[model].values()) / len(vals) if vals else None,
             "total_runs": len(vals),
+            "unscored_runs": len(unscored.get(model, {})),
+            "unscored_tasks": unscored.get(model, {}),
         }
     return {
         "comparison_name": config.name,
@@ -579,6 +601,17 @@ def build_summary(results: list[dict], config: ComparisonConfig) -> dict:
         "time_matrix": time_matrix,
         "model_averages": model_averages,
     }
+
+
+def _fmt_avg(value: float | None, width: int, precision: int, suffix: str = "") -> str:
+    """Render an average, or `--` when nothing was scored.
+
+    Printing 0.00 for "no task of this model produced a measurement" is the
+    defect this whole module is being repaired for.
+    """
+    if value is None:
+        return f"{'--':>{width}}{suffix}"
+    return f"{value:>{width}.{precision}f}{suffix}"
 
 
 def print_summary_table(summary: dict) -> None:
@@ -610,9 +643,12 @@ def print_summary_table(summary: dict) -> None:
             else:
                 row += f"  {'--':>{task_col_w}}"
         avg = averages.get(model, {})
-        row += f"  {avg.get('avg_score', 0.0):>6.2f}"
-        row += f"  {avg.get('avg_steps', 0.0):>5.1f}"
-        row += f"  {avg.get('avg_time', 0.0):>5.1f}s"
+        row += "  " + _fmt_avg(avg.get("avg_score"), 6, 2)
+        row += "  " + _fmt_avg(avg.get("avg_steps"), 5, 1)
+        row += "  " + _fmt_avg(avg.get("avg_time"), 5, 1, "s")
+        unscored_n = avg.get("unscored_runs", 0)
+        if unscored_n:
+            row += f"  [{unscored_n} unscored]"
         print(row)
     print("=" * 70)
 
@@ -635,15 +671,19 @@ def generate_html_report(summary: dict, results: list[dict], output_path: Path) 
             else:
                 cells += "<td>--</td>"
         avg = averages.get(model, {})
-        cells += f"<td><strong>{avg.get('avg_score', 0.0):.2f}</strong></td>"
-        cells += f"<td>{avg.get('avg_steps', 0.0):.1f}</td>"
-        cells += f"<td>{avg.get('avg_time', 0.0):.1f}s</td>"
+        cells += (
+            f"<td><strong>{_fmt_avg(avg.get('avg_score'), 0, 2).strip()}"
+            f"</strong></td>"
+        )
+        cells += f"<td>{_fmt_avg(avg.get('avg_steps'), 0, 1).strip()}</td>"
+        cells += f"<td>{_fmt_avg(avg.get('avg_time'), 0, 1, 's').strip()}</td>"
         rows_html += f"<tr>{cells}</tr>\n"
     task_headers = "".join(f"<th>{html.escape(t)}</th>" for t in task_labels)
     details_html = ""
     for r in results:
         model = r.get("model_name", "?")
         task_name = r.get("task_name", r.get("task_path", "?"))
+        unscored_reason = r.get("error_type")
         score = r.get("score", 0.0)
         steps = r.get("steps", 0)
         elapsed = r.get("elapsed_seconds", 0.0)
@@ -656,7 +696,12 @@ def generate_html_report(summary: dict, results: list[dict], output_path: Path) 
                 f"{html.escape(str(a.get('type', '?')))} "
                 f"({html.escape(str(a.get('text', '') or ''))})</li>\n"
             )
-        css = "pass" if score > 0 else "fail"
+        if unscored_reason:
+            css = "unscored"
+            score_text = f"NOT SCORED ({html.escape(str(unscored_reason))})"
+        else:
+            css = "pass" if score > 0 else "fail"
+            score_text = f"score={score:.2f}"
         error_block = ""
         if error:
             error_block = f"<p class='error'>Error: {html.escape(error)}</p>"
@@ -665,7 +710,7 @@ def generate_html_report(summary: dict, results: list[dict], output_path: Path) 
             <summary class="{css}">
                 <strong>{html.escape(model)}</strong> on
                 <em>{html.escape(task_name)}</em>:
-                score={score:.2f}, steps={steps}, time={elapsed:.1f}s
+                {score_text}, steps={steps}, time={elapsed:.1f}s
             </summary>
             <div class="detail-content">
                 {error_block}
