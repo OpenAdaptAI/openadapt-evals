@@ -548,6 +548,7 @@ for development conventions, the WAA benchmark workflow, and architecture detail
 | [openadapt-capture](https://github.com/OpenAdaptAI/openadapt-capture) | Screen recording and demo sharing |
 | [openadapt-consilium](https://github.com/OpenAdaptAI/openadapt-consilium) | Multi-model consensus library |
 | [openadapt-grounding](https://github.com/OpenAdaptAI/openadapt-grounding) | UI element localization |
+| [ClawBench](https://github.com/reacher-z/ClawBench) | Real-world web-agent benchmark with 153 tasks across 144 live websites and safe final-request interception |
 
 Project documentation: [docs.openadapt.ai](https://docs.openadapt.ai). Full
 organization: [github.com/OpenAdaptAI](https://github.com/OpenAdaptAI).
