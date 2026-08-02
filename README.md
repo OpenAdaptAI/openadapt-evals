@@ -247,8 +247,8 @@ Re-run the comparison and publish a new evidence set rather than editing an old
 one: superseded reports stay reproducible against the wheel they were measured
 on.
 
-See `docs/eval_results/current_flow_v1_24_0_local_20260727/` for the current
-comparison, its `COMPARISON_TO_v1_16_1.md` release-over-release delta, and
+See `docs/eval_results/current_flow_v1_27_1_local_20260802/` for the current
+comparison, its `COMPARISON_TO_v1_24_0.md` release-over-release delta, and
 `REPRODUCE.md` for the exact commands.
 
 ## More workflows
