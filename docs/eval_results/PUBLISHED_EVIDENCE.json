@@ -20,11 +20,20 @@
     },
     {
       "path": "docs/eval_results/current_flow_v1_24_0_local_20260727",
-      "status": "current",
+      "status": "superseded",
+      "superseded_by": "docs/eval_results/current_flow_v1_27_1_local_20260802",
       "flow_version": "1.24.0",
       "wheel_sha256": "170fdac154794292c99dc6eea6486e7a2c3fdf321bcd87976d924bccd3db4aef",
       "sdist_sha256": "2d4702e5ccbdfed0f78063ca510dc82894a2833edbed71d77edffbd0ffebd67d",
       "measured_on": "2026-07-27"
+    },
+    {
+      "path": "docs/eval_results/current_flow_v1_27_1_local_20260802",
+      "status": "current",
+      "flow_version": "1.27.1",
+      "wheel_sha256": "99d8f3ef014481356f4bcfc65f694ed2fd47a75e2025c5ddfdae4bfab2194094",
+      "sdist_sha256": "aeabf2b11ae6151fe76c02ee783e8368d10ee984465f858f9d37429b17a15468",
+      "measured_on": "2026-08-02"
     }
   ]
 }
