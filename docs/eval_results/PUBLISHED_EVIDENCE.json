@@ -29,10 +29,19 @@
     },
     {
       "path": "docs/eval_results/current_flow_v1_27_1_local_20260802",
-      "status": "current",
+      "status": "superseded",
+      "superseded_by": "docs/eval_results/current_flow_v1_28_0_local_20260802",
       "flow_version": "1.27.1",
       "wheel_sha256": "99d8f3ef014481356f4bcfc65f694ed2fd47a75e2025c5ddfdae4bfab2194094",
       "sdist_sha256": "aeabf2b11ae6151fe76c02ee783e8368d10ee984465f858f9d37429b17a15468",
+      "measured_on": "2026-08-02"
+    },
+    {
+      "path": "docs/eval_results/current_flow_v1_28_0_local_20260802",
+      "status": "current",
+      "flow_version": "1.28.0",
+      "wheel_sha256": "4d156035ea411e3cbdbc40978d653d50727a7d8664646be62f7f9e95ba0c7202",
+      "sdist_sha256": "6e108f3469da20226427fee7a11378e067ca08c1fbbfcdbb4018ab9c3d142a8b",
       "measured_on": "2026-08-02"
     }
   ]
