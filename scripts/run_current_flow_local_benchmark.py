@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib.metadata
+import importlib.util
 import json
 import math
 import platform
@@ -36,6 +37,13 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+_RUNTIME_PATH = Path(__file__).resolve().parent / "evidence_runtime.py"
+_RUNTIME_SPEC = importlib.util.spec_from_file_location("_evidence_runtime", _RUNTIME_PATH)
+assert _RUNTIME_SPEC is not None and _RUNTIME_SPEC.loader is not None
+_RUNTIME = importlib.util.module_from_spec(_RUNTIME_SPEC)
+_RUNTIME_SPEC.loader.exec_module(_RUNTIME)
+capture_runtime = _RUNTIME.capture_runtime
 
 ARMS = ("compiled", "dom", "dom_named")
 CONDITIONS = ("clean", "theme", "rename")
@@ -496,6 +504,7 @@ def run_benchmark(
     finally:
         stop()
 
+    runtime = capture_runtime(out_dir, browser_required=True)
     aggregate = {
         arm: {
             condition: _aggregate(
@@ -561,6 +570,7 @@ def run_benchmark(
             "playwright": importlib.metadata.version("playwright"),
             "chromium": "Playwright-managed headless Chromium",
         },
+        "runtime": runtime,
         "setup": {
             "server_start_wall_s": server_start_wall_s,
             "record_compile_trials": setups,

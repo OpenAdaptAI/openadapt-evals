@@ -60,6 +60,7 @@ _SPEC = importlib.util.spec_from_file_location("_current_flow_local_benchmark", 
 assert _SPEC is not None and _SPEC.loader is not None
 _BENCH = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_BENCH)
+capture_runtime = _BENCH.capture_runtime
 
 # Reuse the sibling's exact source-binding discipline so the reports in one
 # evidence set can never drift on how they pin a wheel, a commit, or a tag.
@@ -83,7 +84,9 @@ PROFILES = ("demo", "standard", "regulated")
 CELLS = ("ungoverned_lease", "governed_lease", "lease_frame_changed")
 
 
-def _make_png(size: tuple[int, int] = VIEWPORT, color: tuple[int, int, int] = (240, 240, 240)) -> bytes:
+def _make_png(
+    size: tuple[int, int] = VIEWPORT, color: tuple[int, int, int] = (240, 240, 240)
+) -> bytes:
     from PIL import Image  # noqa: PLC0415
 
     image = Image.new("RGB", size, color)
@@ -139,9 +142,7 @@ class _ScriptedVision:
     ):
         return None
 
-    def find_text(
-        self, screen_png, text, *, region=None, min_ratio=0.8, raise_on_ambiguity=False
-    ):
+    def find_text(self, screen_png, text, *, region=None, min_ratio=0.8, raise_on_ambiguity=False):
         return None
 
     def text_present(self, screen_png, text, *, region=None, min_ratio=0.8):
@@ -150,9 +151,7 @@ class _ScriptedVision:
     def ocr(self, screen_png, *, region=None):
         return []
 
-    def pixels_changed(
-        self, before_png, after_png, *, region=None, threshold=20, min_pixels=4
-    ):
+    def pixels_changed(self, before_png, after_png, *, region=None, threshold=20, min_pixels=4):
         return True
 
     def phash_png(self, png, region=None):
@@ -270,9 +269,7 @@ def _run_cell(
     workflow = Workflow(name="remote-lease-probe", steps=[step])
 
     backend = PixelOnlyRemoteBackend(
-        frame_after_lease=(
-            _make_png(color=(10, 20, 30)) if cell == "lease_frame_changed" else None
-        )
+        frame_after_lease=(_make_png(color=(10, 20, 30)) if cell == "lease_frame_changed" else None)
     )
     vision = _ScriptedVision()
     vision.template_results = [
@@ -376,9 +373,11 @@ def evaluate_invariants(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "backend that cannot bind its exact fresh frame and target to "
             "delivery, before the first input edge.",
             lambda row: row["governed"],
-            lambda row: row["input_edges_delivered"] != 0
-            or row["replayer_success"]
-            or not row["safety_halt"],
+            lambda row: (
+                row["input_edges_delivered"] != 0
+                or row["replayer_success"]
+                or not row["safety_halt"]
+            ),
             rows,
         ),
         _invariant(
@@ -389,9 +388,11 @@ def evaluate_invariants(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             lambda row: True,
             lambda row: any_profile(
                 row,
-                lambda value: value["transaction_outcome"] == _PRODUCTION_SUCCESS
-                or value["execution_outcome"] == _PRODUCTION_SUCCESS
-                or value["production_eligible"],
+                lambda value: (
+                    value["transaction_outcome"] == _PRODUCTION_SUCCESS
+                    or value["execution_outcome"] == _PRODUCTION_SUCCESS
+                    or value["production_eligible"]
+                ),
             ),
             rows,
         ),
@@ -400,8 +401,7 @@ def evaluate_invariants(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "A lease-only delivery must leave the result unlabeled: no typed "
             "delivery receipt and no recorded actuation tier.",
             lambda row: row["input_edges_delivered"] > 0,
-            lambda row: row["delivery_receipt_present"]
-            or row["actuation_tier"] is not None,
+            lambda row: row["delivery_receipt_present"] or row["actuation_tier"] is not None,
             rows,
         ),
         _invariant(
@@ -430,21 +430,13 @@ def _aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
             continue
         summary[cell] = {
             "n": len(cell_rows),
-            "delivered_count": sum(
-                1 for row in cell_rows if row["input_edges_delivered"] > 0
-            ),
-            "refused_count": sum(
-                1 for row in cell_rows if row["input_edges_delivered"] == 0
-            ),
-            "replayer_success_count": sum(
-                1 for row in cell_rows if row["replayer_success"]
-            ),
+            "delivered_count": sum(1 for row in cell_rows if row["input_edges_delivered"] > 0),
+            "refused_count": sum(1 for row in cell_rows if row["input_edges_delivered"] == 0),
+            "replayer_success_count": sum(1 for row in cell_rows if row["replayer_success"]),
             "delivery_receipt_count": sum(
                 1 for row in cell_rows if row["delivery_receipt_present"]
             ),
-            "actuation_tiers": sorted(
-                {str(row["actuation_tier"]) for row in cell_rows}
-            ),
+            "actuation_tiers": sorted({str(row["actuation_tier"]) for row in cell_rows}),
             "transaction_outcomes": {
                 profile: sorted(
                     {str(row["profiles"][profile]["transaction_outcome"]) for row in cell_rows}
@@ -508,11 +500,7 @@ def _render_report(document: dict[str, Any]) -> str:
         "|---|---:|---:|---|",
     ]
     for invariant in document["invariants"]:
-        verdict = (
-            "vacuous"
-            if invariant["vacuous"]
-            else ("yes" if invariant["holds"] else "**NO**")
-        )
+        verdict = "vacuous" if invariant["vacuous"] else ("yes" if invariant["holds"] else "**NO**")
         lines.append(
             f"| {invariant['statement']} | {invariant['applicable_count']} | "
             f"{invariant['violation_count']} | {verdict} |"
@@ -616,6 +604,7 @@ def probe(flow_source: Path, flow_wheel: Path, out_dir: Path, *, trials: int = 3
             "platform": platform.platform(),
             "python": platform.python_version(),
         },
+        "runtime": capture_runtime(out_dir, browser_required=False),
         "source": {
             "evals": {"commit": evals_commit},
             "flow": {
@@ -642,8 +631,7 @@ def probe(flow_source: Path, flow_wheel: Path, out_dir: Path, *, trials: int = 3
             "remote session.",
             "One synthetic single-step workflow; resolution is scripted so the "
             "delivery decision is the only variable.",
-            "No wrong-target immunity, identity coverage, or hosted lifecycle "
-            "claim is made here.",
+            "No wrong-target immunity, identity coverage, or hosted lifecycle claim is made here.",
         ],
         "reproduce": (
             "python scripts/probe_remote_lease_safety.py "
