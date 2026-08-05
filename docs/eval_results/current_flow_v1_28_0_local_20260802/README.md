@@ -5,9 +5,12 @@ Measured against the exact published `openadapt-flow` 1.28.0 wheel, SHA-256
 release-tagged tracked-clean source `b646276a086c74b65ba850cdef2e475ca53f10c0`.
 Zero model calls, $0.00 model cost, loopback only.
 
-This is the `current` entry in `docs/eval_results/PUBLISHED_EVIDENCE.json`. It
-supersedes `current_flow_v1_27_1_local_20260802`, which remains committed and
-reproducible against the 1.27.1 wheel it was measured on.
+This is a retained `stale` entry in `docs/eval_results/PUBLISHED_EVIDENCE.json`.
+Flow 1.30.0 is current, and this run did not retain an exact browser revision or
+installed dependency snapshot. Do not relabel these results. A governed 1.30
+rerun must replace them. This set superseded
+`current_flow_v1_27_1_local_20260802`, which remains committed and reproducible
+against the 1.27.1 wheel it measured.
 
 | File | What it holds |
 |---|---|

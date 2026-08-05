@@ -17,8 +17,10 @@ What is checked, against ``docs/eval_results/PUBLISHED_EVIDENCE.json``:
 3. Its pinned version equals the newest non-yanked release on PyPI.
 4. Its pinned wheel digest equals that release's published wheel digest.
 5. Every ``superseded`` set names the set that replaced it.
+6. Its verifier, result, replication, public-report, task/oracle, campaign,
+   browser, and installed-dependency inventories are complete and exact.
 
-Checks 1, 2 and 5 are offline and always run.  Checks 3 and 4 need PyPI: pass
+Checks 1, 2, 5 and 6 are offline and always run.  Checks 3 and 4 need PyPI: pass
 ``--current-version``/``--current-wheel-sha256`` to supply the release
 out-of-band, or ``--offline`` to skip them.  A network failure is reported and
 skipped rather than failing the build -- it is not evidence of drift.  Actual
@@ -128,6 +130,59 @@ def _safe_file(repo_root: Path, relative: object) -> Path | None:
     return candidate if candidate.is_file() else None
 
 
+def _relative_file(repo_root: Path, relative: object) -> tuple[Path | None, str | None]:
+    """Return a safe file and its normalized repository-relative name."""
+
+    path = _safe_file(repo_root, relative)
+    if path is None:
+        return None, None
+    return path, path.relative_to(repo_root).as_posix()
+
+
+def _validated_bindings(
+    binding: dict[str, Any],
+    key: str,
+    repo_root: Path,
+    *,
+    require_sha256: bool = True,
+) -> tuple[list[tuple[dict[str, Any], Path, str]], list[str]]:
+    """Validate one non-empty, unique file-binding inventory."""
+
+    raw = binding.get(key)
+    if not isinstance(raw, list) or not raw:
+        return [], [f"{key} must be a non-empty list"]
+    values: list[tuple[dict[str, Any], Path, str]] = []
+    problems: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            problems.append(f"{key} contains a malformed binding")
+            continue
+        path, normalized = _relative_file(repo_root, item.get("path"))
+        if path is None or normalized is None:
+            problems.append(f"{key} contains a missing or unsafe path: {item.get('path')!r}")
+            continue
+        if normalized in seen:
+            problems.append(f"{key} contains a duplicate path: {normalized!r}")
+            continue
+        seen.add(normalized)
+        if require_sha256 and item.get("sha256") != _sha256(path):
+            problems.append(f"{key} digest changed: {normalized!r}")
+            continue
+        values.append((item, path, normalized))
+    return values, problems
+
+
+def _inventory_files(repo_root: Path, root: Path, suffix: str | None) -> set[str]:
+    return {
+        path.relative_to(repo_root).as_posix()
+        for path in root.rglob("*")
+        if path.is_file()
+        and path.name != "EVIDENCE_MANIFEST.json"
+        and (suffix is None or path.name.endswith(suffix))
+    }
+
+
 def _task_contract(document: dict[str, Any]) -> dict[str, Any]:
     """Return the claim-defining task and oracle fields from one result file."""
 
@@ -157,8 +212,9 @@ def check_evidence_manifest(entry: dict[str, Any], repo_root: Path) -> list[str]
         binding = load_manifest(manifest_path)
     except (OSError, json.JSONDecodeError) as exc:
         return [f"{entry['path']}: evidence_manifest cannot be read: {exc}"]
-    if binding.get("schema_version") != 1:
-        problems.append(f"{entry['path']}: evidence manifest schema_version must be 1")
+    prefix = f"{entry['path']}: "
+    if binding.get("schema_version") != 2:
+        problems.append(prefix + "evidence manifest schema_version must be 2")
     flow = binding.get("flow")
     if not isinstance(flow, dict):
         problems.append(f"{entry['path']}: evidence manifest flow binding is missing")
@@ -174,27 +230,138 @@ def check_evidence_manifest(entry: dict[str, Any], repo_root: Path) -> list[str]
     results_path = _safe_file(repo_root, f"{entry['path']}/results.json")
     if results_path is None:
         return problems + [f"{entry['path']}: results.json is missing"]
-    results = load_manifest(results_path)
-    expected_runtime = binding.get("runtime_dependencies")
-    if not isinstance(expected_runtime, dict) or not expected_runtime:
-        problems.append(f"{entry['path']}: runtime_dependencies are missing")
-    elif results.get("environment") != expected_runtime:
+    evidence_root = repo_root / entry["path"]
+    verifier_bindings, binding_problems = _validated_bindings(binding, "verifiers", repo_root)
+    problems.extend(prefix + problem for problem in binding_problems)
+
+    public_reports, binding_problems = _validated_bindings(binding, "public_reports", repo_root)
+    problems.extend(prefix + problem for problem in binding_problems)
+    bound_reports = {normalized for _, _, normalized in public_reports}
+    actual_reports = _inventory_files(repo_root, evidence_root, ".md")
+    if bound_reports != actual_reports:
         problems.append(
-            f"{entry['path']}: runtime_dependencies do not match results.json environment"
+            prefix
+            + "public_reports inventory differs from retained Markdown files: "
+            + f"missing={sorted(actual_reports - bound_reports)}, extra={sorted(bound_reports - actual_reports)}"
         )
-    for verifier in binding.get("verifiers", []):
-        if not isinstance(verifier, dict):
-            problems.append(f"{entry['path']}: malformed verifier binding")
-            continue
-        path = _safe_file(repo_root, verifier.get("path"))
-        if path is None or verifier.get("sha256") != _sha256(path):
+
+    artifacts, binding_problems = _validated_bindings(binding, "artifacts", repo_root)
+    problems.extend(prefix + problem for problem in binding_problems)
+    bound_artifacts = {normalized for _, _, normalized in artifacts}
+    actual_artifacts = _inventory_files(repo_root, evidence_root, None) - actual_reports
+    if bound_artifacts != actual_artifacts:
+        problems.append(
+            prefix
+            + "artifacts inventory differs from retained JSON files: "
+            + f"missing={sorted(actual_artifacts - bound_artifacts)}, extra={sorted(bound_artifacts - actual_artifacts)}"
+        )
+
+    campaigns = binding.get("campaigns")
+    seen_results: set[str] = set()
+    if not isinstance(campaigns, list) or not campaigns:
+        problems.append(prefix + "campaigns must be a non-empty list")
+    else:
+        seen_campaigns: set[str] = set()
+        verifier_paths = {normalized for _, _, normalized in verifier_bindings}
+        for campaign in campaigns:
+            if not isinstance(campaign, dict):
+                problems.append(prefix + "campaigns contains a malformed binding")
+                continue
+            name = campaign.get("name")
+            if not isinstance(name, str) or not name or name in seen_campaigns:
+                problems.append(prefix + f"campaign name is missing or duplicate: {name!r}")
+            else:
+                seen_campaigns.add(name)
+            result_path, normalized_result = _relative_file(repo_root, campaign.get("results_path"))
+            if result_path is None or normalized_result is None:
+                problems.append(
+                    prefix
+                    + f"campaign results path is missing or unsafe: {campaign.get('results_path')!r}"
+                )
+                continue
+            if normalized_result in seen_results:
+                problems.append(
+                    prefix + f"campaign results path is duplicate: {normalized_result!r}"
+                )
+            seen_results.add(normalized_result)
+            verifier_path = campaign.get("verifier_path")
+            if verifier_path not in verifier_paths:
+                problems.append(
+                    prefix
+                    + f"campaign verifier is not in the verifier inventory: {verifier_path!r}"
+                )
+            try:
+                document = load_manifest(result_path)
+            except (OSError, json.JSONDecodeError) as exc:
+                problems.append(
+                    prefix + f"campaign results cannot be read: {normalized_result!r}: {exc}"
+                )
+                continue
+            if campaign.get("environment") != document.get("environment"):
+                problems.append(prefix + f"campaign environment differs from {normalized_result!r}")
+            runtime = campaign.get("runtime")
+            required_runtime = {
+                "python_version",
+                "dependency_snapshot_filename",
+                "dependency_snapshot_sha256",
+                "openadapt_types_version",
+            }
+            if not isinstance(runtime, dict) or not required_runtime.issubset(runtime):
+                problems.append(prefix + f"campaign runtime facts are incomplete: {name!r}")
+            else:
+                for field in required_runtime:
+                    if (
+                        not isinstance(runtime.get(field), str)
+                        or not runtime[field]
+                        or runtime[field].lower() in {"unknown", "not_recorded"}
+                    ):
+                        problems.append(
+                            prefix + f"campaign runtime field is not exact: {name!r}.{field}"
+                        )
+                dependency_name = runtime.get("dependency_snapshot_filename")
+                dependency_relative = (
+                    Path(normalized_result).parent / dependency_name
+                    if isinstance(dependency_name, str)
+                    else None
+                )
+                dependency_path = _safe_file(
+                    repo_root,
+                    dependency_relative.as_posix() if dependency_relative is not None else None,
+                )
+                if dependency_path is None or runtime.get("dependency_snapshot_sha256") != _sha256(
+                    dependency_path
+                ):
+                    problems.append(
+                        prefix + f"campaign dependency snapshot changed or is missing: {name!r}"
+                    )
+                if "chromium" in document.get("environment", {}):
+                    for field in ("browser_version", "browser_revision"):
+                        if (
+                            not isinstance(runtime.get(field), str)
+                            or not runtime[field]
+                            or runtime[field].lower() in {"unknown", "not_recorded"}
+                        ):
+                            problems.append(
+                                prefix + f"browser runtime field is not exact: {name!r}.{field}"
+                            )
+            if runtime != document.get("runtime"):
+                problems.append(prefix + f"campaign runtime differs from {normalized_result!r}")
+        result_artifacts = {
+            path
+            for path in bound_artifacts
+            if path.endswith("/results.json") or path == f"{entry['path']}/results.json"
+        }
+        if seen_results != result_artifacts:
             problems.append(
-                f"{entry['path']}: verifier changed or is missing: {verifier.get('path')!r}"
+                prefix
+                + "campaign results inventory differs from retained results: "
+                + f"missing={sorted(result_artifacts - seen_results)}, extra={sorted(seen_results - result_artifacts)}"
             )
     contracts = binding.get("task_contracts")
     if not isinstance(contracts, list) or not contracts:
         problems.append(f"{entry['path']}: task_contracts are missing")
     else:
+        seen_contracts: set[str] = set()
         for contract in contracts:
             if not isinstance(contract, dict):
                 problems.append(f"{entry['path']}: malformed task contract")
@@ -203,26 +370,28 @@ def check_evidence_manifest(entry: dict[str, Any], repo_root: Path) -> list[str]
             if path is None:
                 problems.append(f"{entry['path']}: task contract results file is missing")
                 continue
-            actual = _task_contract(load_manifest(path))
+            normalized = path.relative_to(repo_root).as_posix()
+            if normalized in seen_contracts:
+                problems.append(f"{entry['path']}: duplicate task contract: {normalized!r}")
+                continue
+            seen_contracts.add(normalized)
+            try:
+                actual = _task_contract(load_manifest(path))
+            except (OSError, json.JSONDecodeError) as exc:
+                problems.append(f"{entry['path']}: task contract results cannot be read: {exc}")
+                continue
             if contract.get("value") != actual or contract.get("sha256") != _canonical_sha256(
                 actual
             ):
                 problems.append(
                     f"{entry['path']}: task or oracle contract changed: {contract.get('results_path')!r}"
                 )
-    artifacts = binding.get("artifacts")
-    if not isinstance(artifacts, list) or not artifacts:
-        problems.append(f"{entry['path']}: retained artifact hashes are missing")
-    else:
-        for artifact in artifacts:
-            if not isinstance(artifact, dict):
-                problems.append(f"{entry['path']}: malformed retained artifact")
-                continue
-            path = _safe_file(repo_root, artifact.get("path"))
-            if path is None or artifact.get("sha256") != _sha256(path):
-                problems.append(
-                    f"{entry['path']}: retained artifact changed or is missing: {artifact.get('path')!r}"
-                )
+        if contracts and seen_contracts != seen_results:
+            problems.append(
+                prefix
+                + "task contract inventory differs from campaign results: "
+                + f"missing={sorted(seen_results - seen_contracts)}, extra={sorted(seen_contracts - seen_results)}"
+            )
     return problems
 
 

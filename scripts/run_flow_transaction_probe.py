@@ -69,6 +69,7 @@ _SPEC = importlib.util.spec_from_file_location("_current_flow_local_benchmark", 
 assert _SPEC is not None and _SPEC.loader is not None
 _BENCH = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_BENCH)
+capture_runtime = _BENCH.capture_runtime
 
 # Reuse the sibling's exact source-binding discipline so the two reports can
 # never drift on how they pin a wheel, a commit, or a release tag.
@@ -682,6 +683,7 @@ def run_probe(
             "playwright": importlib.metadata.version("playwright"),
             "chromium": "Playwright-managed headless Chromium",
         },
+        "runtime": capture_runtime(out_dir, browser_required=True),
         "setup": setup,
         "aggregate": aggregate,
         "invariants": invariants,
