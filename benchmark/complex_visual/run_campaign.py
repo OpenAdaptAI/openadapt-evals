@@ -111,7 +111,10 @@ class FixtureProcess:
 
 def _threshold(image: Image.Image) -> int:
     values = np.asarray(image.convert("L"), dtype=np.uint8)
-    return (int(values.min()) + int(values.max())) // 2
+    minimum, maximum = int(values.min()), int(values.max())
+    if minimum == maximum:
+        raise RuntimeError("retained target crop has no visual contrast")
+    return (minimum + maximum) // 2
 
 
 def _crop_evidence(
@@ -264,6 +267,8 @@ class EvidenceResolver:
                 for left, right in zip(values, values[1:])
                 if right - left > 1
             ]
+            if not differences:
+                raise RuntimeError(f"retained evidence {evidence_id!r} has no glyph spacing")
             spacing = math.gcd(*differences)
             pattern = np.zeros(
                 ((ys.max() - ys.min()) // spacing + 1, (xs.max() - xs.min()) // spacing + 1),

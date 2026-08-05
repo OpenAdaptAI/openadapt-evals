@@ -48,6 +48,7 @@ class Fixture:
         self.focused_window = "inbox"
         self.commit_fault_armed = False
         self.heartbeat = False
+        self.is_ready = False
         self.regions: dict[str, list[list[int]]] = {}
         self.centers: dict[str, list[list[int]]] = {}
         self.root_path.mkdir(parents=True, exist_ok=True)
@@ -69,7 +70,7 @@ class Fixture:
             self.canvases[name] = canvas
         self.canvases["editor"].bind("<Key>", self._on_key)
         self._draw_all()
-        self.inbox.after(200, self._publish_ready)
+        self.inbox.after(200, self._mark_ready)
 
     def _initialize_stores(self) -> None:
         with sqlite3.connect(self.root_path / "effects.sqlite") as conn:
@@ -110,6 +111,11 @@ class Fixture:
         self.ready_path.write_text(
             json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
+
+    def _mark_ready(self) -> None:
+        self.inbox.update_idletasks()
+        self.is_ready = True
+        self._publish_ready()
 
     def _claim_focus(self, name: str) -> None:
         if self.focused_window != name:
@@ -224,7 +230,8 @@ class Fixture:
         self._draw_inbox()
         self._draw_worklist()
         self._draw_editor()
-        self._publish_ready()
+        if self.is_ready:
+            self.inbox.after_idle(self._publish_ready)
 
     def _draw_inbox(self) -> None:
         canvas = self.canvases["inbox"]
