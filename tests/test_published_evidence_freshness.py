@@ -107,3 +107,10 @@ def test_manifest_that_disagrees_with_its_artifact_is_drift(tmp_path: Path) -> N
     problems = MODULE.check_entry_matches_artifact(entry, tmp_path)
 
     assert problems and "results.json recorded" in problems[0]
+
+
+def test_current_evidence_manifest_binds_verifiers_runtime_and_tasks() -> None:
+    manifest = MODULE.load_manifest(MANIFEST)
+    entry = MODULE.current_entry(manifest)
+
+    assert MODULE.check_evidence_manifest(entry, ROOT) == []

@@ -28,6 +28,7 @@ drift always exits non-zero.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 import urllib.error
@@ -46,6 +47,15 @@ class DriftError(Exception):
 
 def load_manifest(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _canonical_sha256(value: Any) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def current_entry(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -105,6 +115,114 @@ def check_entry_matches_artifact(entry: dict[str, Any], repo_root: Path) -> list
             f"{entry.get('wheel_sha256')!r} but results.json recorded "
             f"{recorded_sha!r}"
         )
+    return problems
+
+
+def _safe_file(repo_root: Path, relative: object) -> Path | None:
+    if not isinstance(relative, str):
+        return None
+    path = Path(relative)
+    if path.is_absolute() or ".." in path.parts:
+        return None
+    candidate = repo_root / path
+    return candidate if candidate.is_file() else None
+
+
+def _task_contract(document: dict[str, Any]) -> dict[str, Any]:
+    """Return the claim-defining task and oracle fields from one result file."""
+
+    keys = (
+        "task",
+        "oracle",
+        "outcome_definitions",
+        "trials_per_arm_condition",
+        "arms",
+        "conditions",
+        "fault_modes",
+        "verification_modes",
+        "cells",
+        "profiles",
+    )
+    return {key: document[key] for key in keys if key in document}
+
+
+def check_evidence_manifest(entry: dict[str, Any], repo_root: Path) -> list[str]:
+    """Verify the current result set is still the exact measurement set."""
+
+    problems: list[str] = []
+    manifest_path = _safe_file(repo_root, entry.get("evidence_manifest"))
+    if manifest_path is None:
+        return [f"{entry['path']}: evidence_manifest is missing or unsafe"]
+    try:
+        binding = load_manifest(manifest_path)
+    except (OSError, json.JSONDecodeError) as exc:
+        return [f"{entry['path']}: evidence_manifest cannot be read: {exc}"]
+    if binding.get("schema_version") != 1:
+        problems.append(f"{entry['path']}: evidence manifest schema_version must be 1")
+    flow = binding.get("flow")
+    if not isinstance(flow, dict):
+        problems.append(f"{entry['path']}: evidence manifest flow binding is missing")
+    else:
+        for key, expected in (
+            ("version", entry.get("flow_version")),
+            ("wheel_sha256", entry.get("wheel_sha256")),
+        ):
+            if flow.get(key) != expected:
+                problems.append(
+                    f"{entry['path']}: evidence manifest flow {key} disagrees with PUBLISHED_EVIDENCE"
+                )
+    results_path = _safe_file(repo_root, f"{entry['path']}/results.json")
+    if results_path is None:
+        return problems + [f"{entry['path']}: results.json is missing"]
+    results = load_manifest(results_path)
+    expected_runtime = binding.get("runtime_dependencies")
+    if not isinstance(expected_runtime, dict) or not expected_runtime:
+        problems.append(f"{entry['path']}: runtime_dependencies are missing")
+    elif results.get("environment") != expected_runtime:
+        problems.append(
+            f"{entry['path']}: runtime_dependencies do not match results.json environment"
+        )
+    for verifier in binding.get("verifiers", []):
+        if not isinstance(verifier, dict):
+            problems.append(f"{entry['path']}: malformed verifier binding")
+            continue
+        path = _safe_file(repo_root, verifier.get("path"))
+        if path is None or verifier.get("sha256") != _sha256(path):
+            problems.append(
+                f"{entry['path']}: verifier changed or is missing: {verifier.get('path')!r}"
+            )
+    contracts = binding.get("task_contracts")
+    if not isinstance(contracts, list) or not contracts:
+        problems.append(f"{entry['path']}: task_contracts are missing")
+    else:
+        for contract in contracts:
+            if not isinstance(contract, dict):
+                problems.append(f"{entry['path']}: malformed task contract")
+                continue
+            path = _safe_file(repo_root, contract.get("results_path"))
+            if path is None:
+                problems.append(f"{entry['path']}: task contract results file is missing")
+                continue
+            actual = _task_contract(load_manifest(path))
+            if contract.get("value") != actual or contract.get("sha256") != _canonical_sha256(
+                actual
+            ):
+                problems.append(
+                    f"{entry['path']}: task or oracle contract changed: {contract.get('results_path')!r}"
+                )
+    artifacts = binding.get("artifacts")
+    if not isinstance(artifacts, list) or not artifacts:
+        problems.append(f"{entry['path']}: retained artifact hashes are missing")
+    else:
+        for artifact in artifacts:
+            if not isinstance(artifact, dict):
+                problems.append(f"{entry['path']}: malformed retained artifact")
+                continue
+            path = _safe_file(repo_root, artifact.get("path"))
+            if path is None or artifact.get("sha256") != _sha256(path):
+                problems.append(
+                    f"{entry['path']}: retained artifact changed or is missing: {artifact.get('path')!r}"
+                )
     return problems
 
 
@@ -179,6 +297,7 @@ def main(argv: list[str] | None = None) -> int:
 
     problems.extend(check_superseded_links(manifest))
     problems.extend(check_entry_matches_artifact(entry, args.repo_root))
+    problems.extend(check_evidence_manifest(entry, args.repo_root))
 
     release_version = args.current_version
     release_wheel = args.current_wheel_sha256
@@ -209,8 +328,7 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"Published evidence {entry['path']} passed its OFFLINE checks. "
             f"The release-freshness comparison against the current {package} "
-            f"release was SKIPPED"
-            + (" (--offline)." if args.offline else " (PyPI unreachable).")
+            f"release was SKIPPED" + (" (--offline)." if args.offline else " (PyPI unreachable).")
         )
         return 0
 

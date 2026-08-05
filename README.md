@@ -242,7 +242,9 @@ invalidate it without any commit landing here.
 `docs/eval_results/PUBLISHED_EVIDENCE.json` records which evidence set is
 current and which release it was measured against, and
 `scripts/check_published_evidence_freshness.py` fails when that pin no longer
-matches the current published release. It runs offline on every pull request and
+matches the current published release. The current set also has an
+`EVIDENCE_MANIFEST.json` that binds the verifier scripts, retained artifacts,
+runtime dependencies, and task/oracle contracts. It runs offline on every pull request and
 against PyPI on a daily schedule (`.github/workflows/evidence-freshness.yml`).
 Re-run the comparison and publish a new evidence set rather than editing an old
 one: superseded reports stay reproducible against the wheel they were measured
