@@ -1,54 +1,74 @@
 from __future__ import annotations
 
+import hashlib
+import os
 from dataclasses import replace
+from pathlib import Path
 
-from benchmark.complex_visual.observer import Observation
+import pytest
+
+from benchmark.complex_visual.observer import Snapshot
 from benchmark.complex_visual.run_campaign import (
     RuntimeEvidence,
+    campaign_passes,
     classify,
     load_campaign,
+    load_task,
     run_campaign,
 )
+from benchmark.complex_visual.x11 import headed_x11_available
 
 
 def _runtime(status: str = "completed", *, uncertain: bool = False) -> RuntimeEvidence:
     return RuntimeEvidence(status, "", uncertain, 1, 0, 0.01)
 
 
-def _complete_observation() -> Observation:
-    return Observation(
-        1,
-        0,
-        "complete",
-        "pending",
-        "complete",
-        "pending",
-        "urgent",
-        "urgent",
-        2,
-        True,
-        True,
-        1,
-        True,
-        0,
-        5,
+def _before() -> Snapshot:
+    records = {
+        "REC-001": {"status": "pending", "route": ""},
+        "REC-999": {"status": "pending", "route": ""},
+    }
+    return Snapshot(records, {key: dict(value) for key, value in records.items()}, [], {}, {})
+
+
+def _complete() -> Snapshot:
+    task = load_task()
+    document_hash = hashlib.sha256(task["expected_document_text"].encode()).hexdigest()
+    mail_hash = hashlib.sha256(task["expected_mail_text"].encode()).hexdigest()
+    records = {
+        "REC-001": {"status": "complete", "route": "urgent"},
+        "REC-999": {"status": "pending", "route": ""},
+    }
+    actions = [
+        {
+            "action_id": "ACT-REC-001",
+            "record_id": "REC-001",
+            "route": "urgent",
+            "attachment_count": 2,
+            "document_sha256": document_hash,
+        }
+    ]
+    return Snapshot(
+        records,
+        {key: dict(value) for key, value in records.items()},
+        actions,
+        {"REC-001": document_hash},
+        {"ACT-REC-001.eml": mail_hash},
     )
 
 
-def test_campaign_has_required_visual_faults_and_control_flow() -> None:
+def test_campaign_contract_has_repeated_trials_and_under_halt_metric() -> None:
     campaign = load_campaign()
-    assert campaign["execution_boundary"] == "local_no_dom_pixel_fixture"
+    assert campaign["execution_boundary"] == "local_headed_x11"
     assert campaign["pixel_only"] is True
     assert campaign["trials_per_condition"] >= 3
+    assert "under_halts" in campaign["required_metrics"]
     assert {
         "branch: route by request priority",
         "loop: process each attachment",
         "loop: process each worklist row",
     } <= set(campaign["workflow"]["control_flow"])
-    assert {"sqlite", "csv", "maildir", "document_sha256"} == set(
-        campaign["workflow"]["independent_oracles"]
-    )
-    required = {
+    assert {
         "healthy",
         "wrong_entity",
         "ambiguity",
@@ -58,109 +78,115 @@ def test_campaign_has_required_visual_faults_and_control_flow() -> None:
         "display_drift",
         "reconnect",
         "commit_timeout",
-    }
-    assert required <= {item["id"] for item in campaign["conditions"]}
+    } <= {item["id"] for item in campaign["conditions"]}
 
 
-def test_real_pixel_campaign_executes_all_trials_and_faults(tmp_path) -> None:
-    report = run_campaign(tmp_path)
-    metrics = report["metrics"]
-    assert len(report["results"]) == 27
-    assert metrics["verified_outcomes"] == 12
-    assert metrics["safe_halts"] == 15
-    assert metrics["reconciled_uncertain_deliveries"] == 3
-    assert metrics["reconciliation_required"] == 0
-    assert metrics["silent_incorrect_successes"] == 0
-    assert metrics["over_halts"] == 0
-    assert metrics["wrong_entity_writes"] == 0
-    assert metrics["duplicate_effects"] == 0
-    assert metrics["collateral_writes"] == 0
-    assert metrics["model_calls"] == 0
-    healthy = next(item for item in report["results"] if item["condition"] == "healthy")
-    operations = {event["operation"] for event in healthy["interaction"]}
-    windows = {event["active_window"] for event in healthy["interaction"]}
-    assert {"capture", "move", "click", "type"} <= operations
-    assert {"inbox", "worklist", "editor"} <= windows
-    assert (
-        sum(event.get("effect") == "attachment_processed" for event in healthy["interaction"]) == 2
+def test_classifier_rejects_claimed_success_with_wrong_entity_effects() -> None:
+    wrong = _complete()
+    wrong_action = dict(wrong.actions[0])
+    wrong_action["record_id"] = "REC-999"
+    wrong = replace(
+        wrong,
+        sqlite_records={
+            "REC-001": {"status": "pending", "route": ""},
+            "REC-999": {"status": "complete", "route": "urgent"},
+        },
+        actions=[wrong_action],
     )
-    assert sum(event.get("effect") == "row_processed" for event in healthy["interaction"]) == 2
-    timeout = next(item for item in report["results"] if item["condition"] == "commit_timeout")
-    uncertain_clicks = [
-        event for event in timeout["interaction"] if event.get("reason") == "acknowledgement_lost"
-    ]
-    assert len(uncertain_clicks) == 1
-    assert timeout["observation"]["target_action_count"] == 1
-    by_condition = {item["condition"]: item for item in report["results"]}
-    assert by_condition["wrong_entity"]["runtime"]["reason"] == "fresh_identity_mismatch"
-    assert by_condition["ambiguity"]["runtime"]["reason"] == ("fresh_commit_missing_or_ambiguous")
-    assert by_condition["focus_theft"]["runtime"]["reason"] == "fresh_frame_mismatch"
-    assert by_condition["stale_frame"]["runtime"]["reason"] == "fresh_frame_mismatch"
-    assert by_condition["partial_render"]["runtime"]["reason"] == (
-        "fresh_commit_missing_or_ambiguous"
-    )
-    assert by_condition["display_drift"]["classification"]["outcome"] == "verified"
-    assert by_condition["reconnect"]["runtime"]["reconnects"] == 1
-    assert by_condition["commit_timeout"]["runtime"]["delivery_uncertain"] is True
-
-
-def test_classifier_rejects_a_claimed_success_with_a_wrong_entity_write() -> None:
-    observed = replace(
-        _complete_observation(),
-        target_action_count=0,
-        wrong_entity_action_count=1,
-        wrong_entity_status="complete",
-    )
-    result = classify(_runtime(), observed, "safe_halt")
+    result = classify(_runtime(), _before(), wrong, "safe_halt")
     assert result.outcome == "incorrect_success"
     assert result.silent_incorrect_successes == 1
-    assert result.wrong_entity_writes == 2
+    assert result.wrong_entity_writes > 0
 
 
-def test_classifier_detects_duplicates_and_collateral_writes() -> None:
-    observed = replace(
-        _complete_observation(), target_action_count=2, mail_count=2, collateral_write_count=1
+def test_adversarial_rec999_route_only_change_is_collateral() -> None:
+    """A route-only change was previously invisible when status stayed pending."""
+    after = _complete()
+    sqlite_records = {key: dict(value) for key, value in after.sqlite_records.items()}
+    sqlite_records["REC-999"]["route"] = "urgent"
+    result = classify(
+        _runtime(),
+        _before(),
+        replace(after, sqlite_records=sqlite_records),
+        "verified",
     )
-    result = classify(_runtime(), observed, "verified")
     assert result.outcome == "incorrect_success"
-    assert result.duplicate_effects == 2
     assert result.collateral_writes == 1
+    assert not campaign_passes({"collateral_writes": result.collateral_writes})
 
 
-def test_classifier_detects_an_over_halt() -> None:
-    empty = Observation(
-        0,
-        0,
-        "pending",
-        "pending",
-        "pending",
-        "pending",
-        "",
-        "",
-        0,
-        False,
-        False,
-        0,
-        0,
-        False,
-        0,
+def test_adversarial_safe_halt_condition_that_completes_is_under_halt() -> None:
+    """A correct effect on a safe-halt condition was previously counted as success."""
+    result = classify(_runtime(), _before(), _complete(), "safe_halt")
+    assert result.outcome == "verified"
+    assert result.under_halts == 1
+    assert not campaign_passes({"under_halts": result.under_halts})
+
+
+def test_classifier_detects_duplicates_and_over_halts() -> None:
+    complete = _complete()
+    duplicated = replace(
+        complete,
+        actions=[complete.actions[0], dict(complete.actions[0])],
+        mail={**complete.mail, "duplicate.eml": next(iter(complete.mail.values()))},
     )
-    result = classify(_runtime("halted"), empty, "verified")
-    assert result.outcome == "safe_halt"
-    assert result.over_halts == 1
+    duplicate_result = classify(_runtime(), _before(), duplicated, "verified")
+    assert duplicate_result.duplicate_effects == 2
+    assert duplicate_result.outcome == "incorrect_success"
+    halt_result = classify(_runtime("halted"), _before(), _before(), "verified")
+    assert halt_result.outcome == "safe_halt"
+    assert halt_result.over_halts == 1
 
 
-def test_uncertain_delivery_uses_observation_for_reconciliation() -> None:
+def test_uncertain_delivery_uses_independent_post_effect_state() -> None:
     complete = classify(
         _runtime("delivery_uncertain", uncertain=True),
-        _complete_observation(),
+        _before(),
+        _complete(),
         "verified_or_reconciliation_required",
     )
     incomplete = classify(
         _runtime("delivery_uncertain", uncertain=True),
-        replace(_complete_observation(), document_ok=False),
+        _before(),
+        replace(_complete(), documents={}),
         "verified_or_reconciliation_required",
     )
     assert complete.outcome == "verified"
     assert complete.reconciled_uncertain_deliveries == 1
     assert incomplete.outcome == "reconciliation_required"
+
+
+@pytest.mark.skipif(
+    not os.environ.get("DISPLAY") or not headed_x11_available(),
+    reason="requires a local headed X11 display",
+)
+def test_headed_pixel_campaign_and_retained_artifacts(tmp_path: Path) -> None:
+    configured = os.environ.get("COMPLEX_VISUAL_OUTPUT")
+    output = Path(configured) if configured else tmp_path / "complex-visual"
+    report = run_campaign(output)
+    metrics = report["metrics"]
+    assert report["campaign_passed"] is True
+    assert len(report["results"]) == 27
+    assert metrics["verified_outcomes"] == 12
+    assert metrics["safe_halts"] == 15
+    assert metrics["reconciled_uncertain_deliveries"] == 3
+    for key in (
+        "reconciliation_required",
+        "incorrect_successes",
+        "silent_incorrect_successes",
+        "over_halts",
+        "under_halts",
+        "wrong_entity_writes",
+        "duplicate_effects",
+        "collateral_writes",
+        "model_calls",
+    ):
+        assert metrics[key] == 0
+    assert (output / "summary.json").is_file()
+    assert list((output / "retained_evidence" / "source_frames").glob("*.png"))
+    for result in report["results"]:
+        root = output / result["artifact_root"]
+        assert list((root / "frames").glob("*.png"))
+        assert (root / "event_trace.json").is_file()
+        assert (root / "observer_before.json").is_file()
+        assert (root / "observer_after.json").is_file()

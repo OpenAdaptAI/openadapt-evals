@@ -1,9 +1,4 @@
-"""No-DOM pixel fixture for the complex visual workflow campaign.
-
-The service renders three application windows into PNG frames.  Its protocol
-accepts only screenshots and pointer or keyboard input.  It does not expose a
-DOM, accessibility tree, control name, or application state to the actor.
-"""
+"""Three-window headed Tk fixture for the complex visual campaign."""
 
 from __future__ import annotations
 
@@ -12,93 +7,83 @@ import csv
 import hashlib
 import json
 import sqlite3
-import sys
-from dataclasses import dataclass, field
-from io import BytesIO
+import tkinter as tk
 from pathlib import Path
 
-from PIL import Image, ImageDraw
-
-WIDTH, HEIGHT = 800, 500
-CONTROL_SIZE = (140, 28)
-DRIFT_CONTROL_SIZE = (126, 25)
-
-COLORS = {
-    "background": (235, 239, 244),
-    "panel": (255, 255, 255),
-    "title": (32, 43, 61),
-    "tab_inbox": (64, 111, 190),
-    "tab_worklist": (65, 145, 104),
-    "tab_editor": (139, 92, 190),
-    "attachment": (39, 133, 170),
-    "row_task": (205, 117, 31),
-    "urgent": (192, 57, 43),
-    "normal": (48, 120, 185),
-    "field": (222, 228, 235),
-    "save": (103, 82, 164),
-    "commit": (27, 145, 85),
-    "target_entity": (17, 118, 74),
-    "wrong_entity": (188, 58, 52),
-    "priority_high": (239, 139, 42),
-    "priority_normal": (73, 132, 187),
-    "pointer": (10, 10, 10),
+WINDOWS = {
+    "inbox": (20, 30),
+    "worklist": (440, 30),
+    "editor": (860, 30),
 }
+WINDOW_SIZE = (390, 560)
 
-DRIFT_COLORS = {
-    key: tuple(
-        min(255, channel + (17 if index % 2 == 0 else -13)) for index, channel in enumerate(value)
-    )
-    for key, value in COLORS.items()
+GLYPHS = {
+    "identity": ("1000001", "0100010", "0010100", "0001000", "0010100", "0100010", "1000001"),
+    "wrong_identity": ("1111111", "1000001", "1011101", "1010101", "1011101", "1000001", "1111111"),
+    "priority_high": ("0001000", "0011100", "0111110", "1111111", "0011100", "0011100", "0011100"),
+    "attachment": ("1111000", "1000100", "1011110", "1010010", "1011110", "1000000", "1111110"),
+    "row_task": ("1111110", "1000010", "1011010", "1011010", "1011010", "1000010", "1111110"),
+    "urgent": ("1000001", "1000001", "1000001", "1000001", "1000001", "0100010", "0011100"),
+    "normal": ("1000001", "1100001", "1010001", "1001001", "1000101", "1000011", "1000001"),
+    "field": ("1111111", "1000001", "1000001", "1000001", "1000001", "1000001", "1111111"),
+    "save": ("1111111", "1000001", "1011101", "1010101", "1011101", "1000001", "1111111"),
+    "commit": ("0011100", "0100010", "1000001", "1000000", "1000001", "0100010", "0011100"),
+    "focus": ("1111111", "1000000", "1011110", "1010000", "1010000", "1000000", "1000000"),
 }
 
 
-@dataclass
 class Fixture:
-    root: Path
-    condition: str
-    active_window: str = "inbox"
-    pointer: tuple[int, int] = (5, 5)
-    connected: bool = True
-    session_generation: int = 1
-    attachments_done: set[int] = field(default_factory=set)
-    rows_done: set[int] = field(default_factory=set)
-    route: str | None = None
-    field_focused: bool = False
-    typed_text: str = ""
-    draft_saved: bool = False
-    editor_ready_captures: int = 0
-    pending_focus_theft: bool = False
-    pending_stale_frame: bool = False
-    committed: bool = False
-
-    def __post_init__(self) -> None:
-        self.root.mkdir(parents=True, exist_ok=True)
+    def __init__(self, root_path: Path, condition: str, ready_path: Path) -> None:
+        self.root_path = root_path
+        self.condition = condition
+        self.ready_path = ready_path
+        self.scale = 1.08 if condition == "display_drift" else 1.0
+        self.glyph_unit = 3 if condition == "display_drift" else 2
+        self.attachments_done: set[int] = set()
+        self.rows_done: set[int] = set()
+        self.route = ""
+        self.document_text = ""
+        self.draft_saved = False
+        self.active_record = "REC-001"
+        self.focused_window = "inbox"
+        self.commit_fault_armed = False
+        self.heartbeat = False
+        self.regions: dict[str, list[list[int]]] = {}
+        self.centers: dict[str, list[list[int]]] = {}
+        self.root_path.mkdir(parents=True, exist_ok=True)
         self._initialize_stores()
-
-    @property
-    def palette(self) -> dict[str, tuple[int, int, int]]:
-        return DRIFT_COLORS if self.condition == "display_drift" else COLORS
-
-    @property
-    def scale(self) -> float:
-        return 0.9 if self.condition == "display_drift" else 1.0
-
-    def box(self, x: int, y: int, width: int, height: int) -> tuple[int, int, int, int]:
-        scale = self.scale
-        left, top = round(x * scale), round(y * scale)
-        return (left, top, left + round(width * scale), top + round(height * scale))
+        self.inbox = tk.Tk(className="OpenAdaptInbox")
+        self.worklist = tk.Toplevel(self.inbox, class_="OpenAdaptWorklist")
+        self.editor = tk.Toplevel(self.inbox, class_="OpenAdaptEditor")
+        self.windows = {"inbox": self.inbox, "worklist": self.worklist, "editor": self.editor}
+        self.canvases: dict[str, tk.Canvas] = {}
+        for name, window in self.windows.items():
+            x, y = WINDOWS[name]
+            window.overrideredirect(True)
+            window.geometry(f"{WINDOW_SIZE[0]}x{WINDOW_SIZE[1]}+{x}+{y}")
+            canvas = tk.Canvas(
+                window, width=WINDOW_SIZE[0], height=WINDOW_SIZE[1], highlightthickness=0
+            )
+            canvas.pack(fill="both", expand=True)
+            canvas.bind("<FocusIn>", lambda event, selected=name: self._claim_focus(selected))
+            self.canvases[name] = canvas
+        self.canvases["editor"].bind("<Key>", self._on_key)
+        self._draw_all()
+        self.inbox.after(200, self._publish_ready)
 
     def _initialize_stores(self) -> None:
-        with sqlite3.connect(self.root / "effects.sqlite") as conn:
-            conn.execute("create table records (record_id text primary key, status text)")
+        with sqlite3.connect(self.root_path / "effects.sqlite") as conn:
+            conn.execute(
+                "create table records (record_id text primary key, status text, route text)"
+            )
             conn.execute(
                 "create table actions (action_id text, record_id text, route text, attachment_count integer, document_sha256 text)"
             )
             conn.executemany(
-                "insert into records values (?, ?)",
-                (("REC-001", "pending"), ("REC-999", "pending")),
+                "insert into records values (?, ?, ?)",
+                (("REC-001", "pending", ""), ("REC-999", "pending", "")),
             )
-        with (self.root / "worklist.csv").open("w", newline="", encoding="utf-8") as stream:
+        with (self.root_path / "worklist.csv").open("w", newline="", encoding="utf-8") as stream:
             csv.writer(stream).writerows(
                 (
                     ("record_id", "status", "route"),
@@ -106,285 +91,304 @@ class Fixture:
                     ("REC-999", "pending", ""),
                 )
             )
-        (self.root / "maildir").mkdir()
-        (self.root / "documents").mkdir()
+        (self.root_path / "maildir").mkdir()
+        (self.root_path / "documents").mkdir()
 
-    def _audit(self, operation: str, **details: object) -> None:
-        event = {"operation": operation, "active_window": self.active_window, **details}
-        with (self.root / "interaction.jsonl").open("a", encoding="utf-8") as stream:
-            stream.write(json.dumps(event, sort_keys=True) + "\n")
+    def _event(self, event: str, **details: object) -> None:
+        with (self.root_path / "fixture_events.jsonl").open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps({"event": event, **details}, sort_keys=True) + "\n")
 
-    def _draw_button(
-        self, draw: ImageDraw.ImageDraw, role: str, box: tuple[int, int, int, int], label: str
+    def _publish_ready(self) -> None:
+        payload = {
+            "regions": self.regions,
+            "centers": self.centers,
+            "windows": {
+                name: [x, y, x + WINDOW_SIZE[0], y + WINDOW_SIZE[1]]
+                for name, (x, y) in WINDOWS.items()
+            },
+        }
+        self.ready_path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+
+    def _claim_focus(self, name: str) -> None:
+        if self.focused_window != name:
+            self.focused_window = name
+            self._event("focus", window=name)
+            self._draw_all()
+
+    def _glyph(
+        self, canvas: tk.Canvas, name: str, x: int, y: int, tag: str, *, partial: bool = False
+    ) -> tuple[int, int, int, int]:
+        pattern = GLYPHS[name]
+        unit = self.glyph_unit
+        rows = len(pattern) // 2 if partial else len(pattern)
+        for row, bits in enumerate(pattern[:rows]):
+            for column, bit in enumerate(bits):
+                if bit == "1":
+                    canvas.create_rectangle(
+                        x + column * unit,
+                        y + row * unit,
+                        x + (column + 1) * unit - 1,
+                        y + (row + 1) * unit - 1,
+                        fill="#111111",
+                        outline="",
+                        tags=(tag,),
+                    )
+        return (x - 2, y - 2, x + len(pattern[0]) * unit + 2, y + len(pattern) * unit + 2)
+
+    def _control(
+        self,
+        window: str,
+        evidence_id: str,
+        x: int,
+        y: int,
+        label: str,
+        callback,
+        *,
+        glyph: str | None = None,
+        partial: bool = False,
     ) -> None:
-        draw.rectangle(box, fill=self.palette[role])
-        draw.text((box[0] + 6, box[1] + 6), label, fill=(255, 255, 255))
-
-    def render(self, *, count_capture: bool = False) -> Image.Image:
-        if count_capture and self.active_window == "editor" and self.draft_saved:
-            self.editor_ready_captures += 1
-        image = Image.new("RGB", (WIDTH, HEIGHT), self.palette["background"])
-        draw = ImageDraw.Draw(image)
-        draw.rectangle(
-            self.box(20, 15, 760, 460),
-            fill=self.palette["panel"],
-            outline=self.palette["title"],
-            width=2,
+        canvas = self.canvases[window]
+        x, y = round(x * self.scale), round(y * self.scale)
+        width, height = round(150 * self.scale), round(42 * self.scale)
+        tag = f"control:{evidence_id}:{len(self.centers.get(evidence_id, []))}"
+        canvas.create_rectangle(
+            x, y, x + width, y + height, fill="#e8edf2", outline="#334155", width=2, tags=(tag,)
         )
-        for role, label, x, window in (
-            ("tab_inbox", "Inbox", 40, "inbox"),
-            ("tab_worklist", "Worklist", 205, "worklist"),
-            ("tab_editor", "Document editor", 370, "editor"),
-        ):
-            box = self.box(x, 35, *CONTROL_SIZE)
-            self._draw_button(draw, role, box, label)
-            if self.active_window == window:
-                draw.rectangle(box, outline=(255, 255, 255), width=3)
-        if self.active_window == "inbox":
-            self._render_inbox(draw)
-        elif self.active_window == "worklist":
-            self._render_worklist(draw)
-        else:
-            self._render_editor(draw)
-        px, py = self.pointer
-        draw.polygon(
-            ((px, py), (px + 9, py + 18), (px + 4, py + 13), (px, py + 18)),
-            fill=self.palette["pointer"],
+        glyph_name = glyph or evidence_id
+        region = self._glyph(canvas, glyph_name, x + 10, y + 12, tag, partial=partial)
+        canvas.create_text(
+            x + 42, y + height // 2, text=label, anchor="w", fill="#111111", tags=(tag,)
         )
-        return image
+        canvas.tag_bind(
+            tag,
+            "<Button-1>",
+            lambda event, selected=window, action=callback: self._activate(selected, action),
+        )
+        if evidence_id == "commit":
+            canvas.tag_bind(tag, "<Enter>", self._arm_commit_fault)
+        wx, wy = WINDOWS[window]
+        absolute = [region[0] + wx, region[1] + wy, region[2] + wx, region[3] + wy]
+        self.regions.setdefault(evidence_id, []).append(absolute)
+        self.centers.setdefault(evidence_id, []).append([wx + x + width // 2, wy + y + height // 2])
 
-    def _render_inbox(self, draw: ImageDraw.ImageDraw) -> None:
-        draw.text((50, 105), "Synthetic request REC-001", fill=self.palette["title"])
-        draw.rectangle(self.box(50, 130, 24, 18), fill=self.palette["target_entity"])
-        draw.rectangle(self.box(100, 130, 24, 18), fill=self.palette["priority_high"])
-        for index, x in enumerate((80, 260)):
+    def _marker(
+        self,
+        window: str,
+        evidence_id: str,
+        x: int,
+        y: int,
+        *,
+        glyph: str | None = None,
+        partial: bool = False,
+    ) -> None:
+        canvas = self.canvases[window]
+        x, y = round(x * self.scale), round(y * self.scale)
+        region = self._glyph(
+            canvas, glyph or evidence_id, x, y, f"marker:{evidence_id}", partial=partial
+        )
+        wx, wy = WINDOWS[window]
+        self.regions.setdefault(evidence_id, []).append(
+            [region[0] + wx, region[1] + wy, region[2] + wx, region[3] + wy]
+        )
+
+    def _activate(self, window: str, callback) -> None:
+        self.windows[window].focus_force()
+        self.canvases[window].focus_set()
+        self._claim_focus(window)
+        callback()
+
+    def _draw_all(self) -> None:
+        self.regions, self.centers = {}, {}
+        theme = "#d7dce2" if self.condition == "display_drift" else "#f8fafc"
+        for name, canvas in self.canvases.items():
+            canvas.delete("all")
+            canvas.configure(background=theme)
+            canvas.create_text(
+                18,
+                18,
+                text={"inbox": "Inbox", "worklist": "Worklist", "editor": "Document editor"}[name],
+                anchor="nw",
+                font=("TkDefaultFont", 18, "bold"),
+                fill="#111111",
+            )
+            canvas.create_rectangle(
+                2,
+                2,
+                WINDOW_SIZE[0] - 3,
+                WINDOW_SIZE[1] - 3,
+                outline="#2563eb" if self.focused_window == name else "#94a3b8",
+                width=4,
+            )
+        self._draw_inbox()
+        self._draw_worklist()
+        self._draw_editor()
+        self._publish_ready()
+
+    def _draw_inbox(self) -> None:
+        canvas = self.canvases["inbox"]
+        canvas.create_text(20, 70, text="Synthetic request REC-001", anchor="w", fill="#111111")
+        self._marker("inbox", "inbox_identity", 24, 94, glyph="identity")
+        self._marker("inbox", "priority_high", 72, 94)
+        for index, y in enumerate((145, 210)):
             if index not in self.attachments_done:
-                self._draw_button(
-                    draw, "attachment", self.box(x, 205, *CONTROL_SIZE), f"Attachment {index + 1}"
+                self._control(
+                    "inbox",
+                    "attachment",
+                    35,
+                    y,
+                    f"Attachment {index + 1}",
+                    lambda selected=index: self._attachment(selected),
                 )
 
-    def _render_worklist(self, draw: ImageDraw.ImageDraw) -> None:
-        draw.text((50, 105), "Synthetic CSV worklist", fill=self.palette["title"])
-        draw.rectangle(self.box(50, 135, 24, 18), fill=self.palette["target_entity"])
-        for index, y in enumerate((185, 245)):
+    def _draw_worklist(self) -> None:
+        canvas = self.canvases["worklist"]
+        canvas.create_text(20, 70, text="CSV worklist", anchor="w", fill="#111111")
+        self._marker("worklist", "worklist_identity", 24, 94, glyph="identity")
+        for index, y in enumerate((145, 210)):
             if index not in self.rows_done:
-                self._draw_button(
-                    draw, "row_task", self.box(90, y, *CONTROL_SIZE), f"Row {index + 1}"
+                self._control(
+                    "worklist",
+                    "row_task",
+                    35,
+                    y,
+                    f"Worklist row {index + 1}",
+                    lambda selected=index: self._row(selected),
                 )
         if len(self.rows_done) == 2:
-            self._draw_button(draw, "urgent", self.box(430, 185, *CONTROL_SIZE), "Route urgent")
-            self._draw_button(draw, "normal", self.box(430, 245, *CONTROL_SIZE), "Route normal")
+            self._control(
+                "worklist", "urgent", 35, 300, "Route urgent", lambda: self._route("urgent")
+            )
+            self._control(
+                "worklist", "normal", 200, 300, "Route normal", lambda: self._route("normal")
+            )
 
-    def _render_editor(self, draw: ImageDraw.ImageDraw) -> None:
-        draw.text((50, 105), "Synthetic document", fill=self.palette["title"])
-        identity_role = (
-            "wrong_entity"
-            if self.condition == "wrong_entity" and self.editor_ready_captures >= 2
-            else "target_entity"
-        )
-        draw.rectangle(self.box(50, 135, 24, 18), fill=self.palette[identity_role])
-        field_box = self.box(70, 185, 480, 90)
-        draw.rectangle(field_box, fill=self.palette["field"], outline=self.palette["title"])
-        draw.text(
-            (field_box[0] + 8, field_box[1] + 8), self.typed_text[:58], fill=self.palette["title"]
+    def _draw_editor(self) -> None:
+        canvas = self.canvases["editor"]
+        canvas.create_text(20, 70, text="Document for active record", anchor="w", fill="#111111")
+        identity = "wrong_identity" if self.active_record != "REC-001" else "identity"
+        self._marker("editor", "editor_identity", 24, 94, glyph=identity)
+        if self.focused_window == "editor":
+            self._marker("editor", "focus", 72, 94)
+        self._control(
+            "editor", "field", 30, 135, self.document_text[:26] or "Document body", self._field
         )
         if not self.draft_saved:
-            self._draw_button(draw, "save", self.box(80, 325, *CONTROL_SIZE), "Save draft")
+            self._control("editor", "save", 35, 240, "Save draft", self._save)
+        else:
+            partial = self.condition == "partial_render"
+            self._control("editor", "commit", 35, 330, "Commit", self._commit, partial=partial)
+            if self.condition == "ambiguity":
+                self._control("editor", "commit", 200, 330, "Commit", self._commit)
+        if self.heartbeat:
+            canvas.create_rectangle(350, 100, 360, 110, fill="#dc2626", outline="")
+
+    def _attachment(self, index: int) -> None:
+        self.attachments_done.add(index)
+        self._event("attachment_processed", index=index)
+        self._draw_all()
+
+    def _row(self, index: int) -> None:
+        self.rows_done.add(index)
+        self._event("row_processed", index=index)
+        self._draw_all()
+        if self.condition == "reconnect" and len(self.rows_done) == 1:
+            self.worklist.withdraw()
+            self._event("window_disconnected", window="worklist")
+            self.inbox.after(350, self._restore_worklist)
+
+    def _restore_worklist(self) -> None:
+        self.worklist.deiconify()
+        self.worklist.lift()
+        self._event("window_reconnected", window="worklist")
+
+    def _route(self, route: str) -> None:
+        self.route = route
+        self._event("route_selected", route=route)
+        self._draw_all()
+
+    def _field(self) -> None:
+        self.canvases["editor"].focus_set()
+        self._event("field_focused")
+
+    def _on_key(self, event: tk.Event) -> None:
+        if event.char and event.char.isprintable():
+            self.document_text += event.char
+            self._draw_all()
+
+    def _save(self) -> None:
+        if self.document_text:
+            self.draft_saved = True
+            self._event("draft_saved")
+            self._draw_all()
+
+    def _arm_commit_fault(self, event: tk.Event) -> None:
+        del event
+        if self.commit_fault_armed:
             return
-        commit_box = self.box(430, 325, *CONTROL_SIZE)
-        fault_visible = self.editor_ready_captures >= 2
-        if self.condition == "partial_render" and fault_visible:
-            partial = (
-                commit_box[0],
-                commit_box[1],
-                commit_box[2],
-                commit_box[1] + max(1, (commit_box[3] - commit_box[1]) // 2),
-            )
-            self._draw_button(draw, "commit", partial, "Commit")
-        else:
-            self._draw_button(draw, "commit", commit_box, "Commit")
-        if self.condition == "ambiguity" and fault_visible:
-            self._draw_button(draw, "commit", self.box(430, 380, *CONTROL_SIZE), "Commit")
+        self.commit_fault_armed = True
+        if self.condition == "wrong_entity":
+            self.active_record = "REC-999"
+            self.inbox.after(25, self._draw_all)
+        elif self.condition == "focus_theft":
+            self.inbox.after(25, self._steal_focus)
+        elif self.condition == "stale_frame":
+            self.inbox.after(25, self._pulse)
 
-    def capture(self) -> dict:
-        if not self.connected:
-            self._audit("capture", accepted=False, reason="session_disconnected")
-            return {"accepted": False, "reason": "session_disconnected"}
-        image = self.render(count_capture=True)
-        if self.active_window == "editor" and self.draft_saved and self.editor_ready_captures >= 2:
-            self.pending_focus_theft = self.condition == "focus_theft"
-            self.pending_stale_frame = self.condition == "stale_frame"
-        stream = BytesIO()
-        image.save(stream, format="PNG")
-        payload = stream.getvalue()
-        digest = hashlib.sha256(payload).hexdigest()
-        self._audit("capture", accepted=True, frame_sha256=digest)
-        import base64
+    def _steal_focus(self) -> None:
+        self.inbox.focus_force()
+        self.canvases["inbox"].focus_set()
+        self._claim_focus("inbox")
+        self._event("focus_stolen", window="inbox")
 
-        return {
-            "accepted": True,
-            "png_base64": base64.b64encode(payload).decode("ascii"),
-            "frame_sha256": digest,
-            "session_generation": self.session_generation,
-        }
-
-    def _current_digest(self) -> str:
-        stream = BytesIO()
-        self.render().save(stream, format="PNG")
-        return hashlib.sha256(stream.getvalue()).hexdigest()
-
-    @staticmethod
-    def _inside(x: int, y: int, box: tuple[int, int, int, int]) -> bool:
-        return box[0] <= x < box[2] and box[1] <= y < box[3]
-
-    def move(self, x: int, y: int, expected_frame_sha256: str) -> dict:
-        if not self.connected or expected_frame_sha256 != self._current_digest():
-            self._audit("move", accepted=False, x=x, y=y, reason="stale_frame")
-            return {"accepted": False, "reason": "stale_frame"}
-        self.pointer = (x, y)
-        self._audit("move", accepted=True, x=x, y=y)
-        return {"accepted": True}
-
-    def click(self, x: int, y: int, expected_frame_sha256: str) -> dict:
-        if self.pending_focus_theft:
-            self.active_window = "inbox"
-            self.pending_focus_theft = False
-        if self.pending_stale_frame:
-            self.pointer = (self.pointer[0] + 1, self.pointer[1])
-            self.pending_stale_frame = False
-        if not self.connected or expected_frame_sha256 != self._current_digest():
-            self._audit("click", accepted=False, x=x, y=y, reason="fresh_frame_mismatch")
-            return {"accepted": False, "reason": "fresh_frame_mismatch"}
-        for role, tab_x, window in (
-            ("tab_inbox", 40, "inbox"),
-            ("tab_worklist", 205, "worklist"),
-            ("tab_editor", 370, "editor"),
-        ):
-            if self._inside(x, y, self.box(tab_x, 35, *CONTROL_SIZE)):
-                del role
-                self.active_window = window
-                self._audit("click", accepted=True, x=x, y=y, effect="window_switch")
-                return {"accepted": True}
-        response = self._click_active(x, y)
-        self._audit("click", x=x, y=y, **response)
-        return response
-
-    def _click_active(self, x: int, y: int) -> dict:
-        if self.active_window == "inbox":
-            for index, control_x in enumerate((80, 260)):
-                if index not in self.attachments_done and self._inside(
-                    x, y, self.box(control_x, 205, *CONTROL_SIZE)
-                ):
-                    self.attachments_done.add(index)
-                    return {"accepted": True, "effect": "attachment_processed"}
-        elif self.active_window == "worklist":
-            for index, control_y in enumerate((185, 245)):
-                if index not in self.rows_done and self._inside(
-                    x, y, self.box(90, control_y, *CONTROL_SIZE)
-                ):
-                    self.rows_done.add(index)
-                    if self.condition == "reconnect" and len(self.rows_done) == 1:
-                        self.connected = False
-                    return {"accepted": True, "effect": "row_processed"}
-            if len(self.rows_done) == 2:
-                for route, role, route_y in (("urgent", "urgent", 185), ("normal", "normal", 245)):
-                    if self._inside(x, y, self.box(430, route_y, *CONTROL_SIZE)):
-                        del role
-                        self.route = route
-                        return {"accepted": True, "effect": "route_selected"}
-        else:
-            if self._inside(x, y, self.box(70, 185, 480, 90)):
-                self.field_focused = True
-                return {"accepted": True, "effect": "field_focused"}
-            if not self.draft_saved and self._inside(x, y, self.box(80, 325, *CONTROL_SIZE)):
-                if self.typed_text:
-                    self.draft_saved = True
-                    return {"accepted": True, "effect": "draft_saved"}
-            if self.draft_saved and self._inside(x, y, self.box(430, 325, *CONTROL_SIZE)):
-                self._commit()
-                if self.condition == "commit_timeout":
-                    return {
-                        "accepted": False,
-                        "reason": "acknowledgement_lost",
-                        "delivery_uncertain": True,
-                    }
-                return {"accepted": True, "effect": "committed"}
-        return {"accepted": False, "reason": "no_control_at_point"}
-
-    def type_text(self, text: str, expected_frame_sha256: str) -> dict:
-        if (
-            not self.connected
-            or expected_frame_sha256 != self._current_digest()
-            or not self.field_focused
-        ):
-            self._audit("type", accepted=False, reason="input_guard_failed")
-            return {"accepted": False, "reason": "input_guard_failed"}
-        self.typed_text += text
-        self._audit("type", accepted=True, character_count=len(text))
-        return {"accepted": True}
-
-    def reconnect(self) -> dict:
-        self.connected = True
-        self.session_generation += 1
-        self._audit("reconnect", accepted=True, session_generation=self.session_generation)
-        return {"accepted": True, "session_generation": self.session_generation}
+    def _pulse(self) -> None:
+        self.heartbeat = not self.heartbeat
+        self._draw_all()
+        if self.commit_fault_armed:
+            self.inbox.after(70, self._pulse)
 
     def _commit(self) -> None:
-        if self.committed:
-            return
-        record_id = "REC-001"
-        document = self.root / "documents" / f"{record_id}.txt"
-        document.write_text(self.typed_text + "\n", encoding="utf-8")
+        record_id = self.active_record
+        document = self.root_path / "documents" / f"{record_id}.txt"
+        document.write_text(self.document_text + "\n", encoding="utf-8")
         digest = hashlib.sha256(document.read_bytes()).hexdigest()
-        with sqlite3.connect(self.root / "effects.sqlite") as conn:
-            conn.execute("update records set status = 'complete' where record_id = ?", (record_id,))
+        with sqlite3.connect(self.root_path / "effects.sqlite") as conn:
+            conn.execute(
+                "update records set status = 'complete', route = ? where record_id = ?",
+                (self.route, record_id),
+            )
             conn.execute(
                 "insert into actions values (?, ?, ?, ?, ?)",
-                ("ACT-001", record_id, self.route, len(self.attachments_done), digest),
+                (f"ACT-{record_id}", record_id, self.route, len(self.attachments_done), digest),
             )
-        rows = [
-            ("record_id", "status", "route"),
-            ("REC-001", "complete", self.route or ""),
-            ("REC-999", "pending", ""),
-        ]
-        with (self.root / "worklist.csv").open("w", newline="", encoding="utf-8") as stream:
+        rows = [("record_id", "status", "route")]
+        for current in ("REC-001", "REC-999"):
+            rows.append(
+                (
+                    current,
+                    "complete" if current == record_id else "pending",
+                    self.route if current == record_id else "",
+                )
+            )
+        with (self.root_path / "worklist.csv").open("w", newline="", encoding="utf-8") as stream:
             csv.writer(stream).writerows(rows)
-        (self.root / "maildir" / "ACT-001.eml").write_text(
+        (self.root_path / "maildir" / f"ACT-{record_id}.eml").write_text(
             f"Record: {record_id}\nRoute: {self.route}\n", encoding="utf-8"
         )
-        self.committed = True
+        self._event("committed", record_id=record_id)
 
-
-def serve(root: Path, condition: str) -> None:
-    fixture = Fixture(root, condition)
-    for line in sys.stdin:
-        request = json.loads(line)
-        operation = request["operation"]
-        if operation == "capture":
-            response = fixture.capture()
-        elif operation == "move":
-            response = fixture.move(request["x"], request["y"], request["expected_frame_sha256"])
-        elif operation == "click":
-            response = fixture.click(request["x"], request["y"], request["expected_frame_sha256"])
-        elif operation == "type":
-            response = fixture.type_text(request["text"], request["expected_frame_sha256"])
-        elif operation == "reconnect":
-            response = fixture.reconnect()
-        elif operation == "close":
-            response = {"accepted": True}
-            print(json.dumps(response), flush=True)
-            break
-        else:
-            response = {"accepted": False, "reason": "unknown_operation"}
-        print(json.dumps(response), flush=True)
+    def run(self) -> None:
+        self.inbox.mainloop()
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--condition", required=True)
+    parser.add_argument("--ready", type=Path, required=True)
     args = parser.parse_args()
-    serve(args.root, args.condition)
+    Fixture(args.root, args.condition, args.ready).run()
 
 
 if __name__ == "__main__":
