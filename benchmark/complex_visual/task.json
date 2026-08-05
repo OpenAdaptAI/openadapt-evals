@@ -1,0 +1,11 @@
+{
+  "schema_version": "openadapt.complex-visual-task.v1",
+  "target_record_id": "REC-001",
+  "other_record_id": "REC-999",
+  "priority": "high",
+  "route": "urgent",
+  "attachments": ["A-01", "A-02"],
+  "worklist_rows": ["review", "schedule"],
+  "expected_document_text": "Processed REC-001 with attachments A-01 and A-02\n",
+  "expected_mail_text": "Record: REC-001\nRoute: urgent\n"
+}

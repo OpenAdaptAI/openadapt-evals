@@ -1,15 +1,19 @@
 # Complex visual workflow benchmark
 
-This public harness tests a pixel-only workflow across Inbox, Worklist, and
-Document editor windows. The workflow reads synthetic email, branches by
-priority, loops over attachments, updates a CSV worklist, creates a document,
-and proves results through independent SQLite, CSV, Maildir, and document-hash
-reads.
+This public harness drives a no-DOM pixel desktop with Inbox, Worklist, and
+Document editor windows. It finds controls from PNG pixels, moves a pointer,
+clicks, types, and changes windows. The workflow reads synthetic email,
+branches by priority, loops over two attachments and two worklist rows, updates
+a CSV worklist, and creates a document.
 
-It is local and synthetic by default. It starts no cloud service and makes no
-model call. `run_campaign.py` is a deterministic reference implementation. A
-Flow integration can supply its own `execute_trial` callback and retain the
-same campaign and metric contract.
+The fixture runs as a local process. The actor receives screenshots and input
+receipts only. A second process opens SQLite in read-only mode and reads the
+CSV, Maildir, and document stores through new handles. The actor does not use
+this observer for target selection. The observer derives the result from the
+immutable task truth and persisted effects.
+
+It starts no cloud service and makes no model call. A Flow integration can
+supply its own trial callback and retain the campaign and metric contract.
 
 Run it with:
 
@@ -20,8 +24,9 @@ python -m benchmark.complex_visual.run_campaign
 The campaign runs at least three trials for every condition: healthy, wrong
 entity, ambiguity, focus theft, stale frame, partial render, display drift,
 reconnect, and commit-timeout. It reports silent incorrect successes and
-over-halts separately from aggregate outcomes. A commit-timeout must reconcile
-through independent state; it must never cause a blind retry.
+over-halts, wrong-entity writes, duplicates, collateral writes, and reconciled
+uncertain deliveries separately. A commit-timeout dispatches the write, loses
+the acknowledgement, and uses the independent observer. It never retries.
 
 Only the public mechanism and a synthetic sample are in this directory. Do not
 add grown failure data, tuned adversary parameters, deployment thresholds,
