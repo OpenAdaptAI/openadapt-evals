@@ -235,7 +235,7 @@ def record_demonstration(evidence_dir: Path) -> dict:
     manifest = {
         "schema_version": "openadapt.visual-evidence.v1",
         "templates": templates,
-        "matching": {"cell_units": [2, 3], "threshold_source": "retained_crop_range_midpoint"},
+        "matching": {"pixel_spacings": [2, 3], "threshold_source": "retained_crop_range_midpoint"},
     }
     (evidence_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -244,19 +244,6 @@ def record_demonstration(evidence_dir: Path) -> dict:
         json.dumps(trace, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     return manifest
-
-
-def _runs(values: np.ndarray) -> list[int]:
-    lengths: list[int] = []
-    for row in values:
-        start = None
-        for index, value in enumerate(row.tolist() + [False]):
-            if value and start is None:
-                start = index
-            elif not value and start is not None:
-                lengths.append(index - start)
-                start = None
-    return lengths
 
 
 class EvidenceResolver:
@@ -270,15 +257,34 @@ class EvidenceResolver:
             crop = Image.open(evidence_dir / item["path"]).convert("L")
             dark = np.asarray(crop) <= item["luminance_threshold"]
             ys, xs = np.where(dark)
-            bounded = dark[ys.min() : ys.max() + 1, xs.min() : xs.max() + 1]
-            run_lengths = _runs(bounded) + _runs(bounded.T)
-            cell = math.gcd(*[length for length in run_lengths if length > 0])
-            pattern = bounded[::cell, ::cell]
+            unique_xs, unique_ys = sorted(set(xs.tolist())), sorted(set(ys.tolist()))
+            differences = [
+                right - left
+                for values in (unique_xs, unique_ys)
+                for left, right in zip(values, values[1:])
+                if right - left > 1
+            ]
+            spacing = math.gcd(*differences)
+            pattern = np.zeros(
+                ((ys.max() - ys.min()) // spacing + 1, (xs.max() - xs.min()) // spacing + 1),
+                dtype=bool,
+            )
+            for x, y in zip(xs, ys):
+                pattern[(y - ys.min()) // spacing, (x - xs.min()) // spacing] = True
             self.patterns[evidence_id] = pattern
 
     @staticmethod
-    def _expanded(pattern: np.ndarray, unit: int) -> np.ndarray:
-        ink = np.repeat(np.repeat(pattern, unit, axis=0), unit, axis=1)
+    def _expanded(pattern: np.ndarray, spacing: int) -> np.ndarray:
+        ink = np.zeros(
+            (
+                (pattern.shape[0] - 1) * spacing + spacing - 1,
+                (pattern.shape[1] - 1) * spacing + spacing - 1,
+            ),
+            dtype=bool,
+        )
+        block = spacing - 1
+        for y, x in np.argwhere(pattern):
+            ink[y * spacing : y * spacing + block, x * spacing : x * spacing + block] = True
         return np.pad(ink, 1, constant_values=False)
 
     def resolve(self, image: Image.Image, evidence_id: str) -> list[tuple[int, int, int, int]]:
@@ -288,8 +294,8 @@ class EvidenceResolver:
         region = screen[top:bottom, left:right]
         dark_points = {(int(x), int(y)) for y, x in np.argwhere(region)}
         matches: list[tuple[int, int, int, int]] = []
-        for unit in self.manifest["matching"]["cell_units"]:
-            target = self._expanded(self.patterns[evidence_id], unit)
+        for spacing in self.manifest["matching"]["pixel_spacings"]:
+            target = self._expanded(self.patterns[evidence_id], spacing)
             target_points = [(int(x), int(y)) for y, x in np.argwhere(target)]
             anchors = (target_points[0], target_points[len(target_points) // 2], target_points[-1])
             candidates: set[tuple[int, int]] | None = None
