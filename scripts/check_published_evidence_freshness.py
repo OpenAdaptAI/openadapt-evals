@@ -222,17 +222,20 @@ def check_evidence_manifest(entry: dict[str, Any], repo_root: Path) -> list[str]
         for key, expected in (
             ("version", entry.get("flow_version")),
             ("wheel_sha256", entry.get("wheel_sha256")),
+            ("sdist_sha256", entry.get("sdist_sha256")),
         ):
             if flow.get(key) != expected:
                 problems.append(
                     f"{entry['path']}: evidence manifest flow {key} disagrees with PUBLISHED_EVIDENCE"
                 )
+    flow_binding = flow if isinstance(flow, dict) else {}
     results_path = _safe_file(repo_root, f"{entry['path']}/results.json")
     if results_path is None:
         return problems + [f"{entry['path']}: results.json is missing"]
     evidence_root = repo_root / entry["path"]
     verifier_bindings, binding_problems = _validated_bindings(binding, "verifiers", repo_root)
     problems.extend(prefix + problem for problem in binding_problems)
+    verifier_digests = {normalized: item["sha256"] for item, _, normalized in verifier_bindings}
 
     public_reports, binding_problems = _validated_bindings(binding, "public_reports", repo_root)
     problems.extend(prefix + problem for problem in binding_problems)
@@ -297,6 +300,20 @@ def check_evidence_manifest(entry: dict[str, Any], repo_root: Path) -> list[str]
                     prefix + f"campaign results cannot be read: {normalized_result!r}: {exc}"
                 )
                 continue
+            source = document.get("source", {})
+            if source.get("runner_sha256") != verifier_digests.get(verifier_path):
+                problems.append(prefix + f"campaign runner digest differs from {verifier_path!r}")
+            if source.get("evals", {}).get("commit") != binding.get("evals_commit"):
+                problems.append(
+                    prefix + f"campaign evals commit differs from {normalized_result!r}"
+                )
+            campaign_flow = source.get("flow", {})
+            if campaign_flow.get("version") != flow_binding.get("version") or campaign_flow.get(
+                "artifact", {}
+            ).get("sha256") != flow_binding.get("wheel_sha256"):
+                problems.append(
+                    prefix + f"campaign Flow binding differs from {normalized_result!r}"
+                )
             if campaign.get("environment") != document.get("environment"):
                 problems.append(prefix + f"campaign environment differs from {normalized_result!r}")
             runtime = campaign.get("runtime")

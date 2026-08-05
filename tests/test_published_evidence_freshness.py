@@ -22,21 +22,22 @@ def test_repo_manifest_is_internally_consistent() -> None:
     runs on every pull request.
     """
 
-    assert MODULE.main(["--offline"]) == 1
+    assert MODULE.main(["--offline"]) == 0
 
 
-def test_repo_manifest_marks_old_evidence_stale_until_it_is_rerun() -> None:
+def test_repo_manifest_keeps_old_evidence_stale_and_names_the_exact_rerun() -> None:
     manifest = MODULE.load_manifest(MANIFEST)
-    with pytest.raises(MODULE.DriftError, match="found 0"):
-        MODULE.current_entry(manifest)
-    stale = [entry for entry in manifest["evidence"] if entry["status"] == "stale"]
-    assert len(stale) == 1
-    assert "1.30.0" in stale[0]["stale_reason"]
+    current = MODULE.current_entry(manifest)
+    old = next(item for item in manifest["evidence"] if item["flow_version"] == "1.28.0")
+    assert current["flow_version"] == "1.30.0"
+    assert old["status"] == "superseded"
+    assert old["superseded_by"] == current["path"]
+    assert "not relabeled" in old["stale_reason"]
 
 
 def test_drift_is_detected_when_a_newer_release_is_published() -> None:
     manifest = MODULE.load_manifest(MANIFEST)
-    entry = next(item for item in manifest["evidence"] if item["status"] == "stale")
+    entry = MODULE.current_entry(manifest)
 
     problems = MODULE.check_against_release(entry, "99.0.0", None)
 
@@ -46,7 +47,7 @@ def test_drift_is_detected_when_a_newer_release_is_published() -> None:
 
 def test_no_drift_when_the_pinned_release_is_current() -> None:
     manifest = MODULE.load_manifest(MANIFEST)
-    entry = next(item for item in manifest["evidence"] if item["status"] == "stale")
+    entry = MODULE.current_entry(manifest)
 
     problems = MODULE.check_against_release(entry, entry["flow_version"], entry["wheel_sha256"])
 
@@ -55,7 +56,7 @@ def test_no_drift_when_the_pinned_release_is_current() -> None:
 
 def test_a_republished_wheel_digest_is_drift() -> None:
     manifest = MODULE.load_manifest(MANIFEST)
-    entry = next(item for item in manifest["evidence"] if item["status"] == "stale")
+    entry = MODULE.current_entry(manifest)
 
     problems = MODULE.check_against_release(entry, entry["flow_version"], "0" * 64)
 
@@ -111,7 +112,7 @@ def test_manifest_that_disagrees_with_its_artifact_is_drift(tmp_path: Path) -> N
 
 def test_stale_evidence_names_the_runtime_facts_that_were_not_retained() -> None:
     manifest = MODULE.load_manifest(MANIFEST)
-    entry = next(item for item in manifest["evidence"] if item["status"] == "stale")
+    entry = next(item for item in manifest["evidence"] if item["flow_version"] == "1.28.0")
 
     problems = MODULE.check_evidence_manifest(entry, ROOT)
 
@@ -146,10 +147,12 @@ def _valid_bound_evidence(tmp_path: Path) -> tuple[dict[str, object], Path, dict
             "python": "3.12.13",
         },
         "source": {
+            "evals": {"commit": "b" * 40},
+            "runner_sha256": MODULE._sha256(verifier),
             "flow": {
                 "version": "1.30.0",
                 "artifact": {"sha256": "a" * 64},
-            }
+            },
         },
         "runtime": {
             "python_version": "3.12.13",
@@ -164,6 +167,7 @@ def _valid_bound_evidence(tmp_path: Path) -> tuple[dict[str, object], Path, dict
     contract = MODULE._task_contract(result_value)
     binding: dict[str, object] = {
         "schema_version": 2,
+        "evals_commit": "b" * 40,
         "flow": {"version": "1.30.0", "wheel_sha256": "a" * 64},
         "verifiers": [{"path": "scripts/verify.py", "sha256": MODULE._sha256(verifier)}],
         "campaigns": [
@@ -229,6 +233,10 @@ def test_complete_evidence_binding_passes(tmp_path: Path) -> None:
         (
             lambda value: value["campaigns"][0].__setitem__("environment", {}),
             "campaign environment differs",
+        ),
+        (
+            lambda value: value.__setitem__("evals_commit", "c" * 40),
+            "campaign evals commit differs",
         ),
         (
             lambda value: value["task_contracts"].append(dict(value["task_contracts"][0])),

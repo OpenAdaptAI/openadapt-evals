@@ -38,13 +38,23 @@
     },
     {
       "path": "docs/eval_results/current_flow_v1_28_0_local_20260802",
-      "status": "stale",
+      "status": "superseded",
+      "superseded_by": "docs/eval_results/current_flow_v1_30_0_local_20260806",
       "flow_version": "1.28.0",
       "wheel_sha256": "4d156035ea411e3cbdbc40978d653d50727a7d8664646be62f7f9e95ba0c7202",
       "sdist_sha256": "6e108f3469da20226427fee7a11378e067ca08c1fbbfcdbb4018ab9c3d142a8b",
       "evidence_manifest": "docs/eval_results/current_flow_v1_28_0_local_20260802/EVIDENCE_MANIFEST.json",
       "measured_on": "2026-08-02",
-      "stale_reason": "Flow 1.30.0 is current. These retained results measured Flow 1.28.0 and did not retain an exact browser revision or installed dependency snapshot. Re-run the governed campaign; do not relabel these results."
+      "stale_reason": "These retained results measured Flow 1.28.0 and did not retain an exact browser revision or installed dependency snapshot. They were not relabeled. A governed Flow 1.30.0 campaign replaced them."
+    },
+    {
+      "path": "docs/eval_results/current_flow_v1_30_0_local_20260806",
+      "status": "current",
+      "flow_version": "1.30.0",
+      "wheel_sha256": "7bf1a7b00388172a79bda666def182688c296ffb5bc9be2fd3281169fc36ae63",
+      "sdist_sha256": "3a402610e35f47fd54daaf066b8c3a6006c13483cb4c778740014abea1854ea4",
+      "evidence_manifest": "docs/eval_results/current_flow_v1_30_0_local_20260806/EVIDENCE_MANIFEST.json",
+      "measured_on": "2026-08-06"
     }
   ]
 }
