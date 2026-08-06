@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import math
 import os
 import statistics
 import subprocess
@@ -19,12 +18,16 @@ from typing import Callable
 import numpy as np
 from PIL import Image
 
-from benchmark.complex_visual.observer import Snapshot
-from benchmark.complex_visual.x11 import DeliveryAcknowledgementLost, X11Session
+from benchmark.complex_visual.observer import Snapshot, verify_observation
+from benchmark.complex_visual.protocol import CARD_COLUMNS, canonical_json, decode_task_card
+from benchmark.complex_visual.x11 import X11Session
 
 ROOT = Path(__file__).parent
+REPOSITORY_ROOT = ROOT.parents[1]
 CAMPAIGN_PATH = ROOT / "campaign.json"
-TASK_PATH = ROOT / "task.json"
+CASES_PATH = ROOT / "cases.json"
+WINDOWS = {"inbox": (20, 30), "worklist": (440, 30), "editor": (860, 30)}
+WINDOW_SIZE = (390, 560)
 
 
 @dataclass(frozen=True)
@@ -53,21 +56,40 @@ def load_campaign() -> dict:
     return json.loads(CAMPAIGN_PATH.read_text(encoding="utf-8"))
 
 
-def load_task() -> dict:
-    return json.loads(TASK_PATH.read_text(encoding="utf-8"))
+def load_cases() -> dict[str, dict]:
+    return json.loads(CASES_PATH.read_text(encoding="utf-8"))["cases"]
+
+
+def make_truth(case_id: str, condition: str, trial: int) -> dict:
+    task = dict(load_cases()[case_id])
+    action_id = f"ACT-{condition}-{trial:02d}"
+    task["expected_action_id"] = action_id
+    task["schema_version"] = "openadapt.visual-task-card.v1"
+    return {
+        "schema_version": "openadapt.complex-visual-truth.v1",
+        "case_id": case_id,
+        "expected_action_id": action_id,
+        "expected_mail_text": (
+            f"Action: {action_id}\nRecord: {task['target_record_id']}\nRoute: {task['route']}\n"
+        ),
+        "task_card": task,
+    }
+
+
+def _python_environment() -> dict[str, str]:
+    return {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join(
+            filter(None, (str(REPOSITORY_ROOT), os.environ.get("PYTHONPATH", "")))
+        ),
+    }
 
 
 class FixtureProcess:
-    def __init__(self, root: Path, condition: str) -> None:
-        self.ready_path = root / "fixture_ready.json"
+    def __init__(self, root: Path, condition: str, truth_path: Path) -> None:
+        self.ready_path = root / "lifecycle.ready"
         self.stderr_path = root / "fixture_stderr.log"
         self.stderr_stream = self.stderr_path.open("w", encoding="utf-8")
-        environment = {
-            **os.environ,
-            "PYTHONPATH": os.pathsep.join(
-                filter(None, (str(Path.cwd()), os.environ.get("PYTHONPATH", "")))
-            ),
-        }
         self.process = subprocess.Popen(
             [
                 sys.executable,
@@ -79,28 +101,24 @@ class FixtureProcess:
                 condition,
                 "--ready",
                 str(self.ready_path),
+                "--truth",
+                str(truth_path),
             ],
             stdout=subprocess.DEVNULL,
             stderr=self.stderr_stream,
-            env=environment,
+            env=_python_environment(),
         )
 
-    def wait_ready(self, timeout: float = 5.0) -> dict:
+    def wait_ready(self, timeout: float = 5.0) -> None:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if self.process.poll() is not None:
                 self.stderr_stream.flush()
                 raise RuntimeError(self.stderr_path.read_text(encoding="utf-8"))
-            if self.ready_path.is_file():
-                try:
-                    return json.loads(self.ready_path.read_text(encoding="utf-8"))
-                except json.JSONDecodeError:
-                    pass
+            if self.ready_path.is_file() and self.ready_path.read_text() == "READY\n":
+                return
             time.sleep(0.03)
         raise TimeoutError("headed fixture did not become ready")
-
-    def ready(self) -> dict:
-        return json.loads(self.ready_path.read_text(encoding="utf-8"))
 
     def close(self) -> None:
         if self.process.poll() is None:
@@ -117,26 +135,30 @@ def _threshold(image: Image.Image) -> int:
     return (minimum + maximum) // 2
 
 
-def _crop_evidence(
-    evidence_dir: Path,
-    evidence_id: str,
-    frame: Image.Image,
-    region: list[int],
-    source_frame: Path,
-    window_region: list[int],
-) -> dict:
-    crop = frame.crop(tuple(region))
-    crop_path = evidence_dir / "templates" / f"{evidence_id}.png"
-    crop_path.parent.mkdir(parents=True, exist_ok=True)
-    crop.save(crop_path, format="PNG")
-    return {
-        "path": crop_path.relative_to(evidence_dir).as_posix(),
-        "source_frame": source_frame.relative_to(evidence_dir).as_posix(),
-        "source_frame_sha256": hashlib.sha256(source_frame.read_bytes()).hexdigest(),
-        "source_region": region,
-        "search_region": window_region,
-        "luminance_threshold": _threshold(crop),
-    }
+def _window_region(name: str) -> list[int]:
+    x, y = WINDOWS[name]
+    return [x, y, x + WINDOW_SIZE[0], y + WINDOW_SIZE[1]]
+
+
+def _marker_region(window: str, x: int, y: int, scale: float, unit: int) -> list[int]:
+    wx, wy = WINDOWS[window]
+    x, y = round(x * scale), round(y * scale)
+    return [wx + x - 2, wy + y - 2, wx + x + 7 * unit + 2, wy + y + 7 * unit + 2]
+
+
+def _control_geometry(
+    window: str, x: int, y: int, scale: float, unit: int
+) -> tuple[list[int], tuple[int, int]]:
+    wx, wy = WINDOWS[window]
+    x, y = round(x * scale), round(y * scale)
+    width, height = round(150 * scale), round(42 * scale)
+    region = [
+        wx + x + 8,
+        wy + y + 10,
+        wx + x + 10 + 7 * unit + 2,
+        wy + y + 12 + 7 * unit + 2,
+    ]
+    return region, (wx + x + width // 2, wy + y + height // 2)
 
 
 def _capture_source(
@@ -146,100 +168,251 @@ def _capture_source(
     return x11.capture(path), path
 
 
-def record_demonstration(evidence_dir: Path) -> dict:
-    """Create retained screenshot evidence through real X pointer and key input."""
-    evidence_dir.mkdir(parents=True, exist_ok=True)
-    runtime_root = evidence_dir / "authoring_fixture"
-    runtime_root.mkdir()
-    fixture = FixtureProcess(runtime_root, "healthy")
-    x11 = X11Session()
-    trace: list[dict] = []
-    templates: dict[str, dict] = {}
-    try:
-        ready = fixture.wait_ready()
-        frame, frame_path = _capture_source(x11, evidence_dir, 1, "initial_windows")
-        window_for = {
-            "inbox_identity": "inbox",
-            "priority_high": "inbox",
-            "attachment": "inbox",
-            "worklist_identity": "worklist",
-            "row_task": "worklist",
-            "editor_identity": "editor",
-            "field": "editor",
-            "save": "editor",
+def _retain_target(
+    manifest: dict,
+    trace: list[dict],
+    evidence_dir: Path,
+    evidence_id: str,
+    variant: str,
+    frame: Image.Image,
+    frame_path: Path,
+    region: list[int],
+    window: str,
+    **metadata: object,
+) -> None:
+    crop = frame.crop(tuple(region))
+    crop_path = evidence_dir / "templates" / f"{evidence_id}_{variant}.png"
+    crop_path.parent.mkdir(parents=True, exist_ok=True)
+    crop.save(crop_path, format="PNG")
+    item = {
+        "path": crop_path.relative_to(evidence_dir).as_posix(),
+        "crop_sha256": hashlib.sha256(crop_path.read_bytes()).hexdigest(),
+        "source_frame": frame_path.relative_to(evidence_dir).as_posix(),
+        "source_frame_sha256": hashlib.sha256(frame_path.read_bytes()).hexdigest(),
+        "source_region": region,
+        "luminance_threshold": _threshold(crop),
+        "variant": variant,
+        **metadata,
+    }
+    entry = manifest["templates"].setdefault(
+        evidence_id, {"search_region": _window_region(window), "variants": []}
+    )
+    entry["variants"].append(item)
+    trace.append(
+        {
+            "operation": "observe_target",
+            "evidence_id": evidence_id,
+            "variant": variant,
+            "source_frame": item["source_frame"],
+            "source_frame_sha256": item["source_frame_sha256"],
+            "source_region": region,
         }
-        for evidence_id, window in window_for.items():
-            templates[evidence_id] = _crop_evidence(
-                evidence_dir,
-                evidence_id,
-                frame,
-                ready["regions"][evidence_id][0],
-                frame_path,
-                ready["windows"][window],
-            )
-        for evidence_id, expected_count in (("attachment", 2), ("row_task", 2)):
-            centers = list(ready["centers"][evidence_id])
-            if len(centers) != expected_count:
-                raise RuntimeError(
-                    f"authoring fixture did not expose {expected_count} {evidence_id} controls"
+    )
+
+
+def _record_variant(
+    evidence_dir: Path,
+    manifest: dict,
+    trace: list[dict],
+    variant: str,
+    condition: str,
+    frame_index: int,
+) -> int:
+    scale, unit = (1.08, 3) if condition == "display_drift" else (1.0, 2)
+    author_root = evidence_dir / "authoring" / variant
+    oracle = author_root / "oracle"
+    fixture_root = author_root / "fixture"
+    oracle.mkdir(parents=True)
+    fixture_root.mkdir()
+    truth_path = oracle / "truth.json"
+    truth = make_truth("urgent", f"author-{variant}", 1)
+    truth_path.write_text(json.dumps(truth, sort_keys=True) + "\n", encoding="utf-8")
+    fixture = FixtureProcess(fixture_root, condition, truth_path)
+    x11 = X11Session()
+    try:
+        fixture.wait_ready()
+        frame_index += 1
+        initial, initial_path = _capture_source(
+            x11, evidence_dir, frame_index, f"{variant}_initial"
+        )
+        marker_targets = {
+            "inbox_identity": ("inbox", 24, 94),
+            "task_card_anchor": ("inbox", 72, 94),
+            "worklist_identity": ("worklist", 24, 94),
+            "editor_identity": ("editor", 24, 94),
+        }
+        for evidence_id, (window, x, y) in marker_targets.items():
+            region = _marker_region(window, x, y, scale, unit)
+            metadata: dict[str, object] = {}
+            if evidence_id == "task_card_anchor":
+                card_origin = (
+                    WINDOWS["inbox"][0] + round(120 * scale),
+                    WINDOWS["inbox"][1] + round(94 * scale),
                 )
-            for x, y in centers:
-                x11.click(x, y)
-                trace.append({"operation": "click", "evidence_id": evidence_id, "x": x, "y": y})
-        time.sleep(0.1)
-        ready = fixture.ready()
-        frame, frame_path = _capture_source(x11, evidence_dir, 2, "branch_controls")
-        for evidence_id in ("urgent", "normal"):
-            templates[evidence_id] = _crop_evidence(
+                metadata = {
+                    "card_columns": CARD_COLUMNS,
+                    "card_cell_unit": unit,
+                    "card_origin_offset": [
+                        card_origin[0] - region[0],
+                        card_origin[1] - region[1],
+                    ],
+                }
+            _retain_target(
+                manifest,
+                trace,
                 evidence_dir,
                 evidence_id,
-                frame,
-                ready["regions"][evidence_id][0],
-                frame_path,
-                ready["windows"]["worklist"],
+                variant,
+                initial,
+                initial_path,
+                region,
+                window,
+                **metadata,
             )
-        x, y = ready["centers"]["urgent"][0]
-        x11.click(x, y)
-        trace.append({"operation": "click", "evidence_id": "urgent", "x": x, "y": y})
-        x, y = ready["centers"]["field"][0]
-        x11.click(x, y)
-        trace.append({"operation": "click", "evidence_id": "field", "x": x, "y": y})
-        task = load_task()
-        text = task["expected_document_text"].removesuffix("\n")
+        control_targets = {
+            "attachment": ("inbox", 35, 240),
+            "row_task": ("worklist", 35, 145),
+            "field": ("editor", 30, 135),
+            "save": ("editor", 35, 240),
+        }
+        for evidence_id, (window, x, y) in control_targets.items():
+            region, _ = _control_geometry(window, x, y, scale, unit)
+            _retain_target(
+                manifest,
+                trace,
+                evidence_dir,
+                evidence_id,
+                variant,
+                initial,
+                initial_path,
+                region,
+                window,
+            )
+        for index in range(len(truth["task_card"]["attachments"])):
+            _, point = _control_geometry("inbox", 35, 240 + index * 58, scale, unit)
+            x11.click(*point)
+            trace.append(
+                {"operation": "click", "evidence_id": "attachment", "x": point[0], "y": point[1]}
+            )
+        for index in range(len(truth["task_card"]["worklist_rows"])):
+            _, point = _control_geometry("worklist", 35, 145 + index * 65, scale, unit)
+            x11.click(*point)
+            trace.append(
+                {"operation": "click", "evidence_id": "row_task", "x": point[0], "y": point[1]}
+            )
+        frame_index += 1
+        branch, branch_path = _capture_source(x11, evidence_dir, frame_index, f"{variant}_branch")
+        for evidence_id, x in (("urgent", 35), ("normal", 200)):
+            region, point = _control_geometry("worklist", x, 370, scale, unit)
+            _retain_target(
+                manifest,
+                trace,
+                evidence_dir,
+                evidence_id,
+                variant,
+                branch,
+                branch_path,
+                region,
+                "worklist",
+            )
+            if evidence_id == "urgent":
+                x11.click(*point)
+                trace.append(
+                    {"operation": "click", "evidence_id": evidence_id, "x": point[0], "y": point[1]}
+                )
+        _, field_point = _control_geometry("editor", 30, 135, scale, unit)
+        x11.click(*field_point)
+        trace.append(
+            {"operation": "click", "evidence_id": "field", "x": field_point[0], "y": field_point[1]}
+        )
+        text = truth["task_card"]["expected_document_text"].removesuffix("\n")
         x11.type_text(text)
         trace.append({"operation": "type", "character_count": len(text)})
-        time.sleep(0.1)
-        ready = fixture.ready()
-        focused, focused_path = _capture_source(x11, evidence_dir, 3, "editor_focused")
-        templates["focus"] = _crop_evidence(
+        frame_index += 1
+        focused, focused_path = _capture_source(
+            x11, evidence_dir, frame_index, f"{variant}_focused"
+        )
+        focus_region = _marker_region("editor", 72, 94, scale, unit)
+        _retain_target(
+            manifest,
+            trace,
             evidence_dir,
             "focus",
+            variant,
             focused,
-            ready["regions"]["focus"][0],
             focused_path,
-            ready["windows"]["editor"],
+            focus_region,
+            "editor",
         )
-        x, y = ready["centers"]["save"][0]
-        x11.click(x, y)
-        trace.append({"operation": "click", "evidence_id": "save", "x": x, "y": y})
-        time.sleep(0.1)
-        ready = fixture.ready()
-        commit_frame, commit_path = _capture_source(x11, evidence_dir, 4, "commit_ready")
-        templates["commit"] = _crop_evidence(
+        _, save_point = _control_geometry("editor", 35, 240, scale, unit)
+        x11.click(*save_point)
+        trace.append(
+            {"operation": "click", "evidence_id": "save", "x": save_point[0], "y": save_point[1]}
+        )
+        frame_index += 1
+        commit_frame, commit_path = _capture_source(
+            x11, evidence_dir, frame_index, f"{variant}_commit"
+        )
+        commit_region, commit_point = _control_geometry("editor", 35, 330, scale, unit)
+        _retain_target(
+            manifest,
+            trace,
             evidence_dir,
             "commit",
+            variant,
             commit_frame,
-            ready["regions"]["commit"][0],
             commit_path,
-            ready["windows"]["editor"],
+            commit_region,
+            "editor",
+        )
+        x11.click(*commit_point)
+        trace.append(
+            {
+                "operation": "click",
+                "evidence_id": "commit",
+                "x": commit_point[0],
+                "y": commit_point[1],
+            }
+        )
+        frame_index += 1
+        receipt, receipt_path = _capture_source(
+            x11, evidence_dir, frame_index, f"{variant}_receipt"
+        )
+        receipt_region = _marker_region("editor", 200, 345, scale, unit)
+        _retain_target(
+            manifest,
+            trace,
+            evidence_dir,
+            "receipt",
+            variant,
+            receipt,
+            receipt_path,
+            receipt_region,
+            "editor",
         )
     finally:
         fixture.close()
+    return frame_index
+
+
+def record_demonstration(evidence_dir: Path) -> dict:
+    """Retain real frames, clicks, typing, and observation geometry."""
+    evidence_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
-        "schema_version": "openadapt.visual-evidence.v1",
-        "templates": templates,
-        "matching": {"pixel_spacings": [2, 3], "threshold_source": "retained_crop_range_midpoint"},
+        "schema_version": "openadapt.visual-evidence.v2",
+        "templates": {},
+        "matching": {"method": "exact_retained_binary_crop"},
     }
+    trace: list[dict] = []
+    frame_index = _record_variant(evidence_dir, manifest, trace, "native", "healthy", 0)
+    _record_variant(
+        evidence_dir,
+        manifest,
+        trace,
+        "display_drift",
+        "display_drift",
+        frame_index,
+    )
     (evidence_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
@@ -250,78 +423,131 @@ def record_demonstration(evidence_dir: Path) -> dict:
 
 
 class EvidenceResolver:
-    """Resolve targets from retained bitmap crops without fixture role or color data."""
+    """Resolve targets only from retained bitmap crops and source geometry."""
 
     def __init__(self, evidence_dir: Path) -> None:
         self.evidence_dir = evidence_dir
         self.manifest = json.loads((evidence_dir / "manifest.json").read_text(encoding="utf-8"))
-        self.patterns: dict[str, np.ndarray] = {}
-        for evidence_id, item in self.manifest["templates"].items():
-            crop = Image.open(evidence_dir / item["path"]).convert("L")
-            dark = np.asarray(crop) <= item["luminance_threshold"]
-            ys, xs = np.where(dark)
-            unique_xs, unique_ys = sorted(set(xs.tolist())), sorted(set(ys.tolist()))
-            differences = [
-                right - left
-                for values in (unique_xs, unique_ys)
-                for left, right in zip(values, values[1:])
-                if right - left > 1
-            ]
-            if not differences:
-                raise RuntimeError(f"retained evidence {evidence_id!r} has no glyph spacing")
-            spacing = math.gcd(*differences)
-            pattern = np.zeros(
-                ((ys.max() - ys.min()) // spacing + 1, (xs.max() - xs.min()) // spacing + 1),
-                dtype=bool,
-            )
-            for x, y in zip(xs, ys):
-                pattern[(y - ys.min()) // spacing, (x - xs.min()) // spacing] = True
-            self.patterns[evidence_id] = pattern
+        self.targets: dict[str, list[tuple[dict, np.ndarray]]] = {}
+        for evidence_id, entry in self.manifest["templates"].items():
+            variants = []
+            for item in entry["variants"]:
+                crop_path = evidence_dir / item["path"]
+                source_path = evidence_dir / item["source_frame"]
+                if hashlib.sha256(crop_path.read_bytes()).hexdigest() != item["crop_sha256"]:
+                    raise ValueError(f"retained crop hash is invalid for {evidence_id}")
+                if (
+                    hashlib.sha256(source_path.read_bytes()).hexdigest()
+                    != item["source_frame_sha256"]
+                ):
+                    raise ValueError(f"retained source-frame hash is invalid for {evidence_id}")
+                crop_rgb = Image.open(crop_path).convert("RGB")
+                source_crop = (
+                    Image.open(source_path).convert("RGB").crop(tuple(item["source_region"]))
+                )
+                if not np.array_equal(np.asarray(crop_rgb), np.asarray(source_crop)):
+                    raise ValueError(
+                        f"retained crop is not bound to its source frame for {evidence_id}"
+                    )
+                crop = crop_rgb.convert("L")
+                variants.append((item, np.asarray(crop) <= item["luminance_threshold"]))
+            self.targets[evidence_id] = variants
 
     @staticmethod
-    def _expanded(pattern: np.ndarray, spacing: int) -> np.ndarray:
-        ink = np.zeros(
-            (
-                (pattern.shape[0] - 1) * spacing + spacing - 1,
-                (pattern.shape[1] - 1) * spacing + spacing - 1,
-            ),
-            dtype=bool,
-        )
-        block = spacing - 1
-        for y, x in np.argwhere(pattern):
-            ink[y * spacing : y * spacing + block, x * spacing : x * spacing + block] = True
-        return np.pad(ink, 1, constant_values=False)
+    def _find_exact(region: np.ndarray, target: np.ndarray) -> list[tuple[int, int]]:
+        target_points = [(int(x), int(y)) for y, x in np.argwhere(target)]
+        if not target_points:
+            return []
+        region_points = {(int(x), int(y)) for y, x in np.argwhere(region)}
+        anchors = (target_points[0], target_points[len(target_points) // 2], target_points[-1])
+        candidates: set[tuple[int, int]] | None = None
+        for anchor_x, anchor_y in anchors:
+            origins = {(x - anchor_x, y - anchor_y) for x, y in region_points}
+            candidates = origins if candidates is None else candidates & origins
+        matches = []
+        height, width = target.shape
+        for x, y in candidates or set():
+            if x < 0 or y < 0 or x + width > region.shape[1] or y + height > region.shape[0]:
+                continue
+            if np.array_equal(region[y : y + height, x : x + width], target):
+                matches.append((x, y))
+        return matches
+
+    def resolve_details(self, image: Image.Image, evidence_id: str) -> list[dict]:
+        entry = self.manifest["templates"][evidence_id]
+        left, top, right, bottom = entry["search_region"]
+        luminance = np.asarray(image.convert("L"))
+        matches: list[dict] = []
+        for item, target in self.targets[evidence_id]:
+            screen = luminance <= item["luminance_threshold"]
+            region = screen[top:bottom, left:right]
+            for x, y in self._find_exact(region, target):
+                height, width = target.shape
+                matches.append(
+                    {
+                        "box": (left + x, top + y, left + x + width, top + y + height),
+                        "variant": item,
+                    }
+                )
+        unique = {(match["box"], match["variant"]["variant"]): match for match in matches}
+        return [unique[key] for key in sorted(unique)]
 
     def resolve(self, image: Image.Image, evidence_id: str) -> list[tuple[int, int, int, int]]:
-        item = self.manifest["templates"][evidence_id]
-        left, top, right, bottom = item["search_region"]
-        screen = np.asarray(image.convert("L")) <= item["luminance_threshold"]
-        region = screen[top:bottom, left:right]
-        dark_points = {(int(x), int(y)) for y, x in np.argwhere(region)}
-        matches: list[tuple[int, int, int, int]] = []
-        for spacing in self.manifest["matching"]["pixel_spacings"]:
-            target = self._expanded(self.patterns[evidence_id], spacing)
-            target_points = [(int(x), int(y)) for y, x in np.argwhere(target)]
-            anchors = (target_points[0], target_points[len(target_points) // 2], target_points[-1])
-            candidates: set[tuple[int, int]] | None = None
-            for anchor_x, anchor_y in anchors:
-                origins = {(x - anchor_x, y - anchor_y) for x, y in dark_points}
-                candidates = origins if candidates is None else candidates & origins
-            for x, y in candidates or set():
-                height, width = target.shape
-                if x < 0 or y < 0 or x + width > region.shape[1] or y + height > region.shape[0]:
-                    continue
-                if np.array_equal(region[y : y + height, x : x + width], target):
-                    matches.append((left + x, top + y, left + x + width, top + y + height))
-        return sorted(set(matches))
+        return sorted({match["box"] for match in self.resolve_details(image, evidence_id)})
+
+    def read_task_card(self, image: Image.Image) -> dict:
+        luminance = np.asarray(image.convert("L"))
+        failures: list[str] = []
+        for match in self.resolve_details(image, "task_card_anchor"):
+            item = match["variant"]
+            unit = item["card_cell_unit"]
+            columns = item["card_columns"]
+            origin_x = match["box"][0] + item["card_origin_offset"][0]
+            origin_y = match["box"][1] + item["card_origin_offset"][1]
+            search_bottom = self.manifest["templates"]["task_card_anchor"]["search_region"][3]
+            rows = (search_bottom - origin_y) // unit
+            bits = []
+            for index in range(rows * columns):
+                row, column = divmod(index, columns)
+                x = origin_x + column * unit + unit // 2
+                y = origin_y + row * unit + unit // 2
+                if y >= luminance.shape[0] or x >= luminance.shape[1]:
+                    break
+                bits.append(int(luminance[y, x] < 128))
+            try:
+                task = decode_task_card(bits)
+                _validate_visible_task(task)
+                return task
+            except (KeyError, TypeError, ValueError) as exc:
+                failures.append(str(exc))
+        raise ValueError(f"no valid hash-checked visual task card: {failures}")
+
+
+def _validate_visible_task(task: dict) -> None:
+    required_strings = (
+        "schema_version",
+        "target_record_id",
+        "priority",
+        "route",
+        "expected_action_id",
+        "expected_document_text",
+    )
+    if any(not isinstance(task.get(key), str) or not task[key] for key in required_strings):
+        raise ValueError("visual task card has an invalid required string")
+    if task["priority"] not in {"urgent", "normal"} or task["route"] != task["priority"]:
+        raise ValueError("visual task card has an invalid route branch")
+    for key in ("attachments", "worklist_rows"):
+        if not isinstance(task.get(key), list) or not task[key]:
+            raise ValueError(f"visual task card has an invalid {key} loop")
+        if any(not isinstance(value, str) or not value for value in task[key]):
+            raise ValueError(f"visual task card has an invalid {key} item")
 
 
 class PixelActor:
-    def __init__(self, root: Path, evidence_dir: Path, condition: str) -> None:
+    def __init__(self, root: Path, evidence_dir: Path) -> None:
         self.root = root
         self.frames = root / "frames"
         self.frames.mkdir()
-        self.condition = condition
         self.x11 = X11Session()
         self.resolver = EvidenceResolver(evidence_dir)
         self.events: list[dict] = []
@@ -424,27 +650,69 @@ class PixelActor:
         if len(self.resolver.resolve(guarded, "commit")) != 1:
             return "halted", "guarded_commit_missing_or_ambiguous", False
         x, y = self._center(commits[0])
-        try:
-            self.x11.click(
-                x,
-                y,
-                lose_acknowledgement=self.condition == "commit_timeout",
-            )
-            self.action_attempts += 1
-            self.events.append({"operation": "click", "evidence_id": "commit", "x": x, "y": y})
+        self.x11.click(x, y)
+        self.action_attempts += 1
+        self.events.append({"operation": "click", "evidence_id": "commit", "x": x, "y": y})
+        time.sleep(0.2)
+        receipt, _ = self.capture("post_dispatch_receipt")
+        if len(self.resolver.resolve(receipt, "receipt")) == 1:
             return "completed", "", False
-        except DeliveryAcknowledgementLost as exc:
-            self.action_attempts += 1
+        return "delivery_uncertain", "post_dispatch_receipt_missing", True
+
+    def run(self) -> RuntimeEvidence:
+        started = time.monotonic()
+        status, reason, uncertain = "halted", "uninitialized", False
+        try:
+            initial, frame_hash = self.capture("initial")
+            task = self.resolver.read_task_card(initial)
             self.events.append(
                 {
-                    "operation": "click",
-                    "evidence_id": "commit",
-                    "x": x,
-                    "y": y,
-                    "delivery_uncertain": True,
+                    "operation": "read_visual_task_card",
+                    "frame_sha256": frame_hash,
+                    "task_sha256": hashlib.sha256(canonical_json(task)).hexdigest(),
+                    "priority": task["priority"],
+                    "attachment_count": len(task["attachments"]),
+                    "worklist_row_count": len(task["worklist_rows"]),
                 }
             )
-            return "delivery_uncertain", str(exc), True
+            if len(self.resolver.resolve(initial, "inbox_identity")) != 1:
+                reason = "inbox_identity_mismatch"
+            else:
+                ok, reason = self.loop("attachment", len(task["attachments"]))
+                if ok:
+                    worklist, _ = self.capture("worklist_identity")
+                    ok = len(self.resolver.resolve(worklist, "worklist_identity")) == 1
+                    reason = "worklist_identity_mismatch" if not ok else ""
+                if ok:
+                    ok, reason = self.loop("row_task", len(task["worklist_rows"]))
+                if ok:
+                    ok, reason = self.click_unique(task["priority"])
+                if ok:
+                    editor, _ = self.capture("editor_identity")
+                    ok = len(self.resolver.resolve(editor, "editor_identity")) == 1
+                    reason = "editor_identity_mismatch" if not ok else ""
+                if ok:
+                    ok, reason = self.click_unique("field")
+                if ok:
+                    text = task["expected_document_text"].removesuffix("\n")
+                    self.x11.type_text(text)
+                    self.action_attempts += 1
+                    self.events.append({"operation": "type", "character_count": len(text)})
+                    ok, reason = self.click_unique("save")
+                if ok:
+                    status, reason, uncertain = self.commit()
+        except (KeyError, TypeError, ValueError) as exc:
+            reason = f"visual_task_card_invalid:{exc}"
+        finally:
+            self.save_trace()
+        return RuntimeEvidence(
+            status,
+            reason,
+            uncertain,
+            self.action_attempts,
+            self.reconnects,
+            time.monotonic() - started,
+        )
 
     def save_trace(self) -> None:
         (self.root / "event_trace.json").write_text(
@@ -452,98 +720,110 @@ class PixelActor:
         )
 
 
-def read_snapshot(root: Path, filename: str) -> Snapshot:
-    output = root / filename
-    environment = {
-        **os.environ,
-        "PYTHONPATH": os.pathsep.join(
-            filter(None, (str(Path.cwd()), os.environ.get("PYTHONPATH", "")))
-        ),
-    }
+def _run_observer(fixture_root: Path, oracle_root: Path, phase: str) -> None:
     subprocess.run(
         [
             sys.executable,
             "-m",
             "benchmark.complex_visual.observer",
-            str(root),
+            str(fixture_root),
+            "--truth",
+            str(oracle_root / "truth.json"),
+            "--phase",
+            phase,
             "--output",
-            str(output),
+            str(oracle_root / f"observer_{phase}.json"),
         ],
         check=True,
-        env=environment,
+        env=_python_environment(),
     )
-    return Snapshot(**json.loads(output.read_text(encoding="utf-8")))
+
+
+def _set_oracle_mode(oracle_root: Path, *, writable: bool) -> None:
+    oracle_root.chmod(0o750 if writable else 0o550)
+    for path in oracle_root.iterdir():
+        path.chmod(0o640 if writable else 0o440)
 
 
 def execute_pixel_trial(
     condition: str, trial: int, root: Path, evidence_dir: Path
 ) -> RuntimeEvidence:
-    del trial
     started = time.monotonic()
-    fixture = FixtureProcess(root, condition)
-    actor: PixelActor | None = None
-    status, reason, uncertain = "halted", "uninitialized", False
+    condition_spec = next(item for item in load_campaign()["conditions"] if item["id"] == condition)
+    actor_root = root / "actor"
+    fixture_root = root / "fixture"
+    oracle_root = root / "oracle"
+    actor_root.mkdir()
+    fixture_root.mkdir()
+    oracle_root.mkdir()
+    truth = make_truth(condition_spec["case"], condition, trial)
+    truth_path = oracle_root / "truth.json"
+    truth_path.write_text(json.dumps(truth, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    fixture = FixtureProcess(fixture_root, condition, truth_path)
     try:
         fixture.wait_ready()
-        read_snapshot(root, "observer_before.json")
-        actor = PixelActor(root, evidence_dir, condition)
-        initial, _ = actor.capture("initial")
-        if len(actor.resolver.resolve(initial, "inbox_identity")) != 1:
-            reason = "inbox_identity_mismatch"
-        else:
-            priority = "urgent" if actor.resolver.resolve(initial, "priority_high") else "normal"
-            ok, reason = actor.loop("attachment", len(load_task()["attachments"]))
-            if ok:
-                worklist, _ = actor.capture("worklist_identity")
-                ok = len(actor.resolver.resolve(worklist, "worklist_identity")) == 1
-                reason = "worklist_identity_mismatch" if not ok else ""
-            if ok:
-                ok, reason = actor.loop("row_task", len(load_task()["worklist_rows"]))
-            if ok:
-                ok, reason = actor.click_unique(priority)
-            if ok:
-                editor, _ = actor.capture("editor_identity")
-                ok = len(actor.resolver.resolve(editor, "editor_identity")) == 1
-                reason = "editor_identity_mismatch" if not ok else ""
-            if ok:
-                ok, reason = actor.click_unique("field")
-            if ok:
-                text = load_task()["expected_document_text"].removesuffix("\n")
-                actor.x11.type_text(text)
-                actor.action_attempts += 1
-                actor.events.append({"operation": "type", "character_count": len(text)})
-                ok, reason = actor.click_unique("save")
-            if ok:
-                status, reason, uncertain = actor.commit()
-        time.sleep(0.2)
+        _run_observer(fixture_root, oracle_root, "before")
+        _set_oracle_mode(oracle_root, writable=False)
+        root.chmod(0o555)
+        actor_stderr = actor_root / "actor_stderr.log"
+        with actor_stderr.open("w", encoding="utf-8") as stderr:
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "benchmark.complex_visual.run_campaign",
+                    "--actor-root",
+                    str(actor_root),
+                    "--evidence",
+                    str(evidence_dir),
+                ],
+                cwd=actor_root,
+                env=_python_environment(),
+                stdout=subprocess.DEVNULL,
+                stderr=stderr,
+                check=False,
+            )
+        if completed.returncode != 0:
+            return RuntimeEvidence(
+                "halted",
+                f"actor_process_failed:{completed.returncode}",
+                False,
+                0,
+                0,
+                time.monotonic() - started,
+            )
+        payload = json.loads((actor_root / "result.json").read_text(encoding="utf-8"))
+        return RuntimeEvidence(**payload)
     finally:
-        if actor is not None:
-            actor.save_trace()
+        root.chmod(0o755)
         fixture.close()
-    read_snapshot(root, "observer_after.json")
-    return RuntimeEvidence(
-        status,
-        reason,
-        uncertain,
-        actor.action_attempts if actor else 0,
-        actor.reconnects if actor else 0,
-        time.monotonic() - started,
+        _set_oracle_mode(oracle_root, writable=True)
+        _run_observer(fixture_root, oracle_root, "after")
+        _set_oracle_mode(oracle_root, writable=False)
+
+
+def read_bound_snapshot(root: Path, phase: str) -> Snapshot:
+    oracle_root = root / "oracle"
+    payload = json.loads((oracle_root / f"observer_{phase}.json").read_text(encoding="utf-8"))
+    return verify_observation(payload, oracle_root / "truth.json", phase)
+
+
+def _mapping_changes(before: dict, after: dict, excluded: set[str]) -> int:
+    return sum(
+        before.get(key) != after.get(key) for key in set(before) | set(after) if key not in excluded
     )
 
 
-def _collateral_changes(before: Snapshot, after: Snapshot, target: str) -> int:
-    changes = 0
-    for before_records, after_records in (
-        (before.sqlite_records, after.sqlite_records),
-        (before.csv_records, after.csv_records),
-    ):
-        for record_id in set(before_records) | set(after_records):
-            if record_id != target and before_records.get(record_id) != after_records.get(
-                record_id
-            ):
-                changes += 1
-    changes += sum(record_id != target for record_id in after.documents)
-    return changes
+def _new_actions(before: Snapshot, after: Snapshot) -> list[dict]:
+    remaining = Counter(canonical_json(action) for action in before.actions)
+    new = []
+    for action in after.actions:
+        encoded = canonical_json(action)
+        if remaining[encoded]:
+            remaining[encoded] -= 1
+        else:
+            new.append(action)
+    return new
 
 
 def classify(
@@ -551,31 +831,57 @@ def classify(
     before: Snapshot,
     after: Snapshot,
     expected: str,
-    task: dict | None = None,
+    truth: dict,
 ) -> Classification:
-    """Classify from task truth and independently observed before/after state."""
-    task = task or load_task()
+    """Classify from exact truth and hash-checked independent observations."""
+    task = truth["task_card"]
     target = task["target_record_id"]
-    expected_document = hashlib.sha256(task["expected_document_text"].encode()).hexdigest()
-    expected_mail = hashlib.sha256(task["expected_mail_text"].encode()).hexdigest()
-    target_actions = [action for action in after.actions if action["record_id"] == target]
-    wrong_actions = [action for action in after.actions if action["record_id"] != target]
-    collateral = _collateral_changes(before, after, target)
+    action_id = truth["expected_action_id"]
+    document_hash = hashlib.sha256(task["expected_document_text"].encode()).hexdigest()
+    mail_hash = hashlib.sha256(truth["expected_mail_text"].encode()).hexdigest()
+    mail_name = f"{action_id}.eml"
+    expected_action = {
+        "action_id": action_id,
+        "record_id": target,
+        "route": task["route"],
+        "attachment_count": len(task["attachments"]),
+        "document_sha256": document_hash,
+    }
+    new_actions = _new_actions(before, after)
+    valid_before = (
+        before.sqlite_records.get(target) == {"status": "pending", "route": ""}
+        and before.csv_records.get(target) == {"status": "pending", "route": ""}
+        and all(action["action_id"] != action_id for action in before.actions)
+        and target not in before.documents
+        and mail_name not in before.mail
+    )
+    record_collateral = _mapping_changes(
+        before.sqlite_records, after.sqlite_records, {target}
+    ) + _mapping_changes(before.csv_records, after.csv_records, {target})
+    document_collateral = _mapping_changes(before.documents, after.documents, {target})
+    mail_collateral = _mapping_changes(before.mail, after.mail, {mail_name})
+    action_collateral = sum(action != expected_action for action in new_actions)
+    collateral = record_collateral + document_collateral + mail_collateral + action_collateral
+    expected_documents = {**before.documents, target: document_hash}
+    expected_mail = {**before.mail, mail_name: mail_hash}
     complete = (
-        after.sqlite_records.get(target) == {"status": "complete", "route": task["route"]}
+        valid_before
+        and after.sqlite_records.get(target) == {"status": "complete", "route": task["route"]}
         and after.csv_records.get(target) == {"status": "complete", "route": task["route"]}
-        and len(target_actions) == 1
-        and target_actions[0]["route"] == task["route"]
-        and target_actions[0]["attachment_count"] == len(task["attachments"])
-        and target_actions[0]["document_sha256"] == expected_document
-        and after.documents == {target: expected_document}
-        and after.mail == {f"ACT-{target}.eml": expected_mail}
-        and not wrong_actions
+        and new_actions == [expected_action]
+        and after.documents == expected_documents
+        and after.mail == expected_mail
         and collateral == 0
+        and asdict(before) != asdict(after)
     )
     any_effect = asdict(before) != asdict(after)
-    duplicates = max(0, len(target_actions) - 1) + max(0, len(after.mail) - 1)
-    wrong_writes = len(wrong_actions) + collateral
+    target_action_count = sum(action["record_id"] == target for action in new_actions)
+    duplicates = max(0, target_action_count - 1) + mail_collateral
+    wrong_writes = (
+        sum(action["record_id"] != target for action in new_actions)
+        + record_collateral
+        + document_collateral
+    )
     if runtime.delivery_uncertain:
         outcome = "verified" if complete else "reconciliation_required"
     elif runtime.status == "completed" and complete:
@@ -632,9 +938,11 @@ def run_campaign(
             root = output / "trials" / f"{condition['id']}-{trial}"
             root.mkdir(parents=True)
             runtime = execute(condition["id"], trial, root, evidence_dir)
-            before = Snapshot(**json.loads((root / "observer_before.json").read_text()))
-            after = Snapshot(**json.loads((root / "observer_after.json").read_text()))
-            result = classify(runtime, before, after, condition["expect"])
+            before = read_bound_snapshot(root, "before")
+            after = read_bound_snapshot(root, "after")
+            truth_path = root / "oracle" / "truth.json"
+            truth = json.loads(truth_path.read_text(encoding="utf-8"))
+            result = classify(runtime, before, after, condition["expect"], truth)
             outcome_metric = {
                 "verified": "verified_outcomes",
                 "safe_halt": "safe_halts",
@@ -657,6 +965,7 @@ def run_campaign(
             results.append(
                 {
                     "condition": condition["id"],
+                    "case": condition["case"],
                     "trial": trial,
                     "runtime": asdict(runtime),
                     "classification": asdict(result),
@@ -682,8 +991,20 @@ def run_campaign(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--actor-root", type=Path)
+    parser.add_argument("--evidence", type=Path)
     args = parser.parse_args()
+    if args.actor_root:
+        if args.output or not args.evidence:
+            parser.error("actor mode requires --actor-root and --evidence only")
+        runtime = PixelActor(args.actor_root, args.evidence).run()
+        (args.actor_root / "result.json").write_text(
+            json.dumps(asdict(runtime), indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        return
+    if not args.output or args.evidence:
+        parser.error("campaign mode requires --output only")
     report = run_campaign(args.output)
     print(json.dumps(report["metrics"], indent=2, sort_keys=True))
     raise SystemExit(0 if report["campaign_passed"] else 1)

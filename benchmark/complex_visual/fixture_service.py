@@ -10,6 +10,8 @@ import sqlite3
 import tkinter as tk
 from pathlib import Path
 
+from benchmark.complex_visual.protocol import CARD_COLUMNS, encode_task_card
+
 WINDOWS = {
     "inbox": (20, 30),
     "worklist": (440, 30),
@@ -20,7 +22,15 @@ WINDOW_SIZE = (390, 560)
 GLYPHS = {
     "identity": ("1000001", "0100010", "0010100", "0001000", "0010100", "0100010", "1000001"),
     "wrong_identity": ("1111111", "1000001", "1011101", "1010101", "1011101", "1000001", "1111111"),
-    "priority_high": ("0001000", "0011100", "0111110", "1111111", "0011100", "0011100", "0011100"),
+    "task_card_anchor": (
+        "1111111",
+        "1000001",
+        "1011101",
+        "1010001",
+        "1011101",
+        "1000001",
+        "1111111",
+    ),
     "attachment": ("1111000", "1000100", "1011110", "1010010", "1011110", "1000000", "1111110"),
     "row_task": ("1111110", "1000010", "1011010", "1011010", "1011010", "1000010", "1111110"),
     "urgent": ("1000001", "1000001", "1000001", "1000001", "1000001", "0100010", "0011100"),
@@ -28,15 +38,18 @@ GLYPHS = {
     "field": ("1111111", "1000001", "1000001", "1000001", "1000001", "1000001", "1111111"),
     "save": ("1111111", "1000001", "1011101", "1010101", "1011101", "1000001", "1111111"),
     "commit": ("0011100", "0100010", "1000001", "1000000", "1000001", "0100010", "0011100"),
+    "receipt": ("1111111", "1000000", "1011110", "1010000", "1011110", "1000000", "1111111"),
     "focus": ("1111111", "1000000", "1011110", "1010000", "1010000", "1000000", "1000000"),
 }
 
 
 class Fixture:
-    def __init__(self, root_path: Path, condition: str, ready_path: Path) -> None:
+    def __init__(self, root_path: Path, condition: str, ready_path: Path, truth_path: Path) -> None:
         self.root_path = root_path
         self.condition = condition
         self.ready_path = ready_path
+        self.truth = json.loads(truth_path.read_text(encoding="utf-8"))
+        self.task = self.truth["task_card"]
         self.scale = 1.08 if condition == "display_drift" else 1.0
         self.glyph_unit = 3 if condition == "display_drift" else 2
         self.attachments_done: set[int] = set()
@@ -44,13 +57,11 @@ class Fixture:
         self.route = ""
         self.document_text = ""
         self.draft_saved = False
-        self.active_record = "REC-001"
+        self.committed = False
+        self.active_record = self.task["target_record_id"]
         self.focused_window = "inbox"
         self.commit_fault_armed = False
         self.heartbeat = False
-        self.is_ready = False
-        self.regions: dict[str, list[list[int]]] = {}
-        self.centers: dict[str, list[list[int]]] = {}
         self.root_path.mkdir(parents=True, exist_ok=True)
         self._initialize_stores()
         self.inbox = tk.Tk(className="OpenAdaptInbox")
@@ -73,6 +84,8 @@ class Fixture:
         self.inbox.after(200, self._mark_ready)
 
     def _initialize_stores(self) -> None:
+        target = self.task["target_record_id"]
+        records = ((target, "pending", ""), ("REC-999", "pending", ""))
         with sqlite3.connect(self.root_path / "effects.sqlite") as conn:
             conn.execute(
                 "create table records (record_id text primary key, status text, route text)"
@@ -80,18 +93,9 @@ class Fixture:
             conn.execute(
                 "create table actions (action_id text, record_id text, route text, attachment_count integer, document_sha256 text)"
             )
-            conn.executemany(
-                "insert into records values (?, ?, ?)",
-                (("REC-001", "pending", ""), ("REC-999", "pending", "")),
-            )
+            conn.executemany("insert into records values (?, ?, ?)", records)
         with (self.root_path / "worklist.csv").open("w", newline="", encoding="utf-8") as stream:
-            csv.writer(stream).writerows(
-                (
-                    ("record_id", "status", "route"),
-                    ("REC-001", "pending", ""),
-                    ("REC-999", "pending", ""),
-                )
-            )
+            csv.writer(stream).writerows((("record_id", "status", "route"), *records))
         (self.root_path / "maildir").mkdir()
         (self.root_path / "documents").mkdir()
 
@@ -99,23 +103,9 @@ class Fixture:
         with (self.root_path / "fixture_events.jsonl").open("a", encoding="utf-8") as stream:
             stream.write(json.dumps({"event": event, **details}, sort_keys=True) + "\n")
 
-    def _publish_ready(self) -> None:
-        payload = {
-            "regions": self.regions,
-            "centers": self.centers,
-            "windows": {
-                name: [x, y, x + WINDOW_SIZE[0], y + WINDOW_SIZE[1]]
-                for name, (x, y) in WINDOWS.items()
-            },
-        }
-        self.ready_path.write_text(
-            json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
-
     def _mark_ready(self) -> None:
         self.inbox.update_idletasks()
-        self.is_ready = True
-        self._publish_ready()
+        self.ready_path.write_text("READY\n", encoding="utf-8")
 
     def _claim_focus(self, name: str) -> None:
         if self.focused_window != name:
@@ -125,13 +115,13 @@ class Fixture:
 
     def _glyph(
         self, canvas: tk.Canvas, name: str, x: int, y: int, tag: str, *, partial: bool = False
-    ) -> tuple[int, int, int, int]:
+    ) -> None:
         pattern = GLYPHS[name]
-        unit = self.glyph_unit
         rows = len(pattern) // 2 if partial else len(pattern)
         for row, bits in enumerate(pattern[:rows]):
             for column, bit in enumerate(bits):
                 if bit == "1":
+                    unit = self.glyph_unit
                     canvas.create_rectangle(
                         x + column * unit,
                         y + row * unit,
@@ -141,7 +131,6 @@ class Fixture:
                         outline="",
                         tags=(tag,),
                     )
-        return (x - 2, y - 2, x + len(pattern[0]) * unit + 2, y + len(pattern) * unit + 2)
 
     def _control(
         self,
@@ -152,18 +141,16 @@ class Fixture:
         label: str,
         callback,
         *,
-        glyph: str | None = None,
         partial: bool = False,
     ) -> None:
         canvas = self.canvases[window]
         x, y = round(x * self.scale), round(y * self.scale)
         width, height = round(150 * self.scale), round(42 * self.scale)
-        tag = f"control:{evidence_id}:{len(self.centers.get(evidence_id, []))}"
+        tag = f"control:{evidence_id}:{x}:{y}"
         canvas.create_rectangle(
             x, y, x + width, y + height, fill="#e8edf2", outline="#334155", width=2, tags=(tag,)
         )
-        glyph_name = glyph or evidence_id
-        region = self._glyph(canvas, glyph_name, x + 10, y + 12, tag, partial=partial)
+        self._glyph(canvas, evidence_id, x + 10, y + 12, tag, partial=partial)
         canvas.create_text(
             x + 42, y + height // 2, text=label, anchor="w", fill="#111111", tags=(tag,)
         )
@@ -174,30 +161,26 @@ class Fixture:
         )
         if evidence_id == "commit":
             canvas.tag_bind(tag, "<Enter>", self._arm_commit_fault)
-        wx, wy = WINDOWS[window]
-        absolute = [region[0] + wx, region[1] + wy, region[2] + wx, region[3] + wy]
-        self.regions.setdefault(evidence_id, []).append(absolute)
-        self.centers.setdefault(evidence_id, []).append([wx + x + width // 2, wy + y + height // 2])
 
-    def _marker(
-        self,
-        window: str,
-        evidence_id: str,
-        x: int,
-        y: int,
-        *,
-        glyph: str | None = None,
-        partial: bool = False,
-    ) -> None:
-        canvas = self.canvases[window]
+    def _marker(self, window: str, glyph: str, x: int, y: int) -> None:
         x, y = round(x * self.scale), round(y * self.scale)
-        region = self._glyph(
-            canvas, glyph or evidence_id, x, y, f"marker:{evidence_id}", partial=partial
-        )
-        wx, wy = WINDOWS[window]
-        self.regions.setdefault(evidence_id, []).append(
-            [region[0] + wx, region[1] + wy, region[2] + wx, region[3] + wy]
-        )
+        self._glyph(self.canvases[window], glyph, x, y, f"marker:{glyph}")
+
+    def _task_card(self) -> None:
+        canvas = self.canvases["inbox"]
+        unit = self.glyph_unit
+        origin_x, origin_y = round(120 * self.scale), round(94 * self.scale)
+        for index, bit in enumerate(encode_task_card(self.task)):
+            row, column = divmod(index, CARD_COLUMNS)
+            x, y = origin_x + column * unit, origin_y + row * unit
+            canvas.create_rectangle(
+                x,
+                y,
+                x + unit - 1,
+                y + unit - 1,
+                fill="#111111" if bit else "#ffffff",
+                outline="",
+            )
 
     def _activate(self, window: str, callback) -> None:
         self.windows[window].focus_force()
@@ -206,7 +189,6 @@ class Fixture:
         callback()
 
     def _draw_all(self) -> None:
-        self.regions, self.centers = {}, {}
         theme = "#d7dce2" if self.condition == "display_drift" else "#f8fafc"
         for name, canvas in self.canvases.items():
             canvas.delete("all")
@@ -230,21 +212,20 @@ class Fixture:
         self._draw_inbox()
         self._draw_worklist()
         self._draw_editor()
-        if self.is_ready:
-            self.inbox.after_idle(self._publish_ready)
 
     def _draw_inbox(self) -> None:
         canvas = self.canvases["inbox"]
-        canvas.create_text(20, 70, text="Synthetic request REC-001", anchor="w", fill="#111111")
-        self._marker("inbox", "inbox_identity", 24, 94, glyph="identity")
-        self._marker("inbox", "priority_high", 72, 94)
-        for index, y in enumerate((145, 210)):
+        canvas.create_text(20, 70, text="Synthetic visual task card", anchor="w", fill="#111111")
+        self._marker("inbox", "identity", 24, 94)
+        self._marker("inbox", "task_card_anchor", 72, 94)
+        self._task_card()
+        for index in range(len(self.task["attachments"])):
             if index not in self.attachments_done:
                 self._control(
                     "inbox",
                     "attachment",
                     35,
-                    y,
+                    240 + index * 58,
                     f"Attachment {index + 1}",
                     lambda selected=index: self._attachment(selected),
                 )
@@ -252,30 +233,32 @@ class Fixture:
     def _draw_worklist(self) -> None:
         canvas = self.canvases["worklist"]
         canvas.create_text(20, 70, text="CSV worklist", anchor="w", fill="#111111")
-        self._marker("worklist", "worklist_identity", 24, 94, glyph="identity")
-        for index, y in enumerate((145, 210)):
+        self._marker("worklist", "identity", 24, 94)
+        for index in range(len(self.task["worklist_rows"])):
             if index not in self.rows_done:
                 self._control(
                     "worklist",
                     "row_task",
                     35,
-                    y,
+                    145 + index * 65,
                     f"Worklist row {index + 1}",
                     lambda selected=index: self._row(selected),
                 )
-        if len(self.rows_done) == 2:
+        if len(self.rows_done) == len(self.task["worklist_rows"]):
             self._control(
-                "worklist", "urgent", 35, 300, "Route urgent", lambda: self._route("urgent")
+                "worklist", "urgent", 35, 370, "Route urgent", lambda: self._route("urgent")
             )
             self._control(
-                "worklist", "normal", 200, 300, "Route normal", lambda: self._route("normal")
+                "worklist", "normal", 200, 370, "Route normal", lambda: self._route("normal")
             )
 
     def _draw_editor(self) -> None:
         canvas = self.canvases["editor"]
         canvas.create_text(20, 70, text="Document for active record", anchor="w", fill="#111111")
-        identity = "wrong_identity" if self.active_record != "REC-001" else "identity"
-        self._marker("editor", "editor_identity", 24, 94, glyph=identity)
+        identity = (
+            "wrong_identity" if self.active_record != self.task["target_record_id"] else "identity"
+        )
+        self._marker("editor", identity, 24, 94)
         if self.focused_window == "editor":
             self._marker("editor", "focus", 72, 94)
         self._control(
@@ -283,11 +266,20 @@ class Fixture:
         )
         if not self.draft_saved:
             self._control("editor", "save", 35, 240, "Save draft", self._save)
-        else:
-            partial = self.condition == "partial_render"
-            self._control("editor", "commit", 35, 330, "Commit", self._commit, partial=partial)
+        elif not self.committed:
+            self._control(
+                "editor",
+                "commit",
+                35,
+                330,
+                "Commit",
+                self._commit,
+                partial=self.condition == "partial_render",
+            )
             if self.condition == "ambiguity":
                 self._control("editor", "commit", 200, 330, "Commit", self._commit)
+        elif self.condition != "commit_timeout":
+            self._marker("editor", "receipt", 200, 345)
         if self.heartbeat:
             canvas.create_rectangle(350, 100, 360, 110, fill="#dc2626", outline="")
 
@@ -360,6 +352,7 @@ class Fixture:
         document = self.root_path / "documents" / f"{record_id}.txt"
         document.write_text(self.document_text + "\n", encoding="utf-8")
         digest = hashlib.sha256(document.read_bytes()).hexdigest()
+        action_id = self.truth["expected_action_id"]
         with sqlite3.connect(self.root_path / "effects.sqlite") as conn:
             conn.execute(
                 "update records set status = 'complete', route = ? where record_id = ?",
@@ -367,10 +360,11 @@ class Fixture:
             )
             conn.execute(
                 "insert into actions values (?, ?, ?, ?, ?)",
-                (f"ACT-{record_id}", record_id, self.route, len(self.attachments_done), digest),
+                (action_id, record_id, self.route, len(self.attachments_done), digest),
             )
+        target = self.task["target_record_id"]
         rows = [("record_id", "status", "route")]
-        for current in ("REC-001", "REC-999"):
+        for current in (target, "REC-999"):
             rows.append(
                 (
                     current,
@@ -380,10 +374,12 @@ class Fixture:
             )
         with (self.root_path / "worklist.csv").open("w", newline="", encoding="utf-8") as stream:
             csv.writer(stream).writerows(rows)
-        (self.root_path / "maildir" / f"ACT-{record_id}.eml").write_text(
-            f"Record: {record_id}\nRoute: {self.route}\n", encoding="utf-8"
+        (self.root_path / "maildir" / f"{action_id}.eml").write_text(
+            self.truth["expected_mail_text"], encoding="utf-8"
         )
-        self._event("committed", record_id=record_id)
+        self.committed = True
+        self._event("committed", action_id=action_id, record_id=record_id)
+        self._draw_all()
 
     def run(self) -> None:
         self.inbox.mainloop()
@@ -394,8 +390,9 @@ def main() -> None:
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--condition", required=True)
     parser.add_argument("--ready", type=Path, required=True)
+    parser.add_argument("--truth", type=Path, required=True)
     args = parser.parse_args()
-    Fixture(args.root, args.condition, args.ready).run()
+    Fixture(args.root, args.condition, args.ready, args.truth).run()
 
 
 if __name__ == "__main__":
