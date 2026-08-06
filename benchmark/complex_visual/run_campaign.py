@@ -121,6 +121,7 @@ def _sudo_path() -> str:
 def _actor_command(identity: ActorIdentity, command: list[str]) -> list[str]:
     """Build a clean-environment command for the dedicated actor identity."""
     environment = shutil.which("env") or "/usr/bin/env"
+    actor_source = os.environ.get("COMPLEX_VISUAL_ACTOR_SOURCE", str(REPOSITORY_ROOT))
     return [
         _sudo_path(),
         "--non-interactive",
@@ -131,10 +132,15 @@ def _actor_command(identity: ActorIdentity, command: list[str]) -> list[str]:
         "-i",
         f"DISPLAY={os.environ.get('DISPLAY', '')}",
         f"PATH={os.environ.get('PATH', '')}",
-        f"PYTHONPATH={REPOSITORY_ROOT}",
+        f"PYTHONPATH={actor_source}",
         "PYTHONDONTWRITEBYTECODE=1",
         *command,
     ]
+
+
+def _actor_python() -> str:
+    """Return the Python executable in the actor's read-only runtime."""
+    return os.environ.get("COMPLEX_VISUAL_ACTOR_PYTHON", sys.executable)
 
 
 def _prepare_actor_root(actor_root: Path, identity: ActorIdentity) -> Path:
@@ -852,7 +858,7 @@ def _run_authority_probe(
         _actor_command(
             identity,
             [
-                sys.executable,
+                _actor_python(),
                 "-m",
                 "benchmark.complex_visual.authority_probe",
                 "--trial-root",
@@ -926,7 +932,7 @@ def execute_pixel_trial(
                 _actor_command(
                     identity,
                     [
-                        sys.executable,
+                        _actor_python(),
                         "-m",
                         "benchmark.complex_visual.run_campaign",
                         "--actor-root",

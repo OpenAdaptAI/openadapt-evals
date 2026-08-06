@@ -48,9 +48,21 @@ jobs:
           sudo useradd --system --no-create-home --shell /usr/sbin/nologin openadapt-actor
           test "$(id -u openadapt-actor)" != "$(id -u)"
 
+      - name: Prepare read-only actor runtime
+        env:
+          ACTOR_RUNTIME: /tmp/openadapt-actor-runtime-${{ github.run_id }}
+        run: |
+          sudo install -d -o root -g root -m 0755 "$ACTOR_RUNTIME/source"
+          sudo cp -a .venv "$ACTOR_RUNTIME/venv"
+          sudo cp -a benchmark "$ACTOR_RUNTIME/source/benchmark"
+          sudo chown -R root:root "$ACTOR_RUNTIME"
+          sudo chmod -R u=rwX,go=rX "$ACTOR_RUNTIME"
+
       - name: Run headed pixel campaign
         env:
           COMPLEX_VISUAL_ACTOR_USER: openadapt-actor
+          COMPLEX_VISUAL_ACTOR_PYTHON: /tmp/openadapt-actor-runtime-${{ github.run_id }}/venv/bin/python
+          COMPLEX_VISUAL_ACTOR_SOURCE: /tmp/openadapt-actor-runtime-${{ github.run_id }}/source
           COMPLEX_VISUAL_OUTPUT: /tmp/complex-visual-artifacts-${{ github.run_id }}
         run: >-
           xvfb-run --auto-servernum --server-args="-screen 0 1280x700x24 -ac"
