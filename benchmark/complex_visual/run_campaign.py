@@ -168,6 +168,25 @@ def _capture_source(
     return x11.capture(path), path
 
 
+def _capture_source_when_visible(
+    x11: X11Session,
+    evidence_dir: Path,
+    index: int,
+    label: str,
+    region: list[int],
+    timeout: float = 2.0,
+) -> tuple[Image.Image, Path]:
+    """Retain the first presented frame with contrast at the observed region."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        frame, path = _capture_source(x11, evidence_dir, index, label)
+        values = np.asarray(frame.convert("L").crop(tuple(region)))
+        if int(values.min()) != int(values.max()):
+            return frame, path
+        time.sleep(0.04)
+    raise TimeoutError(f"demonstration target {label!r} did not become visible")
+
+
 def _retain_target(
     manifest: dict,
     trace: list[dict],
@@ -350,10 +369,10 @@ def _record_variant(
             {"operation": "click", "evidence_id": "save", "x": save_point[0], "y": save_point[1]}
         )
         frame_index += 1
-        commit_frame, commit_path = _capture_source(
-            x11, evidence_dir, frame_index, f"{variant}_commit"
-        )
         commit_region, commit_point = _control_geometry("editor", 35, 330, scale, unit)
+        commit_frame, commit_path = _capture_source_when_visible(
+            x11, evidence_dir, frame_index, f"{variant}_commit", commit_region
+        )
         _retain_target(
             manifest,
             trace,
@@ -375,10 +394,10 @@ def _record_variant(
             }
         )
         frame_index += 1
-        receipt, receipt_path = _capture_source(
-            x11, evidence_dir, frame_index, f"{variant}_receipt"
-        )
         receipt_region = _marker_region("editor", 200, 345, scale, unit)
+        receipt, receipt_path = _capture_source_when_visible(
+            x11, evidence_dir, frame_index, f"{variant}_receipt", receipt_region
+        )
         _retain_target(
             manifest,
             trace,
