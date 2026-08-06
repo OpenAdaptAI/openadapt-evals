@@ -61,7 +61,7 @@ class Fixture:
         self.active_record = self.task["target_record_id"]
         self.focused_window = "inbox"
         self.commit_fault_armed = False
-        self.heartbeat = False
+        self.heartbeat_sequence = 0
         self.root_path.mkdir(parents=True, exist_ok=True)
         self._initialize_stores()
         self.inbox = tk.Tk(className="OpenAdaptInbox")
@@ -280,8 +280,9 @@ class Fixture:
                 self._control("editor", "commit", 200, 330, "Commit", self._commit)
         elif self.condition != "commit_timeout":
             self._marker("editor", "receipt", 200, 345)
-        if self.heartbeat:
-            canvas.create_rectangle(350, 100, 360, 110, fill="#dc2626", outline="")
+        if self.heartbeat_sequence:
+            x = 300 + min(self.heartbeat_sequence, 70)
+            canvas.create_rectangle(x, 100, x + 10, 110, fill="#dc2626", outline="")
 
     def _attachment(self, index: int) -> None:
         self.attachments_done.add(index)
@@ -342,7 +343,8 @@ class Fixture:
         self._event("focus_stolen", window="inbox")
 
     def _pulse(self) -> None:
-        self.heartbeat = not self.heartbeat
+        self.heartbeat_sequence += 1
+        self._event("frame_changed", sequence=self.heartbeat_sequence)
         self._draw_all()
         if self.commit_fault_armed:
             self.inbox.after(70, self._pulse)
