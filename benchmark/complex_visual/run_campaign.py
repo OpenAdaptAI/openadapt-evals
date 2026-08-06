@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import statistics
 import subprocess
 import sys
@@ -38,6 +39,13 @@ class RuntimeEvidence:
     action_attempts: int
     reconnects: int
     runtime_s: float
+
+
+@dataclass(frozen=True)
+class ActorIdentity:
+    username: str
+    uid: int
+    gid: int
 
 
 @dataclass(frozen=True)
@@ -83,6 +91,72 @@ def _python_environment() -> dict[str, str]:
             filter(None, (str(REPOSITORY_ROOT), os.environ.get("PYTHONPATH", "")))
         ),
     }
+
+
+def resolve_actor_identity(username: str | None = None) -> ActorIdentity:
+    """Require a configured actor account with a different effective UID."""
+    if os.name != "posix" or not hasattr(os, "geteuid"):
+        raise RuntimeError("the headed authority campaign requires a POSIX host")
+    selected = username or os.environ.get("COMPLEX_VISUAL_ACTOR_USER")
+    if not selected:
+        raise RuntimeError("COMPLEX_VISUAL_ACTOR_USER must name a dedicated OS account")
+    import pwd
+
+    try:
+        account = pwd.getpwnam(selected)
+    except KeyError as exc:
+        raise RuntimeError(f"actor OS account {selected!r} does not exist") from exc
+    if account.pw_uid == os.geteuid():
+        raise RuntimeError("actor OS account must have a distinct effective UID")
+    return ActorIdentity(selected, account.pw_uid, account.pw_gid)
+
+
+def _sudo_path() -> str:
+    sudo = shutil.which("sudo")
+    if not sudo:
+        raise RuntimeError("sudo is required to enter the dedicated actor identity")
+    return sudo
+
+
+def _actor_command(identity: ActorIdentity, command: list[str]) -> list[str]:
+    """Build a clean-environment command for the dedicated actor identity."""
+    environment = shutil.which("env") or "/usr/bin/env"
+    return [
+        _sudo_path(),
+        "--non-interactive",
+        "--user",
+        identity.username,
+        "--",
+        environment,
+        "-i",
+        f"DISPLAY={os.environ.get('DISPLAY', '')}",
+        f"PATH={os.environ.get('PATH', '')}",
+        f"PYTHONPATH={REPOSITORY_ROOT}",
+        "PYTHONDONTWRITEBYTECODE=1",
+        *command,
+    ]
+
+
+def _prepare_actor_root(actor_root: Path, identity: ActorIdentity) -> Path:
+    """Give the actor one writable directory that the coordinator can read."""
+    stderr_path = actor_root / "actor_stderr.log"
+    stderr_path.touch(mode=0o640)
+    coordinator_gid = os.getegid()
+    subprocess.run(
+        [
+            _sudo_path(),
+            "--non-interactive",
+            "chown",
+            f"{identity.uid}:{coordinator_gid}",
+            str(actor_root),
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [_sudo_path(), "--non-interactive", "chmod", "2750", str(actor_root)],
+        check=True,
+    )
+    return stderr_path
 
 
 class FixtureProcess:
@@ -766,10 +840,64 @@ def _set_oracle_mode(oracle_root: Path, *, writable: bool) -> None:
         path.chmod(0o640 if writable else 0o440)
 
 
+def _run_authority_probe(
+    identity: ActorIdentity,
+    trial_root: Path,
+    actor_root: Path,
+    fixture_root: Path,
+    oracle_root: Path,
+) -> dict:
+    """Fail unless the actor UID has only its declared filesystem authority."""
+    completed = subprocess.run(
+        _actor_command(
+            identity,
+            [
+                sys.executable,
+                "-m",
+                "benchmark.complex_visual.authority_probe",
+                "--trial-root",
+                str(trial_root),
+                "--actor-root",
+                str(actor_root),
+                "--fixture-root",
+                str(fixture_root),
+                "--oracle-root",
+                str(oracle_root),
+            ],
+        ),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+    expected_checks = {
+        "actor_root_writable": True,
+        "trial_root_writable": False,
+        "fixture_root_writable": False,
+        "fixture_store_writable": False,
+        "oracle_root_readable": False,
+        "oracle_root_searchable": False,
+        "oracle_root_writable": False,
+        "truth_readable": False,
+        "observer_before_readable": False,
+    }
+    if payload.get("process_uid") != identity.uid:
+        raise RuntimeError("authority probe did not run as the configured actor UID")
+    if payload.get("checks") != expected_checks:
+        raise RuntimeError(f"actor authority boundary is invalid: {payload.get('checks')}")
+    return {
+        **payload,
+        "actor_username": identity.username,
+        "coordinator_uid": os.geteuid(),
+        "truth_sha256": hashlib.sha256((oracle_root / "truth.json").read_bytes()).hexdigest(),
+    }
+
+
 def execute_pixel_trial(
     condition: str, trial: int, root: Path, evidence_dir: Path
 ) -> RuntimeEvidence:
     started = time.monotonic()
+    identity = resolve_actor_identity()
     condition_spec = next(item for item in load_campaign()["conditions"] if item["id"] == condition)
     actor_root = root / "actor"
     fixture_root = root / "fixture"
@@ -777,6 +905,7 @@ def execute_pixel_trial(
     actor_root.mkdir()
     fixture_root.mkdir()
     oracle_root.mkdir()
+    actor_stderr = _prepare_actor_root(actor_root, identity)
     truth = make_truth(condition_spec["case"], condition, trial)
     truth_path = oracle_root / "truth.json"
     truth_path.write_text(json.dumps(truth, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -785,21 +914,28 @@ def execute_pixel_trial(
         fixture.wait_ready()
         _run_observer(fixture_root, oracle_root, "before")
         _set_oracle_mode(oracle_root, writable=False)
+        authority = _run_authority_probe(identity, root, actor_root, fixture_root, oracle_root)
+        _set_oracle_mode(oracle_root, writable=True)
+        (oracle_root / "actor_authority.json").write_text(
+            json.dumps(authority, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        _set_oracle_mode(oracle_root, writable=False)
         root.chmod(0o555)
-        actor_stderr = actor_root / "actor_stderr.log"
         with actor_stderr.open("w", encoding="utf-8") as stderr:
             completed = subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "benchmark.complex_visual.run_campaign",
-                    "--actor-root",
-                    str(actor_root),
-                    "--evidence",
-                    str(evidence_dir),
-                ],
+                _actor_command(
+                    identity,
+                    [
+                        sys.executable,
+                        "-m",
+                        "benchmark.complex_visual.run_campaign",
+                        "--actor-root",
+                        str(actor_root),
+                        "--evidence",
+                        str(evidence_dir),
+                    ],
+                ),
                 cwd=actor_root,
-                env=_python_environment(),
                 stdout=subprocess.DEVNULL,
                 stderr=stderr,
                 check=False,
@@ -999,7 +1135,7 @@ def run_campaign(
     metrics["p95_runtime_s"] = sorted(runtimes)[max(0, int(len(runtimes) * 0.95) - 1)]
     report = {
         "schema_version": campaign["schema_version"],
-        "execution_boundary": "local_headed_x11",
+        "execution_boundary": campaign["execution_boundary"],
         "campaign_passed": campaign_passes(metrics),
         "metrics": dict(metrics),
         "results": results,

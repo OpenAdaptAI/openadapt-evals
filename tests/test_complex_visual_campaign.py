@@ -9,7 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from benchmark.complex_visual.observer import Snapshot, verify_observation
+from benchmark.complex_visual.authority_probe import probe_authority
+from benchmark.complex_visual.observer import Snapshot, inventory_mail, verify_observation
 from benchmark.complex_visual.protocol import canonical_json, decode_task_card, encode_task_card
 from benchmark.complex_visual.run_campaign import (
     RuntimeEvidence,
@@ -18,6 +19,7 @@ from benchmark.complex_visual.run_campaign import (
     load_campaign,
     load_cases,
     make_truth,
+    resolve_actor_identity,
     run_campaign,
 )
 from benchmark.complex_visual.x11 import headed_x11_available
@@ -68,7 +70,7 @@ def _complete(truth: dict | None = None) -> Snapshot:
 
 def test_campaign_contract_has_repeated_trials_and_both_route_branches() -> None:
     campaign = load_campaign()
-    assert campaign["execution_boundary"] == "local_headed_x11"
+    assert campaign["execution_boundary"] == "local_headed_x11_distinct_uid"
     assert campaign["pixel_only"] is True
     assert campaign["trials_per_condition"] >= 3
     assert "under_halts" in campaign["required_metrics"]
@@ -175,6 +177,23 @@ def test_adversarial_extra_mail_is_full_collateral() -> None:
     assert result.duplicate_effects == 1
 
 
+def test_adversarial_extensionless_nested_mail_is_full_collateral() -> None:
+    truth = _truth()
+    complete = _complete(truth)
+    extra = replace(
+        complete,
+        mail={
+            **complete.mail,
+            "new/": "directory",
+            "new/extensionless-message": "bad-hash",
+        },
+    )
+    result = classify(_runtime(), _before(), extra, "verified", truth)
+    assert result.outcome == "incorrect_success"
+    assert result.collateral_writes == 2
+    assert result.duplicate_effects == 2
+
+
 def test_classifier_detects_duplicates_and_over_halts() -> None:
     truth = _truth()
     complete = _complete(truth)
@@ -234,9 +253,50 @@ def test_observer_evidence_rejects_snapshot_or_truth_tampering(tmp_path: Path) -
         verify_observation(payload, truth_path, "before")
 
 
+def test_observer_inventories_all_maildir_entries(tmp_path: Path) -> None:
+    maildir = tmp_path / "maildir"
+    message = maildir / "new" / "extensionless-message"
+    message.parent.mkdir(parents=True)
+    message.write_bytes(b"synthetic mail\n")
+    (maildir / "tmp").mkdir()
+    inventory = inventory_mail(maildir)
+    assert inventory == {
+        "new/": "directory",
+        "new/extensionless-message": hashlib.sha256(message.read_bytes()).hexdigest(),
+        "tmp/": "directory",
+    }
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX file identities")
+def test_same_uid_and_read_only_modes_are_not_actor_authority(tmp_path: Path) -> None:
+    import pwd
+
+    trial_root = tmp_path / "trial"
+    actor_root = trial_root / "actor"
+    fixture_root = trial_root / "fixture"
+    oracle_root = trial_root / "oracle"
+    actor_root.mkdir(parents=True)
+    fixture_root.mkdir()
+    oracle_root.mkdir()
+    (fixture_root / "effects.sqlite").touch()
+    (oracle_root / "truth.json").write_text("{}\n", encoding="utf-8")
+    (oracle_root / "observer_before.json").write_text("{}\n", encoding="utf-8")
+    for path in oracle_root.iterdir():
+        path.chmod(0o440)
+    oracle_root.chmod(0o550)
+    authority = probe_authority(trial_root, actor_root, fixture_root, oracle_root)
+    assert authority["checks"]["truth_readable"] is True
+    assert authority["checks"]["observer_before_readable"] is True
+    current_username = pwd.getpwuid(os.geteuid()).pw_name
+    with pytest.raises(RuntimeError, match="distinct effective UID"):
+        resolve_actor_identity(current_username)
+
+
 @pytest.mark.skipif(
-    not os.environ.get("DISPLAY") or not headed_x11_available(),
-    reason="requires a local headed X11 display",
+    not os.environ.get("DISPLAY")
+    or not os.environ.get("COMPLEX_VISUAL_ACTOR_USER")
+    or not headed_x11_available(),
+    reason="requires headed X11 and a dedicated actor OS identity",
 )
 def test_headed_pixel_campaign_and_retained_artifacts(tmp_path: Path) -> None:
     configured = os.environ.get("COMPLEX_VISUAL_OUTPUT")
@@ -278,3 +338,16 @@ def test_headed_pixel_campaign_and_retained_artifacts(tmp_path: Path) -> None:
         assert (root / "oracle" / "observer_before.json").is_file()
         assert (root / "oracle" / "observer_after.json").is_file()
         assert not stat.S_IMODE((root / "oracle").stat().st_mode) & 0o222
+        authority = json.loads((root / "oracle" / "actor_authority.json").read_text())
+        assert authority["process_uid"] != authority["coordinator_uid"]
+        assert authority["checks"] == {
+            "actor_root_writable": True,
+            "fixture_root_writable": False,
+            "fixture_store_writable": False,
+            "observer_before_readable": False,
+            "oracle_root_readable": False,
+            "oracle_root_searchable": False,
+            "oracle_root_writable": False,
+            "trial_root_writable": False,
+            "truth_readable": False,
+        }

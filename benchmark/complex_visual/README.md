@@ -15,13 +15,19 @@ identifier from the visible card. The actor does not receive a task or truth
 file. The campaign covers urgent and normal routes. The two cases use different
 loop bounds.
 
-The fixture, actor, and observer run as separate processes. The actor can write
-only its sibling artifact directory. The coordinator keeps truth and observer
-evidence in a read-only sibling directory while the actor runs. Each observer
-record binds the phase, exact truth-file hash, and exact snapshot hash. The
-observer opens SQLite in read-only mode. It reads the CSV, Maildir, and document
-stores through new handles. The actor does not use this observer for target
-selection.
+The fixture, actor, and observer run as separate processes. The actor runs as a
+dedicated unprivileged OS user. The campaign refuses execution if the
+coordinator user and the actor user have the same UID. Before each trial, an
+authority probe runs as the actor user. It must prove that the actor can write
+its artifact directory,
+cannot read or search the oracle directory, and cannot write the fixture store.
+File modes under the coordinator UID are not accepted as an authority boundary.
+
+The coordinator keeps truth and observer evidence in a sibling directory. Each
+observer record binds the phase, exact truth-file hash, and exact snapshot hash.
+The observer opens SQLite in read-only mode. It inventories every Maildir entry,
+including nested and extensionless entries. It reads the CSV and document stores
+through new handles. The actor does not use this observer for target selection.
 
 The classifier requires the exact expected action identifier and a pending to
 complete state transition. It rejects a preexisting complete state. It compares
@@ -34,8 +40,10 @@ supply its own trial callback and retain the campaign and metric contract.
 Run it with:
 
 ```sh
-Xvfb :99 -screen 0 1280x700x24 &
-DISPLAY=:99 python -m benchmark.complex_visual.run_campaign --output /tmp/complex-visual
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin openadapt-actor
+Xvfb :99 -screen 0 1280x700x24 -ac &
+DISPLAY=:99 COMPLEX_VISUAL_ACTOR_USER=openadapt-actor \
+  python -m benchmark.complex_visual.run_campaign --output /tmp/complex-visual
 ```
 
 The campaign runs at least three trials for every condition: healthy urgent,
@@ -48,9 +56,9 @@ dispatches the write, omits the visual receipt, and uses the independent
 observer. It never retries.
 
 The path-scoped CI workflow uploads retained demonstration and trial frames,
-event traces, hash-bound observer evidence, sealed truth, fixture logs, and the
-campaign summary. These are synthetic artifacts. The workflow starts no paid
-service.
+event traces, hash-bound observer evidence, the actor authority probe, sealed
+truth, fixture logs, and the campaign summary. These are synthetic artifacts.
+The workflow starts no paid service.
 
 Only the public mechanism and a synthetic sample are in this directory. Do not
 add grown failure data, tuned adversary parameters, deployment thresholds,

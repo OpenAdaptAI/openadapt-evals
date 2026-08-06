@@ -1,6 +1,6 @@
 {
   "schema_version": "openadapt.complex-visual-workflow-campaign.v1",
-  "execution_boundary": "local_headed_x11",
+  "execution_boundary": "local_headed_x11_distinct_uid",
   "pixel_only": true,
   "task": "Use pixel-only multi-window interaction to process a synthetic request from email, update a CSV worklist, create a document, and verify each persisted result independently.",
   "trials_per_condition": 3,

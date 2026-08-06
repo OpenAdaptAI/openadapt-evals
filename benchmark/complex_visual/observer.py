@@ -26,6 +26,23 @@ def sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
+def inventory_mail(maildir: Path) -> dict[str, str]:
+    """Inventory every Maildir entry without following symbolic links."""
+    entries: dict[str, str] = {}
+    for path in sorted(maildir.rglob("*")):
+        relative = path.relative_to(maildir).as_posix()
+        if path.is_symlink():
+            target = path.readlink().as_posix().encode("utf-8")
+            entries[relative] = f"symlink:{sha256_bytes(target)}"
+        elif path.is_dir():
+            entries[f"{relative}/"] = "directory"
+        elif path.is_file():
+            entries[relative] = sha256_bytes(path.read_bytes())
+        else:
+            entries[relative] = f"special:{path.lstat().st_mode}"
+    return entries
+
+
 def observe(root: Path) -> Snapshot:
     """Open every store through new read-only handles and return exact state."""
     with sqlite3.connect(f"file:{root / 'effects.sqlite'}?mode=ro", uri=True) as conn:
@@ -54,10 +71,7 @@ def observe(root: Path) -> Snapshot:
         path.stem: sha256_bytes(path.read_bytes())
         for path in sorted((root / "documents").glob("*.txt"))
     }
-    mail = {
-        path.name: sha256_bytes(path.read_bytes())
-        for path in sorted((root / "maildir").glob("*.eml"))
-    }
+    mail = inventory_mail(root / "maildir")
     return Snapshot(records, csv_records, actions, documents, mail)
 
 
