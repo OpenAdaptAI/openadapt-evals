@@ -271,6 +271,7 @@ def _record_variant(
                 metadata = {
                     "card_columns": CARD_COLUMNS,
                     "card_cell_unit": unit,
+                    "card_sample_offset": (unit - 1) // 2,
                     "card_origin_offset": [
                         card_origin[0] - region[0],
                         card_origin[1] - region[1],
@@ -520,6 +521,7 @@ class EvidenceResolver:
         for match in self.resolve_details(image, "task_card_anchor"):
             item = match["variant"]
             unit = item["card_cell_unit"]
+            sample_offset = item["card_sample_offset"]
             columns = item["card_columns"]
             origin_x = match["box"][0] + item["card_origin_offset"][0]
             origin_y = match["box"][1] + item["card_origin_offset"][1]
@@ -528,8 +530,8 @@ class EvidenceResolver:
             bits = []
             for index in range(rows * columns):
                 row, column = divmod(index, columns)
-                x = origin_x + column * unit + unit // 2
-                y = origin_y + row * unit + unit // 2
+                x = origin_x + column * unit + sample_offset
+                y = origin_y + row * unit + sample_offset
                 if y >= luminance.shape[0] or x >= luminance.shape[1]:
                     break
                 bits.append(int(luminance[y, x] < 128))
