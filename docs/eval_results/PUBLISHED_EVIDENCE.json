@@ -6,6 +6,8 @@
     "was measured against. scripts/check_published_evidence_freshness.py fails",
     "when a set marked current no longer pins the current published release, or",
     "when a pinned wheel digest does not match that release on PyPI.",
+    "The current label means release-fresh, not production-accepted. Every",
+    "current entry and campaign states its production_acceptance value.",
     "Mark a set superseded (never delete it) when a newer set replaces it: the",
     "old numbers stay reproducible against the wheel they were measured on."
   ],
@@ -49,12 +51,27 @@
     },
     {
       "path": "docs/eval_results/current_flow_v1_30_0_local_20260806",
-      "status": "current",
+      "status": "superseded",
+      "superseded_by": "docs/eval_results/current_flow_v1_31_0_local_20260818",
       "flow_version": "1.30.0",
       "wheel_sha256": "7bf1a7b00388172a79bda666def182688c296ffb5bc9be2fd3281169fc36ae63",
       "sdist_sha256": "3a402610e35f47fd54daaf066b8c3a6006c13483cb4c778740014abea1854ea4",
       "evidence_manifest": "docs/eval_results/current_flow_v1_30_0_local_20260806/EVIDENCE_MANIFEST.json",
-      "measured_on": "2026-08-06"
+      "measured_on": "2026-08-06",
+      "production_acceptance": false,
+      "stale_reason": "These retained results measured Flow 1.30.0. They were not relabeled. A complete Flow 1.31.0 rerun replaced them after the published release changed."
+    },
+    {
+      "path": "docs/eval_results/current_flow_v1_31_0_local_20260818",
+      "status": "current",
+      "flow_version": "1.31.0",
+      "flow_source_commit": "2d225dea9a0ad29ca84ce1b037cc0ac671367e28",
+      "flow_release_tag": "v1.31.0",
+      "wheel_sha256": "81133db1528ad1bb1f26e3fcb6aea61b0651db6d905cf2e4943e8383c1f3d29c",
+      "sdist_sha256": "cf1fc356d14d267df82be188de3e9a3575734f18f46ef91ac8075438cc731540",
+      "evidence_manifest": "docs/eval_results/current_flow_v1_31_0_local_20260818/EVIDENCE_MANIFEST.json",
+      "measured_on": "2026-08-18",
+      "production_acceptance": false
     }
   ]
 }

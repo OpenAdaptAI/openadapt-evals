@@ -49,6 +49,22 @@ def _verifier_for(name: str) -> str:
     raise ValueError(f"unknown campaign directory: {name}")
 
 
+def _evidence_scope(name: str) -> dict[str, Any]:
+    """Return the bounded maturity scope for one public campaign."""
+
+    if name == "remote_lease_safety":
+        evidence_class = "contract_fixture"
+    else:
+        evidence_class = "local_synthetic"
+    return {
+        "class": evidence_class,
+        "production_acceptance": False,
+        "customer_workflow": False,
+        "hosted_execution": False,
+        "real_remote_session": False,
+    }
+
+
 def build(evidence: Path, *, sdist_sha256: str) -> dict[str, Any]:
     evidence = evidence.resolve()
     results = sorted(evidence.rglob("results.json"))
@@ -68,6 +84,8 @@ def build(evidence: Path, *, sdist_sha256: str) -> dict[str, Any]:
                 "verifier_path": _verifier_for(name),
                 "environment": document["environment"],
                 "runtime": document["runtime"],
+                "evidence_scope": _evidence_scope(name),
+                "metric_coverage": CHECK._metric_coverage(document),
             }
         )
         contract = CHECK._task_contract(document)
@@ -85,10 +103,12 @@ def build(evidence: Path, *, sdist_sha256: str) -> dict[str, Any]:
         if path.is_file() and path.suffix != ".md" and path.name != "EVIDENCE_MANIFEST.json"
     )
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "evals_commit": root["source"]["evals"]["commit"],
         "flow": {
             "version": flow["version"],
+            "source_commit": flow["commit"],
+            "release_tag": flow["release_tag"],
             "wheel_sha256": flow["artifact"]["sha256"],
             "sdist_sha256": sdist_sha256,
         },

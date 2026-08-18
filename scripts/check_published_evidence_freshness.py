@@ -19,8 +19,11 @@ What is checked, against ``docs/eval_results/PUBLISHED_EVIDENCE.json``:
 5. Every ``superseded`` set names the set that replaced it.
 6. Its verifier, result, replication, public-report, task/oracle, campaign,
    browser, and installed-dependency inventories are complete and exact.
+7. Every campaign states whether it is production acceptance, and the checker
+   derives silent-incorrect-success and over-halt coverage from the retained
+   result instead of accepting an unsupported maturity label.
 
-Checks 1, 2, 5 and 6 are offline and always run.  Checks 3 and 4 need PyPI: pass
+Checks 1, 2 and 5-7 are offline and always run.  Checks 3 and 4 need PyPI: pass
 ``--current-version``/``--current-wheel-sha256`` to supply the release
 out-of-band, or ``--offline`` to skip them.  A network failure is reported and
 skipped rather than failing the build -- it is not evidence of drift.  Actual
@@ -187,18 +190,91 @@ def _task_contract(document: dict[str, Any]) -> dict[str, Any]:
     """Return the claim-defining task and oracle fields from one result file."""
 
     keys = (
+        "scope",
         "task",
         "oracle",
         "outcome_definitions",
         "trials_per_arm_condition",
+        "trials_per_cell",
         "arms",
         "conditions",
         "fault_modes",
         "verification_modes",
         "cells",
         "profiles",
+        "caveats",
+        "invariants",
+        "identity_coverage",
+        "paid_or_remote_mutations",
     )
     return {key: document[key] for key in keys if key in document}
+
+
+def _contains_numeric_metric(value: Any, names: set[str]) -> bool:
+    """Return whether a retained result contains one counted metric."""
+
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in names and isinstance(item, (int, float)) and not isinstance(item, bool):
+                return True
+            if _contains_numeric_metric(item, names):
+                return True
+        return False
+    if isinstance(value, list):
+        return any(_contains_numeric_metric(item, names) for item in value)
+    return False
+
+
+def _metric_coverage(document: dict[str, Any]) -> dict[str, str]:
+    """Derive required reliability-metric coverage from retained results."""
+
+    return {
+        "silent_incorrect_success": (
+            "counted"
+            if _contains_numeric_metric(
+                document,
+                {"silent_incorrect_success", "silent_incorrect_success_count"},
+            )
+            else "not_counted"
+        ),
+        "over_halt": (
+            "counted"
+            if _contains_numeric_metric(document, {"over_halt", "over_halt_count"})
+            else "not_counted"
+        ),
+    }
+
+
+def _check_task_standard(document: dict[str, Any], campaign_name: object) -> list[str]:
+    """Check the minimum public evaluation contract for one campaign."""
+
+    label = repr(campaign_name)
+    problems: list[str] = []
+    task = document.get("task") or document.get("scope")
+    if not isinstance(task, str) or not task.strip():
+        problems.append(f"campaign task/scope is missing: {label}")
+    trials = document.get("trials_per_arm_condition", document.get("trials_per_cell"))
+    if not isinstance(trials, int) or isinstance(trials, bool) or trials < 3:
+        problems.append(f"campaign has fewer than 3 trials per condition: {label}")
+    oracle = document.get("oracle")
+    invariants = document.get("invariants")
+    if not (isinstance(oracle, str) and oracle.strip()) and not (
+        isinstance(invariants, list) and invariants
+    ):
+        problems.append(f"campaign oracle/invariants are missing: {label}")
+    caveats = document.get("caveats")
+    if (
+        not isinstance(caveats, list)
+        or not caveats
+        or not all(isinstance(item, str) and item.strip() for item in caveats)
+    ):
+        problems.append(f"campaign caveats are missing: {label}")
+    taxonomy = document.get("outcome_definitions")
+    if not (isinstance(taxonomy, dict) and taxonomy) and not (
+        isinstance(invariants, list) and invariants
+    ):
+        problems.append(f"campaign failure taxonomy is missing: {label}")
+    return problems
 
 
 def check_evidence_manifest(entry: dict[str, Any], repo_root: Path) -> list[str]:
@@ -213,14 +289,16 @@ def check_evidence_manifest(entry: dict[str, Any], repo_root: Path) -> list[str]
     except (OSError, json.JSONDecodeError) as exc:
         return [f"{entry['path']}: evidence_manifest cannot be read: {exc}"]
     prefix = f"{entry['path']}: "
-    if binding.get("schema_version") != 2:
-        problems.append(prefix + "evidence manifest schema_version must be 2")
+    if binding.get("schema_version") != 3:
+        problems.append(prefix + "evidence manifest schema_version must be 3")
     flow = binding.get("flow")
     if not isinstance(flow, dict):
         problems.append(f"{entry['path']}: evidence manifest flow binding is missing")
     else:
         for key, expected in (
             ("version", entry.get("flow_version")),
+            ("source_commit", entry.get("flow_source_commit")),
+            ("release_tag", entry.get("flow_release_tag")),
             ("wheel_sha256", entry.get("wheel_sha256")),
             ("sdist_sha256", entry.get("sdist_sha256")),
         ):
@@ -260,6 +338,7 @@ def check_evidence_manifest(entry: dict[str, Any], repo_root: Path) -> list[str]
         )
 
     campaigns = binding.get("campaigns")
+    production_acceptance_values: list[bool] = []
     seen_results: set[str] = set()
     if not isinstance(campaigns, list) or not campaigns:
         problems.append(prefix + "campaigns must be a non-empty list")
@@ -314,6 +393,12 @@ def check_evidence_manifest(entry: dict[str, Any], repo_root: Path) -> list[str]
                 problems.append(
                     prefix + f"campaign Flow binding differs from {normalized_result!r}"
                 )
+            if campaign_flow.get("commit") != flow_binding.get(
+                "source_commit"
+            ) or campaign_flow.get("release_tag") != flow_binding.get("release_tag"):
+                problems.append(
+                    prefix + f"campaign Flow source binding differs from {normalized_result!r}"
+                )
             if campaign.get("environment") != document.get("environment"):
                 problems.append(prefix + f"campaign environment differs from {normalized_result!r}")
             runtime = campaign.get("runtime")
@@ -363,6 +448,53 @@ def check_evidence_manifest(entry: dict[str, Any], repo_root: Path) -> list[str]
                             )
             if runtime != document.get("runtime"):
                 problems.append(prefix + f"campaign runtime differs from {normalized_result!r}")
+            problems.extend(prefix + problem for problem in _check_task_standard(document, name))
+            metric_coverage = _metric_coverage(document)
+            if campaign.get("metric_coverage") != metric_coverage:
+                problems.append(
+                    prefix + f"campaign metric coverage differs from {normalized_result!r}"
+                )
+            evidence_scope = campaign.get("evidence_scope")
+            if not isinstance(evidence_scope, dict):
+                problems.append(prefix + f"campaign evidence scope is missing: {name!r}")
+            else:
+                if evidence_scope.get("class") not in {
+                    "contract_fixture",
+                    "local_synthetic",
+                    "customer_environment",
+                    "production",
+                }:
+                    problems.append(prefix + f"campaign evidence class is invalid: {name!r}")
+                for scope_field in (
+                    "customer_workflow",
+                    "hosted_execution",
+                    "real_remote_session",
+                ):
+                    if not isinstance(evidence_scope.get(scope_field), bool):
+                        problems.append(
+                            prefix
+                            + f"campaign evidence scope field is not boolean: {name!r}.{scope_field}"
+                        )
+                production_acceptance = evidence_scope.get("production_acceptance")
+                if not isinstance(production_acceptance, bool):
+                    problems.append(
+                        prefix + f"campaign production acceptance is not boolean: {name!r}"
+                    )
+                elif production_acceptance and set(metric_coverage.values()) != {"counted"}:
+                    problems.append(
+                        prefix
+                        + f"campaign claims production acceptance without required reliability metrics: {name!r}"
+                    )
+                elif production_acceptance and evidence_scope.get("class") not in {
+                    "customer_environment",
+                    "production",
+                }:
+                    problems.append(
+                        prefix
+                        + f"campaign claims production acceptance from a synthetic or fixture class: {name!r}"
+                    )
+                else:
+                    production_acceptance_values.append(production_acceptance)
         result_artifacts = {
             path
             for path in bound_artifacts
@@ -374,6 +506,15 @@ def check_evidence_manifest(entry: dict[str, Any], repo_root: Path) -> list[str]
                 + "campaign results inventory differs from retained results: "
                 + f"missing={sorted(result_artifacts - seen_results)}, extra={sorted(seen_results - result_artifacts)}"
             )
+    entry_production_acceptance = entry.get("production_acceptance")
+    if not isinstance(entry_production_acceptance, bool):
+        problems.append(prefix + "PUBLISHED_EVIDENCE production_acceptance must be boolean")
+    elif entry_production_acceptance != (
+        bool(production_acceptance_values) and all(production_acceptance_values)
+    ):
+        problems.append(
+            prefix + "PUBLISHED_EVIDENCE production_acceptance disagrees with campaign scopes"
+        )
     contracts = binding.get("task_contracts")
     if not isinstance(contracts, list) or not contracts:
         problems.append(f"{entry['path']}: task_contracts are missing")

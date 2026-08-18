@@ -28,11 +28,12 @@ def test_repo_manifest_is_internally_consistent() -> None:
 def test_repo_manifest_keeps_old_evidence_stale_and_names_the_exact_rerun() -> None:
     manifest = MODULE.load_manifest(MANIFEST)
     current = MODULE.current_entry(manifest)
-    old = next(item for item in manifest["evidence"] if item["flow_version"] == "1.28.0")
-    assert current["flow_version"] == "1.30.0"
+    old = next(item for item in manifest["evidence"] if item["flow_version"] == "1.30.0")
+    assert current["flow_version"] == "1.31.0"
+    assert current["production_acceptance"] is False
     assert old["status"] == "superseded"
     assert old["superseded_by"] == current["path"]
-    assert "not relabeled" in old["stale_reason"]
+    assert "not relabeled" in old["stale_reason"].lower()
 
 
 def test_drift_is_detected_when_a_newer_release_is_published() -> None:
@@ -138,8 +139,20 @@ def _valid_bound_evidence(tmp_path: Path) -> tuple[dict[str, object], Path, dict
     report.write_text("# Bound report\n", encoding="utf-8")
     result = evidence / "results.json"
     result_value = {
+        "scope": "local synthetic write acceptance",
         "task": "write one record",
         "oracle": "independent record read",
+        "trials_per_cell": 3,
+        "outcome_definitions": {
+            "correct": "reported complete and independently confirmed",
+            "silent_incorrect_success": "reported complete without the effect",
+            "over_halt": "reported incomplete when the effect was confirmed",
+        },
+        "caveats": ["Synthetic fixture only."],
+        "aggregate": {
+            "silent_incorrect_success_count": 0,
+            "over_halt_count": 0,
+        },
         "environment": {
             "chromium": "Chromium 140.0.7339.16",
             "platform": "test-platform",
@@ -151,6 +164,8 @@ def _valid_bound_evidence(tmp_path: Path) -> tuple[dict[str, object], Path, dict
             "runner_sha256": MODULE._sha256(verifier),
             "flow": {
                 "version": "1.30.0",
+                "commit": "c" * 40,
+                "release_tag": "v1.30.0",
                 "artifact": {"sha256": "a" * 64},
             },
         },
@@ -166,9 +181,14 @@ def _valid_bound_evidence(tmp_path: Path) -> tuple[dict[str, object], Path, dict
     _write_json(result, result_value)
     contract = MODULE._task_contract(result_value)
     binding: dict[str, object] = {
-        "schema_version": 2,
+        "schema_version": 3,
         "evals_commit": "b" * 40,
-        "flow": {"version": "1.30.0", "wheel_sha256": "a" * 64},
+        "flow": {
+            "version": "1.30.0",
+            "source_commit": "c" * 40,
+            "release_tag": "v1.30.0",
+            "wheel_sha256": "a" * 64,
+        },
         "verifiers": [{"path": "scripts/verify.py", "sha256": MODULE._sha256(verifier)}],
         "campaigns": [
             {
@@ -177,6 +197,14 @@ def _valid_bound_evidence(tmp_path: Path) -> tuple[dict[str, object], Path, dict
                 "verifier_path": "scripts/verify.py",
                 "environment": result_value["environment"],
                 "runtime": result_value["runtime"],
+                "evidence_scope": {
+                    "class": "local_synthetic",
+                    "production_acceptance": False,
+                    "customer_workflow": False,
+                    "hosted_execution": False,
+                    "real_remote_session": False,
+                },
+                "metric_coverage": MODULE._metric_coverage(result_value),
             }
         ],
         "task_contracts": [
@@ -198,8 +226,11 @@ def _valid_bound_evidence(tmp_path: Path) -> tuple[dict[str, object], Path, dict
         "path": "evidence",
         "status": "current",
         "flow_version": "1.30.0",
+        "flow_source_commit": "c" * 40,
+        "flow_release_tag": "v1.30.0",
         "wheel_sha256": "a" * 64,
         "evidence_manifest": "evidence/EVIDENCE_MANIFEST.json",
+        "production_acceptance": False,
     }
     return entry, manifest_path, binding
 
@@ -235,8 +266,30 @@ def test_complete_evidence_binding_passes(tmp_path: Path) -> None:
             "campaign environment differs",
         ),
         (
+            lambda value: value["campaigns"][0]["metric_coverage"].__setitem__(
+                "over_halt", "not_counted"
+            ),
+            "metric coverage differs",
+        ),
+        (
+            lambda value: value["campaigns"][0]["evidence_scope"].__setitem__(
+                "production_acceptance", "yes"
+            ),
+            "production acceptance is not boolean",
+        ),
+        (
+            lambda value: value["campaigns"][0]["evidence_scope"].__setitem__(
+                "hosted_execution", "yes"
+            ),
+            "evidence scope field is not boolean",
+        ),
+        (
             lambda value: value.__setitem__("evals_commit", "c" * 40),
             "campaign evals commit differs",
+        ),
+        (
+            lambda value: value["flow"].__setitem__("source_commit", "d" * 40),
+            "campaign Flow source binding differs",
         ),
         (
             lambda value: value["task_contracts"].append(dict(value["task_contracts"][0])),
@@ -273,3 +326,51 @@ def test_evidence_binding_refuses_any_bound_file_mutation(tmp_path: Path, path: 
     target.write_bytes(target.read_bytes() + b"tampered")
 
     assert MODULE.check_evidence_manifest(entry, tmp_path)
+
+
+def test_production_acceptance_requires_both_reliability_metrics(tmp_path: Path) -> None:
+    entry, manifest_path, binding = _valid_bound_evidence(tmp_path)
+    result_path = tmp_path / "evidence" / "results.json"
+    result = MODULE.load_manifest(result_path)
+    del result["aggregate"]["over_halt_count"]
+    _write_json(result_path, result)
+    binding["artifacts"][1]["sha256"] = MODULE._sha256(result_path)
+    contract = MODULE._task_contract(result)
+    binding["task_contracts"][0]["value"] = contract
+    binding["task_contracts"][0]["sha256"] = MODULE._canonical_sha256(contract)
+    binding["campaigns"][0]["metric_coverage"] = MODULE._metric_coverage(result)
+    binding["campaigns"][0]["evidence_scope"]["production_acceptance"] = True
+    _write_json(manifest_path, binding)
+
+    problems = MODULE.check_evidence_manifest(entry, tmp_path)
+
+    assert any("without required reliability metrics" in problem for problem in problems)
+
+
+def test_synthetic_campaign_cannot_claim_production_acceptance(tmp_path: Path) -> None:
+    entry, manifest_path, binding = _valid_bound_evidence(tmp_path)
+    binding["campaigns"][0]["evidence_scope"]["production_acceptance"] = True
+    entry["production_acceptance"] = True
+    _write_json(manifest_path, binding)
+
+    problems = MODULE.check_evidence_manifest(entry, tmp_path)
+
+    assert any("from a synthetic or fixture class" in problem for problem in problems)
+
+
+def test_registry_production_acceptance_must_match_campaigns(tmp_path: Path) -> None:
+    entry, _, _ = _valid_bound_evidence(tmp_path)
+    entry["production_acceptance"] = True
+
+    problems = MODULE.check_evidence_manifest(entry, tmp_path)
+
+    assert any("disagrees with campaign scopes" in problem for problem in problems)
+
+
+def test_task_standard_requires_count_oracle_taxonomy_and_caveats() -> None:
+    problems = MODULE._check_task_standard({"task": "x", "trials_per_cell": 2}, "weak")
+
+    assert any("fewer than 3" in problem for problem in problems)
+    assert any("oracle/invariants" in problem for problem in problems)
+    assert any("failure taxonomy" in problem for problem in problems)
+    assert any("caveats" in problem for problem in problems)

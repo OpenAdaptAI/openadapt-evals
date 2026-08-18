@@ -246,16 +246,23 @@ matches the current published release. The current set also has an
 `EVIDENCE_MANIFEST.json` that inventories the verifier scripts, retained
 artifacts, public reports, campaign environments, and task/oracle contracts.
 The 1.28 set remains stale because its run did not retain an exact browser
-revision or installed dependency snapshot. The current 1.30 set records those
+revision or installed dependency snapshot. The current 1.31 set records those
 facts for every campaign. The check runs offline on every pull request and
 against PyPI on a daily schedule (`.github/workflows/evidence-freshness.yml`).
 Re-run the comparison and publish a new evidence set rather than editing an old
 one: superseded reports stay reproducible against the wheel they were measured
 on.
 
-See `docs/eval_results/current_flow_v1_30_0_local_20260806/` for the current
-comparison and its exact retained campaign reports. The older 1.28 set remains
-available as stale historical evidence; it was not relabeled.
+The word `current` means release-fresh. It does not mean production-accepted.
+Each campaign records its evidence class, whether it is production acceptance,
+and whether it counts silent incorrect success and over-halt. The present set
+contains local synthetic and contract-fixture evidence only. See the
+[production-readiness evidence boundary](docs/eval_results/PRODUCTION_READINESS.md)
+for the missing acceptance tracks and their exit conditions.
+
+See `docs/eval_results/current_flow_v1_31_0_local_20260818/` for the current
+comparison and its exact retained campaign reports. The older sets remain
+available as stale historical evidence; they were not relabeled.
 
 ## More workflows
 
