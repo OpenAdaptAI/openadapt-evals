@@ -1,0 +1,111 @@
+{
+  "algorithm": "ed25519",
+  "payload": {
+    "action_policy_sha256": "2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a",
+    "admission_id": "11111111-1111-4111-8111-111111111111",
+    "application_contract_sha256": "2424242424242424242424242424242424242424242424242424242424242424",
+    "bundle_artifact_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "bundle_content_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+    "bundle_version_id": "55555555-5555-4555-8555-555555555555",
+    "campaign": {
+      "artifact_sha256": "c0f85314d9bb6236226b37b4dce86ea9ccee4dbec344ddb49858f7898e912d66",
+      "contract_sha256": "02b706e8251719c9ed4c62e3c9807074952f5ffe350a382fa61bb7d3832cfe41",
+      "decision": "admitted",
+      "failure_taxonomy": [
+        "collateral_effect",
+        "duplicate_effect",
+        "operator_intervention",
+        "over_halt",
+        "platform_failure",
+        "safe_halt",
+        "silent_incorrect_success",
+        "uncertain_delivery",
+        "verified",
+        "wrong_record"
+      ],
+      "oracle_contract_sha256": "a9d87b5deaa24c553e65aa0237136398fe7821ae7d226fc20d48c500765bc1e0",
+      "oracle_id": "openadapt.execute-acceptance-campaign-oracle/v1",
+      "outcomes_sha256": "7c33c1c98779b1eca72c5e5cd8110e07d5975801ff4e84d6e69de0508f50304d",
+      "tasks": [
+        {
+          "condition": "ambiguous-target",
+          "observed_trials": 3,
+          "required_trials": 3,
+          "task": "execute-acceptance"
+        },
+        {
+          "condition": "healthy-01",
+          "observed_trials": 3,
+          "required_trials": 3,
+          "task": "execute-acceptance"
+        },
+        {
+          "condition": "healthy-02",
+          "observed_trials": 3,
+          "required_trials": 3,
+          "task": "execute-acceptance"
+        },
+        {
+          "condition": "healthy-03",
+          "observed_trials": 3,
+          "required_trials": 3,
+          "task": "execute-acceptance"
+        },
+        {
+          "condition": "idempotency-replay",
+          "observed_trials": 3,
+          "required_trials": 3,
+          "task": "execute-acceptance"
+        },
+        {
+          "condition": "stale-session",
+          "observed_trials": 3,
+          "required_trials": 3,
+          "task": "execute-acceptance"
+        },
+        {
+          "condition": "verifier-unavailable",
+          "observed_trials": 3,
+          "required_trials": 3,
+          "task": "execute-acceptance"
+        },
+        {
+          "condition": "weak-effect-only",
+          "observed_trials": 3,
+          "required_trials": 3,
+          "task": "execute-acceptance"
+        },
+        {
+          "condition": "wrong-reference",
+          "observed_trials": 3,
+          "required_trials": 3,
+          "task": "execute-acceptance"
+        }
+      ]
+    },
+    "effect_contract_sha256": "2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d",
+    "environment_contract_sha256": "2626262626262626262626262626262626262626262626262626262626262626",
+    "expires_at": "2026-09-17T11:59:00Z",
+    "governed_authorization_template_sha256": "2323232323232323232323232323232323232323232323232323232323232323",
+    "identity_contract_sha256": "2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c",
+    "input_policy_sha256": "2929292929292929292929292929292929292929292929292929292929292929",
+    "issued_at": "2026-08-18T11:59:00Z",
+    "issuer": {
+      "key_id": "qa-ed25519-34750f98bd59fcfc",
+      "ref": "refs/heads/main@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "workflow": "OpenAdaptAI/openadapt-internal/.github/workflows/production-qualification-admission.yml"
+    },
+    "network_policy_sha256": "2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
+    "not_before": "2026-08-18T11:58:00Z",
+    "operator_contract_sha256": "2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e",
+    "runtime_contract_sha256": "2828282828282828282828282828282828282828282828282828282828282828",
+    "runtime_environment_sha256": "2727272727272727272727272727272727272727272727272727272727272727",
+    "runtime_validation_id": "66666666-6666-4666-8666-666666666666",
+    "schema_version": "openadapt.qualification-admission/v1",
+    "substrate_contract_sha256": "2525252525252525252525252525252525252525252525252525252525252525",
+    "tenant_id": "22222222-2222-4222-8222-222222222222",
+    "workflow_id": "33333333-3333-4333-8333-333333333333",
+    "workflow_version_id": "44444444-4444-4444-8444-444444444444"
+  },
+  "signature": "OBEE1BaFQteeAGCKehi1Ssnzqts8cZz7aDVUSRE7maxU2L5rvbjA/F4vjWIOz/07wUZyfY3x7r/AOH1Pxy3nBA=="
+}

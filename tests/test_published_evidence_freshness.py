@@ -328,7 +328,7 @@ def test_evidence_binding_refuses_any_bound_file_mutation(tmp_path: Path, path: 
     assert MODULE.check_evidence_manifest(entry, tmp_path)
 
 
-def test_production_acceptance_requires_both_reliability_metrics(tmp_path: Path) -> None:
+def test_campaign_cannot_promote_numeric_metrics_to_production(tmp_path: Path) -> None:
     entry, manifest_path, binding = _valid_bound_evidence(tmp_path)
     result_path = tmp_path / "evidence" / "results.json"
     result = MODULE.load_manifest(result_path)
@@ -344,10 +344,10 @@ def test_production_acceptance_requires_both_reliability_metrics(tmp_path: Path)
 
     problems = MODULE.check_evidence_manifest(entry, tmp_path)
 
-    assert any("without required reliability metrics" in problem for problem in problems)
+    assert any("cannot be declared; use the verified importer" in problem for problem in problems)
 
 
-def test_synthetic_campaign_cannot_claim_production_acceptance(tmp_path: Path) -> None:
+def test_campaign_class_cannot_claim_production_acceptance(tmp_path: Path) -> None:
     entry, manifest_path, binding = _valid_bound_evidence(tmp_path)
     binding["campaigns"][0]["evidence_scope"]["production_acceptance"] = True
     entry["production_acceptance"] = True
@@ -355,16 +355,132 @@ def test_synthetic_campaign_cannot_claim_production_acceptance(tmp_path: Path) -
 
     problems = MODULE.check_evidence_manifest(entry, tmp_path)
 
-    assert any("from a synthetic or fixture class" in problem for problem in problems)
+    assert any("cannot be declared; use the verified importer" in problem for problem in problems)
 
 
-def test_registry_production_acceptance_must_match_campaigns(tmp_path: Path) -> None:
+def test_registry_boolean_cannot_claim_production_acceptance(tmp_path: Path) -> None:
     entry, _, _ = _valid_bound_evidence(tmp_path)
     entry["production_acceptance"] = True
 
     problems = MODULE.check_evidence_manifest(entry, tmp_path)
 
-    assert any("disagrees with campaign scopes" in problem for problem in problems)
+    assert any("declared boolean is not evidence" in problem for problem in problems)
+
+
+def test_production_import_links_must_be_digest_bound(tmp_path: Path) -> None:
+    entry, manifest_path, binding = _valid_bound_evidence(tmp_path)
+    entry["production_acceptance"] = True
+    binding["production_acceptance_import"] = {
+        "certificate": "evidence/certificate.json",
+        "campaign": "evidence/campaign.json",
+        "qualification_admission": "evidence/admission.json",
+        "attestation_bundle": "evidence/attestation.jsonl",
+        "derived_result": "evidence/derived.json",
+    }
+    _write_json(manifest_path, binding)
+
+    problems = MODULE.check_evidence_manifest(entry, tmp_path)
+
+    assert any("link must contain path and sha256" in problem for problem in problems)
+
+
+def test_production_import_cannot_select_its_own_approved_cloud_commit(
+    tmp_path: Path,
+) -> None:
+    entry, manifest_path, binding = _valid_bound_evidence(tmp_path)
+    entry["production_acceptance"] = True
+    binding["production_acceptance_import"] = {
+        "certificate": {},
+        "campaign": {},
+        "attestation_bundle": {},
+        "derived_result": {},
+        "expected_cloud_source_commit": "c" * 40,
+    }
+    _write_json(manifest_path, binding)
+
+    problems = MODULE.check_evidence_manifest(entry, tmp_path)
+
+    assert any("declared boolean is not evidence" in problem for problem in problems)
+
+
+def test_production_import_uses_external_admission_trust_and_revocations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry, manifest_path, binding = _valid_bound_evidence(tmp_path)
+    entry["production_acceptance"] = True
+    evidence = tmp_path / "evidence"
+    names = (
+        "certificate",
+        "campaign",
+        "qualification_admission",
+        "attestation_bundle",
+        "derived_result",
+    )
+    paths: dict[str, Path] = {}
+    for name in names:
+        suffix = ".jsonl" if name == "attestation_bundle" else ".json"
+        path = evidence / f"{name}{suffix}"
+        path.write_text("{}\n", encoding="utf-8")
+        paths[name] = path
+    derived = {
+        "bindings": {
+            "flow_version": entry["flow_version"],
+            "flow_release_commit": entry["flow_source_commit"],
+            "flow_wheel_sha256": f"sha256:{entry['wheel_sha256']}",
+        },
+        "claim_scope": MODULE.PRODUCTION.CLAIM_SCOPE,
+    }
+    _write_json(paths["derived_result"], derived)
+    imported = {
+        name: {
+            "path": path.relative_to(tmp_path).as_posix(),
+            "sha256": MODULE._sha256(path),
+        }
+        for name, path in paths.items()
+    }
+    binding["production_acceptance_import"] = imported
+    binding["artifacts"].extend(imported.values())
+    _write_json(manifest_path, binding)
+    observed: dict[str, object] = {}
+
+    def import_files(*args: object, **kwargs: object) -> dict[str, object]:
+        observed["args"] = args
+        observed["kwargs"] = kwargs
+        return derived
+
+    monkeypatch.setattr(MODULE.PRODUCTION, "import_files", import_files)
+    trust = {"qa-ed25519-0000000000000000": {"public_key": "external"}}
+    admission_revocations = {"admission-id"}
+    signer_revocations = {"qa-ed25519-revoked"}
+
+    problems = MODULE.check_evidence_manifest(
+        entry,
+        tmp_path,
+        "f" * 40,
+        trust,
+        admission_revocations,
+        signer_revocations,
+    )
+
+    assert problems == []
+    assert observed["args"] == (
+        paths["certificate"],
+        paths["campaign"],
+        paths["qualification_admission"],
+        paths["attestation_bundle"],
+        "f" * 40,
+    )
+    assert observed["kwargs"] == {
+        "trusted_admission_signers": trust,
+        "revoked_admission_ids": admission_revocations,
+        "revoked_admission_signer_key_ids": signer_revocations,
+    }
+
+
+def test_external_trust_inputs_must_be_valid_json() -> None:
+    assert MODULE.main(["--offline", "--trusted-admission-signers-json", "[]"]) == 1
+    assert MODULE.main(["--offline", "--revoked-admission-ids-json", "{}"] ) == 1
 
 
 def test_task_standard_requires_count_oracle_taxonomy_and_caveats() -> None:

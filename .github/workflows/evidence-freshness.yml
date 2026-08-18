@@ -12,6 +12,7 @@ on:
     paths:
       - 'docs/eval_results/**'
       - 'scripts/check_published_evidence_freshness.py'
+      - 'scripts/import_production_acceptance.py'
       - '.github/workflows/evidence-freshness.yml'
 
 concurrency:
@@ -35,4 +36,14 @@ jobs:
 
       # Standard library only: no dependency install, no lockfile, no cache.
       - name: Check published evidence against the current published release
-        run: python scripts/check_published_evidence_freshness.py
+        env:
+          APPROVED_CLOUD_ACCEPTANCE_COMMIT: ${{ vars.APPROVED_CLOUD_ACCEPTANCE_COMMIT }}
+          QUALIFICATION_ADMISSION_SIGNERS_JSON: ${{ vars.QUALIFICATION_ADMISSION_SIGNERS_JSON }}
+          REVOKED_QUALIFICATION_ADMISSION_IDS_JSON: ${{ vars.REVOKED_QUALIFICATION_ADMISSION_IDS_JSON }}
+          REVOKED_QUALIFICATION_SIGNER_KEY_IDS_JSON: ${{ vars.REVOKED_QUALIFICATION_SIGNER_KEY_IDS_JSON }}
+        run: >-
+          python scripts/check_published_evidence_freshness.py
+          --approved-cloud-source-commit "$APPROVED_CLOUD_ACCEPTANCE_COMMIT"
+          --trusted-admission-signers-json "$QUALIFICATION_ADMISSION_SIGNERS_JSON"
+          --revoked-admission-ids-json "$REVOKED_QUALIFICATION_ADMISSION_IDS_JSON"
+          --revoked-admission-signer-key-ids-json "$REVOKED_QUALIFICATION_SIGNER_KEY_IDS_JSON"

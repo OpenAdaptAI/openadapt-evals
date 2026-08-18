@@ -1,0 +1,11 @@
+{
+  "qa-ed25519-34750f98bd59fcfc": {
+    "allowed_ref_prefixes": [
+      "refs/heads/main@"
+    ],
+    "allowed_workflows": [
+      "OpenAdaptAI/openadapt-internal/.github/workflows/production-qualification-admission.yml"
+    ],
+    "public_key": "iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w="
+  }
+}
