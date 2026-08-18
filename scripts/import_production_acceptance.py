@@ -67,6 +67,7 @@ _SHA256 = re.compile(r"^sha256:[a-f0-9]{64}$")
 _SEMVER = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$")
 _POSITIVE_DECIMAL = re.compile(r"^[1-9][0-9]*$")
 _UNPREFIXED_SHA256 = re.compile(r"^[a-f0-9]{64}$")
+_PINNED_IMAGE = re.compile(r"^[a-z0-9][a-z0-9._/:-]{0,255}@sha256:[a-f0-9]{64}$")
 _ADMISSION_REF = re.compile(r"^refs/heads/main@[a-f0-9]{40}$")
 _ADMISSION_KEY_ID = re.compile(r"^qa-ed25519-[a-f0-9]{16}$")
 _RECEIPT_KEY_ID = re.compile(r"^qe-ed25519-[a-f0-9]{16}$")
@@ -669,7 +670,11 @@ def _canonical_uuid(value: Any, label: str) -> str:
         parsed = uuid.UUID(value)
     except ValueError as exc:
         raise AcceptanceError(f"{label} must be a canonical UUID") from exc
-    if str(parsed) != value:
+    if (
+        str(parsed) != value
+        or parsed.variant != uuid.RFC_4122
+        or parsed.version not in range(1, 9)
+    ):
         raise AcceptanceError(f"{label} must be a canonical UUID")
     return value
 
@@ -762,12 +767,7 @@ def _validate_evidence_identity(
             detail["browser_base_image"],
             "qualification evidence identity browser image",
         )
-        image_name, separator, image_digest = browser_image.rpartition("@sha256:")
-        if (
-            not image_name
-            or separator != "@sha256:"
-            or _UNPREFIXED_SHA256.fullmatch(image_digest) is None
-        ):
+        if _PINNED_IMAGE.fullmatch(browser_image) is None:
             raise AcceptanceError(
                 "qualification evidence identity browser image is not digest-pinned"
             )
@@ -1316,10 +1316,7 @@ def _validate_certificate(
     ) is None:
         raise AcceptanceError("certificate Playwright version is not exact")
     browser_image = _nonempty(runtime["browser_base_image"], "certificate browser image")
-    image_name, separator, image_digest = browser_image.rpartition("@sha256:")
-    if not image_name or separator != "@sha256:" or re.fullmatch(
-        r"[a-f0-9]{64}", image_digest
-    ) is None:
+    if _PINNED_IMAGE.fullmatch(browser_image) is None:
         raise AcceptanceError("certificate browser image is not digest-pinned")
 
     qualification = _closed(
@@ -2064,8 +2061,6 @@ def _validate_campaign(
     if campaign["schema_version"] != CAMPAIGN_SCHEMA:
         raise AcceptanceError("campaign schema is not supported")
     campaign_id = _canonical_uuid(campaign["campaign_id"], "campaign ID")
-    if uuid.UUID(campaign_id).version != 4:
-        raise AcceptanceError("campaign ID must be a UUIDv4")
     if campaign["decision"] != "admitted":
         raise AcceptanceError("campaign decision is not admitted")
     for key in ("admission_id", "runtime_validation_id"):

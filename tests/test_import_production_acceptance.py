@@ -745,6 +745,9 @@ def test_rejects_unhashed_workflow_binding() -> None:
         "python:3.11-slim@sha256:" + "g" * 64,
         "@sha256:" + "4" * 64,
         "python:3.11@sha256:" + "4" * 64 + "-suffix",
+        "Python:3.11-slim@sha256:" + "4" * 64,
+        "python:3.11-SLIM@sha256:" + "4" * 64,
+        "python :3.11-slim@sha256:" + "4" * 64,
     ],
 )
 def test_rejects_malformed_browser_image_digest(image: str) -> None:
@@ -753,6 +756,50 @@ def test_rejects_malformed_browser_image_digest(image: str) -> None:
 
     with pytest.raises(MODULE.AcceptanceError, match="browser image is not digest-pinned"):
         _derive(certificate)
+
+
+@pytest.mark.parametrize(
+    "image",
+    [
+        "Python:3.11-slim@sha256:" + "4" * 64,
+        "python:3.11-SLIM@sha256:" + "4" * 64,
+        "python:3.11-slim@sha256:" + "A" * 64,
+        "python:3.11-slim @sha256:" + "4" * 64,
+    ],
+)
+def test_rejects_noncanonical_browser_image_in_admitted_runtime(image: str) -> None:
+    admission = _admission()
+    admission["payload"]["evidence_identity"]["runtime_build_identity"][
+        "managed_browser"
+    ]["browser_base_image"] = image
+
+    with pytest.raises(MODULE.AcceptanceError, match="browser image is not digest-pinned"):
+        _derive(admission=admission)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "11111111-1111-1111-8111-111111111111",
+        "88888888-8888-8888-8888-888888888888",
+    ],
+)
+def test_accepts_canonical_rfc_uuid_versions_one_through_eight(value: str) -> None:
+    assert MODULE._canonical_uuid(value, "test UUID") == value
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "11111111-1111-4111-8111-11111111111A",
+        "11111111-1111-0111-8111-111111111111",
+        "11111111-1111-9111-8111-111111111111",
+        "11111111-1111-4111-7111-111111111111",
+    ],
+)
+def test_rejects_uuid_outside_cloud_canonical_rfc_grammar(value: str) -> None:
+    with pytest.raises(MODULE.AcceptanceError, match="must be a canonical UUID"):
+        MODULE._canonical_uuid(value, "test UUID")
 
 
 def test_rejects_unknown_certificate_fields() -> None:
@@ -1638,6 +1685,12 @@ def test_rejects_fixed_admission_policy_digest_mutation() -> None:
 
     with pytest.raises(MODULE.AcceptanceError, match="admission policy differs"):
         _derive(admission=admission)
+
+
+def test_fixed_admission_policy_digest_matches_cloud_v2() -> None:
+    assert MODULE.admission_policy_sha256() == (
+        "2d3969d8c5fcfe0c0a967f775562802ca20b6598a8a3199185d0da6b7a36fb6b"
+    )
 
 
 def test_rejects_signer_registry_digest_and_lifetime_mutations() -> None:
