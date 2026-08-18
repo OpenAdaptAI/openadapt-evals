@@ -30,15 +30,24 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-CERTIFICATE_SCHEMA = "openadapt.execute-live-acceptance-record/v1"
-CAMPAIGN_SCHEMA = "openadapt.qualification-campaign/v1"
+CERTIFICATE_SCHEMA = "openadapt.execute-live-acceptance-record/v2"
+CAMPAIGN_SCHEMA = "openadapt.qualification-campaign/v2"
+TRIAL_SCHEMA = "openadapt.qualification-trial-row/v2"
 RESULT_SCHEMA = "openadapt.evals-derived-production-acceptance/v1"
 CLAIM_SCOPE = "qualified_browser_workflow_on_bound_environment"
-ADMISSION_SCHEMA = "openadapt.qualification-admission/v1"
-ADMISSION_SIGNATURE_DOMAIN = b"openadapt-qualification-admission-v1\0"
-RECEIPT_SCHEMA = "openadapt.qualification-evidence-receipt/v1"
-RECEIPT_SIGNATURE_DOMAIN_TEXT = "openadapt-qualification-evidence-receipt-v1\\0"
-RECEIPT_SIGNATURE_DOMAIN = b"openadapt-qualification-evidence-receipt-v1\0"
+ADMISSION_SCHEMA = "openadapt.qualification-admission/v2"
+ADMISSION_SIGNATURE_DOMAIN_TEXT = "openadapt-qualification-admission-v2\\0"
+ADMISSION_SIGNATURE_DOMAIN = b"openadapt-qualification-admission-v2\0"
+RECEIPT_SCHEMA = "openadapt.qualification-evidence-receipt/v2"
+RECEIPT_SIGNATURE_DOMAIN_TEXT = "openadapt-qualification-evidence-receipt-v2\\0"
+RECEIPT_SIGNATURE_DOMAIN = b"openadapt-qualification-evidence-receipt-v2\0"
+EVIDENCE_IDENTITY_SCHEMA = "openadapt.production-acceptance-evidence-identity/v2"
+EVIDENCE_IDENTITY_DOMAIN = b"OpenAdapt production acceptance evidence identity v2\0"
+RUNTIME_BUILD_IDENTITY_SCHEMA = "openadapt.admitted-runtime-build/v1"
+ADMISSION_POLICY_SCHEMA = "openadapt.production-acceptance-admission-policy/v1"
+ADMISSION_POLICY_DOMAIN = b"OpenAdapt production acceptance admission policy v1\0"
+SIGNER_REGISTRY_SCHEMA = "openadapt.qualification-signer-registry/v2"
+SIGNER_REGISTRY_DOMAIN = b"OpenAdapt qualification signer registry v2\0"
 ADMISSION_ISSUER_WORKFLOW = (
     "OpenAdaptAI/openadapt-internal/.github/workflows/"
     "production-qualification-admission.yml"
@@ -83,6 +92,8 @@ _FLOW_KEYS = {"version", "release_commit", "wheel_sha256"}
 _RUNTIME_KEYS = {
     "manifest_sha256",
     "runner_build",
+    "runner_artifact_sha256",
+    "substrate",
     "playwright_version",
     "browser_base_image",
 }
@@ -100,9 +111,11 @@ _QUALIFICATION_KEYS = {
     "admission_signer",
     "runtime_validation_id_sha256",
     "admission_id_sha256",
+    "campaign_id_sha256",
     "workflow_version_id_sha256",
     "workflow_digest",
     "environment_digest",
+    "evidence_identity_sha256",
 }
 _ADMISSION_SIGNER_KEYS = {
     "algorithm",
@@ -204,6 +217,9 @@ _RETENTION_KEYS = {
 _CAMPAIGN_KEYS = {
     "schema_version",
     "campaign_id",
+    "admission_id",
+    "runtime_validation_id",
+    "evidence_identity_sha256",
     "qualification_contract",
     "oracle_contract",
     "authority_contract",
@@ -228,8 +244,10 @@ _TRIAL_KEYS = {
     "attempt_id_sha256",
     "run_id_sha256",
     "workflow_version_id",
+    "admission_id",
     "bundle_artifact_sha256",
     "runtime_validation_id",
+    "evidence_identity_sha256",
     "started_at",
     "completed_at",
     "execution_outcome",
@@ -289,10 +307,13 @@ _RECEIPT_PROJECTION_KEYS = {
     "attempt_id_sha256",
     "run_id_sha256",
     "workflow_version_id",
+    "admission_id",
     "bundle_artifact_sha256",
     "runtime_validation_id",
+    "evidence_identity_sha256",
     "verdict",
     "evidence_sha256",
+    "facts",
 }
 _RECEIPT_ROW_FIELDS = {
     "runner": "runner_receipt_sha256",
@@ -335,6 +356,7 @@ _ADMISSION_PAYLOAD_KEYS = {
     "identity_contract_sha256",
     "effect_contract_sha256",
     "operator_contract_sha256",
+    "evidence_identity",
     "campaign",
     "issuer",
     "issued_at",
@@ -357,8 +379,10 @@ _ADMISSION_DIGEST_KEYS = _ADMISSION_PAYLOAD_KEYS - {
     "issued_at",
     "not_before",
     "expires_at",
+    "evidence_identity",
 }
 _ADMISSION_CAMPAIGN_KEYS = {
+    "campaign_id",
     "artifact_sha256",
     "contract_sha256",
     "outcomes_sha256",
@@ -367,6 +391,130 @@ _ADMISSION_CAMPAIGN_KEYS = {
     "tasks",
     "failure_taxonomy",
     "decision",
+}
+
+_EVIDENCE_IDENTITY_KEYS = {
+    "schema_version",
+    "runtime_build_identity",
+    "managed_runner_signer_sha256",
+    "tenant_id",
+    "workflow_id",
+    "workflow_version_id",
+    "workflow_digest",
+    "bundle_version_id",
+    "bundle_artifact_sha256",
+    "bundle_content_digest",
+    "environment_digest",
+    "governed_authorization_template_sha256",
+    "application_contract_sha256",
+    "substrate_contract_sha256",
+    "environment_contract_sha256",
+    "runtime_environment_sha256",
+    "runtime_contract_sha256",
+    "input_policy_sha256",
+    "action_policy_sha256",
+    "network_policy_sha256",
+    "identity_contract_sha256",
+    "effect_contract_sha256",
+    "operator_contract_sha256",
+    "runtime_validation_id",
+    "admission_id",
+    "campaign_id",
+    "admission_policy_sha256",
+    "campaign_contract_sha256",
+    "oracle_contract_sha256",
+    "qualification_campaign_schema",
+    "qualification_trial_schema",
+    "qualification_receipt_schema",
+    "qualification_signer_registry_sha256",
+    "qualification_signer_registry_revision",
+}
+
+_RUNTIME_BUILD_COMMON_KEYS = {
+    "schema_version",
+    "flow_version",
+    "flow_release_commit",
+    "flow_wheel_sha256",
+    "runtime_manifest_sha256",
+    "runner_build",
+    "runner_artifact_sha256",
+    "substrate",
+    "managed_browser",
+    "native_desktop",
+    "remote_display",
+}
+_MANAGED_BROWSER_DETAIL_KEYS = {"playwright_version", "browser_base_image"}
+_NATIVE_DESKTOP_DETAIL_KEYS = {
+    "desktop_version",
+    "desktop_release_commit",
+    "desktop_artifact_sha256",
+    "os_family",
+    "runtime_boundary_sha256",
+}
+_REMOTE_DISPLAY_DETAIL_KEYS = {
+    "desktop_version",
+    "desktop_release_commit",
+    "desktop_artifact_sha256",
+    "runner_os_family",
+    "transport",
+    "runtime_boundary_sha256",
+}
+
+_SIGNER_REGISTRY_KEYS = {
+    "schema_version",
+    "revision",
+    "generated_at",
+    "expires_at",
+    "signers",
+}
+_SIGNER_REGISTRY_ENTRY_KEYS = {
+    "algorithm",
+    "key_id",
+    "public_key",
+    "allowed_workflows",
+    "allowed_ref_prefixes",
+    "status",
+    "revoked_at",
+}
+
+_RUNNER_FACT_KEYS = {
+    "model_call_counter",
+    "operator_intervention_ids_sha256",
+}
+_MODEL_CALL_COUNTER_KEYS = {
+    "source",
+    "attempted",
+    "completed",
+    "input_tokens",
+    "output_tokens",
+    "cost_microusd",
+    "call_ids_sha256",
+    "provider_models",
+    "egress_policy_sha256",
+    "report_sha256",
+}
+_PROVIDER_MODEL_KEYS = {"provider", "model"}
+_OBSERVER_FACT_KEYS = {
+    "dispatch_state",
+    "verifier_method",
+    "verifier_tier",
+    "pre_state_evidence_sha256",
+    "post_state_evidence_sha256",
+    "expected_record_id_sha256",
+    "expected_transaction_ref_sha256",
+    "effect_inventory",
+    "derived_classifications",
+}
+_EFFECT_KEYS = {
+    "effect_id_sha256",
+    "record_id_sha256",
+    "transaction_ref_sha256",
+}
+_EFFECT_CLASSIFICATION_KEYS = {
+    "intended_effect_count",
+    "wrong_record_count",
+    "duplicate_effect_count",
+    "collateral_effect_count",
 }
 
 _RUNTIME_OUTCOMES = {
@@ -396,6 +544,7 @@ _FAILURE_TAXONOMY = (
     "uncertain_delivery",
     "platform_failure",
     "operator_intervention",
+    "healthy_path_model_call",
 )
 _PRODUCTION_FAILURES = set(_FAILURE_TAXONOMY) - {"verified", "safe_halt"}
 
@@ -412,6 +561,50 @@ def canonical_json(value: Any) -> str:
 
 def canonical_sha256(value: Any) -> str:
     return "sha256:" + hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def evidence_identity_sha256(value: Mapping[str, Any]) -> str:
+    """Return the domain-separated digest for one exact evidence identity."""
+
+    return hashlib.sha256(
+        EVIDENCE_IDENTITY_DOMAIN + canonical_json(value).encode("utf-8")
+    ).hexdigest()
+
+
+def qualification_signer_registry_sha256(value: Mapping[str, Any]) -> str:
+    return hashlib.sha256(
+        SIGNER_REGISTRY_DOMAIN + canonical_json(value).encode("utf-8")
+    ).hexdigest()
+
+
+def admission_policy() -> dict[str, Any]:
+    """Return the fixed policy whose digest the qualification authority admits."""
+
+    return {
+        "schema_version": ADMISSION_POLICY_SCHEMA,
+        "qualification_admission_schema": ADMISSION_SCHEMA,
+        "qualification_campaign_schema": CAMPAIGN_SCHEMA,
+        "qualification_trial_schema": TRIAL_SCHEMA,
+        "qualification_receipt_schema": RECEIPT_SCHEMA,
+        "admission_signature_domain": ADMISSION_SIGNATURE_DOMAIN_TEXT,
+        "receipt_signature_domain": RECEIPT_SIGNATURE_DOMAIN_TEXT,
+        "issuer_workflow": ADMISSION_ISSUER_WORKFLOW,
+        "issuer_ref_prefix": ADMISSION_REF_PREFIX,
+        "maximum_lifetime_seconds": 2_592_000,
+        "minimum_trials_per_condition": 3,
+        "failure_taxonomy": sorted(_FAILURE_TAXONOMY),
+        "external_signer_registry_required": True,
+        "registry_freshness_required_at_actuation": True,
+        "revocation_check_required": True,
+        "distinct_admission_and_runtime_ids_required": True,
+        "shared_evidence_identity_required": True,
+    }
+
+
+def admission_policy_sha256() -> str:
+    return hashlib.sha256(
+        ADMISSION_POLICY_DOMAIN + canonical_json(admission_policy()).encode("utf-8")
+    ).hexdigest()
 
 
 def file_sha256(path: Path) -> str:
@@ -481,6 +674,207 @@ def _canonical_uuid(value: Any, label: str) -> str:
     return value
 
 
+def _validate_desktop_runtime_detail(value: Mapping[str, Any], *, label: str) -> None:
+    if not isinstance(value["desktop_version"], str) or _SEMVER.fullmatch(
+        value["desktop_version"]
+    ) is None:
+        raise AcceptanceError(f"{label} desktop version is not exact")
+    if not isinstance(value["desktop_release_commit"], str) or _HEX_40.fullmatch(
+        value["desktop_release_commit"]
+    ) is None:
+        raise AcceptanceError(f"{label} desktop commit is not exact")
+    for key in ("desktop_artifact_sha256", "runtime_boundary_sha256"):
+        _unprefixed_digest(value[key], f"{label} {key}")
+
+
+def _validate_evidence_identity(
+    value: Any,
+    *,
+    admission_payload: Mapping[str, Any],
+    campaign: Mapping[str, Any],
+) -> dict[str, Any]:
+    identity = dict(
+        _closed(value, _EVIDENCE_IDENTITY_KEYS, "qualification evidence identity")
+    )
+    if identity["schema_version"] != EVIDENCE_IDENTITY_SCHEMA:
+        raise AcceptanceError("qualification evidence identity schema is not supported")
+    registry_revision = identity["qualification_signer_registry_revision"]
+    if (
+        not isinstance(registry_revision, int)
+        or isinstance(registry_revision, bool)
+        or registry_revision < 1
+    ):
+        raise AcceptanceError(
+            "qualification evidence identity signer registry revision is invalid"
+        )
+    runtime_value = _mapping(
+        identity["runtime_build_identity"],
+        "qualification runtime build identity",
+    )
+    runtime = _closed(
+        runtime_value,
+        _RUNTIME_BUILD_COMMON_KEYS,
+        "qualification runtime build identity",
+    )
+    selected = [
+        name
+        for name in ("managed_browser", "native_desktop", "remote_display")
+        if runtime[name] is not None
+    ]
+    if len(selected) != 1:
+        raise AcceptanceError(
+            "qualification runtime build identity must select exactly one substrate detail"
+        )
+    selected_detail = selected[0]
+    substrate = runtime["substrate"]
+    if runtime["schema_version"] != RUNTIME_BUILD_IDENTITY_SCHEMA:
+        raise AcceptanceError("qualification runtime build identity schema is not supported")
+    if not isinstance(runtime["flow_version"], str) or _SEMVER.fullmatch(
+        runtime["flow_version"]
+    ) is None:
+        raise AcceptanceError("qualification evidence identity Flow version is not exact")
+    if not isinstance(runtime["flow_release_commit"], str) or _HEX_40.fullmatch(
+        runtime["flow_release_commit"]
+    ) is None:
+        raise AcceptanceError("qualification evidence identity Flow commit is not exact")
+    _nonempty(runtime["runner_build"], "qualification evidence identity runner build")
+    for key in (
+        "flow_wheel_sha256",
+        "runtime_manifest_sha256",
+        "runner_artifact_sha256",
+    ):
+        _unprefixed_digest(runtime[key], f"qualification runtime build identity {key}")
+    if selected_detail == "managed_browser":
+        if substrate != "web":
+            raise AcceptanceError("qualification managed-browser substrate is not web")
+        detail = _closed(
+            runtime[selected_detail],
+            _MANAGED_BROWSER_DETAIL_KEYS,
+            "qualification managed-browser identity",
+        )
+        if not isinstance(detail["playwright_version"], str) or _SEMVER.fullmatch(
+            detail["playwright_version"]
+        ) is None:
+            raise AcceptanceError(
+                "qualification evidence identity Playwright version is not exact"
+            )
+        browser_image = _nonempty(
+            detail["browser_base_image"],
+            "qualification evidence identity browser image",
+        )
+        image_name, separator, image_digest = browser_image.rpartition("@sha256:")
+        if (
+            not image_name
+            or separator != "@sha256:"
+            or _UNPREFIXED_SHA256.fullmatch(image_digest) is None
+        ):
+            raise AcceptanceError(
+                "qualification evidence identity browser image is not digest-pinned"
+            )
+    elif selected_detail == "native_desktop":
+        detail = _closed(
+            runtime[selected_detail],
+            _NATIVE_DESKTOP_DETAIL_KEYS,
+            "qualification native-desktop identity",
+        )
+        _validate_desktop_runtime_detail(detail, label="qualification native-desktop identity")
+        if substrate not in {"windows", "macos", "linux"} or detail["os_family"] != substrate:
+            raise AcceptanceError("qualification native-desktop substrate differs from OS")
+    else:
+        detail = _closed(
+            runtime[selected_detail],
+            _REMOTE_DISPLAY_DETAIL_KEYS,
+            "qualification remote-display identity",
+        )
+        _validate_desktop_runtime_detail(detail, label="qualification remote-display identity")
+        if substrate not in {"rdp", "citrix"} or detail["transport"] != substrate:
+            raise AcceptanceError("qualification remote-display transport differs")
+        if detail["runner_os_family"] not in {"windows", "linux"}:
+            raise AcceptanceError("qualification remote-display runner OS is invalid")
+
+    for key in {
+        "tenant_id",
+        "workflow_id",
+        "workflow_version_id",
+        "bundle_version_id",
+        "runtime_validation_id",
+        "admission_id",
+        "campaign_id",
+    }:
+        _canonical_uuid(identity[key], f"qualification evidence identity {key}")
+    for key in {
+        "managed_runner_signer_sha256",
+        "workflow_digest",
+        "bundle_artifact_sha256",
+        "bundle_content_digest",
+        "environment_digest",
+        "governed_authorization_template_sha256",
+        "application_contract_sha256",
+        "substrate_contract_sha256",
+        "environment_contract_sha256",
+        "runtime_environment_sha256",
+        "runtime_contract_sha256",
+        "input_policy_sha256",
+        "action_policy_sha256",
+        "network_policy_sha256",
+        "identity_contract_sha256",
+        "effect_contract_sha256",
+        "operator_contract_sha256",
+        "admission_policy_sha256",
+        "campaign_contract_sha256",
+        "oracle_contract_sha256",
+        "qualification_signer_registry_sha256",
+    }:
+        _unprefixed_digest(identity[key], f"qualification evidence identity {key}")
+
+    for key in (
+        "tenant_id",
+        "workflow_id",
+        "workflow_version_id",
+        "bundle_version_id",
+        "bundle_artifact_sha256",
+        "bundle_content_digest",
+        "governed_authorization_template_sha256",
+        "application_contract_sha256",
+        "substrate_contract_sha256",
+        "environment_contract_sha256",
+        "runtime_environment_sha256",
+        "runtime_contract_sha256",
+        "input_policy_sha256",
+        "action_policy_sha256",
+        "network_policy_sha256",
+        "identity_contract_sha256",
+        "effect_contract_sha256",
+        "operator_contract_sha256",
+        "runtime_validation_id",
+        "admission_id",
+    ):
+        if identity[key] != admission_payload[key]:
+            raise AcceptanceError(
+                f"qualification evidence identity {key} differs from admission"
+            )
+    if identity["campaign_id"] != campaign["campaign_id"]:
+        raise AcceptanceError("qualification evidence identity campaign differs from campaign")
+    if identity["admission_policy_sha256"] != admission_policy_sha256():
+        raise AcceptanceError("qualification evidence identity admission policy differs")
+    if identity["campaign_contract_sha256"] != canonical_sha256(
+        campaign["qualification_contract"]
+    ).removeprefix("sha256:"):
+        raise AcceptanceError("qualification evidence identity campaign contract differs")
+    if identity["oracle_contract_sha256"] != canonical_sha256(
+        campaign["oracle_contract"]
+    ).removeprefix("sha256:"):
+        raise AcceptanceError("qualification evidence identity oracle contract differs")
+    for key, expected in {
+        "qualification_campaign_schema": CAMPAIGN_SCHEMA,
+        "qualification_trial_schema": TRIAL_SCHEMA,
+        "qualification_receipt_schema": RECEIPT_SCHEMA,
+    }.items():
+        if identity[key] != expected:
+            raise AcceptanceError(f"qualification evidence identity {key} differs")
+    return identity
+
+
 def _whole_second_timestamp(value: Any, label: str) -> datetime:
     if not isinstance(value, str) or _WHOLE_SECOND_UTC.fullmatch(value) is None:
         raise AcceptanceError(f"{label} must be a whole-second UTC timestamp")
@@ -488,6 +882,69 @@ def _whole_second_timestamp(value: Any, label: str) -> datetime:
         return datetime.fromisoformat(value[:-1] + "+00:00").astimezone(timezone.utc)
     except ValueError as exc:
         raise AcceptanceError(f"{label} is invalid") from exc
+
+
+def _validate_signer_registry(
+    value: Any,
+) -> tuple[dict[str, Mapping[str, Any]], datetime, datetime]:
+    registry = _closed(value, _SIGNER_REGISTRY_KEYS, "qualification signer registry")
+    if registry["schema_version"] != SIGNER_REGISTRY_SCHEMA:
+        raise AcceptanceError("qualification signer registry schema is not supported")
+    revision = registry["revision"]
+    if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+        raise AcceptanceError("qualification signer registry revision is invalid")
+    generated_at = _whole_second_timestamp(
+        registry["generated_at"], "qualification signer registry generated_at"
+    )
+    expires_at = _whole_second_timestamp(
+        registry["expires_at"], "qualification signer registry expires_at"
+    )
+    if expires_at <= generated_at or expires_at > generated_at + timedelta(days=7):
+        raise AcceptanceError("qualification signer registry lifetime is invalid")
+    entries = registry["signers"]
+    if not isinstance(entries, list) or not entries:
+        raise AcceptanceError("qualification signer registry signers must be non-empty")
+    verified: dict[str, Mapping[str, Any]] = {}
+    ordered_key_ids: list[str] = []
+    for index, value in enumerate(entries):
+        entry = _closed(
+            value,
+            _SIGNER_REGISTRY_ENTRY_KEYS,
+            f"qualification signer registry entry {index}",
+        )
+        if entry["algorithm"] != "ed25519":
+            raise AcceptanceError("qualification signer registry algorithm is not Ed25519")
+        key_id = entry["key_id"]
+        if not isinstance(key_id, str) or _ADMISSION_KEY_ID.fullmatch(key_id) is None:
+            raise AcceptanceError("qualification signer registry key ID is invalid")
+        if key_id in verified:
+            raise AcceptanceError("qualification signer registry key ID is duplicate")
+        public_key = _canonical_base64(
+            entry["public_key"], 32, "qualification signer registry public key"
+        )
+        derived = "qa-ed25519-" + hashlib.sha256(public_key).hexdigest()[:16]
+        if key_id != derived:
+            raise AcceptanceError("qualification signer registry key differs from key ID")
+        if entry["allowed_workflows"] != [ADMISSION_ISSUER_WORKFLOW]:
+            raise AcceptanceError("qualification signer registry workflow trust is not exact")
+        if entry["allowed_ref_prefixes"] != [ADMISSION_REF_PREFIX]:
+            raise AcceptanceError("qualification signer registry ref trust is not exact")
+        if entry["status"] == "active":
+            if entry["revoked_at"] is not None:
+                raise AcceptanceError("active qualification signer has a revocation time")
+        elif entry["status"] == "revoked":
+            revoked_at = _whole_second_timestamp(
+                entry["revoked_at"], "qualification signer registry revoked_at"
+            )
+            if revoked_at > generated_at:
+                raise AcceptanceError("qualification signer revocation postdates registry")
+        else:
+            raise AcceptanceError("qualification signer registry status is invalid")
+        verified[key_id] = entry
+        ordered_key_ids.append(key_id)
+    if ordered_key_ids != sorted(ordered_key_ids):
+        raise AcceptanceError("qualification signer registry entries are not ordered")
+    return verified, generated_at, expires_at
 
 
 def _canonical_base64(value: Any, length: int, label: str) -> bytes:
@@ -565,6 +1022,9 @@ def validate_qualification_admission(
     """Verify the external qualification authority and its exact campaign."""
 
     trusted_signers = _mapping(trusted_signers, "qualification signer trust registry")
+    signer_entries, registry_generated_at, registry_expires_at = (
+        _validate_signer_registry(trusted_signers)
+    )
     if not isinstance(revoked_admission_ids, (set, frozenset)) or not all(
         isinstance(value, str) and value for value in revoked_admission_ids
     ):
@@ -586,8 +1046,33 @@ def validate_qualification_admission(
         raise AcceptanceError("qualification admission schema is not supported")
     for key in _ADMISSION_UUID_KEYS:
         _canonical_uuid(payload[key], f"qualification admission {key}")
+    if payload["admission_id"] == payload["runtime_validation_id"]:
+        raise AcceptanceError(
+            "qualification admission ID equals the runtime-validation ID"
+        )
     for key in _ADMISSION_DIGEST_KEYS:
         _unprefixed_digest(payload[key], f"qualification admission {key}")
+
+    evidence_identity = _validate_evidence_identity(
+        payload["evidence_identity"],
+        admission_payload=payload,
+        campaign=campaign,
+    )
+    if evidence_identity["qualification_signer_registry_sha256"] != (
+        qualification_signer_registry_sha256(trusted_signers)
+    ):
+        raise AcceptanceError("qualification signer registry differs from admission")
+    if evidence_identity["qualification_signer_registry_revision"] != trusted_signers[
+        "revision"
+    ]:
+        raise AcceptanceError("qualification signer registry revision differs from admission")
+    identity_digest = evidence_identity_sha256(evidence_identity)
+    if campaign["admission_id"] != payload["admission_id"]:
+        raise AcceptanceError("campaign admission ID differs from admission")
+    if campaign["runtime_validation_id"] != payload["runtime_validation_id"]:
+        raise AcceptanceError("campaign runtime-validation ID differs from admission")
+    if campaign["evidence_identity_sha256"] != identity_digest:
+        raise AcceptanceError("campaign evidence identity differs from admission")
 
     issuer = _closed(
         payload["issuer"],
@@ -604,12 +1089,8 @@ def validate_qualification_admission(
     if not isinstance(issuer["ref"], str) or _ADMISSION_REF.fullmatch(issuer["ref"]) is None:
         raise AcceptanceError("qualification admission issuer ref is not approved")
 
-    trust = trusted_signers.get(key_id)
-    if not isinstance(trust, dict) or set(trust) != {
-        "public_key",
-        "allowed_workflows",
-        "allowed_ref_prefixes",
-    }:
+    trust = signer_entries.get(key_id)
+    if trust is None or trust["status"] != "active":
         raise AcceptanceError("qualification admission signer is not trusted")
     workflows = trust["allowed_workflows"]
     ref_prefixes = trust["allowed_ref_prefixes"]
@@ -659,6 +1140,8 @@ def validate_qualification_admission(
         raise AcceptanceError("qualification admission is not active")
     if current >= expires_at:
         raise AcceptanceError("qualification admission has expired")
+    if not registry_generated_at <= issued_at < registry_expires_at:
+        raise AcceptanceError("qualification signer registry was not active at issuance")
     if payload["admission_id"] in revoked_admission_ids:
         raise AcceptanceError("qualification admission is revoked")
 
@@ -667,6 +1150,8 @@ def validate_qualification_admission(
         _ADMISSION_CAMPAIGN_KEYS,
         "qualification admission campaign",
     )
+    if campaign_binding["campaign_id"] != campaign["campaign_id"]:
+        raise AcceptanceError("qualification admission campaign ID differs")
     for key in (
         "artifact_sha256",
         "contract_sha256",
@@ -755,6 +1240,7 @@ def validate_qualification_admission(
         "issuer_workflow": issuer["workflow"],
         "issuer_ref": issuer["ref"],
         "expires_at": payload["expires_at"],
+        "evidence_identity_sha256": identity_digest,
     }
 
 
@@ -821,7 +1307,10 @@ def _validate_certificate(
         raise AcceptanceError("certificate Flow release commit is not exact")
     _digest(flow["wheel_sha256"], "certificate Flow wheel")
     _digest(runtime["manifest_sha256"], "certificate managed-runtime manifest")
+    _digest(runtime["runner_artifact_sha256"], "certificate runner artifact")
     _nonempty(runtime["runner_build"], "certificate runner build")
+    if runtime["substrate"] != "web":
+        raise AcceptanceError("certificate managed-runtime substrate is not web")
     if not isinstance(runtime["playwright_version"], str) or _SEMVER.fullmatch(
         runtime["playwright_version"]
     ) is None:
@@ -846,9 +1335,11 @@ def _validate_certificate(
         "oracle_contract_sha256",
         "runtime_validation_id_sha256",
         "admission_id_sha256",
+        "campaign_id_sha256",
         "workflow_version_id_sha256",
         "workflow_digest",
         "environment_digest",
+        "evidence_identity_sha256",
     ):
         _digest(qualification[key], f"certificate qualification {key}")
     for key in (
@@ -1203,16 +1694,20 @@ def _binding_pairs(certificate: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "runtime_validation_id_sha256": qualification["runtime_validation_id_sha256"],
         "admission_id_sha256": qualification["admission_id_sha256"],
+        "campaign_id_sha256": qualification["campaign_id_sha256"],
         "workflow_version_id_sha256": qualification["workflow_version_id_sha256"],
         "workflow_digest": qualification["workflow_digest"],
         "environment_digest": qualification["environment_digest"],
+        "evidence_identity_sha256": qualification["evidence_identity_sha256"],
         "cloud_source_commit": product["cloud"]["source_commit"],
         "cloud_target_build_sha256": product["cloud"]["target_build_sha256"],
         "flow_version": product["flow"]["version"],
         "flow_release_commit": product["flow"]["release_commit"],
         "flow_wheel_sha256": product["flow"]["wheel_sha256"],
         "managed_runtime_manifest_sha256": product["managed_runtime"]["manifest_sha256"],
+        "runner_artifact_sha256": product["managed_runtime"]["runner_artifact_sha256"],
         "runner_build": product["managed_runtime"]["runner_build"],
+        "substrate": product["managed_runtime"]["substrate"],
         "playwright_version": product["managed_runtime"]["playwright_version"],
         "browser_base_image": product["managed_runtime"]["browser_base_image"],
         "campaign_contract_sha256": qualification["campaign_contract_sha256"],
@@ -1265,6 +1760,163 @@ def _validate_authority_contract(value: Any) -> dict[str, tuple[str, bytes]]:
     return verified
 
 
+def _unique_digest_list(value: Any, label: str) -> list[str]:
+    if not isinstance(value, list):
+        raise AcceptanceError(f"{label} must be a list")
+    digests = [_unprefixed_digest(item, f"{label} item") for item in value]
+    if len(digests) != len(set(digests)):
+        raise AcceptanceError(f"{label} must not contain duplicates")
+    return digests
+
+
+def _validate_runner_facts(
+    value: Any,
+    *,
+    source_digest: str,
+    evidence_identity: Mapping[str, Any],
+    label: str,
+) -> dict[str, Any]:
+    facts = _closed(value, _RUNNER_FACT_KEYS, f"{label} runner facts")
+    counter = _closed(
+        facts["model_call_counter"],
+        _MODEL_CALL_COUNTER_KEYS,
+        f"{label} model-call counter",
+    )
+    if counter["source"] != "runner_signed_flow_report_and_enforced_egress_policy":
+        raise AcceptanceError(f"{label} model-call counter source is not reviewed")
+    counts = {
+        key: _count(counter[key], f"{label} model-call {key}")
+        for key in (
+            "attempted",
+            "completed",
+            "input_tokens",
+            "output_tokens",
+            "cost_microusd",
+        )
+    }
+    call_ids = _unique_digest_list(
+        counter["call_ids_sha256"], f"{label} model-call IDs"
+    )
+    if len(call_ids) != counts["attempted"]:
+        raise AcceptanceError(f"{label} model-call IDs differ from attempted count")
+    if counts["completed"] > counts["attempted"]:
+        raise AcceptanceError(f"{label} completed model calls exceed attempted calls")
+    provider_models = counter["provider_models"]
+    if not isinstance(provider_models, list):
+        raise AcceptanceError(f"{label} provider-model inventory must be a list")
+    normalized_provider_models: list[tuple[str, str]] = []
+    for index, entry in enumerate(provider_models):
+        item = _closed(
+            entry,
+            _PROVIDER_MODEL_KEYS,
+            f"{label} provider-model {index}",
+        )
+        normalized_provider_models.append(
+            (
+                _nonempty(item["provider"], f"{label} provider-model {index} provider"),
+                _nonempty(item["model"], f"{label} provider-model {index} model"),
+            )
+        )
+    if len(normalized_provider_models) != len(set(normalized_provider_models)):
+        raise AcceptanceError(f"{label} provider-model inventory contains duplicates")
+    if counts["attempted"] == 0 and normalized_provider_models:
+        raise AcceptanceError(f"{label} provider-model inventory exists without a model call")
+    if counter["egress_policy_sha256"] != evidence_identity["network_policy_sha256"]:
+        raise AcceptanceError(f"{label} model-call egress policy differs from admission")
+    if counter["report_sha256"] != source_digest:
+        raise AcceptanceError(f"{label} model-call report differs from source evidence")
+    operator_ids = _unique_digest_list(
+        facts["operator_intervention_ids_sha256"],
+        f"{label} operator intervention IDs",
+    )
+    return {
+        "model_call_counter": {**counts, "call_ids": call_ids},
+        "operator_intervention_count": len(operator_ids),
+    }
+
+
+def _validate_observer_facts(value: Any, *, label: str) -> dict[str, Any]:
+    facts = _closed(value, _OBSERVER_FACT_KEYS, f"{label} observer facts")
+    if facts["dispatch_state"] not in {"dispatched", "not_dispatched"}:
+        raise AcceptanceError(f"{label} observer dispatch state is invalid")
+    if facts["verifier_method"] != "read_only_system_of_record_query":
+        raise AcceptanceError(f"{label} observer verifier method is not reviewed")
+    if facts["verifier_tier"] != "independent_system_of_record":
+        raise AcceptanceError(f"{label} observer verifier tier is not independent")
+    for key in (
+        "pre_state_evidence_sha256",
+        "post_state_evidence_sha256",
+        "expected_record_id_sha256",
+        "expected_transaction_ref_sha256",
+    ):
+        _unprefixed_digest(facts[key], f"{label} observer {key}")
+    inventory = facts["effect_inventory"]
+    if not isinstance(inventory, list):
+        raise AcceptanceError(f"{label} observer effect inventory must be a list")
+    expected_record = facts["expected_record_id_sha256"]
+    expected_transaction = facts["expected_transaction_ref_sha256"]
+    effect_ids: set[str] = set()
+    intended = 0
+    wrong_record = 0
+    collateral = 0
+    for index, value in enumerate(inventory):
+        effect = _closed(value, _EFFECT_KEYS, f"{label} observer effect {index}")
+        for key in _EFFECT_KEYS:
+            _unprefixed_digest(effect[key], f"{label} observer effect {index} {key}")
+        if effect["effect_id_sha256"] in effect_ids:
+            raise AcceptanceError(f"{label} observer effect inventory contains duplicates")
+        effect_ids.add(effect["effect_id_sha256"])
+        if effect["transaction_ref_sha256"] != expected_transaction:
+            collateral += 1
+        elif effect["record_id_sha256"] != expected_record:
+            wrong_record += 1
+        else:
+            intended += 1
+    if facts["dispatch_state"] == "not_dispatched" and inventory:
+        raise AcceptanceError(f"{label} observer found effects for an undispatched action")
+    derived = {
+        "intended_effect_count": intended,
+        "wrong_record_count": wrong_record,
+        "duplicate_effect_count": max(0, intended - 1),
+        "collateral_effect_count": collateral,
+    }
+    declared = _closed(
+        facts["derived_classifications"],
+        _EFFECT_CLASSIFICATION_KEYS,
+        f"{label} observer derived classifications",
+    )
+    normalized_declared = {
+        key: _count(declared[key], f"{label} observer {key}") for key in declared
+    }
+    if normalized_declared != derived:
+        raise AcceptanceError(
+            f"{label} observer effect classifications differ from its inventory"
+        )
+    return {"dispatch_state": facts["dispatch_state"], **derived}
+
+
+def _validate_receipt_facts(
+    value: Any,
+    *,
+    receipt_type: str,
+    source_digest: str,
+    evidence_identity: Mapping[str, Any],
+    label: str,
+) -> dict[str, Any]:
+    if receipt_type == "runner":
+        return _validate_runner_facts(
+            value,
+            source_digest=source_digest,
+            evidence_identity=evidence_identity,
+            label=label,
+        )
+    if receipt_type == "observer":
+        return _validate_observer_facts(value, label=label)
+    if value != {}:
+        raise AcceptanceError(f"{label} {receipt_type} facts must be empty")
+    return {}
+
+
 def _verified_receipt(
     receipt_digest: Any,
     *,
@@ -1275,9 +1927,10 @@ def _verified_receipt(
     trial: Mapping[str, Any],
     envelopes: Mapping[str, Any],
     authorities: Mapping[str, tuple[str, bytes]],
+    evidence_identity: Mapping[str, Any],
     generated_at: datetime,
     label: str,
-) -> tuple[str, str]:
+) -> tuple[str, str, dict[str, Any]]:
     digest = _unprefixed_digest(receipt_digest, f"{label} {receipt_type} receipt")
     if digest not in envelopes:
         raise AcceptanceError(f"{label} {receipt_type} receipt body is missing")
@@ -1314,10 +1967,13 @@ def _verified_receipt(
         "attempt_id_sha256": trial["attempt_id_sha256"],
         "run_id_sha256": trial["run_id_sha256"],
         "workflow_version_id": trial["workflow_version_id"],
+        "admission_id": trial["admission_id"],
         "bundle_artifact_sha256": trial["bundle_artifact_sha256"],
         "runtime_validation_id": trial["runtime_validation_id"],
+        "evidence_identity_sha256": trial["evidence_identity_sha256"],
         "verdict": projection["verdict"],
         "evidence_sha256": source_digest,
+        "facts": projection["facts"],
     }
     if projection != expected_projection:
         raise AcceptanceError(f"{label} {receipt_type} projection differs from its row")
@@ -1341,14 +1997,34 @@ def _verified_receipt(
         signature,
         RECEIPT_SIGNATURE_DOMAIN + canonical_json(signed).encode("utf-8"),
     )
-    return projection["verdict"], source_digest
+    facts = _validate_receipt_facts(
+        projection["facts"],
+        receipt_type=receipt_type,
+        source_digest=source_digest,
+        evidence_identity=evidence_identity,
+        label=label,
+    )
+    return projection["verdict"], source_digest, facts
 
 
 def _derive_trial_classification(
     *,
     expected: str,
     verdicts: Mapping[str, str],
+    receipt_facts: Mapping[str, Mapping[str, Any]],
 ) -> str:
+    runner_facts = receipt_facts["runner"]
+    observer_facts = receipt_facts["observer"]
+    if runner_facts["operator_intervention_count"]:
+        return "operator_intervention"
+    if observer_facts["wrong_record_count"]:
+        return "wrong_record"
+    if observer_facts["duplicate_effect_count"]:
+        return "duplicate_effect"
+    if observer_facts["collateral_effect_count"]:
+        return "collateral_effect"
+    if expected == "verified" and runner_facts["model_call_counter"]["attempted"]:
+        return "healthy_path_model_call"
     if verdicts["webhook"] != "delivered":
         return "uncertain_delivery"
     if verdicts["cleanup"] != "completed" or verdicts["cleanup_absence"] != "absent":
@@ -1363,6 +2039,8 @@ def _derive_trial_classification(
             and verdicts["observer"] == "satisfied"
             and verdicts["replay"] == "verified"
             and "fault" not in verdicts
+            and observer_facts["dispatch_state"] == "dispatched"
+            and observer_facts["intended_effect_count"] == 1
         ):
             return "verified"
         return "silent_incorrect_success"
@@ -1371,6 +2049,8 @@ def _derive_trial_classification(
         and verdicts["observer"] == "satisfied"
         and verdicts["replay"] == "halted"
         and verdicts.get("fault") == "injected"
+        and observer_facts["dispatch_state"] == "not_dispatched"
+        and observer_facts["intended_effect_count"] == 0
     ):
         return "safe_halt"
     return "silent_incorrect_success"
@@ -1379,7 +2059,7 @@ def _derive_trial_classification(
 def _validate_campaign(
     campaign: Mapping[str, Any],
     admission_payload: Mapping[str, Any],
-) -> tuple[Counter[str], dict[str, int]]:
+) -> tuple[Counter[str], dict[str, int], Counter[str]]:
     campaign = _closed(campaign, _CAMPAIGN_KEYS, "campaign")
     if campaign["schema_version"] != CAMPAIGN_SCHEMA:
         raise AcceptanceError("campaign schema is not supported")
@@ -1388,6 +2068,17 @@ def _validate_campaign(
         raise AcceptanceError("campaign ID must be a UUIDv4")
     if campaign["decision"] != "admitted":
         raise AcceptanceError("campaign decision is not admitted")
+    for key in ("admission_id", "runtime_validation_id"):
+        _canonical_uuid(campaign[key], f"campaign {key}")
+        if campaign[key] != admission_payload[key]:
+            raise AcceptanceError(f"campaign {key} differs from admission")
+    evidence_identity = _mapping(
+        admission_payload["evidence_identity"],
+        "qualification evidence identity",
+    )
+    identity_digest = evidence_identity_sha256(evidence_identity)
+    if campaign["evidence_identity_sha256"] != identity_digest:
+        raise AcceptanceError("campaign evidence identity differs from admission")
     generated_at = _whole_second_timestamp(campaign["generated_at"], "campaign generated_at")
     oracle = _closed(campaign["oracle_contract"], _ORACLE_KEYS, "campaign oracle contract")
     if oracle != {
@@ -1407,6 +2098,10 @@ def _validate_campaign(
     expected_cases = _case_contract(contract)
     task_id = contract["task_id"]
     authorities = _validate_authority_contract(campaign["authority_contract"])
+    runner_public_key = authorities["runner"][1]
+    runner_fingerprint = hashlib.sha256(runner_public_key).hexdigest()
+    if runner_fingerprint != evidence_identity["managed_runner_signer_sha256"]:
+        raise AcceptanceError("campaign runner signer differs from admission")
     envelopes = _mapping(campaign["receipt_envelopes"], "campaign receipt envelopes")
     for digest in envelopes:
         _unprefixed_digest(digest, "campaign receipt envelope key")
@@ -1420,6 +2115,7 @@ def _validate_campaign(
     used_receipts: set[str] = set()
     seen_source_artifacts: set[str] = set()
     taxonomy: Counter[str] = Counter()
+    fact_totals: Counter[str] = Counter()
     trials_per_condition: dict[str, int] = {}
     effect_invariant_observations = 0
     healthy_model_observations = 0
@@ -1462,7 +2158,7 @@ def _validate_campaign(
         for trial_index, trial_value in enumerate(trials, start=1):
             label = f"campaign condition {condition_id!r} trial {trial_index}"
             trial = _closed(trial_value, _TRIAL_KEYS, label)
-            if trial["schema_version"] != "openadapt.qualification-trial-row/v1":
+            if trial["schema_version"] != TRIAL_SCHEMA:
                 raise AcceptanceError(f"{label} schema is not supported")
             if trial["task"] != task_id or trial["condition"] != condition_id:
                 raise AcceptanceError(f"{label} task or condition differs from its container")
@@ -1481,11 +2177,16 @@ def _validate_campaign(
             seen_attempts.add(trial["attempt_id_sha256"])
             seen_runs.add(trial["run_id_sha256"])
             _canonical_uuid(trial["workflow_version_id"], f"{label} workflow version")
+            _canonical_uuid(trial["admission_id"], f"{label} admission")
             _canonical_uuid(trial["runtime_validation_id"], f"{label} runtime validation")
             if trial["workflow_version_id"] != admission_payload["workflow_version_id"]:
                 raise AcceptanceError(f"{label} workflow version differs from admission")
             if trial["runtime_validation_id"] != admission_payload["runtime_validation_id"]:
                 raise AcceptanceError(f"{label} runtime validation differs from admission")
+            if trial["admission_id"] != admission_payload["admission_id"]:
+                raise AcceptanceError(f"{label} admission ID differs from admission")
+            if trial["evidence_identity_sha256"] != identity_digest:
+                raise AcceptanceError(f"{label} evidence identity differs from admission")
             if trial["bundle_artifact_sha256"] != admission_payload["bundle_artifact_sha256"]:
                 raise AcceptanceError(f"{label} bundle artifact differs from admission")
             started_at = _whole_second_timestamp(trial["started_at"], f"{label} started_at")
@@ -1499,6 +2200,7 @@ def _validate_campaign(
             if trial["failure_class"] not in _FAILURE_TAXONOMY:
                 raise AcceptanceError(f"{label} failure class is invalid")
             verdicts: dict[str, str] = {}
+            receipt_facts: dict[str, dict[str, Any]] = {}
             for receipt_type, row_field in _RECEIPT_ROW_FIELDS.items():
                 receipt_digest = trial[row_field]
                 if receipt_type == "fault" and case["kind"] == "representative":
@@ -1514,7 +2216,7 @@ def _validate_campaign(
                 if receipt_digest in used_receipts:
                     raise AcceptanceError(f"{label} reuses a receipt envelope")
                 used_receipts.add(receipt_digest)
-                verdict, source_digest = _verified_receipt(
+                verdict, source_digest, facts = _verified_receipt(
                     receipt_digest,
                     receipt_type=receipt_type,
                     campaign_id=campaign_id,
@@ -1523,6 +2225,7 @@ def _validate_campaign(
                     trial=trial,
                     envelopes=envelopes,
                     authorities=authorities,
+                    evidence_identity=evidence_identity,
                     generated_at=generated_at,
                     label=label,
                 )
@@ -1530,14 +2233,35 @@ def _validate_campaign(
                     raise AcceptanceError(f"{label} reuses a source evidence artifact")
                 seen_source_artifacts.add(source_digest)
                 verdicts[receipt_type] = verdict
+                receipt_facts[receipt_type] = facts
             if verdicts["runner"] != trial["execution_outcome"]:
                 raise AcceptanceError(f"{label} execution outcome differs from signed evidence")
             if verdicts["observer"] != trial["oracle_verdict"]:
                 raise AcceptanceError(f"{label} oracle verdict differs from signed evidence")
-            classification = _derive_trial_classification(expected=expected, verdicts=verdicts)
+            classification = _derive_trial_classification(
+                expected=expected,
+                verdicts=verdicts,
+                receipt_facts=receipt_facts,
+            )
             if trial["failure_class"] != classification:
                 raise AcceptanceError(f"{label} failure class differs from signed evidence")
             taxonomy[classification] += 1
+            observer_facts = receipt_facts["observer"]
+            runner_facts = receipt_facts["runner"]
+            fact_totals["wrong_record_count"] += observer_facts["wrong_record_count"]
+            fact_totals["duplicate_effect_count"] += observer_facts[
+                "duplicate_effect_count"
+            ]
+            fact_totals["collateral_effect_count"] += observer_facts[
+                "collateral_effect_count"
+            ]
+            fact_totals["operator_intervention_count"] += runner_facts[
+                "operator_intervention_count"
+            ]
+            attempted_model_calls = runner_facts["model_call_counter"]["attempted"]
+            fact_totals["model_call_count"] += attempted_model_calls
+            if expected == "verified":
+                fact_totals["healthy_path_model_call_count"] += attempted_model_calls
             effect_invariant_observations += 1
             if expected == "verified":
                 healthy_model_observations += 1
@@ -1556,14 +2280,23 @@ def _validate_campaign(
         raise AcceptanceError("campaign invariants must be a non-empty list")
     derived_invariants = {
         "no_wrong_or_duplicate_effect": {
-            "holds": True,
+            "holds": (
+                fact_totals["wrong_record_count"]
+                + fact_totals["duplicate_effect_count"]
+                + fact_totals["collateral_effect_count"]
+                == 0
+            ),
             "observations": effect_invariant_observations,
-            "violations": 0,
+            "violations": (
+                fact_totals["wrong_record_count"]
+                + fact_totals["duplicate_effect_count"]
+                + fact_totals["collateral_effect_count"]
+            ),
         },
         "zero_model_healthy_path": {
-            "holds": True,
+            "holds": fact_totals["healthy_path_model_call_count"] == 0,
             "observations": healthy_model_observations,
-            "violations": 0,
+            "violations": fact_totals["healthy_path_model_call_count"],
         },
     }
     seen_invariants: set[str] = set()
@@ -1585,7 +2318,7 @@ def _validate_campaign(
             raise AcceptanceError(f"campaign invariant differs from retained trials: {invariant_id!r}")
     if seen_invariants != set(derived_invariants):
         raise AcceptanceError("campaign does not contain the exact derived invariant set")
-    return taxonomy, trials_per_condition
+    return taxonomy, trials_per_condition, fact_totals
 
 
 def verify_github_attestation(
@@ -1906,6 +2639,66 @@ def derive_production_acceptance(
     if admission_digest != certificate["qualification"]["qualification_admission_sha256"]:
         raise AcceptanceError("qualification admission digest differs from certificate")
     admission_payload = _mapping(admission["payload"], "qualification admission payload")
+    evidence_identity = _mapping(
+        admission_payload["evidence_identity"],
+        "qualification evidence identity",
+    )
+    identity_digest = evidence_identity_sha256(evidence_identity)
+    if certificate["qualification"]["evidence_identity_sha256"] != (
+        "sha256:" + identity_digest
+    ):
+        raise AcceptanceError("certificate evidence identity differs from admission")
+    runtime_identity = _mapping(
+        evidence_identity["runtime_build_identity"],
+        "qualification runtime build identity",
+    )
+    managed_browser = _mapping(
+        runtime_identity["managed_browser"],
+        "qualification managed-browser identity",
+    )
+    product = certificate["product"]
+    certificate_identity_projection = {
+        "flow_version": product["flow"]["version"],
+        "flow_release_commit": product["flow"]["release_commit"],
+        "flow_wheel_sha256": product["flow"]["wheel_sha256"].removeprefix("sha256:"),
+        "runtime_manifest_sha256": product["managed_runtime"][
+            "manifest_sha256"
+        ].removeprefix("sha256:"),
+        "runner_build": product["managed_runtime"]["runner_build"],
+        "runner_artifact_sha256": product["managed_runtime"][
+            "runner_artifact_sha256"
+        ].removeprefix("sha256:"),
+        "substrate": product["managed_runtime"]["substrate"],
+        "playwright_version": product["managed_runtime"]["playwright_version"],
+        "browser_base_image": product["managed_runtime"]["browser_base_image"],
+        "workflow_digest": certificate["qualification"]["workflow_digest"].removeprefix(
+            "sha256:"
+        ),
+        "environment_digest": certificate["qualification"][
+            "environment_digest"
+        ].removeprefix("sha256:"),
+        "managed_runner_signer_sha256": certificate["identities"][
+            "managed_runner_signer_sha256"
+        ].removeprefix("sha256:"),
+    }
+    expected_identity_projection = {
+        "flow_version": runtime_identity["flow_version"],
+        "flow_release_commit": runtime_identity["flow_release_commit"],
+        "flow_wheel_sha256": runtime_identity["flow_wheel_sha256"],
+        "runtime_manifest_sha256": runtime_identity["runtime_manifest_sha256"],
+        "runner_build": runtime_identity["runner_build"],
+        "runner_artifact_sha256": runtime_identity["runner_artifact_sha256"],
+        "substrate": runtime_identity["substrate"],
+        "playwright_version": managed_browser["playwright_version"],
+        "browser_base_image": managed_browser["browser_base_image"],
+        "workflow_digest": evidence_identity["workflow_digest"],
+        "environment_digest": evidence_identity["environment_digest"],
+        "managed_runner_signer_sha256": evidence_identity[
+            "managed_runner_signer_sha256"
+        ],
+    }
+    if certificate_identity_projection != expected_identity_projection:
+        raise AcceptanceError("certificate execution identity differs from admission")
     if certificate["qualification"]["admission_signer"] != {
         "algorithm": "ed25519",
         "key_id": admission_facts["signer_key_id"],
@@ -1913,16 +2706,30 @@ def derive_production_acceptance(
         "issuer_ref": admission_facts["issuer_ref"],
     }:
         raise AcceptanceError("certificate qualification signer differs from admission")
+    admission_campaign = _mapping(
+        admission_payload["campaign"],
+        "qualification admission campaign",
+    )
     opaque_bindings = {
         "runtime_validation_id_sha256": (
             "runtime validation id",
-            "runtime_validation_id",
+            admission_payload["runtime_validation_id"],
         ),
-        "admission_id_sha256": ("qualification admission id", "admission_id"),
-        "workflow_version_id_sha256": ("workflow version id", "workflow_version_id"),
+        "admission_id_sha256": (
+            "qualification admission id",
+            admission_payload["admission_id"],
+        ),
+        "campaign_id_sha256": (
+            "qualification campaign id",
+            admission_campaign["campaign_id"],
+        ),
+        "workflow_version_id_sha256": (
+            "workflow version id",
+            admission_payload["workflow_version_id"],
+        ),
     }
-    for certificate_key, (domain, payload_key) in opaque_bindings.items():
-        expected = opaque_binding_sha256(domain, admission_payload[payload_key])
+    for certificate_key, (domain, raw_value) in opaque_bindings.items():
+        expected = opaque_binding_sha256(domain, raw_value)
         if certificate["qualification"][certificate_key] != expected:
             raise AcceptanceError(
                 f"certificate {certificate_key} differs from the retained admission"
@@ -1954,7 +2761,9 @@ def derive_production_acceptance(
     oracle_digest = canonical_sha256(campaign["oracle_contract"])
     if oracle_digest != certificate["qualification"]["oracle_contract_sha256"]:
         raise AcceptanceError("campaign oracle digest differs from certificate")
-    taxonomy, trials_per_condition = _validate_campaign(campaign, admission_payload)
+    taxonomy, trials_per_condition, fact_totals = _validate_campaign(
+        campaign, admission_payload
+    )
     conditions = campaign["conditions"]
     required_trial_count = sum(condition["required_trials"] for condition in conditions)
     observed_trial_count = sum(trials_per_condition.values())
@@ -2000,11 +2809,14 @@ def derive_production_acceptance(
                 "silent_incorrect_success"
             ],
             "over_halt_count": counted_taxonomy["over_halt"],
-            "wrong_record_count": counted_taxonomy["wrong_record"],
-            "duplicate_effect_count": counted_taxonomy["duplicate_effect"],
-            "collateral_effect_count": counted_taxonomy["collateral_effect"],
+            "wrong_record_count": fact_totals["wrong_record_count"],
+            "duplicate_effect_count": fact_totals["duplicate_effect_count"],
+            "collateral_effect_count": fact_totals["collateral_effect_count"],
+            "operator_intervention_count": fact_totals[
+                "operator_intervention_count"
+            ],
             "uncertain_delivery_count": counted_taxonomy["uncertain_delivery"],
-            "model_call_count": 0,
+            "model_call_count": fact_totals["model_call_count"],
         },
         "retention": facts["retention"],
         "claim_limit": "not_general_product_production_readiness",

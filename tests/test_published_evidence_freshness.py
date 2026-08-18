@@ -328,6 +328,32 @@ def test_evidence_binding_refuses_any_bound_file_mutation(tmp_path: Path, path: 
     assert MODULE.check_evidence_manifest(entry, tmp_path)
 
 
+def test_safe_file_rejects_leaf_symlink_to_external_private_file(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    outside = tmp_path / "private"
+    repo_root.mkdir()
+    outside.mkdir()
+    private_campaign = outside / "qualification-campaign.json"
+    private_campaign.write_text("{}\n", encoding="utf-8")
+    (repo_root / "campaign.json").symlink_to(private_campaign)
+
+    assert MODULE._safe_file(repo_root, "campaign.json") is None
+
+
+def test_safe_file_rejects_parent_directory_symlink(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    outside = tmp_path / "private"
+    repo_root.mkdir()
+    outside.mkdir()
+    (outside / "qualification-admission.json").write_text("{}\n", encoding="utf-8")
+    (repo_root / "linked-private").symlink_to(outside, target_is_directory=True)
+
+    assert (
+        MODULE._safe_file(repo_root, "linked-private/qualification-admission.json")
+        is None
+    )
+
+
 def test_campaign_cannot_promote_numeric_metrics_to_production(tmp_path: Path) -> None:
     entry, manifest_path, binding = _valid_bound_evidence(tmp_path)
     result_path = tmp_path / "evidence" / "results.json"

@@ -97,6 +97,85 @@ def _resign_admission(
     _sign_admission_payload(admission)
 
 
+def _rebind_evidence_identity(
+    certificate: dict[str, object],
+    campaign: dict[str, object],
+    admission: dict[str, object],
+) -> None:
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    payload = admission["payload"]
+    assert isinstance(payload, dict)
+    identity = payload["evidence_identity"]
+    assert isinstance(identity, dict)
+    old_identity_digest = MODULE.evidence_identity_sha256(identity)
+    identity["campaign_id"] = campaign["campaign_id"]
+    identity["campaign_contract_sha256"] = MODULE.canonical_sha256(
+        campaign["qualification_contract"]
+    ).removeprefix("sha256:")
+    identity["oracle_contract_sha256"] = MODULE.canonical_sha256(
+        campaign["oracle_contract"]
+    ).removeprefix("sha256:")
+    identity_digest = MODULE.evidence_identity_sha256(identity)
+    campaign["admission_id"] = payload["admission_id"]
+    campaign["runtime_validation_id"] = payload["runtime_validation_id"]
+    campaign["evidence_identity_sha256"] = identity_digest
+    qualification = certificate["qualification"]
+    assert isinstance(qualification, dict)
+    qualification["evidence_identity_sha256"] = "sha256:" + identity_digest
+    if identity_digest == old_identity_digest:
+        return
+    old_envelopes = campaign["receipt_envelopes"]
+    assert isinstance(old_envelopes, dict)
+    new_envelopes: dict[str, object] = {}
+    conditions = campaign["conditions"]
+    assert isinstance(conditions, list)
+    for condition in conditions:
+        assert isinstance(condition, dict)
+        trials = condition["trials"]
+        assert isinstance(trials, list)
+        for row in trials:
+            assert isinstance(row, dict)
+            row["admission_id"] = payload["admission_id"]
+            row["runtime_validation_id"] = payload["runtime_validation_id"]
+            row["evidence_identity_sha256"] = identity_digest
+            for receipt_type, row_field in MODULE._RECEIPT_ROW_FIELDS.items():
+                old_digest = row[row_field]
+                if old_digest is None:
+                    continue
+                assert isinstance(old_digest, str)
+                envelope = copy.deepcopy(old_envelopes[old_digest])
+                assert isinstance(envelope, dict)
+                projection = envelope["verified_projection"]
+                assert isinstance(projection, dict)
+                projection["admission_id"] = payload["admission_id"]
+                projection["runtime_validation_id"] = payload["runtime_validation_id"]
+                projection["evidence_identity_sha256"] = identity_digest
+                if receipt_type == "runner":
+                    facts = projection["facts"]
+                    assert isinstance(facts, dict)
+                    counter = facts["model_call_counter"]
+                    assert isinstance(counter, dict)
+                    counter["report_sha256"] = envelope["source_artifact_sha256"]
+                    counter["egress_policy_sha256"] = identity[
+                        "network_policy_sha256"
+                    ]
+                private = Ed25519PrivateKey.from_private_bytes(
+                    bytes([20 + MODULE._RECEIPT_TYPES.index(receipt_type)]) * 32
+                )
+                signed = {key: envelope[key] for key in MODULE._RECEIPT_SIGNED_KEYS}
+                envelope["signature"] = base64.b64encode(
+                    private.sign(
+                        MODULE.RECEIPT_SIGNATURE_DOMAIN
+                        + MODULE.canonical_json(signed).encode("utf-8")
+                    )
+                ).decode("ascii")
+                new_digest = MODULE.canonical_sha256(envelope).removeprefix("sha256:")
+                new_envelopes[new_digest] = envelope
+                row[row_field] = new_digest
+    campaign["receipt_envelopes"] = new_envelopes
+
+
 def _sign_admission_payload(admission: dict[str, object]) -> None:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -117,6 +196,7 @@ def _rebind(
     admission: dict[str, object] | None = None,
 ) -> dict[str, object]:
     admission = admission or _admission()
+    _rebind_evidence_identity(certificate, campaign, admission)
     _resign_admission(admission, campaign)
     qualification = certificate["qualification"]
     assert isinstance(qualification, dict)
@@ -733,6 +813,7 @@ def test_rejects_certificate_with_a_different_admission_digest() -> None:
     "field",
     [
         "admission_id_sha256",
+        "campaign_id_sha256",
         "runtime_validation_id_sha256",
         "workflow_version_id_sha256",
     ],
@@ -940,7 +1021,7 @@ def test_rejects_unknown_or_revoked_admission_signer() -> None:
     key_id = issuer["key_id"]
     assert isinstance(key_id, str)
 
-    with pytest.raises(MODULE.AcceptanceError, match="signer is not trusted"):
+    with pytest.raises(MODULE.AcceptanceError, match="signer registry keys differ"):
         _derive(admission=admission, trusted_admission_signers={})
     with pytest.raises(MODULE.AcceptanceError, match="signer is revoked"):
         _derive(admission=admission, revoked_admission_signer_key_ids={key_id})
@@ -1114,6 +1195,11 @@ def test_rejects_reused_source_evidence_behind_distinct_receipts() -> None:
         projection = envelope["verified_projection"]
         assert isinstance(projection, dict)
         projection["evidence_sha256"] = source_digest
+        facts = projection["facts"]
+        assert isinstance(facts, dict)
+        counter = facts["model_call_counter"]
+        assert isinstance(counter, dict)
+        counter["report_sha256"] = source_digest
 
     _replace_receipt_envelope(
         campaign,
@@ -1364,6 +1450,381 @@ def test_verifier_binds_transparency_time_to_record_issuance(tmp_path: Path) -> 
 
     with pytest.raises(MODULE.AcceptanceError, match="not bound to record issuance"):
         MODULE.verify_github_attestation(certificate_path, bundle_path, "f" * 40, run=run)
+
+
+@pytest.mark.parametrize(
+    "section,field,value",
+    [
+        (("product", "flow"), "version", "9.9.9"),
+        (("product", "flow"), "release_commit", "b" * 40),
+        (("product", "flow"), "wheel_sha256", "sha256:" + "b" * 64),
+        (
+            ("product", "managed_runtime"),
+            "manifest_sha256",
+            "sha256:" + "b" * 64,
+        ),
+        (("product", "managed_runtime"), "runner_build", "different-runner"),
+        (
+            ("product", "managed_runtime"),
+            "runner_artifact_sha256",
+            "sha256:" + "b" * 64,
+        ),
+        (("product", "managed_runtime"), "playwright_version", "9.9.9"),
+        (
+            ("product", "managed_runtime"),
+            "browser_base_image",
+            "python:3.12@sha256:" + "b" * 64,
+        ),
+        (("qualification",), "workflow_digest", "sha256:" + "b" * 64),
+        (("qualification",), "environment_digest", "sha256:" + "b" * 64),
+        (
+            ("identities",),
+            "managed_runner_signer_sha256",
+            "sha256:" + "b" * 64,
+        ),
+    ],
+)
+def test_rejects_each_unbound_certificate_execution_identity_field(
+    section: tuple[str, ...],
+    field: str,
+    value: str,
+) -> None:
+    certificate = _certificate()
+    target: dict[str, object] = certificate
+    for key in section:
+        next_target = target[key]
+        assert isinstance(next_target, dict)
+        target = next_target
+    target[field] = value
+
+    with pytest.raises(MODULE.AcceptanceError, match="execution identity differs"):
+        _derive(certificate=certificate)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "application_contract_sha256",
+        "substrate_contract_sha256",
+        "environment_contract_sha256",
+        "runtime_environment_sha256",
+        "runtime_contract_sha256",
+        "governed_authorization_template_sha256",
+        "input_policy_sha256",
+        "action_policy_sha256",
+        "network_policy_sha256",
+        "identity_contract_sha256",
+        "effect_contract_sha256",
+        "operator_contract_sha256",
+    ],
+)
+def test_rejects_each_admission_contract_outside_shared_identity(field: str) -> None:
+    certificate = _certificate()
+    admission = _admission()
+    payload = admission["payload"]
+    assert isinstance(payload, dict)
+    payload[field] = "9" * 64
+    _sign_admission_payload(admission)
+    qualification = certificate["qualification"]
+    assert isinstance(qualification, dict)
+    qualification["qualification_admission_sha256"] = MODULE.canonical_sha256(admission)
+
+    with pytest.raises(MODULE.AcceptanceError, match=f"{field} differs from admission"):
+        _derive(certificate=certificate, admission=admission)
+
+
+def test_rejects_equal_raw_admission_and_runtime_validation_ids() -> None:
+    admission = _admission()
+    payload = admission["payload"]
+    assert isinstance(payload, dict)
+    payload["admission_id"] = payload["runtime_validation_id"]
+
+    with pytest.raises(MODULE.AcceptanceError, match="equals the runtime-validation ID"):
+        _derive(admission=admission)
+
+
+@pytest.mark.parametrize(
+    "surface",
+    ["campaign", "trial", "receipt"],
+)
+def test_rejects_raw_admission_id_mismatch_on_every_private_surface(surface: str) -> None:
+    certificate = _certificate()
+    campaign = _campaign()
+    replacement = "99999999-9999-4999-8999-999999999999"
+    if surface == "campaign":
+        campaign["admission_id"] = replacement
+    elif surface == "trial":
+        _trial(campaign)["admission_id"] = replacement
+    else:
+        _replace_receipt_envelope(
+            campaign,
+            receipt_type="runner",
+            mutate=lambda envelope: envelope["verified_projection"].__setitem__(
+                "admission_id", replacement
+            ),
+            resign=True,
+        )
+    admission = _admission() if surface == "campaign" else _rebind(certificate, campaign)
+
+    with pytest.raises(MODULE.AcceptanceError, match="admission|projection"):
+        _derive(certificate, campaign, admission)
+
+
+@pytest.mark.parametrize("surface", ["campaign", "trial", "receipt"])
+def test_rejects_shared_identity_mismatch_on_every_private_surface(surface: str) -> None:
+    certificate = _certificate()
+    campaign = _campaign()
+    if surface == "campaign":
+        campaign["evidence_identity_sha256"] = "0" * 64
+    elif surface == "trial":
+        _trial(campaign)["evidence_identity_sha256"] = "0" * 64
+    else:
+        _replace_receipt_envelope(
+            campaign,
+            receipt_type="observer",
+            mutate=lambda envelope: envelope["verified_projection"].__setitem__(
+                "evidence_identity_sha256", "0" * 64
+            ),
+            resign=True,
+        )
+    admission = _admission() if surface == "campaign" else _rebind(certificate, campaign)
+
+    with pytest.raises(MODULE.AcceptanceError, match="evidence identity|projection"):
+        _derive(certificate, campaign, admission)
+
+
+def test_rejects_mixed_old_campaign_and_new_certificate_identity() -> None:
+    certificate = _certificate()
+    campaign = _campaign()
+    admission = _admission()
+    payload = admission["payload"]
+    assert isinstance(payload, dict)
+    identity = payload["evidence_identity"]
+    assert isinstance(identity, dict)
+    runtime = identity["runtime_build_identity"]
+    assert isinstance(runtime, dict)
+    runtime["flow_version"] = "9.9.9"
+    identity_digest = MODULE.evidence_identity_sha256(identity)
+    certificate["product"]["flow"]["version"] = "9.9.9"
+    certificate["qualification"]["evidence_identity_sha256"] = "sha256:" + identity_digest
+    _sign_admission_payload(admission)
+    certificate["qualification"]["qualification_admission_sha256"] = (
+        MODULE.canonical_sha256(admission)
+    )
+
+    with pytest.raises(MODULE.AcceptanceError, match="campaign evidence identity differs"):
+        _derive(certificate, campaign, admission)
+
+
+def test_rejects_identity_that_selects_more_than_one_runtime_detail() -> None:
+    admission = _admission()
+    identity = admission["payload"]["evidence_identity"]
+    runtime = identity["runtime_build_identity"]
+    runtime["native_desktop"] = {
+        "desktop_version": "1.0.0",
+        "desktop_release_commit": "a" * 40,
+        "desktop_artifact_sha256": "a" * 64,
+        "os_family": "windows",
+        "runtime_boundary_sha256": "b" * 64,
+    }
+
+    with pytest.raises(MODULE.AcceptanceError, match="exactly one substrate detail"):
+        _derive(admission=admission)
+
+
+def test_rejects_fixed_admission_policy_digest_mutation() -> None:
+    admission = _admission()
+    admission["payload"]["evidence_identity"]["admission_policy_sha256"] = "0" * 64
+
+    with pytest.raises(MODULE.AcceptanceError, match="admission policy differs"):
+        _derive(admission=admission)
+
+
+def test_rejects_signer_registry_digest_and_lifetime_mutations() -> None:
+    registry = _admission_trust()
+    registry["revision"] = 2
+    with pytest.raises(MODULE.AcceptanceError, match="registry differs from admission"):
+        _derive(trusted_admission_signers=registry)
+
+    registry = _admission_trust()
+    registry["expires_at"] = "2026-08-26T11:50:01Z"
+    with pytest.raises(MODULE.AcceptanceError, match="registry lifetime is invalid"):
+        _derive(trusted_admission_signers=registry)
+
+
+def test_rejects_signer_registry_revision_substitution_in_admission() -> None:
+    admission = _admission()
+    admission["payload"]["evidence_identity"][
+        "qualification_signer_registry_revision"
+    ] = 2
+
+    with pytest.raises(
+        MODULE.AcceptanceError,
+        match="registry revision differs from admission",
+    ):
+        _derive(admission=admission)
+
+
+def _replace_healthy_observer_effect_facts(
+    campaign: dict[str, object],
+    failure: str,
+) -> None:
+    def mutate(envelope: dict[str, object]) -> None:
+        projection = envelope["verified_projection"]
+        assert isinstance(projection, dict)
+        facts = projection["facts"]
+        assert isinstance(facts, dict)
+        expected_record = facts["expected_record_id_sha256"]
+        expected_transaction = facts["expected_transaction_ref_sha256"]
+        effects = facts["effect_inventory"]
+        assert isinstance(effects, list)
+        if failure == "wrong_record":
+            facts["effect_inventory"] = [
+                {
+                    "effect_id_sha256": "8" * 64,
+                    "record_id_sha256": "9" * 64,
+                    "transaction_ref_sha256": expected_transaction,
+                }
+            ]
+            facts["derived_classifications"] = {
+                "intended_effect_count": 0,
+                "wrong_record_count": 1,
+                "duplicate_effect_count": 0,
+                "collateral_effect_count": 0,
+            }
+        elif failure == "duplicate_effect":
+            effects.append(
+                {
+                    "effect_id_sha256": "8" * 64,
+                    "record_id_sha256": expected_record,
+                    "transaction_ref_sha256": expected_transaction,
+                }
+            )
+            facts["derived_classifications"] = {
+                "intended_effect_count": 2,
+                "wrong_record_count": 0,
+                "duplicate_effect_count": 1,
+                "collateral_effect_count": 0,
+            }
+        else:
+            effects.append(
+                {
+                    "effect_id_sha256": "8" * 64,
+                    "record_id_sha256": expected_record,
+                    "transaction_ref_sha256": "9" * 64,
+                }
+            )
+            facts["derived_classifications"] = {
+                "intended_effect_count": 1,
+                "wrong_record_count": 0,
+                "duplicate_effect_count": 0,
+                "collateral_effect_count": 1,
+            }
+
+    _replace_receipt_envelope(
+        campaign,
+        receipt_type="observer",
+        mutate=mutate,
+        resign=True,
+    )
+    _trial(campaign)["failure_class"] = failure
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ["wrong_record", "duplicate_effect", "collateral_effect"],
+)
+def test_rejects_each_effect_failure_derived_from_signed_inventory(failure: str) -> None:
+    certificate = _certificate()
+    campaign = _campaign()
+    _replace_healthy_observer_effect_facts(campaign, failure)
+    admission = _rebind(certificate, campaign)
+
+    with pytest.raises(MODULE.AcceptanceError, match="production-acceptance failures") as exc:
+        _derive(certificate, campaign, admission)
+    assert failure in str(exc.value)
+
+
+def test_rejects_operator_intervention_derived_from_signed_inventory() -> None:
+    certificate = _certificate()
+    campaign = _campaign()
+
+    def mutate(envelope: dict[str, object]) -> None:
+        facts = envelope["verified_projection"]["facts"]
+        facts["operator_intervention_ids_sha256"] = ["8" * 64]
+
+    _replace_receipt_envelope(
+        campaign, receipt_type="runner", mutate=mutate, resign=True
+    )
+    _trial(campaign)["failure_class"] = "operator_intervention"
+    admission = _rebind(certificate, campaign)
+
+    with pytest.raises(MODULE.AcceptanceError, match="operator_intervention"):
+        _derive(certificate, campaign, admission)
+
+
+def _add_signed_model_call(campaign: dict[str, object], *, condition: int) -> None:
+    def mutate(envelope: dict[str, object]) -> None:
+        facts = envelope["verified_projection"]["facts"]
+        counter = facts["model_call_counter"]
+        counter.update(
+            {
+                "attempted": 1,
+                "completed": 1,
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "cost_microusd": 2,
+                "call_ids_sha256": ["8" * 64],
+                "provider_models": [{"provider": "fixture", "model": "fixture-v1"}],
+            }
+        )
+
+    _replace_receipt_envelope(
+        campaign,
+        receipt_type="runner",
+        mutate=mutate,
+        resign=True,
+        condition=condition,
+    )
+
+
+def test_rejects_healthy_path_model_call_derived_from_signed_counter() -> None:
+    certificate = _certificate()
+    campaign = _campaign()
+    _add_signed_model_call(campaign, condition=0)
+    _trial(campaign)["failure_class"] = "healthy_path_model_call"
+    admission = _rebind(certificate, campaign)
+
+    with pytest.raises(MODULE.AcceptanceError, match="healthy_path_model_call"):
+        _derive(certificate, campaign, admission)
+
+
+def test_counts_governed_halt_model_call_instead_of_hard_coding_zero() -> None:
+    certificate = _certificate()
+    campaign = _campaign()
+    _add_signed_model_call(campaign, condition=4)
+    admission = _rebind(certificate, campaign)
+
+    result = _derive(certificate, campaign, admission)
+
+    assert result["reliability"]["model_call_count"] == 1
+
+
+def test_rejects_declared_effect_classification_not_derived_from_inventory() -> None:
+    certificate = _certificate()
+    campaign = _campaign()
+
+    def mutate(envelope: dict[str, object]) -> None:
+        facts = envelope["verified_projection"]["facts"]
+        facts["derived_classifications"]["wrong_record_count"] = 1
+
+    _replace_receipt_envelope(
+        campaign, receipt_type="observer", mutate=mutate, resign=True
+    )
+    admission = _rebind(certificate, campaign)
+
+    with pytest.raises(MODULE.AcceptanceError, match="differ from its inventory"):
+        _derive(certificate, campaign, admission)
 
 
 def test_mutation_helpers_do_not_modify_committed_fixtures() -> None:

@@ -40,6 +40,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import stat
 import sys
 import urllib.error
 import urllib.request
@@ -142,8 +143,25 @@ def _safe_file(repo_root: Path, relative: object) -> Path | None:
     path = Path(relative)
     if path.is_absolute() or ".." in path.parts:
         return None
+    try:
+        resolved_root = repo_root.resolve(strict=True)
+    except OSError:
+        return None
+    component = repo_root
+    for part in path.parts:
+        component = component / part
+        if component.is_symlink():
+            return None
     candidate = repo_root / path
-    return candidate if candidate.is_file() else None
+    try:
+        candidate_stat = candidate.lstat()
+        resolved_candidate = candidate.resolve(strict=True)
+        resolved_candidate.relative_to(resolved_root)
+    except (OSError, ValueError):
+        return None
+    if not stat.S_ISREG(candidate_stat.st_mode):
+        return None
+    return candidate
 
 
 def _relative_file(repo_root: Path, relative: object) -> tuple[Path | None, str | None]:

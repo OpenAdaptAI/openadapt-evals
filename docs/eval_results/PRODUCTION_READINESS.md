@@ -32,11 +32,11 @@ of only the admission and campaign digests is not sufficient.
 
 After approval, the importer will compose four evidence inputs:
 
-1. The closed `openadapt.execute-live-acceptance-record/v1` certificate from
+1. The closed `openadapt.execute-live-acceptance-record/v2` certificate from
    the protected Cloud production workflow.
-2. The signed `openadapt.qualification-admission/v1` envelope from the
+2. The signed `openadapt.qualification-admission/v2` envelope from the
    protected qualification authority.
-3. The full `openadapt.qualification-campaign/v1` artifact with every retained
+3. The full `openadapt.qualification-campaign/v2` artifact with every retained
    trial row and normalized evidence receipt for the exact qualification
    contract.
 4. The GitHub artifact-attestation bundle for the certificate bytes.
@@ -77,27 +77,36 @@ commit, the Ed25519 signature, the derived key ID, the active time window, and
 the external admission and key revocation lists. It refuses a trust key that
 the imported evidence supplies for itself.
 
-The admission signs canonical hashes for the full campaign, qualification
-contract, outcomes projection, oracle, and exact task inventory. The campaign
-must retain every condition in the bound qualification contract and at least
-three unique trials for each condition. Trial indexes are one-based and
-contiguous. Attempt IDs and run IDs cannot repeat. An excluded or hidden trial
-causes refusal.
+The admission signs one shared evidence identity for the exact workflow,
+campaign, environment, Flow release and wheel, runner build and artifact,
+browser image, runtime manifest, signer registry revision, and every admitted
+contract. The certificate repeats the public domain-separated campaign,
+admission, runtime-validation, and workflow-version digests. The importer
+recomputes each digest from the retained admission. The admission also signs
+canonical hashes for the full campaign, qualification contract, outcomes
+projection, oracle, and exact task inventory. The campaign must retain every
+condition in the bound qualification contract and at least three unique trials
+for each condition. Trial indexes are one-based and contiguous. Attempt IDs
+and run IDs cannot repeat. An excluded or hidden trial causes refusal.
 
-Each trial refers to hash-keyed Ed25519 envelopes for the runner, independent
-observer, webhook, replay, cleanup, and cleanup-absence result. Fault cases
-also require a signed fault receipt. The importer verifies each envelope body,
-signature, authority key, source digest, task, condition, trial index, attempt,
-run, workflow version, bundle artifact, runtime validation, verdict, and time.
-A digest with no signed body is not evidence. An unused envelope is hidden
-evidence and causes refusal.
+Each `openadapt.qualification-trial-row/v2` trial refers to hash-keyed
+`openadapt.qualification-evidence-receipt/v2` Ed25519 envelopes for the runner,
+independent observer, webhook, replay, cleanup, and cleanup-absence result.
+Fault cases also require a signed fault receipt. The importer verifies each
+envelope body, signature, authority key, source digest, task, condition, trial
+index, attempt, run, workflow version, bundle artifact, runtime validation,
+admission, evidence identity, verdict, and time. A digest with no signed body is
+not evidence. An unused envelope is hidden evidence and causes refusal.
 
-The importer classifies the verified rows itself. It rejects a count-only
-claim, declared production class or boolean, unsupported failure class,
-vacuous invariant, healthy-path contract that permits a model call, silent
-incorrect success, over-halt, wrong-record effect, duplicate effect,
-collateral effect, uncertain delivery, platform failure, or operator
-intervention.
+The importer classifies the verified rows itself. The signed observer receipt
+contains the exact effect inventory. The signed runner receipt contains the
+model-call counters, provider-model inventory, egress-policy digest, report
+digest, and operator-intervention inventory. The importer derives failures
+from these facts. It rejects a count-only claim, declared production class or
+boolean, unsupported failure class, vacuous invariant, healthy-path contract
+that permits a model call, healthy-path model call, silent incorrect success,
+over-halt, wrong-record effect, duplicate effect, collateral effect, uncertain
+delivery, platform failure, or operator intervention.
 
 When the private-export gate opens, the output claim will be only
 `qualified_browser_workflow_on_bound_environment`. It is not a general product
