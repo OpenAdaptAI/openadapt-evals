@@ -29,12 +29,34 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
+from urllib.parse import urlsplit
 
 CERTIFICATE_SCHEMA = "openadapt.execute-live-acceptance-record/v2"
 CAMPAIGN_SCHEMA = "openadapt.qualification-campaign/v2"
 TRIAL_SCHEMA = "openadapt.qualification-trial-row/v2"
 RESULT_SCHEMA = "openadapt.evals-derived-production-acceptance/v1"
 CLAIM_SCOPE = "qualified_browser_workflow_on_bound_environment"
+PRODUCTION_ACCEPTANCE_SCHEMA = "openadapt.production-acceptance/v1"
+PRODUCTION_ACCEPTANCE_POLICY_SCHEMA = "openadapt.production-acceptance-policy/v1"
+PRODUCTION_ACCEPTANCE_POLICY_DOMAIN = b"OpenAdapt production acceptance policy v1\0"
+PRODUCTION_LIFECYCLE_POLICY_SCHEMA = "openadapt.production-lifecycle-policy/v1"
+PRODUCTION_LIFECYCLE_POLICY_PATH = "schemas/production-lifecycle-policy.schema.json"
+PRODUCTION_LIFECYCLE_TARGET_RELEASE_DOMAIN = (
+    b"OpenAdapt production lifecycle target release v1\0"
+)
+PRODUCTION_LIFECYCLE_ARTIFACT_INVENTORY_DOMAIN = (
+    b"OpenAdapt production lifecycle artifact inventory v1\0"
+)
+PRODUCTION_ACCEPTANCE_TARGET_SCOPES = {
+    "agent": "qualified_agent_bridge_release",
+    "capture": "qualified_native_recorder_release",
+    "cloud": "qualified_workflow_control_plane_deployment",
+    "desktop": "qualified_native_workflow_desktop_release",
+    "docs": "production_documentation_deployment",
+    "flow": "qualified_workflow_runtime_release",
+    "openadapt": "qualified_workflow_launcher_release",
+}
+_BROWSER_SOURCE_TARGETS = {"cloud", "flow"}
 ADMISSION_SCHEMA = "openadapt.qualification-admission/v2"
 ADMISSION_SIGNATURE_DOMAIN_TEXT = "openadapt-qualification-admission-v2\\0"
 ADMISSION_SIGNATURE_DOMAIN = b"openadapt-qualification-admission-v2\0"
@@ -74,6 +96,7 @@ _RECEIPT_KEY_ID = re.compile(r"^qe-ed25519-[a-f0-9]{16}$")
 _WHOLE_SECOND_UTC = re.compile(
     r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
 )
+_ARTIFACT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$")
 
 _CERTIFICATE_KEYS = {
     "schema_version",
@@ -172,7 +195,7 @@ _IDENTITY_KEYS = {
     "producer",
     "target_observer_signer_sha256",
     "target_attestation_signer_sha256",
-    "managed_runner_signer_sha256",
+    "evidence_runner_signer_sha256",
     "organization_id_sha256",
     "workflow_id_sha256",
     "verifier",
@@ -213,6 +236,52 @@ _RETENTION_KEYS = {
     "private_locator_recorded",
     "acceptance_verified_at",
     "provenance_attestation",
+}
+_PRODUCTION_ACCEPTANCE_KEYS = {
+    "schema_version",
+    "target",
+    "claim_scope",
+    "verdict",
+    "acceptance_policy_sha256",
+    "lifecycle_policy_sha256",
+    "target_release_sha256",
+    "target_artifact_inventory_sha256",
+    "evidence_identity_sha256",
+    "source_evidence",
+    "qualification",
+    "failure_taxonomy_counts",
+    "reliability",
+    "retention",
+}
+_PRODUCTION_SOURCE_EVIDENCE_KEYS = {
+    "source_result_sha256",
+    "certificate_sha256",
+    "campaign_sha256",
+    "qualification_admission_sha256",
+    "attestation_sha256",
+    "attestation_bundle_sha256",
+}
+_PRODUCTION_QUALIFICATION_KEYS = {
+    "campaign_contract_sha256",
+    "campaign_outcomes_sha256",
+    "oracle_contract_sha256",
+    "task_count",
+    "condition_count",
+    "required_trial_count",
+    "observed_trial_count",
+    "minimum_trials_per_condition",
+    "excluded_trial_count",
+    "task_condition_inventory_sha256",
+}
+_RELIABILITY_KEYS = {
+    "silent_incorrect_success_count",
+    "over_halt_count",
+    "wrong_record_count",
+    "duplicate_effect_count",
+    "collateral_effect_count",
+    "operator_intervention_count",
+    "uncertain_delivery_count",
+    "model_call_count",
 }
 
 _CAMPAIGN_KEYS = {
@@ -397,7 +466,7 @@ _ADMISSION_CAMPAIGN_KEYS = {
 _EVIDENCE_IDENTITY_KEYS = {
     "schema_version",
     "runtime_build_identity",
-    "managed_runner_signer_sha256",
+    "evidence_runner_signer_sha256",
     "tenant_id",
     "workflow_id",
     "workflow_version_id",
@@ -548,6 +617,76 @@ _FAILURE_TAXONOMY = (
     "healthy_path_model_call",
 )
 _PRODUCTION_FAILURES = set(_FAILURE_TAXONOMY) - {"verified", "safe_halt"}
+_DERIVED_RESULT_KEYS = {
+    "schema_version",
+    "verdict",
+    "evidence_class",
+    "claim_scope",
+    "bindings",
+    "source_evidence",
+    "trial_inventory",
+    "derived_outcomes",
+    "reliability",
+    "retention",
+    "claim_limit",
+}
+_DERIVED_BINDING_KEYS = {
+    "runtime_validation_id_sha256",
+    "admission_id_sha256",
+    "campaign_id_sha256",
+    "workflow_version_id_sha256",
+    "workflow_digest",
+    "environment_digest",
+    "evidence_identity_sha256",
+    "cloud_source_commit",
+    "cloud_target_build_sha256",
+    "flow_version",
+    "flow_release_commit",
+    "flow_wheel_sha256",
+    "managed_runtime_manifest_sha256",
+    "runner_artifact_sha256",
+    "runner_build",
+    "substrate",
+    "playwright_version",
+    "browser_base_image",
+    "campaign_contract_sha256",
+    "campaign_outcomes_sha256",
+    "oracle_contract_sha256",
+    "task_count",
+    "condition_count",
+    "required_trial_count",
+    "observed_trial_count",
+    "evidence_runner_signer_sha256",
+    "target_attestation_signer_sha256",
+    "target_observer_signer_sha256",
+    "target_attestation_sha256",
+    "organization_id_sha256",
+    "workflow_id_sha256",
+}
+_DERIVED_SOURCE_EVIDENCE_KEYS = {
+    "certificate_sha256",
+    "campaign_sha256",
+    "qualification_admission_sha256",
+    "qualification_authority",
+    "attestation",
+    "approved_cloud_source_commit",
+}
+_DERIVED_TRIAL_INVENTORY_KEYS = {
+    "task_count",
+    "condition_count",
+    "required_trial_count",
+    "observed_trial_count",
+    "trial_count",
+    "minimum_trials_per_condition",
+    "conditions",
+    "excluded_trial_count",
+}
+_DERIVED_CONDITION_KEYS = {
+    "task_id_sha256",
+    "condition_id_sha256",
+    "required_trial_count",
+    "observed_trial_count",
+}
 
 
 class AcceptanceError(ValueError):
@@ -558,6 +697,61 @@ def canonical_json(value: Any) -> str:
     """Return the cross-repository canonical JSON representation."""
 
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+class VerifiedProductionLifecycleRelease:
+    """An immutable release that passed the lifecycle and authority checks."""
+
+    __slots__ = (
+        "_artifacts_json",
+        "_claim_scope",
+        "_lifecycle_policy_sha256",
+        "_release_json",
+        "_target",
+    )
+    _CONSTRUCTION_SEAL = object()
+
+    def __init__(
+        self,
+        *,
+        target: str,
+        claim_scope: str,
+        lifecycle_policy_sha256: str,
+        release: Mapping[str, Any],
+        artifacts: Sequence[Mapping[str, Any]],
+        _seal: object,
+    ) -> None:
+        if _seal is not self._CONSTRUCTION_SEAL:
+            raise TypeError(
+                "VerifiedProductionLifecycleRelease can only be created by the "
+                "lifecycle verifier"
+            )
+        object.__setattr__(self, "_target", target)
+        object.__setattr__(self, "_claim_scope", claim_scope)
+        object.__setattr__(self, "_lifecycle_policy_sha256", lifecycle_policy_sha256)
+        object.__setattr__(self, "_release_json", canonical_json(release))
+        object.__setattr__(self, "_artifacts_json", canonical_json(artifacts))
+
+    def __setattr__(self, name: str, value: object) -> None:
+        raise AttributeError("verified lifecycle releases are immutable")
+
+    @property
+    def target(self) -> str:
+        return self._target
+
+    @property
+    def claim_scope(self) -> str:
+        return self._claim_scope
+
+    @property
+    def lifecycle_policy_sha256(self) -> str:
+        return self._lifecycle_policy_sha256
+
+    def release(self) -> dict[str, Any]:
+        return json.loads(self._release_json)
+
+    def artifacts(self) -> list[dict[str, Any]]:
+        return json.loads(self._artifacts_json)
 
 
 def canonical_sha256(value: Any) -> str:
@@ -608,6 +802,60 @@ def admission_policy_sha256() -> str:
     ).hexdigest()
 
 
+def production_acceptance_policy() -> dict[str, Any]:
+    """Return the fixed target-neutral public-manifest policy."""
+
+    return {
+        "schema_version": PRODUCTION_ACCEPTANCE_POLICY_SCHEMA,
+        "manifest_schema": PRODUCTION_ACCEPTANCE_SCHEMA,
+        "source_result_schema": RESULT_SCHEMA,
+        "accepted_verdict": "accepted",
+        "target_claim_scopes": dict(sorted(PRODUCTION_ACCEPTANCE_TARGET_SCOPES.items())),
+        "failure_taxonomy": sorted(_FAILURE_TAXONOMY),
+        "minimum_trials_per_condition": 3,
+        "excluded_trial_count": 0,
+        "zero_failure_counts_required": sorted(_PRODUCTION_FAILURES),
+        "required_retention_mode": "COMPLIANCE",
+        "required_retention_provenance": "github-artifact-attestation-v4",
+        "minimum_retention_days": 365,
+        "maximum_retention_days": 3650,
+        "browser_evidence_target_set": sorted(_BROWSER_SOURCE_TARGETS),
+        "enabled_browser_builder_targets": ["flow"],
+        "pending_target_bindings": {
+            "cloud": "reviewed_deployment_manifest_binding_required"
+        },
+        "release_binding_rules": {
+            "flow": "verified_lifecycle_public_package_sdist_and_wheel_v1",
+            "cloud": "private_deployment_release_and_reviewed_manifest_v1",
+        },
+        "acceptance_policy_digest": "domain-separated-canonical-json-sha256-v1",
+        "lifecycle_policy_digest": "exact-raw-bytes-sha256-v1",
+        "target_release_digest_domain": (
+            "OpenAdapt production lifecycle target release v1\\0"
+        ),
+        "artifact_inventory_digest_domain": (
+            "OpenAdapt production lifecycle artifact inventory v1\\0"
+        ),
+        "lifecycle_authority_metadata_required": True,
+        "complete_source_result_required": True,
+        "target_evidence_adapter_required": True,
+        "privacy_safe_task_condition_identity_required": True,
+    }
+
+
+def production_acceptance_policy_sha256() -> str:
+    return "sha256:" + hashlib.sha256(
+        PRODUCTION_ACCEPTANCE_POLICY_DOMAIN
+        + canonical_json(production_acceptance_policy()).encode("utf-8")
+    ).hexdigest()
+
+
+def _domain_sha256(domain: bytes, value: Any) -> str:
+    return "sha256:" + hashlib.sha256(
+        domain + canonical_json(value).encode("utf-8")
+    ).hexdigest()
+
+
 def file_sha256(path: Path) -> str:
     return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -617,6 +865,25 @@ def opaque_binding_sha256(domain: str, value: str) -> str:
         "utf-8"
     )
     return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def privacy_safe_campaign_label_sha256(
+    label_kind: str,
+    campaign_id: str,
+    value: str,
+) -> str:
+    """Bind a private task or condition label without publishing the label."""
+
+    domain = f"OpenAdapt acceptance private {label_kind} identity v1\0".encode(
+        "utf-8"
+    )
+    payload = canonical_json(
+        {
+            "campaign_id": campaign_id,
+            "value": value,
+        }
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(domain + payload).hexdigest()
 
 
 def _mapping(value: Any, label: str) -> Mapping[str, Any]:
@@ -803,7 +1070,7 @@ def _validate_evidence_identity(
     }:
         _canonical_uuid(identity[key], f"qualification evidence identity {key}")
     for key in {
-        "managed_runner_signer_sha256",
+        "evidence_runner_signer_sha256",
         "workflow_digest",
         "bundle_artifact_sha256",
         "bundle_content_digest",
@@ -1429,8 +1696,8 @@ def _validate_certificate(
         "certificate target attestation signer",
     )
     runner_signer = _digest(
-        identities["managed_runner_signer_sha256"],
-        "certificate managed runner signer",
+        identities["evidence_runner_signer_sha256"],
+        "certificate evidence runner signer",
     )
     _digest(identities["organization_id_sha256"], "certificate organization identity")
     _digest(identities["workflow_id_sha256"], "certificate workflow identity")
@@ -1708,8 +1975,14 @@ def _binding_pairs(certificate: Mapping[str, Any]) -> dict[str, Any]:
         "playwright_version": product["managed_runtime"]["playwright_version"],
         "browser_base_image": product["managed_runtime"]["browser_base_image"],
         "campaign_contract_sha256": qualification["campaign_contract_sha256"],
-        "managed_runner_signer_sha256": certificate["identities"][
-            "managed_runner_signer_sha256"
+        "campaign_outcomes_sha256": qualification["campaign_outcomes_sha256"],
+        "oracle_contract_sha256": qualification["oracle_contract_sha256"],
+        "task_count": qualification["task_count"],
+        "condition_count": qualification["condition_count"],
+        "required_trial_count": qualification["required_trial_count"],
+        "observed_trial_count": qualification["observed_trial_count"],
+        "evidence_runner_signer_sha256": certificate["identities"][
+            "evidence_runner_signer_sha256"
         ],
         "target_attestation_signer_sha256": certificate["identities"][
             "target_attestation_signer_sha256"
@@ -2095,7 +2368,7 @@ def _validate_campaign(
     authorities = _validate_authority_contract(campaign["authority_contract"])
     runner_public_key = authorities["runner"][1]
     runner_fingerprint = hashlib.sha256(runner_public_key).hexdigest()
-    if runner_fingerprint != evidence_identity["managed_runner_signer_sha256"]:
+    if runner_fingerprint != evidence_identity["evidence_runner_signer_sha256"]:
         raise AcceptanceError("campaign runner signer differs from admission")
     envelopes = _mapping(campaign["receipt_envelopes"], "campaign receipt envelopes")
     for digest in envelopes:
@@ -2672,8 +2945,8 @@ def derive_production_acceptance(
         "environment_digest": certificate["qualification"][
             "environment_digest"
         ].removeprefix("sha256:"),
-        "managed_runner_signer_sha256": certificate["identities"][
-            "managed_runner_signer_sha256"
+        "evidence_runner_signer_sha256": certificate["identities"][
+            "evidence_runner_signer_sha256"
         ].removeprefix("sha256:"),
     }
     expected_identity_projection = {
@@ -2688,8 +2961,8 @@ def derive_production_acceptance(
         "browser_base_image": managed_browser["browser_base_image"],
         "workflow_digest": evidence_identity["workflow_digest"],
         "environment_digest": evidence_identity["environment_digest"],
-        "managed_runner_signer_sha256": evidence_identity[
-            "managed_runner_signer_sha256"
+        "evidence_runner_signer_sha256": evidence_identity[
+            "evidence_runner_signer_sha256"
         ],
     }
     if certificate_identity_projection != expected_identity_projection:
@@ -2777,6 +3050,26 @@ def derive_production_acceptance(
             )
     counted_taxonomy = {name: taxonomy.get(name, 0) for name in _FAILURE_TAXONOMY}
     total_trials = observed_trial_count
+    privacy_safe_conditions = [
+        {
+            "task_id_sha256": privacy_safe_campaign_label_sha256(
+                "qualification task",
+                campaign["campaign_id"],
+                campaign["qualification_contract"]["task_id"],
+            ),
+            "condition_id_sha256": privacy_safe_campaign_label_sha256(
+                "qualification condition",
+                campaign["campaign_id"],
+                condition["condition_id"],
+            ),
+            "required_trial_count": condition["required_trials"],
+            "observed_trial_count": trials_per_condition[condition["condition_id"]],
+        }
+        for condition in sorted(
+            campaign["conditions"],
+            key=lambda value: value["condition_id"],
+        )
+    ]
     return {
         "schema_version": RESULT_SCHEMA,
         "verdict": "accepted",
@@ -2792,10 +3085,13 @@ def derive_production_acceptance(
             "approved_cloud_source_commit": expected_cloud_source_commit,
         },
         "trial_inventory": {
+            "task_count": expected_certificate_counts["task_count"],
             "condition_count": len(trials_per_condition),
+            "required_trial_count": required_trial_count,
+            "observed_trial_count": observed_trial_count,
             "trial_count": total_trials,
             "minimum_trials_per_condition": min(trials_per_condition.values()),
-            "trials_per_condition": dict(sorted(trials_per_condition.items())),
+            "conditions": privacy_safe_conditions,
             "excluded_trial_count": 0,
         },
         "derived_outcomes": counted_taxonomy,
@@ -2816,6 +3112,748 @@ def derive_production_acceptance(
         "retention": facts["retention"],
         "claim_limit": "not_general_product_production_readiness",
     }
+
+
+def _validated_manifest_source(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate the complete private result used by the public manifest builder."""
+
+    source = dict(_closed(value, _DERIVED_RESULT_KEYS, "production acceptance source"))
+    if (
+        source["schema_version"] != RESULT_SCHEMA
+        or source["verdict"] != "accepted"
+        or source["evidence_class"] != "qualified_browser_production_acceptance"
+        or source["claim_scope"] != CLAIM_SCOPE
+        or source["claim_limit"] != "not_general_product_production_readiness"
+    ):
+        raise AcceptanceError("production acceptance source is not an accepted browser result")
+
+    bindings = _closed(
+        source["bindings"],
+        _DERIVED_BINDING_KEYS,
+        "production acceptance source bindings",
+    )
+    for key in (
+        "runtime_validation_id_sha256",
+        "admission_id_sha256",
+        "campaign_id_sha256",
+        "workflow_version_id_sha256",
+        "workflow_digest",
+        "environment_digest",
+        "evidence_identity_sha256",
+        "cloud_target_build_sha256",
+        "flow_wheel_sha256",
+        "managed_runtime_manifest_sha256",
+        "runner_artifact_sha256",
+        "campaign_contract_sha256",
+        "campaign_outcomes_sha256",
+        "oracle_contract_sha256",
+        "evidence_runner_signer_sha256",
+        "target_attestation_signer_sha256",
+        "target_observer_signer_sha256",
+        "target_attestation_sha256",
+        "organization_id_sha256",
+        "workflow_id_sha256",
+    ):
+        _digest(bindings[key], f"production acceptance source binding {key}")
+    if not isinstance(bindings["cloud_source_commit"], str) or _HEX_40.fullmatch(
+        bindings["cloud_source_commit"]
+    ) is None:
+        raise AcceptanceError("production acceptance source Cloud commit is invalid")
+    if not isinstance(bindings["flow_release_commit"], str) or _HEX_40.fullmatch(
+        bindings["flow_release_commit"]
+    ) is None:
+        raise AcceptanceError("production acceptance source Flow commit is invalid")
+    if not isinstance(bindings["flow_version"], str) or _SEMVER.fullmatch(
+        bindings["flow_version"]
+    ) is None:
+        raise AcceptanceError("production acceptance source Flow version is invalid")
+    if bindings["substrate"] != "web":
+        raise AcceptanceError("production acceptance source substrate is not web")
+    if not isinstance(bindings["browser_base_image"], str) or _PINNED_IMAGE.fullmatch(
+        bindings["browser_base_image"]
+    ) is None:
+        raise AcceptanceError("production acceptance source browser image is invalid")
+
+    evidence = _closed(
+        source["source_evidence"],
+        _DERIVED_SOURCE_EVIDENCE_KEYS,
+        "production acceptance source evidence",
+    )
+    for key in (
+        "certificate_sha256",
+        "campaign_sha256",
+        "qualification_admission_sha256",
+    ):
+        _digest(evidence[key], f"production acceptance source evidence {key}")
+    if evidence["approved_cloud_source_commit"] != bindings["cloud_source_commit"]:
+        raise AcceptanceError("production acceptance source Cloud approval differs")
+    attestation = _closed(
+        evidence["attestation"],
+        {
+            "repository",
+            "workflow",
+            "certificate_identity",
+            "source_commit",
+            "bundle_sha256",
+        },
+        "production acceptance source attestation",
+    )
+    if (
+        attestation["repository"] != CLOUD_REPOSITORY
+        or attestation["workflow"] != CLOUD_WORKFLOW
+        or attestation["certificate_identity"] != CLOUD_CERTIFICATE_IDENTITY
+        or attestation["source_commit"] != bindings["cloud_source_commit"]
+    ):
+        raise AcceptanceError("production acceptance source attestation differs")
+    _digest(
+        attestation["bundle_sha256"],
+        "production acceptance source attestation bundle",
+    )
+    authority = _closed(
+        evidence["qualification_authority"],
+        {
+            "artifact_sha256",
+            "signer_key_id",
+            "issuer_workflow",
+            "issuer_ref",
+            "expires_at",
+            "evidence_identity_sha256",
+        },
+        "production acceptance source qualification authority",
+    )
+    _digest(
+        authority["artifact_sha256"],
+        "production acceptance source qualification authority artifact",
+    )
+    if authority["artifact_sha256"] != evidence["qualification_admission_sha256"]:
+        raise AcceptanceError("production acceptance source admission digest differs")
+    if authority["evidence_identity_sha256"] != bindings[
+        "evidence_identity_sha256"
+    ].removeprefix("sha256:"):
+        raise AcceptanceError("production acceptance source evidence identity differs")
+
+    inventory = _closed(
+        source["trial_inventory"],
+        _DERIVED_TRIAL_INVENTORY_KEYS,
+        "production acceptance source trial inventory",
+    )
+    counts = {
+        key: _count(inventory[key], f"production acceptance source inventory {key}")
+        for key in (
+            "task_count",
+            "condition_count",
+            "required_trial_count",
+            "observed_trial_count",
+            "trial_count",
+            "minimum_trials_per_condition",
+            "excluded_trial_count",
+        )
+    }
+    if (
+        counts["task_count"] < 1
+        or counts["condition_count"] < counts["task_count"]
+        or counts["required_trial_count"] < 3
+        or counts["observed_trial_count"] < counts["required_trial_count"]
+        or counts["trial_count"] != counts["observed_trial_count"]
+        or counts["minimum_trials_per_condition"] < 3
+        or counts["excluded_trial_count"] != 0
+    ):
+        raise AcceptanceError("production acceptance source inventory is incomplete")
+    for key in (
+        "task_count",
+        "condition_count",
+        "required_trial_count",
+        "observed_trial_count",
+    ):
+        if bindings[key] != counts[key]:
+            raise AcceptanceError(f"production acceptance source binding {key} differs")
+    conditions = inventory["conditions"]
+    if not isinstance(conditions, list) or len(conditions) != counts["condition_count"]:
+        raise AcceptanceError("production acceptance source condition inventory is incomplete")
+    seen_conditions: set[str] = set()
+    seen_tasks: set[str] = set()
+    required_total = 0
+    observed_total = 0
+    observed_minimum: int | None = None
+    for index, item in enumerate(conditions):
+        condition = _closed(
+            item,
+            _DERIVED_CONDITION_KEYS,
+            f"production acceptance source condition {index}",
+        )
+        task_digest = _digest(
+            condition["task_id_sha256"],
+            f"production acceptance source condition {index} task",
+        )
+        condition_digest = _digest(
+            condition["condition_id_sha256"],
+            f"production acceptance source condition {index} identity",
+        )
+        if condition_digest in seen_conditions:
+            raise AcceptanceError("production acceptance source condition is duplicate")
+        seen_conditions.add(condition_digest)
+        seen_tasks.add(task_digest)
+        required = _count(
+            condition["required_trial_count"],
+            f"production acceptance source condition {index} required trials",
+        )
+        observed = _count(
+            condition["observed_trial_count"],
+            f"production acceptance source condition {index} observed trials",
+        )
+        if required < 3 or observed < required:
+            raise AcceptanceError("production acceptance source condition is incomplete")
+        required_total += required
+        observed_total += observed
+        observed_minimum = observed if observed_minimum is None else min(
+            observed_minimum,
+            observed,
+        )
+    if (
+        len(seen_tasks) != counts["task_count"]
+        or required_total != counts["required_trial_count"]
+        or observed_total != counts["observed_trial_count"]
+        or observed_minimum != counts["minimum_trials_per_condition"]
+    ):
+        raise AcceptanceError("production acceptance source condition counts differ")
+
+    taxonomy = _closed(
+        source["derived_outcomes"],
+        set(_FAILURE_TAXONOMY),
+        "production acceptance source failure taxonomy",
+    )
+    counted_taxonomy = {
+        key: _count(value, f"production acceptance source failure taxonomy {key}")
+        for key, value in taxonomy.items()
+    }
+    if sum(counted_taxonomy.values()) != counts["observed_trial_count"]:
+        raise AcceptanceError("production acceptance source taxonomy count differs")
+    if any(counted_taxonomy[name] for name in _PRODUCTION_FAILURES):
+        raise AcceptanceError("production acceptance source contains a production failure")
+
+    reliability = _closed(
+        source["reliability"],
+        _RELIABILITY_KEYS,
+        "production acceptance source reliability",
+    )
+    for key, value in reliability.items():
+        _count(value, f"production acceptance source reliability {key}")
+    expected_reliability = {
+        "silent_incorrect_success_count": counted_taxonomy[
+            "silent_incorrect_success"
+        ],
+        "over_halt_count": counted_taxonomy["over_halt"],
+        "wrong_record_count": counted_taxonomy["wrong_record"],
+        "duplicate_effect_count": counted_taxonomy["duplicate_effect"],
+        "collateral_effect_count": counted_taxonomy["collateral_effect"],
+        "operator_intervention_count": counted_taxonomy["operator_intervention"],
+        "uncertain_delivery_count": counted_taxonomy["uncertain_delivery"],
+    }
+    if any(reliability[key] != value for key, value in expected_reliability.items()):
+        raise AcceptanceError("production acceptance source reliability differs")
+
+    retention = _closed(
+        source["retention"],
+        _RETENTION_KEYS,
+        "production acceptance source retention",
+    )
+    for key in (
+        "ciphertext_sha256",
+        "candidate_sha256",
+        "private_envelope_sha256",
+        "store_attestation_sha256",
+        "storage_identity_sha256",
+        "object_version_sha256",
+        "private_locator_version_sha256",
+        "kms_key_identity_sha256",
+        "uploader_identity_sha256",
+    ):
+        _digest(retention[key], f"production acceptance source retention {key}")
+    for key in (
+        "upload_verified",
+        "head_verified",
+        "object_lock_verified",
+        "private_locator_recorded",
+    ):
+        if retention[key] is not True:
+            raise AcceptanceError(f"production acceptance source retention {key} is false")
+    if retention["retention_mode"] != "COMPLIANCE":
+        raise AcceptanceError("production acceptance source retention is not COMPLIANCE")
+    if not isinstance(retention["receipt_id"], str) or re.fullmatch(
+        r"retention:[a-f0-9]{32}", retention["receipt_id"]
+    ) is None:
+        raise AcceptanceError("production acceptance source retention receipt ID is invalid")
+    if retention["provenance_attestation"] != "github-artifact-attestation-v4":
+        raise AcceptanceError(
+            "production acceptance source retention provenance is invalid"
+        )
+    acceptance_verified_at = _timestamp(
+        retention["acceptance_verified_at"],
+        "production acceptance source retention acceptance_verified_at",
+    )
+    retained_at = _timestamp(
+        retention["retained_at"],
+        "production acceptance source retention retained_at",
+    )
+    retention_until = _timestamp(
+        retention["retention_until"],
+        "production acceptance source retention retention_until",
+    )
+    retention_period = retention_until - retained_at
+    if not timedelta(days=365) <= retention_period <= timedelta(days=3650):
+        raise AcceptanceError(
+            "production acceptance source retention period is outside policy"
+        )
+    if not acceptance_verified_at <= retained_at < retention_until:
+        raise AcceptanceError("production acceptance source retention chronology is invalid")
+    return source
+
+
+def _reject_duplicate_json_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise AcceptanceError(
+                f"production lifecycle policy contains duplicate key {key!r}"
+            )
+        value[key] = item
+    return value
+
+
+def _validated_flow_lifecycle_policy(policy_bytes: bytes) -> dict[str, Any]:
+    if not isinstance(policy_bytes, bytes) or not policy_bytes:
+        raise AcceptanceError("production lifecycle policy must be non-empty bytes")
+    try:
+        value = json.loads(
+            policy_bytes.decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_json_pairs,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise AcceptanceError("production lifecycle policy is not valid UTF-8 JSON") from exc
+    policy = _closed(
+        value,
+        {
+            "$schema",
+            "schema_version",
+            "revision",
+            "maximum_admission_days",
+            "summary_authority",
+            "targets",
+        },
+        "production lifecycle policy",
+    )
+    if (
+        policy["$schema"] != PRODUCTION_LIFECYCLE_POLICY_PATH
+        or policy["schema_version"] != PRODUCTION_LIFECYCLE_POLICY_SCHEMA
+    ):
+        raise AcceptanceError("production lifecycle policy schema is not supported")
+    if (
+        not isinstance(policy["revision"], int)
+        or isinstance(policy["revision"], bool)
+        or policy["revision"] < 1
+    ):
+        raise AcceptanceError("production lifecycle policy revision is invalid")
+    maximum_days = policy["maximum_admission_days"]
+    if (
+        not isinstance(maximum_days, int)
+        or isinstance(maximum_days, bool)
+        or not 1 <= maximum_days <= 30
+    ):
+        raise AcceptanceError("production lifecycle admission duration is invalid")
+    if not isinstance(policy["summary_authority"], dict):
+        raise AcceptanceError("production lifecycle summary authority is invalid")
+    targets = policy["targets"]
+    if not isinstance(targets, list) or len(targets) != len(
+        PRODUCTION_ACCEPTANCE_TARGET_SCOPES
+    ):
+        raise AcceptanceError("production lifecycle target inventory is incomplete")
+    target_keys = {
+        "id",
+        "display_name",
+        "lifecycle_scope",
+        "lifecycle_subject",
+        "source_repository",
+        "release_kind",
+        "required_claim_scope",
+        "required_artifact_kinds",
+        "package_index_project",
+        "artifact_authority_by_kind",
+    }
+    target_map: dict[str, dict[str, Any]] = {}
+    for index, item in enumerate(targets):
+        declared = dict(
+            _closed(item, target_keys, f"production lifecycle target {index}")
+        )
+        target_id = declared["id"]
+        if not isinstance(target_id, str) or target_id in target_map:
+            raise AcceptanceError("production lifecycle target identity is invalid")
+        target_map[target_id] = declared
+    if set(target_map) != set(PRODUCTION_ACCEPTANCE_TARGET_SCOPES):
+        raise AcceptanceError("production lifecycle target inventory differs")
+    expected_flow = {
+        "id": "flow",
+        "display_name": "OpenAdapt Flow",
+        "lifecycle_scope": "repository",
+        "lifecycle_subject": "openadapt-flow",
+        "source_repository": "OpenAdaptAI/openadapt-flow",
+        "release_kind": "public_package",
+        "required_claim_scope": PRODUCTION_ACCEPTANCE_TARGET_SCOPES["flow"],
+        "required_artifact_kinds": ["sdist", "wheel"],
+        "package_index_project": "openadapt-flow",
+        "artifact_authority_by_kind": {"sdist": "pypi", "wheel": "pypi"},
+    }
+    if target_map["flow"] != expected_flow:
+        raise AcceptanceError("Flow production lifecycle policy differs")
+    return target_map["flow"]
+
+
+def _clean_https_url(value: object, label: str) -> str:
+    url = _nonempty(value, label)
+    parsed = urlsplit(url)
+    if (
+        parsed.scheme != "https"
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise AcceptanceError(f"{label} must be a clean HTTPS URL")
+    return url
+
+
+def verify_production_lifecycle_release(
+    lifecycle_policy_bytes: bytes,
+    target: str,
+    target_release: Mapping[str, Any],
+    *,
+    pypi_release_metadata: Mapping[str, Any],
+) -> VerifiedProductionLifecycleRelease:
+    """Verify one exact release against lifecycle policy and PyPI metadata."""
+
+    if target != "flow":
+        if target in PRODUCTION_ACCEPTANCE_TARGET_SCOPES:
+            raise AcceptanceError(
+                f"production lifecycle target {target!r} requires its own verifier"
+            )
+        raise AcceptanceError("production lifecycle target is not supported")
+    target_policy = _validated_flow_lifecycle_policy(lifecycle_policy_bytes)
+    release = dict(
+        _closed(
+            target_release,
+            {
+                "kind",
+                "version",
+                "tag",
+                "source_commit",
+                "immutable_release_url",
+                "artifacts",
+            },
+            "Flow production lifecycle release",
+        )
+    )
+    version = release["version"]
+    if (
+        release["kind"] != "public_package"
+        or not isinstance(version, str)
+        or _SEMVER.fullmatch(version) is None
+        or release["tag"] not in {version, f"v{version}"}
+    ):
+        raise AcceptanceError("Flow production lifecycle package identity is invalid")
+    source_commit = release["source_commit"]
+    if not isinstance(source_commit, str) or _HEX_40.fullmatch(source_commit) is None:
+        raise AcceptanceError("Flow production lifecycle source commit is invalid")
+    immutable_url = _clean_https_url(
+        release["immutable_release_url"],
+        "Flow production lifecycle immutable release URL",
+    )
+    if immutable_url != (
+        "https://github.com/OpenAdaptAI/openadapt-flow/commit/" + source_commit
+    ):
+        raise AcceptanceError(
+            "Flow production lifecycle immutable release URL is not the exact commit"
+        )
+    artifacts_value = release["artifacts"]
+    if not isinstance(artifacts_value, list) or len(artifacts_value) != 2:
+        raise AcceptanceError(
+            "Flow production lifecycle release must contain one sdist and one wheel"
+        )
+    artifacts: list[dict[str, Any]] = []
+    artifact_identities: list[tuple[str, str]] = []
+    for index, item in enumerate(artifacts_value):
+        artifact = dict(
+            _closed(
+                item,
+                {"authority", "kind", "name", "sha256", "size_bytes", "url"},
+                f"Flow production lifecycle artifact {index}",
+            )
+        )
+        name = _nonempty(artifact["name"], f"Flow lifecycle artifact {index} name")
+        if _ARTIFACT_NAME.fullmatch(name) is None:
+            raise AcceptanceError(f"Flow lifecycle artifact {index} name is invalid")
+        kind = artifact["kind"]
+        if kind not in {"sdist", "wheel"} or artifact["authority"] != "pypi":
+            raise AcceptanceError(
+                f"Flow lifecycle artifact {index} kind or authority is invalid"
+            )
+        _digest(artifact["sha256"], f"Flow lifecycle artifact {index} digest")
+        size = artifact["size_bytes"]
+        if not isinstance(size, int) or isinstance(size, bool) or size < 1:
+            raise AcceptanceError(f"Flow lifecycle artifact {index} size is invalid")
+        artifact_url = _clean_https_url(
+            artifact["url"], f"Flow lifecycle artifact {index} URL"
+        )
+        if urlsplit(artifact_url).netloc != "files.pythonhosted.org":
+            raise AcceptanceError(f"Flow lifecycle artifact {index} is not from PyPI")
+        artifact_identities.append((kind, name))
+        artifacts.append(artifact)
+    if artifact_identities != sorted(artifact_identities) or {
+        kind for kind, _name in artifact_identities
+    } != set(target_policy["required_artifact_kinds"]):
+        raise AcceptanceError(
+            "Flow production lifecycle artifacts must be sorted sdist and wheel"
+        )
+    if len(set(artifact_identities)) != len(artifact_identities):
+        raise AcceptanceError("Flow production lifecycle artifact is duplicate")
+    if not isinstance(pypi_release_metadata, Mapping):
+        raise AcceptanceError("PyPI release metadata must be an object")
+    info = pypi_release_metadata.get("info")
+    urls = pypi_release_metadata.get("urls")
+    if not isinstance(info, Mapping) or info.get("version") != version:
+        raise AcceptanceError("PyPI release metadata version differs")
+    if not isinstance(urls, list):
+        raise AcceptanceError("PyPI release metadata files are invalid")
+    for artifact in artifacts:
+        matches = [
+            item
+            for item in urls
+            if isinstance(item, Mapping)
+            and item.get("filename") == artifact["name"]
+            and item.get("url") == artifact["url"]
+            and item.get("size") == artifact["size_bytes"]
+            and isinstance(item.get("digests"), Mapping)
+            and item["digests"].get("sha256")
+            == artifact["sha256"].removeprefix("sha256:")
+            and item.get("yanked") is False
+        ]
+        if len(matches) != 1:
+            raise AcceptanceError(
+                f"PyPI does not verify exact artifact {artifact['name']}"
+            )
+    return VerifiedProductionLifecycleRelease(
+        target=target,
+        claim_scope=target_policy["required_claim_scope"],
+        lifecycle_policy_sha256=(
+            "sha256:" + hashlib.sha256(lifecycle_policy_bytes).hexdigest()
+        ),
+        release=release,
+        artifacts=artifacts,
+        _seal=VerifiedProductionLifecycleRelease._CONSTRUCTION_SEAL,
+    )
+
+
+def _validated_target_lifecycle(
+    source: Mapping[str, Any],
+    target: str,
+    lifecycle_release: VerifiedProductionLifecycleRelease,
+) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
+    if type(lifecycle_release) is not VerifiedProductionLifecycleRelease:
+        raise AcceptanceError(
+            "production acceptance requires a verifier-derived lifecycle release"
+        )
+    if (
+        lifecycle_release.target != target
+        or lifecycle_release.claim_scope != PRODUCTION_ACCEPTANCE_TARGET_SCOPES[target]
+    ):
+        raise AcceptanceError("production acceptance lifecycle target differs")
+    release = lifecycle_release.release()
+    artifacts = lifecycle_release.artifacts()
+    if release.get("artifacts") != artifacts:
+        raise AcceptanceError("production acceptance lifecycle artifacts differ")
+    bindings = source["bindings"]
+    if (
+        release["version"] != bindings["flow_version"]
+        or release["source_commit"] != bindings["flow_release_commit"]
+    ):
+        raise AcceptanceError(
+            "Flow production acceptance lifecycle release differs from verified evidence"
+        )
+    wheels = [item for item in artifacts if item["kind"] == "wheel"]
+    if (
+        len(wheels) != 1
+        or wheels[0]["sha256"] != bindings["flow_wheel_sha256"]
+    ):
+        raise AcceptanceError(
+            "Flow production acceptance wheel differs from verified evidence"
+        )
+    _digest(
+        lifecycle_release.lifecycle_policy_sha256,
+        "production lifecycle policy digest",
+    )
+    return release, artifacts, lifecycle_release.lifecycle_policy_sha256
+
+
+def _build_production_acceptance_manifest(
+    source: Mapping[str, Any],
+    target: str,
+    lifecycle_release: VerifiedProductionLifecycleRelease,
+) -> dict[str, Any]:
+    if target not in _BROWSER_SOURCE_TARGETS:
+        if target in PRODUCTION_ACCEPTANCE_TARGET_SCOPES:
+            raise AcceptanceError(
+                f"production acceptance target {target!r} requires its own evidence adapter"
+            )
+        raise AcceptanceError("production acceptance target is not supported")
+    if target == "cloud":
+        raise AcceptanceError(
+            "Cloud production acceptance requires a reviewed deployment-manifest binding"
+        )
+    bindings = source["bindings"]
+    evidence = source["source_evidence"]
+    inventory = source["trial_inventory"]
+    release_descriptor, artifact_inventory, lifecycle_policy_sha256 = (
+        _validated_target_lifecycle(
+            source,
+            target,
+            lifecycle_release,
+        )
+    )
+    return {
+        "schema_version": PRODUCTION_ACCEPTANCE_SCHEMA,
+        "target": target,
+        "claim_scope": PRODUCTION_ACCEPTANCE_TARGET_SCOPES[target],
+        "verdict": "accepted",
+        "acceptance_policy_sha256": production_acceptance_policy_sha256(),
+        "lifecycle_policy_sha256": lifecycle_policy_sha256,
+        "target_release_sha256": _domain_sha256(
+            PRODUCTION_LIFECYCLE_TARGET_RELEASE_DOMAIN,
+            {
+                "target": target,
+                "claim_scope": PRODUCTION_ACCEPTANCE_TARGET_SCOPES[target],
+                "release": release_descriptor,
+            },
+        ),
+        "target_artifact_inventory_sha256": _domain_sha256(
+            PRODUCTION_LIFECYCLE_ARTIFACT_INVENTORY_DOMAIN,
+            {
+                "target": target,
+                "claim_scope": PRODUCTION_ACCEPTANCE_TARGET_SCOPES[target],
+                "artifacts": artifact_inventory,
+            },
+        ),
+        "evidence_identity_sha256": bindings["evidence_identity_sha256"],
+        "source_evidence": {
+            "source_result_sha256": canonical_sha256(source),
+            "certificate_sha256": evidence["certificate_sha256"],
+            "campaign_sha256": evidence["campaign_sha256"],
+            "qualification_admission_sha256": evidence[
+                "qualification_admission_sha256"
+            ],
+            "attestation_sha256": canonical_sha256(evidence["attestation"]),
+            "attestation_bundle_sha256": evidence["attestation"]["bundle_sha256"],
+        },
+        "qualification": {
+            "campaign_contract_sha256": bindings["campaign_contract_sha256"],
+            "campaign_outcomes_sha256": bindings["campaign_outcomes_sha256"],
+            "oracle_contract_sha256": bindings["oracle_contract_sha256"],
+            "task_count": inventory["task_count"],
+            "condition_count": inventory["condition_count"],
+            "required_trial_count": inventory["required_trial_count"],
+            "observed_trial_count": inventory["observed_trial_count"],
+            "minimum_trials_per_condition": inventory[
+                "minimum_trials_per_condition"
+            ],
+            "excluded_trial_count": inventory["excluded_trial_count"],
+            "task_condition_inventory_sha256": _domain_sha256(
+                b"OpenAdapt production acceptance task-condition inventory v1\0",
+                inventory["conditions"],
+            ),
+        },
+        "failure_taxonomy_counts": dict(source["derived_outcomes"]),
+        "reliability": dict(source["reliability"]),
+        "retention": dict(source["retention"]),
+    }
+
+
+def validate_production_acceptance_manifest(
+    value: Mapping[str, Any],
+    verified_source_result: Mapping[str, Any],
+    *,
+    lifecycle_release: VerifiedProductionLifecycleRelease,
+) -> dict[str, Any]:
+    """Validate one target manifest against the complete verified private result."""
+
+    source = _validated_manifest_source(verified_source_result)
+    manifest = dict(
+        _closed(value, _PRODUCTION_ACCEPTANCE_KEYS, "production acceptance manifest")
+    )
+    target = manifest["target"]
+    if not isinstance(target, str):
+        raise AcceptanceError("production acceptance manifest target is invalid")
+    expected = _build_production_acceptance_manifest(
+        source,
+        target,
+        lifecycle_release,
+    )
+    if manifest != expected:
+        raise AcceptanceError(
+            "production acceptance manifest differs from its verified source result"
+        )
+    for key in (
+        "acceptance_policy_sha256",
+        "lifecycle_policy_sha256",
+        "target_release_sha256",
+        "target_artifact_inventory_sha256",
+        "evidence_identity_sha256",
+    ):
+        _digest(manifest[key], f"production acceptance manifest {key}")
+    _closed(
+        manifest["source_evidence"],
+        _PRODUCTION_SOURCE_EVIDENCE_KEYS,
+        "production acceptance manifest source evidence",
+    )
+    _closed(
+        manifest["qualification"],
+        _PRODUCTION_QUALIFICATION_KEYS,
+        "production acceptance manifest qualification",
+    )
+    _closed(
+        manifest["failure_taxonomy_counts"],
+        set(_FAILURE_TAXONOMY),
+        "production acceptance manifest failure taxonomy",
+    )
+    _closed(
+        manifest["reliability"],
+        _RELIABILITY_KEYS,
+        "production acceptance manifest reliability",
+    )
+    _closed(
+        manifest["retention"],
+        _RETENTION_KEYS,
+        "production acceptance manifest retention",
+    )
+    return manifest
+
+
+def build_production_acceptance_manifest(
+    verified_source_result: Mapping[str, Any],
+    target: str,
+    *,
+    lifecycle_release: VerifiedProductionLifecycleRelease,
+) -> dict[str, Any]:
+    """Build, without I/O, one accepted target manifest from verified evidence."""
+
+    source = _validated_manifest_source(verified_source_result)
+    manifest = _build_production_acceptance_manifest(
+        source,
+        target,
+        lifecycle_release,
+    )
+    return validate_production_acceptance_manifest(
+        manifest,
+        source,
+        lifecycle_release=lifecycle_release,
+    )
 
 
 def import_files(

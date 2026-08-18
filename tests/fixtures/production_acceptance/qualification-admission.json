@@ -8,7 +8,7 @@
     "bundle_content_digest": "2222222222222222222222222222222222222222222222222222222222222222",
     "bundle_version_id": "55555555-5555-4555-8555-555555555555",
     "campaign": {
-      "artifact_sha256": "ed685043a835a14f4990cab8b7646de63bbb4e757df89d09e4331c24ae7734c2",
+      "artifact_sha256": "792a675ba485a1fb8cc36d43a16bf04d90828ef3ebda9514abbbcc79cadc85b3",
       "campaign_id": "12345678-1234-4abc-8def-1234567890ab",
       "contract_sha256": "02b706e8251719c9ed4c62e3c9807074952f5ffe350a382fa61bb7d3832cfe41",
       "decision": "admitted",
@@ -27,7 +27,7 @@
       ],
       "oracle_contract_sha256": "a9d87b5deaa24c553e65aa0237136398fe7821ae7d226fc20d48c500765bc1e0",
       "oracle_id": "openadapt.execute-acceptance-campaign-oracle/v1",
-      "outcomes_sha256": "a7f5dd6c92774a487ffe8c57822f464dd5b84e94f92e01899acbbb61b580ab19",
+      "outcomes_sha256": "3dd11000b63392f09f8105fd83f0fb7d68d526bb2e083e297dde05b05100aaae",
       "tasks": [
         {
           "condition": "ambiguous-target",
@@ -100,10 +100,10 @@
       "effect_contract_sha256": "2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d",
       "environment_contract_sha256": "2626262626262626262626262626262626262626262626262626262626262626",
       "environment_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "evidence_runner_signer_sha256": "7300c0ae1429cd153252736a781b78f404f4738f17db195dbef533b74a45ec86",
       "governed_authorization_template_sha256": "2323232323232323232323232323232323232323232323232323232323232323",
       "identity_contract_sha256": "2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c",
       "input_policy_sha256": "2929292929292929292929292929292929292929292929292929292929292929",
-      "managed_runner_signer_sha256": "7300c0ae1429cd153252736a781b78f404f4738f17db195dbef533b74a45ec86",
       "network_policy_sha256": "2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
       "operator_contract_sha256": "2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e",
       "oracle_contract_sha256": "a9d87b5deaa24c553e65aa0237136398fe7821ae7d226fc20d48c500765bc1e0",
@@ -160,5 +160,5 @@
     "workflow_id": "33333333-3333-4333-8333-333333333333",
     "workflow_version_id": "44444444-4444-4444-8444-444444444444"
   },
-  "signature": "0slsNbAvAmflJs3XaskOMaCCmyD7YbQSEAQKKIJ4SYkWo+uOXzlxopCxJo+ZP5SYRdmmTb6F+VI18B139Cu4Bw=="
+  "signature": "DxQtjy3Su77j//oDu3jG9bwAC8nz6hIQxfH9EncM0ly8fJLbftQru03OC7rTHkyZysyxCw551tBHeMpYKHq0BQ=="
 }

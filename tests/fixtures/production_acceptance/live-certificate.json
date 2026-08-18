@@ -19,7 +19,7 @@
     "zero_model_healthy_path": true
   },
   "identities": {
-    "managed_runner_signer_sha256": "sha256:7300c0ae1429cd153252736a781b78f404f4738f17db195dbef533b74a45ec86",
+    "evidence_runner_signer_sha256": "sha256:7300c0ae1429cd153252736a781b78f404f4738f17db195dbef533b74a45ec86",
     "organization_id_sha256": "sha256:0ecd004dcbed992e16d1f90fbb2b2ae5433e32ed62e563f6fc53caa277516648",
     "producer": {
       "kind": "github_oidc_attested_workflow",
@@ -75,17 +75,17 @@
       "issuer_workflow": "OpenAdaptAI/openadapt-internal/.github/workflows/production-qualification-admission.yml",
       "key_id": "qa-ed25519-34750f98bd59fcfc"
     },
-    "campaign_artifact_sha256": "sha256:ed685043a835a14f4990cab8b7646de63bbb4e757df89d09e4331c24ae7734c2",
+    "campaign_artifact_sha256": "sha256:792a675ba485a1fb8cc36d43a16bf04d90828ef3ebda9514abbbcc79cadc85b3",
     "campaign_contract_sha256": "sha256:02b706e8251719c9ed4c62e3c9807074952f5ffe350a382fa61bb7d3832cfe41",
     "campaign_id_sha256": "sha256:0c72b77f9c560be2306048462f681f01dbe27db818243d8e792c56afccca0a38",
-    "campaign_outcomes_sha256": "sha256:a7f5dd6c92774a487ffe8c57822f464dd5b84e94f92e01899acbbb61b580ab19",
+    "campaign_outcomes_sha256": "sha256:3dd11000b63392f09f8105fd83f0fb7d68d526bb2e083e297dde05b05100aaae",
     "condition_count": 9,
     "environment_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-    "evidence_identity_sha256": "sha256:e4a7728cb64c0d426e699ebb56d008a0e6fcfb8a5f9555026833de8da403e8af",
+    "evidence_identity_sha256": "sha256:58fddafe3b4d2c459e4d4b0422c9e8ee77bd87c4c218a50d0d9071d33c7b175c",
     "minimum_trials_per_condition": 3,
     "observed_trial_count": 27,
     "oracle_contract_sha256": "sha256:a9d87b5deaa24c553e65aa0237136398fe7821ae7d226fc20d48c500765bc1e0",
-    "qualification_admission_sha256": "sha256:c978f962afbe278c0f49cb51c41fa20cedea7981d15110d19aff1ec780843ba7",
+    "qualification_admission_sha256": "sha256:9481e6de04bac906d55fb11df4434df96c8cb44beb88407bac11c37ef0914a93",
     "required_trial_count": 27,
     "runtime_validation_id_sha256": "sha256:4b0c7cd12b36f177beb4e28ab9fb4fa4da0d4d033274233d654bd5615758908f",
     "task_count": 1,

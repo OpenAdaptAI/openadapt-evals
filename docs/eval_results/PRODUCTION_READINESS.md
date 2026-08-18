@@ -89,6 +89,11 @@ condition in the bound qualification contract and at least three unique trials
 for each condition. Trial indexes are one-based and contiguous. Attempt IDs
 and run IDs cannot repeat. An excluded or hidden trial causes refusal.
 
+The shared identity calls the receipt authority
+`evidence_runner_signer_sha256`. This name applies to browser, native Desktop,
+BYOC, RDP, Citrix, and offline customer-controlled evidence. It does not imply
+that the evidence runner is an OpenAdapt-managed browser runner.
+
 Each `openadapt.qualification-trial-row/v2` trial refers to hash-keyed
 `openadapt.qualification-evidence-receipt/v2` Ed25519 envelopes for the runner,
 independent observer, webhook, replay, cleanup, and cleanup-absence result.
@@ -107,6 +112,59 @@ boolean, unsupported failure class, vacuous invariant, healthy-path contract
 that permits a model call, healthy-path model call, silent incorrect success,
 over-halt, wrong-record effect, duplicate effect, collateral effect, uncertain
 delivery, platform failure, or operator intervention.
+
+The derived result binds the certificate's campaign-outcomes and independent
+oracle-contract digests. It repeats the validated task, condition, required
+trial, and observed trial counts. It includes every closed failure-taxonomy
+count used for the verdict. Task and condition identities use domain-separated
+SHA-256 values. The public result does not contain the private task or condition
+labels. The derived-result file digest therefore changes after a one-field
+change to a binding, count, or privacy-safe identity.
+
+## Target-neutral acceptance manifest
+
+The importer contains a pure builder and validator for the closed
+`openadapt.production-acceptance/v1` manifest. The mechanism does not write,
+sign, export, attest, or publish a manifest. It accepts only a complete accepted
+private result. It binds the target and its exact claim scope in both the fixed
+policy and the manifest.
+
+| Target | Exact claim scope |
+| --- | --- |
+| `agent` | `qualified_agent_bridge_release` |
+| `capture` | `qualified_native_recorder_release` |
+| `cloud` | `qualified_workflow_control_plane_deployment` |
+| `desktop` | `qualified_native_workflow_desktop_release` |
+| `docs` | `production_documentation_deployment` |
+| `flow` | `qualified_workflow_runtime_release` |
+| `openadapt` | `qualified_workflow_launcher_release` |
+
+The current browser evidence adapter can build only the Flow target manifest.
+The other targets require their own evidence adapter. Cloud also requires a
+reviewed deployment-manifest binding. The builder refuses Cloud until that
+binding exists. It does not emit a placeholder or failed record when an adapter
+is absent.
+
+For Flow, a separate lifecycle verifier accepts the exact raw lifecycle-policy
+bytes, one closed public-package release, and the PyPI release metadata. It
+requires the exact GitHub source-commit URL. It requires one sorted sdist and
+one wheel. Each artifact includes its authority, kind, name, URL, size, and
+SHA-256 digest. The verifier matches each field to exactly one non-yanked PyPI
+file. It then returns an immutable verified-release object. A caller-supplied
+mapping or digest cannot replace this object.
+
+The pure manifest builder accepts only this verified-release object. It matches
+the Flow version, source commit, and wheel digest to the private result. It
+binds the complete sdist and wheel inventory. It uses the same release and
+artifact digest domains as the Production lifecycle validator. The manifest
+contains two separate policy digests. The acceptance-policy digest covers the
+fixed Evals acceptance rules. The lifecycle-policy digest covers the exact raw
+lifecycle-policy bytes.
+
+The public qualification section contains aggregate trial counts and one
+campaign-scoped task-condition inventory digest. It does not publish task or
+condition labels. The closed source-result digest remains the authority for the
+hidden per-condition inventory.
 
 When the private-export gate opens, the output claim will be only
 `qualified_browser_workflow_on_bound_environment`. It is not a general product
@@ -127,6 +185,8 @@ retention alone does not satisfy this contract.
 ## What the current public Evals set establishes
 
 The Flow 1.31.0 set contains four campaigns. Every condition has three trials.
+This set is development evidence. It is not a Production lifecycle admission,
+and this change does not emit a Production record for it.
 
 | Campaign | Environment | What it measures | Production acceptance |
 | --- | --- | --- | --- |

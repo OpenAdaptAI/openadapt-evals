@@ -51,6 +51,152 @@ def _attestation() -> dict[str, str]:
     }
 
 
+def _lifecycle_policy_bytes() -> bytes:
+    def target(
+        target_id: str,
+        claim_scope: str,
+        *,
+        release_kind: str = "public_package",
+        artifact_kinds: list[str] | None = None,
+        project: str | None = None,
+    ) -> dict[str, object]:
+        kinds = artifact_kinds if artifact_kinds is not None else ["sdist", "wheel"]
+        return {
+            "id": target_id,
+            "display_name": target_id.title(),
+            "lifecycle_scope": "repository",
+            "lifecycle_subject": target_id,
+            "source_repository": f"OpenAdaptAI/{target_id}",
+            "release_kind": release_kind,
+            "required_claim_scope": claim_scope,
+            "required_artifact_kinds": kinds,
+            "package_index_project": project or target_id,
+            "artifact_authority_by_kind": {kind: "pypi" for kind in kinds},
+        }
+
+    targets = [
+        target("agent", "qualified_agent_bridge_release"),
+        target("capture", "qualified_native_recorder_release"),
+        target(
+            "cloud",
+            "qualified_workflow_control_plane_deployment",
+            release_kind="private_deployment",
+            artifact_kinds=[],
+        ),
+        target(
+            "desktop",
+            "qualified_native_workflow_desktop_release",
+            artifact_kinds=[
+                "linux-installer",
+                "macos-installer",
+                "sdist",
+                "wheel",
+                "windows-installer",
+            ],
+        ),
+        target(
+            "docs",
+            "production_documentation_deployment",
+            release_kind="public_deployment",
+            artifact_kinds=["deployment-manifest", "site-archive"],
+        ),
+        {
+            "id": "flow",
+            "display_name": "OpenAdapt Flow",
+            "lifecycle_scope": "repository",
+            "lifecycle_subject": "openadapt-flow",
+            "source_repository": "OpenAdaptAI/openadapt-flow",
+            "release_kind": "public_package",
+            "required_claim_scope": "qualified_workflow_runtime_release",
+            "required_artifact_kinds": ["sdist", "wheel"],
+            "package_index_project": "openadapt-flow",
+            "artifact_authority_by_kind": {"sdist": "pypi", "wheel": "pypi"},
+        },
+        target("openadapt", "qualified_workflow_launcher_release"),
+    ]
+    policy = {
+        "$schema": "schemas/production-lifecycle-policy.schema.json",
+        "schema_version": "openadapt.production-lifecycle-policy/v1",
+        "revision": 1,
+        "maximum_admission_days": 30,
+        "summary_authority": {},
+        "targets": targets,
+    }
+    return (json.dumps(policy, indent=2) + "\n").encode()
+
+
+def _flow_lifecycle_inputs(
+    source: dict[str, object] | None = None,
+) -> tuple[bytes, dict[str, object], dict[str, object]]:
+    source = source or _derive()
+    bindings = source["bindings"]
+    assert isinstance(bindings, dict)
+    version = bindings["flow_version"]
+    commit = bindings["flow_release_commit"]
+    artifacts = [
+        {
+            "authority": "pypi",
+            "kind": "sdist",
+            "name": f"openadapt_flow-{version}.tar.gz",
+            "sha256": "sha256:" + "c" * 64,
+            "size_bytes": 101,
+            "url": (
+                "https://files.pythonhosted.org/packages/cc/cc/"
+                f"openadapt_flow-{version}.tar.gz"
+            ),
+        },
+        {
+            "authority": "pypi",
+            "kind": "wheel",
+            "name": f"openadapt_flow-{version}-py3-none-any.whl",
+            "sha256": bindings["flow_wheel_sha256"],
+            "size_bytes": 202,
+            "url": (
+                "https://files.pythonhosted.org/packages/dd/dd/"
+                f"openadapt_flow-{version}-py3-none-any.whl"
+            ),
+        },
+    ]
+    release = {
+        "kind": "public_package",
+        "version": version,
+        "tag": f"v{version}",
+        "source_commit": commit,
+        "immutable_release_url": (
+            "https://github.com/OpenAdaptAI/openadapt-flow/commit/" + commit
+        ),
+        "artifacts": artifacts,
+    }
+    metadata = {
+        "info": {"version": version},
+        "urls": [
+            {
+                "filename": artifact["name"],
+                "url": artifact["url"],
+                "size": artifact["size_bytes"],
+                "digests": {
+                    "sha256": str(artifact["sha256"]).removeprefix("sha256:")
+                },
+                "yanked": False,
+            }
+            for artifact in artifacts
+        ],
+    }
+    return _lifecycle_policy_bytes(), release, metadata
+
+
+def _verified_flow_lifecycle(
+    source: dict[str, object] | None = None,
+) -> object:
+    policy, release, metadata = _flow_lifecycle_inputs(source)
+    return MODULE.verify_production_lifecycle_release(
+        policy,
+        "flow",
+        release,
+        pypi_release_metadata=metadata,
+    )
+
+
 def _resign_admission(
     admission: dict[str, object],
     campaign: dict[str, object],
@@ -443,26 +589,74 @@ def test_derives_only_the_scoped_claim_and_counts_retained_rows() -> None:
     assert result["evidence_class"] == "qualified_browser_production_acceptance"
     assert result["claim_scope"] == "qualified_browser_workflow_on_bound_environment"
     assert result["claim_limit"] == "not_general_product_production_readiness"
+    task_id_sha256 = (
+        "sha256:65288c82e132b7e66f264e5828b7427f7ad56121081c20a4fc662bb1a97fcf94"
+    )
+    condition_ids = [
+        "ambiguous-target",
+        "healthy-01",
+        "healthy-02",
+        "healthy-03",
+        "idempotency-replay",
+        "stale-session",
+        "verifier-unavailable",
+        "weak-effect-only",
+        "wrong-reference",
+    ]
     assert result["trial_inventory"] == {
+        "task_count": 1,
         "condition_count": 9,
+        "required_trial_count": 27,
+        "observed_trial_count": 27,
         "trial_count": 27,
         "minimum_trials_per_condition": 3,
-        "trials_per_condition": {
-            "ambiguous-target": 3,
-            "healthy-01": 3,
-            "healthy-02": 3,
-            "healthy-03": 3,
-            "idempotency-replay": 3,
-            "stale-session": 3,
-            "verifier-unavailable": 3,
-            "weak-effect-only": 3,
-            "wrong-reference": 3,
-        },
+        "conditions": [
+            {
+                "task_id_sha256": task_id_sha256,
+                "condition_id_sha256": MODULE.privacy_safe_campaign_label_sha256(
+                    "qualification condition",
+                    _campaign()["campaign_id"],
+                    condition_id,
+                ),
+                "required_trial_count": 3,
+                "observed_trial_count": 3,
+            }
+            for condition_id in condition_ids
+        ],
         "excluded_trial_count": 0,
     }
-    assert result["derived_outcomes"]["verified"] == 12
-    assert result["derived_outcomes"]["safe_halt"] == 15
+    assert result["derived_outcomes"] == {
+        "verified": 12,
+        "safe_halt": 15,
+        "silent_incorrect_success": 0,
+        "over_halt": 0,
+        "wrong_record": 0,
+        "duplicate_effect": 0,
+        "collateral_effect": 0,
+        "uncertain_delivery": 0,
+        "platform_failure": 0,
+        "operator_intervention": 0,
+        "healthy_path_model_call": 0,
+    }
+    qualification = _certificate()["qualification"]
+    for field in (
+        "campaign_contract_sha256",
+        "campaign_outcomes_sha256",
+        "oracle_contract_sha256",
+        "task_count",
+        "condition_count",
+        "required_trial_count",
+        "observed_trial_count",
+    ):
+        assert result["bindings"][field] == qualification[field]
     assert set(result["reliability"].values()) == {0}
+    assert result["bindings"]["evidence_runner_signer_sha256"] == (
+        _certificate()["identities"]["evidence_runner_signer_sha256"]
+    )
+    assert "managed_runner_signer_sha256" not in result["bindings"]
+    rendered = json.dumps(result, sort_keys=True)
+    assert "execute-acceptance" not in rendered
+    assert all(condition_id not in rendered for condition_id in condition_ids)
     assert "production_acceptance" not in result
     assert "class" not in result
 
@@ -882,12 +1076,68 @@ def test_rejects_public_identity_digest_not_recomputed_from_admission(field: str
         _derive(certificate)
 
 
-def test_rejects_author_supplied_certificate_trial_count() -> None:
+@pytest.mark.parametrize(
+    "field,replacement",
+    [
+        ("campaign_outcomes_sha256", "sha256:" + "0" * 64),
+        ("oracle_contract_sha256", "sha256:" + "0" * 64),
+        ("task_count", 2),
+        ("condition_count", 10),
+        ("required_trial_count", 26),
+        ("observed_trial_count", 28),
+    ],
+)
+def test_rejects_one_field_public_result_binding_substitution(
+    field: str,
+    replacement: str | int,
+) -> None:
     certificate = _certificate()
-    certificate["qualification"]["observed_trial_count"] = 28
+    certificate["qualification"][field] = replacement
 
-    with pytest.raises(MODULE.AcceptanceError, match="differs from retained rows"):
+    with pytest.raises(MODULE.AcceptanceError, match="differs"):
         _derive(certificate)
+
+
+@pytest.mark.parametrize(
+    "field,label_kind,replacement",
+    [
+        ("task_id_sha256", "qualification task", "execute-acceptance-mutated"),
+        (
+            "condition_id_sha256",
+            "qualification condition",
+            "healthy-01-mutated",
+        ),
+    ],
+)
+def test_one_field_task_condition_identity_mutation_changes_result_digest(
+    field: str,
+    label_kind: str,
+    replacement: str,
+) -> None:
+    result = _derive()
+    original_digest = MODULE.canonical_sha256(result)
+    mutated = copy.deepcopy(result)
+    mutated["trial_inventory"]["conditions"][0][field] = (
+        MODULE.privacy_safe_campaign_label_sha256(
+            label_kind,
+            _campaign()["campaign_id"],
+            replacement,
+        )
+    )
+
+    assert MODULE.canonical_sha256(mutated) != original_digest
+
+
+@pytest.mark.parametrize("failure", MODULE._FAILURE_TAXONOMY)
+def test_one_field_failure_taxonomy_count_mutation_changes_result_digest(
+    failure: str,
+) -> None:
+    result = _derive()
+    original_digest = MODULE.canonical_sha256(result)
+    mutated = copy.deepcopy(result)
+    mutated["derived_outcomes"][failure] += 1
+
+    assert MODULE.canonical_sha256(mutated) != original_digest
 
 
 def test_rejects_unknown_signer_fingerprint_scheme() -> None:
@@ -949,7 +1199,7 @@ def test_cli_refuses_before_it_reads_private_evidence(
 
 def test_rejects_collapsed_runner_observer_signing_identities() -> None:
     certificate = _certificate()
-    certificate["identities"]["managed_runner_signer_sha256"] = certificate["identities"][
+    certificate["identities"]["evidence_runner_signer_sha256"] = certificate["identities"][
         "target_observer_signer_sha256"
     ]
 
@@ -1526,7 +1776,7 @@ def test_verifier_binds_transparency_time_to_record_issuance(tmp_path: Path) -> 
         (("qualification",), "environment_digest", "sha256:" + "b" * 64),
         (
             ("identities",),
-            "managed_runner_signer_sha256",
+            "evidence_runner_signer_sha256",
             "sha256:" + "b" * 64,
         ),
     ],
@@ -1878,6 +2128,535 @@ def test_rejects_declared_effect_classification_not_derived_from_inventory() -> 
 
     with pytest.raises(MODULE.AcceptanceError, match="differ from its inventory"):
         _derive(certificate, campaign, admission)
+
+
+def test_production_acceptance_target_scope_map_is_closed() -> None:
+    assert MODULE.PRODUCTION_ACCEPTANCE_TARGET_SCOPES == {
+        "agent": "qualified_agent_bridge_release",
+        "capture": "qualified_native_recorder_release",
+        "cloud": "qualified_workflow_control_plane_deployment",
+        "desktop": "qualified_native_workflow_desktop_release",
+        "docs": "production_documentation_deployment",
+        "flow": "qualified_workflow_runtime_release",
+        "openadapt": "qualified_workflow_launcher_release",
+    }
+    assert MODULE.production_acceptance_policy_sha256() == (
+        "sha256:9b1fe55bc6796ae0a46960ca4aa335d88de60b0562c383afa1e85fa0a0c204b8"
+    )
+
+
+def test_builds_only_complete_target_neutral_production_manifest() -> None:
+    source = _derive()
+    original = copy.deepcopy(source)
+    lifecycle = _verified_flow_lifecycle(source)
+
+    manifest = MODULE.build_production_acceptance_manifest(
+        source,
+        "flow",
+        lifecycle_release=lifecycle,
+    )
+
+    assert set(manifest) == {
+        "schema_version",
+        "target",
+        "claim_scope",
+        "verdict",
+        "acceptance_policy_sha256",
+        "lifecycle_policy_sha256",
+        "target_release_sha256",
+        "target_artifact_inventory_sha256",
+        "evidence_identity_sha256",
+        "source_evidence",
+        "qualification",
+        "failure_taxonomy_counts",
+        "reliability",
+        "retention",
+    }
+    assert manifest["schema_version"] == "openadapt.production-acceptance/v1"
+    assert manifest["target"] == "flow"
+    assert manifest["claim_scope"] == "qualified_workflow_runtime_release"
+    assert manifest["verdict"] == "accepted"
+    assert manifest[
+        "acceptance_policy_sha256"
+    ] == MODULE.production_acceptance_policy_sha256()
+    assert manifest["lifecycle_policy_sha256"] == (
+        "sha256:" + MODULE.hashlib.sha256(_lifecycle_policy_bytes()).hexdigest()
+    )
+    assert set(manifest["source_evidence"]) == MODULE._PRODUCTION_SOURCE_EVIDENCE_KEYS
+    assert set(manifest["qualification"]) == MODULE._PRODUCTION_QUALIFICATION_KEYS
+    assert set(manifest["failure_taxonomy_counts"]) == set(MODULE._FAILURE_TAXONOMY)
+    assert set(manifest["reliability"]) == MODULE._RELIABILITY_KEYS
+    assert set(manifest["retention"]) == MODULE._RETENTION_KEYS
+    assert MODULE.validate_production_acceptance_manifest(
+        manifest,
+        source,
+        lifecycle_release=lifecycle,
+    ) == manifest
+    assert source == original
+    rendered = json.dumps(manifest, sort_keys=True)
+    assert "execute-acceptance" not in rendered
+    assert "healthy-01" not in rendered
+    assert '"conditions"' not in rendered
+
+
+def test_manifest_uses_exact_lifecycle_release_and_artifact_digest_domains() -> None:
+    source = _derive()
+    lifecycle = _verified_flow_lifecycle(source)
+    manifest = MODULE.build_production_acceptance_manifest(
+        source,
+        "flow",
+        lifecycle_release=lifecycle,
+    )
+    release = lifecycle.release()
+    artifacts = lifecycle.artifacts()
+    assert manifest["target_release_sha256"] == MODULE._domain_sha256(
+        b"OpenAdapt production lifecycle target release v1\0",
+        {
+            "target": "flow",
+            "claim_scope": "qualified_workflow_runtime_release",
+            "release": release,
+        },
+    )
+    assert manifest["target_artifact_inventory_sha256"] == MODULE._domain_sha256(
+        b"OpenAdapt production lifecycle artifact inventory v1\0",
+        {
+            "target": "flow",
+            "claim_scope": "qualified_workflow_runtime_release",
+            "artifacts": artifacts,
+        },
+    )
+
+
+def test_cloud_manifest_requires_reviewed_deployment_manifest_binding() -> None:
+    source = _derive()
+
+    with pytest.raises(MODULE.AcceptanceError, match="reviewed deployment-manifest binding"):
+        MODULE.build_production_acceptance_manifest(
+            source,
+            "cloud",
+            lifecycle_release=_verified_flow_lifecycle(source),
+        )
+
+
+@pytest.mark.parametrize(
+    "target",
+    ["agent", "capture", "desktop", "docs", "openadapt"],
+)
+def test_browser_source_refuses_target_without_its_evidence_adapter(target: str) -> None:
+    with pytest.raises(MODULE.AcceptanceError, match="requires its own evidence adapter"):
+        MODULE.build_production_acceptance_manifest(
+            _derive(),
+            target,
+            lifecycle_release=_verified_flow_lifecycle(),
+        )
+
+
+@pytest.mark.parametrize(
+    "path,replacement",
+    [
+        (("schema_version",), "openadapt.production-acceptance/v2"),
+        (("target",), "cloud"),
+        (("claim_scope",), "qualified_workflow_control_plane_deployment"),
+        (("verdict",), "rejected"),
+        (("acceptance_policy_sha256",), "sha256:" + "0" * 64),
+        (("lifecycle_policy_sha256",), "sha256:" + "0" * 64),
+        (("target_release_sha256",), "sha256:" + "0" * 64),
+        (("target_artifact_inventory_sha256",), "sha256:" + "0" * 64),
+        (("evidence_identity_sha256",), "sha256:" + "0" * 64),
+        (("source_evidence", "certificate_sha256"), "sha256:" + "0" * 64),
+        (("qualification", "oracle_contract_sha256"), "sha256:" + "0" * 64),
+        (("failure_taxonomy_counts", "verified"), 13),
+        (("reliability", "model_call_count"), 1),
+        (("retention", "head_verified"), False),
+    ],
+)
+def test_one_field_production_manifest_mutation_refuses(
+    path: tuple[str, ...],
+    replacement: object,
+) -> None:
+    source = _derive()
+    lifecycle = _verified_flow_lifecycle(source)
+    manifest = MODULE.build_production_acceptance_manifest(
+        source,
+        "flow",
+        lifecycle_release=lifecycle,
+    )
+    mutated = copy.deepcopy(manifest)
+    target: dict[str, object] = mutated
+    for key in path[:-1]:
+        nested = target[key]
+        assert isinstance(nested, dict)
+        target = nested
+    target[path[-1]] = replacement
+
+    with pytest.raises(MODULE.AcceptanceError):
+        MODULE.validate_production_acceptance_manifest(
+            mutated,
+            source,
+            lifecycle_release=lifecycle,
+        )
+
+
+def test_production_manifest_rejects_missing_or_extra_field() -> None:
+    source = _derive()
+    lifecycle = _verified_flow_lifecycle(source)
+    manifest = MODULE.build_production_acceptance_manifest(
+        source,
+        "flow",
+        lifecycle_release=lifecycle,
+    )
+    missing = copy.deepcopy(manifest)
+    del missing["acceptance_policy_sha256"]
+    extra = copy.deepcopy(manifest)
+    extra["production_ready"] = True
+
+    for mutation in (missing, extra):
+        with pytest.raises(MODULE.AcceptanceError, match="manifest keys differ"):
+            MODULE.validate_production_acceptance_manifest(
+                mutation,
+                source,
+                lifecycle_release=lifecycle,
+            )
+
+
+def test_lifecycle_release_must_be_verifier_derived_and_is_immutable() -> None:
+    source = _derive()
+    with pytest.raises(MODULE.AcceptanceError, match="verifier-derived"):
+        MODULE.build_production_acceptance_manifest(
+            source,
+            "flow",
+            lifecycle_release={},
+        )
+    lifecycle = _verified_flow_lifecycle(source)
+    with pytest.raises(AttributeError, match="immutable"):
+        lifecycle._target = "cloud"
+    release_copy = lifecycle.release()
+    release_copy["version"] = "9.9.9"
+    assert lifecycle.release()["version"] != "9.9.9"
+
+
+def test_lifecycle_release_cannot_be_constructed_from_caller_digests() -> None:
+    with pytest.raises(TypeError, match="only be created by the lifecycle verifier"):
+        MODULE.VerifiedProductionLifecycleRelease(
+            target="flow",
+            claim_scope="qualified_workflow_runtime_release",
+            lifecycle_policy_sha256="sha256:" + "0" * 64,
+            release={},
+            artifacts=[],
+            _seal=object(),
+        )
+
+
+def test_lifecycle_policy_digest_binds_exact_raw_bytes() -> None:
+    source = _derive()
+    policy, release, metadata = _flow_lifecycle_inputs(source)
+    lifecycle_a = MODULE.verify_production_lifecycle_release(
+        policy,
+        "flow",
+        release,
+        pypi_release_metadata=metadata,
+    )
+    lifecycle_b = MODULE.verify_production_lifecycle_release(
+        b"\n" + policy,
+        "flow",
+        release,
+        pypi_release_metadata=metadata,
+    )
+    assert lifecycle_a.lifecycle_policy_sha256 != lifecycle_b.lifecycle_policy_sha256
+    manifest_a = MODULE.build_production_acceptance_manifest(
+        source,
+        "flow",
+        lifecycle_release=lifecycle_a,
+    )
+    manifest_b = MODULE.build_production_acceptance_manifest(
+        source,
+        "flow",
+        lifecycle_release=lifecycle_b,
+    )
+    assert manifest_a["lifecycle_policy_sha256"] != manifest_b[
+        "lifecycle_policy_sha256"
+    ]
+    assert manifest_a["acceptance_policy_sha256"] == manifest_b[
+        "acceptance_policy_sha256"
+    ]
+
+
+@pytest.mark.parametrize(
+    "mutation,expected",
+    [
+        (lambda release: release.__setitem__("kind", "private_deployment"), "identity"),
+        (lambda release: release.__setitem__("tag", "v9.9.9"), "identity"),
+        (lambda release: release.__setitem__("source_commit", "bad"), "commit"),
+        (
+            lambda release: release.__setitem__(
+                "immutable_release_url",
+                "https://github.com/OpenAdaptAI/openadapt-flow/releases/tag/v1.0.0",
+            ),
+            "exact commit",
+        ),
+        (lambda release: release.__setitem__("extra", True), "keys differ"),
+    ],
+)
+def test_lifecycle_verifier_refuses_invalid_release_shape(
+    mutation: object,
+    expected: str,
+) -> None:
+    policy, release, metadata = _flow_lifecycle_inputs()
+    mutation(release)
+    with pytest.raises(MODULE.AcceptanceError, match=expected):
+        MODULE.verify_production_lifecycle_release(
+            policy,
+            "flow",
+            release,
+            pypi_release_metadata=metadata,
+        )
+
+
+@pytest.mark.parametrize(
+    "mutation,expected",
+    [
+        (lambda artifacts: artifacts.pop(), "one sdist and one wheel"),
+        (lambda artifacts: artifacts.reverse(), "sorted sdist and wheel"),
+        (
+            lambda artifacts: artifacts[0].__setitem__("authority", "github_release"),
+            "authority is invalid",
+        ),
+        (lambda artifacts: artifacts[0].__setitem__("name", "bad name"), "name"),
+        (lambda artifacts: artifacts[0].__setitem__("sha256", "bad"), "digest"),
+        (lambda artifacts: artifacts[0].__setitem__("size_bytes", 0), "size"),
+        (
+            lambda artifacts: artifacts[0].__setitem__(
+                "url", "https://example.com/openadapt_flow.tar.gz"
+            ),
+            "not from PyPI",
+        ),
+        (
+            lambda artifacts: artifacts[0].__setitem__(
+                "url",
+                str(artifacts[0]["url"]) + "?download=1",
+            ),
+            "clean HTTPS URL",
+        ),
+        (lambda artifacts: artifacts[0].__setitem__("extra", True), "keys differ"),
+    ],
+)
+def test_lifecycle_verifier_refuses_invalid_artifact_inventory(
+    mutation: object,
+    expected: str,
+) -> None:
+    policy, release, metadata = _flow_lifecycle_inputs()
+    artifacts = release["artifacts"]
+    assert isinstance(artifacts, list)
+    mutation(artifacts)
+    with pytest.raises(MODULE.AcceptanceError, match=expected):
+        MODULE.verify_production_lifecycle_release(
+            policy,
+            "flow",
+            release,
+            pypi_release_metadata=metadata,
+        )
+
+
+@pytest.mark.parametrize(
+    "field,replacement",
+    [
+        ("filename", "other.whl"),
+        ("url", "https://files.pythonhosted.org/packages/other.whl"),
+        ("size", 999),
+        ("yanked", True),
+    ],
+)
+def test_lifecycle_verifier_refuses_pypi_metadata_substitution(
+    field: str,
+    replacement: object,
+) -> None:
+    policy, release, metadata = _flow_lifecycle_inputs()
+    metadata["urls"][1][field] = replacement
+    with pytest.raises(MODULE.AcceptanceError, match="does not verify exact artifact"):
+        MODULE.verify_production_lifecycle_release(
+            policy,
+            "flow",
+            release,
+            pypi_release_metadata=metadata,
+        )
+
+
+def test_lifecycle_verifier_refuses_pypi_digest_and_duplicate_match() -> None:
+    policy, release, metadata = _flow_lifecycle_inputs()
+    metadata["urls"][1]["digests"]["sha256"] = "0" * 64
+    with pytest.raises(MODULE.AcceptanceError, match="does not verify exact artifact"):
+        MODULE.verify_production_lifecycle_release(
+            policy,
+            "flow",
+            release,
+            pypi_release_metadata=metadata,
+        )
+
+    policy, release, metadata = _flow_lifecycle_inputs()
+    metadata["urls"].append(copy.deepcopy(metadata["urls"][1]))
+    with pytest.raises(MODULE.AcceptanceError, match="does not verify exact artifact"):
+        MODULE.verify_production_lifecycle_release(
+            policy,
+            "flow",
+            release,
+            pypi_release_metadata=metadata,
+        )
+
+
+def test_lifecycle_verifier_refuses_policy_target_drift_and_duplicate_keys() -> None:
+    policy, release, metadata = _flow_lifecycle_inputs()
+    policy_value = json.loads(policy)
+    flow = next(item for item in policy_value["targets"] if item["id"] == "flow")
+    flow["required_claim_scope"] = "qualified_other_release"
+    with pytest.raises(MODULE.AcceptanceError, match="policy differs"):
+        MODULE.verify_production_lifecycle_release(
+            json.dumps(policy_value).encode(),
+            "flow",
+            release,
+            pypi_release_metadata=metadata,
+        )
+    duplicate = policy.replace(
+        b'"revision": 1,',
+        b'"revision": 1, "revision": 1,',
+        1,
+    )
+    with pytest.raises(MODULE.AcceptanceError, match="duplicate key"):
+        MODULE.verify_production_lifecycle_release(
+            duplicate,
+            "flow",
+            release,
+            pypi_release_metadata=metadata,
+        )
+
+
+@pytest.mark.parametrize("field", ["version", "source_commit", "wheel_sha256"])
+def test_flow_lifecycle_binding_substitution_refuses(field: str) -> None:
+    source = _derive()
+    policy, release, metadata = _flow_lifecycle_inputs(source)
+    if field == "version":
+        release["version"] = "9.9.9"
+        release["tag"] = "v9.9.9"
+        metadata["info"]["version"] = "9.9.9"
+    elif field == "source_commit":
+        release["source_commit"] = "0" * 40
+        release["immutable_release_url"] = (
+            "https://github.com/OpenAdaptAI/openadapt-flow/commit/" + "0" * 40
+        )
+    else:
+        release["artifacts"][1]["sha256"] = "sha256:" + "0" * 64
+        metadata["urls"][1]["digests"]["sha256"] = "0" * 64
+    lifecycle = MODULE.verify_production_lifecycle_release(
+        policy,
+        "flow",
+        release,
+        pypi_release_metadata=metadata,
+    )
+    with pytest.raises(MODULE.AcceptanceError, match="differs from verified evidence"):
+        MODULE.build_production_acceptance_manifest(
+            source,
+            "flow",
+            lifecycle_release=lifecycle,
+        )
+
+
+def test_unbound_cloud_deployment_manifest_cannot_enter_an_accepted_record() -> None:
+    source = _derive()
+    with pytest.raises(MODULE.AcceptanceError, match="reviewed deployment-manifest binding"):
+        MODULE.build_production_acceptance_manifest(
+            source,
+            "cloud",
+            lifecycle_release={
+                "kind": "private_deployment",
+                "manifest_sha256": "sha256:" + "0" * 64,
+            },
+        )
+
+
+def test_incomplete_or_failed_private_source_cannot_build_manifest() -> None:
+    source = _derive()
+    lifecycle = _verified_flow_lifecycle(source)
+    mutations = []
+    wrong_verdict = copy.deepcopy(source)
+    wrong_verdict["verdict"] = "rejected"
+    mutations.append(wrong_verdict)
+    missing_binding = copy.deepcopy(source)
+    del missing_binding["bindings"]["oracle_contract_sha256"]
+    mutations.append(missing_binding)
+    production_failure = copy.deepcopy(source)
+    production_failure["derived_outcomes"]["verified"] -= 1
+    production_failure["derived_outcomes"]["over_halt"] += 1
+    production_failure["reliability"]["over_halt_count"] = 1
+    mutations.append(production_failure)
+
+    for mutation in mutations:
+        with pytest.raises(MODULE.AcceptanceError):
+            MODULE.build_production_acceptance_manifest(
+                mutation,
+                "flow",
+                lifecycle_release=lifecycle,
+            )
+
+
+def test_private_source_reliability_schema_is_closed() -> None:
+    source = _derive()
+    lifecycle = _verified_flow_lifecycle(source)
+    missing = copy.deepcopy(source)
+    del missing["reliability"]["operator_intervention_count"]
+    extra = copy.deepcopy(source)
+    extra["reliability"]["duplicate_count"] = 0
+
+    for mutation in (missing, extra):
+        with pytest.raises(MODULE.AcceptanceError, match="reliability keys differ"):
+            MODULE.build_production_acceptance_manifest(
+                mutation,
+                "flow",
+                lifecycle_release=lifecycle,
+            )
+
+
+@pytest.mark.parametrize(
+    "field,replacement,expected",
+    [
+        ("receipt_id", "retention:not-a-receipt", "receipt ID"),
+        ("retention_mode", "GOVERNANCE", "not COMPLIANCE"),
+        ("provenance_attestation", "unreviewed-v1", "provenance"),
+        ("head_verified", False, "head_verified is false"),
+        (
+            "acceptance_verified_at",
+            "2026-08-18T12:00:00Z",
+            "canonical millisecond UTC form",
+        ),
+        (
+            "retained_at",
+            "2026-08-18T11:59:59.000Z",
+            "chronology",
+        ),
+        (
+            "retention_until",
+            "2026-08-19T12:01:00.000Z",
+            "period is outside policy",
+        ),
+        (
+            "retention_until",
+            "2037-08-18T12:01:00.000Z",
+            "period is outside policy",
+        ),
+    ],
+)
+def test_private_source_retention_mutation_refuses(
+    field: str,
+    replacement: object,
+    expected: str,
+) -> None:
+    source = _derive()
+    source["retention"][field] = replacement
+
+    with pytest.raises(MODULE.AcceptanceError, match=expected):
+        MODULE.build_production_acceptance_manifest(
+            source,
+            "flow",
+            lifecycle_release=_verified_flow_lifecycle(),
+        )
 
 
 def test_mutation_helpers_do_not_modify_committed_fixtures() -> None:
