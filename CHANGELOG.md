@@ -1,6 +1,145 @@
 # CHANGELOG
 
 
+## v0.91.0 (2026-08-19)
+
+### Chores
+
+- Refuse false benchmark completion
+  ([`8132e60`](https://github.com/OpenAdaptAI/openadapt-evals/commit/8132e6078a7510f83193863165a958ec57e4818d))
+
+### Continuous Integration
+
+- Bind current evidence inputs ([#285](https://github.com/OpenAdaptAI/openadapt-evals/pull/285),
+  [`b5a8124`](https://github.com/OpenAdaptAI/openadapt-evals/commit/b5a81240ef0b2cd0207f80f86af38114fb904b64))
+
+* ci: bind current evidence inputs
+
+* ci: fail closed on incomplete evidence bindings
+
+* evidence: publish governed Flow 1.30 campaign
+
+- Bound the apt install and prefer the canonical Ubuntu archive
+  ([#289](https://github.com/OpenAdaptAI/openadapt-evals/pull/289),
+  [`233d832`](https://github.com/OpenAdaptAI/openadapt-evals/commit/233d8325e32b476124fdb08a84e0166defeb9cbd))
+
+The hosted runner resolves its Ubuntu mirror through /etc/apt/apt-mirrors.txt, which points at
+  azure.archive.ubuntu.com. That mirror fails intermittently and apt spends minutes of retries
+  before it falls back, so an unbounded package step can consume a whole run: in openadapt-flow a
+  TeX install ran 3h11m and hit the run limit, and in openadapt-capture a test job ran over an hour
+  on main.
+
+headed-pixel-campaign has a 15-minute job budget but the X11 fixture step had no bound of its own,
+  so one hung apt call could spend all 15 minutes and the campaign -- the point of the job -- would
+  never run. Bound the step to 5 minutes and prefer the canonical archive.
+
+Five minutes is a wide margin: the equivalent apt step in openadapt-capture takes 19s, and 5 minutes
+  still covers three update attempts plus 30s of backoff while leaving at least 10 of the 15 job
+  minutes for `uv sync` and the campaign.
+
+The package list, the `command -v` guard that skips apt when the tools already exist, and the
+  trailing tkinter check are unchanged.
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+- Run pull-request checks on every base branch
+  ([#288](https://github.com/OpenAdaptAI/openadapt-evals/pull/288),
+  [`b39325c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/b39325ca6762fafa2841a02c35f569acf90be7fe))
+
+A stacked pull request matched no `pull_request` trigger because every trigger filtered `branches:
+  [main]`, so it reported zero checks while `mergeStateStatus` stayed CLEAN. An unverified pull
+  request was indistinguishable from a passing one.
+
+Removes the base-branch filter from the three `pull_request` triggers. The `push` trigger keeps
+  `branches: [main]`, and `complex-visual` and `evidence-freshness` keep their `paths` filters.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+### Documentation
+
+- **evidence**: Publish Flow 1.31.0 evidence and enforce maturity boundaries
+  ([#286](https://github.com/OpenAdaptAI/openadapt-evals/pull/286),
+  [`d9ee6e4`](https://github.com/OpenAdaptAI/openadapt-evals/commit/d9ee6e41504fbb1738ccf2d9a276e1f1821c9c5d))
+
+Publishes a fresh Flow 1.31.0 comparison, independent replication, transaction-fault probe, and
+  remote-lease contract probe (93 counted trials). Marks the Flow 1.30.0 set superseded rather than
+  editing or deleting it. Adds machine checks for minimum trial count, task/oracle/invariants,
+  failure taxonomy, caveats, silent-incorrect-success and over-halt coverage, evidence class, scope
+  booleans, and set-level production-acceptance consistency, and rejects production-acceptance
+  claims from synthetic or fixture evidence.
+
+Fixes the daily evidence-freshness scheduled failure that has run red since 2026-08-10.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+- **evidence**: Rebind published evidence to Flow 1.27.1
+  ([`71edc88`](https://github.com/OpenAdaptAI/openadapt-evals/commit/71edc889035d998cac518ddf69b42860730533d7))
+
+Re-measure the published comparison and transaction probe against the exact 1.27.1 wheel; mark
+  1.24.0 superseded. The freshness check was correct and is unchanged.
+
+- **evidence**: Rebind published evidence to Flow 1.28.0
+  ([#283](https://github.com/OpenAdaptAI/openadapt-evals/pull/283),
+  [`9dd8021`](https://github.com/OpenAdaptAI/openadapt-evals/commit/9dd802114c6d78bcb15f75183d902118aa59e0d4))
+
+Re-measure the comparison, the transaction probe, and a new remote frame-lease safety probe against
+  the exact 1.28.0 wheel; mark 1.27.1 superseded. Both harnesses and the MockMed fixture are
+  byte-identical to the 1.27.1 measurement, so the comparison is controlled. The freshness check was
+  correct and is unchanged.
+
+### Features
+
+- **evidence**: Verify retained production acceptance evidence
+  ([#287](https://github.com/OpenAdaptAI/openadapt-evals/pull/287),
+  [`fd9b60b`](https://github.com/OpenAdaptAI/openadapt-evals/commit/fd9b60b76dbcb75cd93bd013f3003f766dd6af2b))
+
+Adds a strict verifier for the Cloud production-acceptance certificate, GitHub provenance,
+  immutable-retention receipt, signed qualification admission, and complete qualification campaign.
+  It recomputes the admission, runtime-validation, workflow-version, organization, workflow,
+  campaign, contract, outcomes, oracle, and trial-count bindings, and derives the failure taxonomy
+  from signed trial rows and receipts instead of author-declared counts or maturity flags.
+
+It rejects unknown or revoked admission signers, changed issuer scope, collapsed admission and
+  runtime identities, incomplete trial rows, excluded or hidden trials, duplicate attempt and run
+  IDs, unreferenced receipt envelopes, unsigned receipt bodies, self-hosted runners, and
+  self-supplied trust registries. Path resolution now refuses symlinked components and any resolved
+  path outside the repository root.
+
+The public entry point `import_files` refuses every import until one approved private-export
+  contract exists, so no campaign, class, boolean, or summary count can declare production
+  acceptance. The checked-in fixtures are synthetic test vectors.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+### Testing
+
+- Add complex visual workflow campaign
+  ([#284](https://github.com/OpenAdaptAI/openadapt-evals/pull/284),
+  [`1082192`](https://github.com/OpenAdaptAI/openadapt-evals/commit/1082192e9c2ec299d31330608c1016a939d3b88d))
+
+* test: add complex visual workflow campaign
+
+* test: drive complex campaign through pixels
+
+* test: use headed evidence-driven visual fixture
+
+* fix: resolve retained glyph evidence at both scales
+
+* fix: wait for headed windows before recording
+
+* fix: harden visual benchmark evidence contract
+
+* fix: wait for presented authoring targets
+
+* fix: sample visible task card cells
+
+* fix: make stale-frame fault monotonic
+
+* Harden complex visual benchmark authority
+
+* Provide read-only actor runtime
+
+
 ## v0.90.3 (2026-07-28)
 
 ### Bug Fixes
