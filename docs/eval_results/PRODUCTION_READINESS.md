@@ -10,9 +10,183 @@ evidence set matches the current published `openadapt-flow` release. It does
 not mean the campaign is production acceptance. The evidence manifest records
 that distinction in `campaigns[].evidence_scope.production_acceptance`.
 
+That campaign field is now descriptive only and must remain `false`. A person
+cannot promote an evidence set by changing it, changing an evidence class, or
+adding summary counts. Production acceptance can enter this repository only
+through `scripts/import_production_acceptance.py` after the private-export gate
+opens.
+
+## Independent hosted-acceptance verifier
+
+The verifier mechanism is implemented. The private-evidence import is not
+enabled. `import_files` refuses every file import until OpenAdapt approves one
+exact private-export contract. Do not export an admission or campaign to this
+repository. Do not set `production_acceptance: true` while this gate is closed.
+The checked-in fixtures are synthetic test vectors only.
+
+The future approval must bind the complete payload schema and digest, the
+destination account, service, container, and prefix, the encryption-key
+identity, the immutable retention mode and period, the authorized importer
+workflow and ref, and the approval authority. A broad enable flag or approval
+of only the admission and campaign digests is not sufficient.
+
+After approval, the importer will compose four evidence inputs:
+
+1. The closed `openadapt.execute-live-acceptance-record/v2` certificate from
+   the protected Cloud production workflow.
+2. The signed `openadapt.qualification-admission/v2` envelope from the
+   protected qualification authority.
+3. The full `openadapt.qualification-campaign/v2` artifact with every retained
+   trial row and normalized evidence receipt for the exact qualification
+   contract.
+4. The GitHub artifact-attestation bundle for the certificate bytes.
+
+The future importer also needs external control inputs: the approved Cloud
+source commit, the approved qualification signer registry, the admission and
+signer revocation lists, and the exact private-export approval. The evidence
+artifacts cannot select these values. The full admission and campaign stay in
+the encrypted retained evidence package until that approval exists. After
+approval, a protected job can stage only the approved payload for
+verification. The derived public result contains hashes and bounded counts. It
+does not contain tenant or workflow identifiers.
+
+The verifier asks GitHub CLI to verify the certificate against the exact
+`OpenAdaptAI/openadapt-cloud` workflow on `refs/heads/main`, the GitHub Actions
+OIDC issuer, and a GitHub-hosted runner. It then validates the verified SLSA
+provenance. It refuses an unknown repository, workflow, ref, source digest,
+issuer, runner class, signature, or empty verification result.
+
+The expected Cloud commit is an external reviewer input. The importer requires
+the certificate commit, the GitHub signing-certificate source commit, and the
+SLSA resolved `gitCommit` to equal that value. It also requires the signing
+certificate and the SLSA source dependency to use `refs/heads/main`. The
+certificate cannot select its own approved commit.
+
+The evidence manifest does not store or select this approval. The repository
+checker reads it from the protected `APPROVED_CLOUD_ACCEPTANCE_COMMIT` GitHub
+repository variable. A production declaration fails when that variable is
+absent or differs from the certificate and verified provenance.
+
+The certificate is necessary but not sufficient. It proves one authenticated,
+qualified browser transaction and binds the private request, idempotent
+responses, runner delivery, result, report, receipt, target attestation,
+single-use runner permit, independent observer, webhook, billing outcome, and
+separate signing identities by digest. The importer also verifies the external
+qualification admission. It checks the exact issuer workflow and main-branch
+commit, the Ed25519 signature, the derived key ID, the active time window, and
+the external admission and key revocation lists. It refuses a trust key that
+the imported evidence supplies for itself.
+
+The admission signs one shared evidence identity for the exact workflow,
+campaign, environment, Flow release and wheel, runner build and artifact,
+browser image, runtime manifest, signer registry revision, and every admitted
+contract. The certificate repeats the public domain-separated campaign,
+admission, runtime-validation, and workflow-version digests. The importer
+recomputes each digest from the retained admission. The admission also signs
+canonical hashes for the full campaign, qualification contract, outcomes
+projection, oracle, and exact task inventory. The campaign must retain every
+condition in the bound qualification contract and at least three unique trials
+for each condition. Trial indexes are one-based and contiguous. Attempt IDs
+and run IDs cannot repeat. An excluded or hidden trial causes refusal.
+
+The shared identity calls the receipt authority
+`evidence_runner_signer_sha256`. This name applies to browser, native Desktop,
+BYOC, RDP, Citrix, and offline customer-controlled evidence. It does not imply
+that the evidence runner is an OpenAdapt-managed browser runner.
+
+Each `openadapt.qualification-trial-row/v2` trial refers to hash-keyed
+`openadapt.qualification-evidence-receipt/v2` Ed25519 envelopes for the runner,
+independent observer, webhook, replay, cleanup, and cleanup-absence result.
+Fault cases also require a signed fault receipt. The importer verifies each
+envelope body, signature, authority key, source digest, task, condition, trial
+index, attempt, run, workflow version, bundle artifact, runtime validation,
+admission, evidence identity, verdict, and time. A digest with no signed body is
+not evidence. An unused envelope is hidden evidence and causes refusal.
+
+The importer classifies the verified rows itself. The signed observer receipt
+contains the exact effect inventory. The signed runner receipt contains the
+model-call counters, provider-model inventory, egress-policy digest, report
+digest, and operator-intervention inventory. The importer derives failures
+from these facts. It rejects a count-only claim, declared production class or
+boolean, unsupported failure class, vacuous invariant, healthy-path contract
+that permits a model call, healthy-path model call, silent incorrect success,
+over-halt, wrong-record effect, duplicate effect, collateral effect, uncertain
+delivery, platform failure, or operator intervention.
+
+The derived result binds the certificate's campaign-outcomes and independent
+oracle-contract digests. It repeats the validated task, condition, required
+trial, and observed trial counts. It includes every closed failure-taxonomy
+count used for the verdict. Task and condition identities use domain-separated
+SHA-256 values. The public result does not contain the private task or condition
+labels. The derived-result file digest therefore changes after a one-field
+change to a binding, count, or privacy-safe identity.
+
+## Target-neutral acceptance manifest
+
+The importer contains a pure builder and validator for the closed
+`openadapt.production-acceptance/v1` manifest. The mechanism does not write,
+sign, export, attest, or publish a manifest. It accepts only a complete accepted
+private result. It binds the target and its exact claim scope in both the fixed
+policy and the manifest.
+
+| Target | Exact claim scope |
+| --- | --- |
+| `agent` | `qualified_agent_bridge_release` |
+| `capture` | `qualified_native_recorder_release` |
+| `cloud` | `qualified_workflow_control_plane_deployment` |
+| `desktop` | `qualified_native_workflow_desktop_release` |
+| `docs` | `production_documentation_deployment` |
+| `flow` | `qualified_workflow_runtime_release` |
+| `openadapt` | `qualified_workflow_launcher_release` |
+
+The current browser evidence adapter can build only the Flow target manifest.
+The other targets require their own evidence adapter. Cloud also requires a
+reviewed deployment-manifest binding. The builder refuses Cloud until that
+binding exists. It does not emit a placeholder or failed record when an adapter
+is absent.
+
+For Flow, a separate lifecycle verifier accepts the exact raw lifecycle-policy
+bytes, one closed public-package release, and the PyPI release metadata. It
+requires the exact GitHub source-commit URL. It requires one sorted sdist and
+one wheel. Each artifact includes its authority, kind, name, URL, size, and
+SHA-256 digest. The verifier matches each field to exactly one non-yanked PyPI
+file. It then returns an immutable verified-release object. A caller-supplied
+mapping or digest cannot replace this object.
+
+The pure manifest builder accepts only this verified-release object. It matches
+the Flow version, source commit, and wheel digest to the private result. It
+binds the complete sdist and wheel inventory. It uses the same release and
+artifact digest domains as the Production lifecycle validator. The manifest
+contains two separate policy digests. The acceptance-policy digest covers the
+fixed Evals acceptance rules. The lifecycle-policy digest covers the exact raw
+lifecycle-policy bytes.
+
+The public qualification section contains aggregate trial counts and one
+campaign-scoped task-condition inventory digest. It does not publish task or
+condition labels. The closed source-result digest remains the authority for the
+hidden per-condition inventory.
+
+When the private-export gate opens, the output claim will be only
+`qualified_browser_workflow_on_bound_environment`. It is not a general product
+production-readiness claim. The checker can accept `production_acceptance: true`
+only when the evidence manifest contains digest-bound links to all four inputs
+and the exact derived output, the protected workflow supplies the external
+trust, revocation, and export-approval controls, and the importer reproduces
+that output. Until then, the importer refuses. A bare registry boolean or
+campaign label fails the check.
+
+Cloud does not issue a complete acceptance record before it verifies durable
+retention. The private evidence envelope uses encrypted immutable storage with
+Object Lock and KMS. The public record retains only opaque digests and the
+verified retention facts. The importer verifies the public retention receipt
+and its exact binding to the candidate and retained envelope. GitHub artifact
+retention alone does not satisfy this contract.
+
 ## What the current public Evals set establishes
 
 The Flow 1.31.0 set contains four campaigns. Every condition has three trials.
+This set is development evidence. It is not a Production lifecycle admission,
+and this change does not emit a Production record for it.
 
 | Campaign | Environment | What it measures | Production acceptance |
 | --- | --- | --- | --- |

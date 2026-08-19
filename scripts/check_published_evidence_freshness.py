@@ -19,11 +19,15 @@ What is checked, against ``docs/eval_results/PUBLISHED_EVIDENCE.json``:
 5. Every ``superseded`` set names the set that replaced it.
 6. Its verifier, result, replication, public-report, task/oracle, campaign,
    browser, and installed-dependency inventories are complete and exact.
-7. Every campaign states whether it is production acceptance, and the checker
-   derives silent-incorrect-success and over-halt coverage from the retained
-   result instead of accepting an unsupported maturity label.
+7. A campaign cannot declare production acceptance through a class, boolean,
+   or summary count.  The checker accepts that state only from the independent
+   certificate/admission/campaign importer.
+8. A production import is digest-bound, GitHub-attestation verified, signed by
+   an externally trusted qualification authority, contains at least three
+   retained trials per qualification condition, verifies every normalized
+   evidence receipt, and derives the failure taxonomy from those trial rows.
 
-Checks 1, 2 and 5-7 are offline and always run.  Checks 3 and 4 need PyPI: pass
+Checks 1, 2 and 5-8 are offline and always run.  Checks 3 and 4 need PyPI: pass
 ``--current-version``/``--current-wheel-sha256`` to supply the release
 out-of-band, or ``--offline`` to skip them.  A network failure is reported and
 skipped rather than failing the build -- it is not evidence of drift.  Actual
@@ -34,7 +38,9 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
+import stat
 import sys
 import urllib.error
 import urllib.request
@@ -44,6 +50,14 @@ from typing import Any, Optional
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = REPO_ROOT / "docs" / "eval_results" / "PUBLISHED_EVIDENCE.json"
 PYPI_URL = "https://pypi.org/pypi/{package}/json"
+PRODUCTION_IMPORTER = Path(__file__).resolve().with_name("import_production_acceptance.py")
+PRODUCTION_SPEC = importlib.util.spec_from_file_location(
+    "_production_acceptance_importer",
+    PRODUCTION_IMPORTER,
+)
+assert PRODUCTION_SPEC is not None and PRODUCTION_SPEC.loader is not None
+PRODUCTION = importlib.util.module_from_spec(PRODUCTION_SPEC)
+PRODUCTION_SPEC.loader.exec_module(PRODUCTION)
 
 
 class DriftError(Exception):
@@ -129,8 +143,25 @@ def _safe_file(repo_root: Path, relative: object) -> Path | None:
     path = Path(relative)
     if path.is_absolute() or ".." in path.parts:
         return None
+    try:
+        resolved_root = repo_root.resolve(strict=True)
+    except OSError:
+        return None
+    component = repo_root
+    for part in path.parts:
+        component = component / part
+        if component.is_symlink():
+            return None
     candidate = repo_root / path
-    return candidate if candidate.is_file() else None
+    try:
+        candidate_stat = candidate.lstat()
+        resolved_candidate = candidate.resolve(strict=True)
+        resolved_candidate.relative_to(resolved_root)
+    except (OSError, ValueError):
+        return None
+    if not stat.S_ISREG(candidate_stat.st_mode):
+        return None
+    return candidate
 
 
 def _relative_file(repo_root: Path, relative: object) -> tuple[Path | None, str | None]:
@@ -140,6 +171,119 @@ def _relative_file(repo_root: Path, relative: object) -> tuple[Path | None, str 
     if path is None:
         return None, None
     return path, path.relative_to(repo_root).as_posix()
+
+
+def _production_import_file(
+    value: object,
+    label: str,
+    repo_root: Path,
+) -> tuple[Path | None, str | None, list[str]]:
+    """Validate one digest-bound file link in a production import."""
+
+    if not isinstance(value, dict) or set(value) != {"path", "sha256"}:
+        return None, None, [f"production acceptance {label} link must contain path and sha256"]
+    path, normalized = _relative_file(repo_root, value.get("path"))
+    if path is None or normalized is None:
+        return None, None, [f"production acceptance {label} path is missing or unsafe"]
+    if value.get("sha256") != _sha256(path):
+        return None, None, [f"production acceptance {label} digest changed"]
+    return path, normalized, []
+
+
+def _check_production_acceptance_import(
+    entry: dict[str, Any],
+    binding: dict[str, Any],
+    repo_root: Path,
+    bound_artifacts: set[str],
+    approved_cloud_source_commit: str | None,
+    trusted_admission_signers: dict[str, Any],
+    revoked_admission_ids: set[str],
+    revoked_admission_signer_key_ids: set[str],
+) -> list[str]:
+    """Derive production acceptance; never accept a registry or campaign flag."""
+
+    prefix = f"{entry['path']}: "
+    declared = entry.get("production_acceptance")
+    if not isinstance(declared, bool):
+        return [prefix + "PUBLISHED_EVIDENCE production_acceptance must be boolean"]
+    imported = binding.get("production_acceptance_import")
+    if not declared:
+        if imported is not None:
+            return [prefix + "production acceptance import exists but the registry is false"]
+        return []
+    if not isinstance(imported, dict) or set(imported) != {
+        "certificate",
+        "campaign",
+        "qualification_admission",
+        "attestation_bundle",
+        "derived_result",
+    }:
+        return [
+            prefix
+            + "production acceptance requires a verified certificate/campaign import; "
+            "a declared boolean is not evidence"
+        ]
+
+    paths: dict[str, Path] = {}
+    normalized_paths: set[str] = set()
+    problems: list[str] = []
+    if (
+        not isinstance(approved_cloud_source_commit, str)
+        or len(approved_cloud_source_commit) != 40
+        or any(
+            character not in "0123456789abcdef"
+            for character in approved_cloud_source_commit
+        )
+    ):
+        problems.append(
+            prefix
+            + "an exact externally approved Cloud source commit is required"
+        )
+    for label in (
+        "certificate",
+        "campaign",
+        "qualification_admission",
+        "attestation_bundle",
+        "derived_result",
+    ):
+        value = imported[label]
+        path, normalized, link_problems = _production_import_file(value, label, repo_root)
+        problems.extend(prefix + problem for problem in link_problems)
+        if path is not None and normalized is not None:
+            paths[label] = path
+            normalized_paths.add(normalized)
+    if problems:
+        return problems
+    if not normalized_paths.issubset(bound_artifacts):
+        return [prefix + "production acceptance import files are outside the artifact inventory"]
+    if len(normalized_paths) != 5:
+        return [prefix + "production acceptance import files must be distinct"]
+    try:
+        derived = PRODUCTION.import_files(
+            paths["certificate"],
+            paths["campaign"],
+            paths["qualification_admission"],
+            paths["attestation_bundle"],
+            approved_cloud_source_commit,
+            trusted_admission_signers=trusted_admission_signers,
+            revoked_admission_ids=revoked_admission_ids,
+            revoked_admission_signer_key_ids=revoked_admission_signer_key_ids,
+        )
+        retained = load_manifest(paths["derived_result"])
+    except (PRODUCTION.AcceptanceError, OSError, json.JSONDecodeError) as exc:
+        return [prefix + f"production acceptance import was refused: {exc}"]
+    if retained != derived:
+        problems.append(prefix + "retained production acceptance result is not independently derived")
+    bindings = derived.get("bindings", {})
+    if bindings.get("flow_version") != entry.get("flow_version"):
+        problems.append(prefix + "production acceptance Flow version differs from the registry")
+    if bindings.get("flow_release_commit") != entry.get("flow_source_commit"):
+        problems.append(prefix + "production acceptance Flow commit differs from the registry")
+    if bindings.get("flow_wheel_sha256") != f"sha256:{entry.get('wheel_sha256')}":
+        problems.append(prefix + "production acceptance Flow wheel differs from the registry")
+    if derived.get("claim_scope") != PRODUCTION.CLAIM_SCOPE:
+        problems.append(prefix + "production acceptance claim scope is not supported")
+    return problems
 
 
 def _validated_bindings(
@@ -277,7 +421,14 @@ def _check_task_standard(document: dict[str, Any], campaign_name: object) -> lis
     return problems
 
 
-def check_evidence_manifest(entry: dict[str, Any], repo_root: Path) -> list[str]:
+def check_evidence_manifest(
+    entry: dict[str, Any],
+    repo_root: Path,
+    approved_cloud_source_commit: str | None = None,
+    trusted_admission_signers: dict[str, Any] | None = None,
+    revoked_admission_ids: set[str] | None = None,
+    revoked_admission_signer_key_ids: set[str] | None = None,
+) -> list[str]:
     """Verify the current result set is still the exact measurement set."""
 
     problems: list[str] = []
@@ -338,7 +489,6 @@ def check_evidence_manifest(entry: dict[str, Any], repo_root: Path) -> list[str]
         )
 
     campaigns = binding.get("campaigns")
-    production_acceptance_values: list[bool] = []
     seen_results: set[str] = set()
     if not isinstance(campaigns, list) or not campaigns:
         problems.append(prefix + "campaigns must be a non-empty list")
@@ -480,21 +630,11 @@ def check_evidence_manifest(entry: dict[str, Any], repo_root: Path) -> list[str]
                     problems.append(
                         prefix + f"campaign production acceptance is not boolean: {name!r}"
                     )
-                elif production_acceptance and set(metric_coverage.values()) != {"counted"}:
+                elif production_acceptance:
                     problems.append(
                         prefix
-                        + f"campaign claims production acceptance without required reliability metrics: {name!r}"
+                        + f"campaign production acceptance cannot be declared; use the verified importer: {name!r}"
                     )
-                elif production_acceptance and evidence_scope.get("class") not in {
-                    "customer_environment",
-                    "production",
-                }:
-                    problems.append(
-                        prefix
-                        + f"campaign claims production acceptance from a synthetic or fixture class: {name!r}"
-                    )
-                else:
-                    production_acceptance_values.append(production_acceptance)
         result_artifacts = {
             path
             for path in bound_artifacts
@@ -506,15 +646,6 @@ def check_evidence_manifest(entry: dict[str, Any], repo_root: Path) -> list[str]
                 + "campaign results inventory differs from retained results: "
                 + f"missing={sorted(result_artifacts - seen_results)}, extra={sorted(seen_results - result_artifacts)}"
             )
-    entry_production_acceptance = entry.get("production_acceptance")
-    if not isinstance(entry_production_acceptance, bool):
-        problems.append(prefix + "PUBLISHED_EVIDENCE production_acceptance must be boolean")
-    elif entry_production_acceptance != (
-        bool(production_acceptance_values) and all(production_acceptance_values)
-    ):
-        problems.append(
-            prefix + "PUBLISHED_EVIDENCE production_acceptance disagrees with campaign scopes"
-        )
     contracts = binding.get("task_contracts")
     if not isinstance(contracts, list) or not contracts:
         problems.append(f"{entry['path']}: task_contracts are missing")
@@ -550,6 +681,18 @@ def check_evidence_manifest(entry: dict[str, Any], repo_root: Path) -> list[str]
                 + "task contract inventory differs from campaign results: "
                 + f"missing={sorted(seen_results - seen_contracts)}, extra={sorted(seen_contracts - seen_results)}"
             )
+    problems.extend(
+        _check_production_acceptance_import(
+            entry,
+            binding,
+            repo_root,
+            bound_artifacts,
+            approved_cloud_source_commit,
+            trusted_admission_signers or {},
+            revoked_admission_ids or set(),
+            revoked_admission_signer_key_ids or set(),
+        )
+    )
     return problems
 
 
@@ -592,6 +735,34 @@ def fetch_current_release(package: str, timeout: float = 20.0) -> tuple[str, Opt
     return version, wheel_sha
 
 
+def _external_json_object(value: str | None, label: str) -> dict[str, Any]:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise DriftError(f"{label} is not valid JSON") from exc
+    if not isinstance(parsed, dict):
+        raise DriftError(f"{label} must be a JSON object")
+    return parsed
+
+
+def _external_json_string_set(value: str | None, label: str) -> set[str]:
+    if not value:
+        return set()
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise DriftError(f"{label} is not valid JSON") from exc
+    if (
+        not isinstance(parsed, list)
+        or not all(isinstance(item, str) and item for item in parsed)
+        or len(parsed) != len(set(parsed))
+    ):
+        raise DriftError(f"{label} must be a unique JSON string list")
+    return set(parsed)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Fail when published evidence drifts from the current published engine release."
@@ -611,6 +782,25 @@ def main(argv: list[str] | None = None) -> int:
         "--current-wheel-sha256",
         help="Supply the current published wheel digest instead of querying PyPI.",
     )
+    parser.add_argument(
+        "--approved-cloud-source-commit",
+        help=(
+            "Externally reviewed Cloud commit. Required when the current evidence "
+            "declares production acceptance."
+        ),
+    )
+    parser.add_argument(
+        "--trusted-admission-signers-json",
+        help="External JSON trust registry for approved qualification admission signers.",
+    )
+    parser.add_argument(
+        "--revoked-admission-ids-json",
+        help="External JSON list of revoked qualification admission IDs.",
+    )
+    parser.add_argument(
+        "--revoked-admission-signer-key-ids-json",
+        help="External JSON list of revoked qualification signer key IDs.",
+    )
     args = parser.parse_args(argv)
 
     manifest = load_manifest(args.manifest)
@@ -618,13 +808,34 @@ def main(argv: list[str] | None = None) -> int:
     problems: list[str] = []
     try:
         entry = current_entry(manifest)
+        trusted_admission_signers = _external_json_object(
+            args.trusted_admission_signers_json,
+            "qualification signer trust registry",
+        )
+        revoked_admission_ids = _external_json_string_set(
+            args.revoked_admission_ids_json,
+            "qualification admission revocations",
+        )
+        revoked_admission_signer_key_ids = _external_json_string_set(
+            args.revoked_admission_signer_key_ids_json,
+            "qualification signer revocations",
+        )
     except DriftError as exc:
         print(f"DRIFT: {exc}", file=sys.stderr)
         return 1
 
     problems.extend(check_superseded_links(manifest))
     problems.extend(check_entry_matches_artifact(entry, args.repo_root))
-    problems.extend(check_evidence_manifest(entry, args.repo_root))
+    problems.extend(
+        check_evidence_manifest(
+            entry,
+            args.repo_root,
+            args.approved_cloud_source_commit,
+            trusted_admission_signers,
+            revoked_admission_ids,
+            revoked_admission_signer_key_ids,
+        )
+    )
 
     release_version = args.current_version
     release_wheel = args.current_wheel_sha256
