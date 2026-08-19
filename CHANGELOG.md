@@ -1,6 +1,31 @@
 # CHANGELOG
 
 
+## v0.91.2 (2026-08-19)
+
+### Bug Fixes
+
+- **evidence**: Expect private Cloud source visibility at signing
+  ([#292](https://github.com/OpenAdaptAI/openadapt-evals/pull/292),
+  [`a556a69`](https://github.com/OpenAdaptAI/openadapt-evals/commit/a556a69bafd54149aed514be8d5034a75bd9a8da))
+
+_validate_verified_provenance required the GitHub signing certificate field
+  sourceRepositoryVisibilityAtSigning to equal "public", but the repository it verifies against,
+  CLOUD_REPOSITORY = "OpenAdaptAI/openadapt-cloud", is private and stays private: it is the
+  proprietary hosted control plane, its acceptance workflow
+  (.github/workflows/execute-live-acceptance.yml) lives there on main, and it runs on
+  production-scoped secrets. A genuine attestation produced in that repository carries "private", so
+  the check would have refused every real certificate once the private-export gate opened.
+
+The check is currently unreachable because import_files() refuses every import until an approved
+  private-export contract exists, so no released behaviour changes. Expect "private" instead of
+  "public", keep the comparison exact and fail-closed, and cover the drift explicitly so the gate
+  cannot regress: the new parametrized case asserts a certificate signed in a public source
+  repository is still refused. No other gate is relaxed.
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.91.1 (2026-08-19)
 
 ### Bug Fixes
