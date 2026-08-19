@@ -1,9 +1,9 @@
 # Production-readiness evidence boundary
 
-OpenAdapt has production-capable mechanisms and bounded accepted workflows.
-It does not have one global production-readiness state. Each workflow,
-application, version, environment, identity rule, effect oracle, and deployment
-boundary needs its own qualification.
+OpenAdapt has production-capable mechanisms. It does not have one global
+production-readiness state. Each workflow, application, version, environment,
+identity rule, effect oracle, and deployment boundary needs its own
+qualification.
 
 The `current` label in `PUBLISHED_EVIDENCE.json` has one narrow meaning: the
 evidence set matches the current published `openadapt-flow` release. It does
@@ -28,9 +28,10 @@ cannot satisfy a production-acceptance gate.
 
 No campaign in this set represents hosted execution, a customer workflow,
 Windows UIA, native macOS Accessibility, Linux AT-SPI, a real RDP session, or a
-real Citrix ICA/HDX session. Other repositories retain bounded substrate
-acceptance records. Those records remain specific to their exact tasks and
-environments.
+real Citrix ICA/HDX session. Other repositories retain their own bounded
+substrate campaigns. Those results remain specific to their exact tasks and
+environments, and no campaign in this repository establishes production
+acceptance.
 
 ## Acceptance exit conditions
 
