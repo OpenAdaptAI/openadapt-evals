@@ -2719,7 +2719,7 @@ def _validate_verified_provenance(
         "buildConfigDigest": expected_cloud_source_commit,
         "buildTrigger": "workflow_dispatch",
         "runInvocationURI": expected_invocation,
-        "sourceRepositoryVisibilityAtSigning": "public",
+        "sourceRepositoryVisibilityAtSigning": "private",
     }
     for key, expected in expected_certificate_fields.items():
         if certificate.get(key) != expected:

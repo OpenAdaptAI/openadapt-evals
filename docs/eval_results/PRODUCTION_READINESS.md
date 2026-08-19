@@ -52,9 +52,13 @@ does not contain tenant or workflow identifiers.
 
 The verifier asks GitHub CLI to verify the certificate against the exact
 `OpenAdaptAI/openadapt-cloud` workflow on `refs/heads/main`, the GitHub Actions
-OIDC issuer, and a GitHub-hosted runner. It then validates the verified SLSA
-provenance. It refuses an unknown repository, workflow, ref, source digest,
-issuer, runner class, signature, or empty verification result.
+OIDC issuer, and a GitHub-hosted runner. That repository is the proprietary
+hosted control plane and stays private, so the verifier also requires
+`sourceRepositoryVisibilityAtSigning` to equal `private`. A certificate signed
+in a public source repository is not the reviewed Cloud workflow. The verifier
+then validates the verified SLSA provenance. It refuses an unknown repository,
+workflow, ref, source digest, issuer, runner class, signature, or empty
+verification result.
 
 The expected Cloud commit is an external reviewer input. The importer requires
 the certificate commit, the GitHub signing-certificate source commit, and the
