@@ -512,7 +512,7 @@ def _verified_provenance(
                             "https://github.com/OpenAdaptAI/openadapt-cloud/"
                             "actions/runs/123456789/attempts/1"
                         ),
-                        "sourceRepositoryVisibilityAtSigning": "public",
+                        "sourceRepositoryVisibilityAtSigning": "private",
                     }
                 },
                 "verifiedTimestamps": [
@@ -1710,6 +1710,11 @@ def test_verifier_allows_other_subjects_but_only_one_matching_certificate(
             "runInvocationURI is not approved",
         ),
         ("buildConfigDigest", "0" * 40, "buildConfigDigest is not approved"),
+        (
+            "sourceRepositoryVisibilityAtSigning",
+            "public",
+            "sourceRepositoryVisibilityAtSigning is not approved",
+        ),
     ],
 )
 def test_verifier_rejects_real_gh_certificate_policy_drift(
