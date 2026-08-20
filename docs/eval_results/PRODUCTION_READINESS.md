@@ -66,16 +66,20 @@ signs these attestations with its own instance: the internal Fulcio at
 `timestamp.githubapp.com`. That instance has no public transparency log, so no
 Rekor inclusion proof exists for this certificate. The verifier binds the
 substitute instead. It passes `--no-public-good`, which refuses a certificate
-signed by the public-good instance. It then requires exactly one verified
+signed by the public-good instance, and it passes `--hostname github.com` so a
+local GitHub CLI host setting cannot select a different private trust root. It
+then requires exactly one verified
 `TimestampAuthority` time from `timestamp.githubapp.com`, and requires that time
 to fall inside the fifteen minutes after the certificate
 `acceptance_verified_at` value. A Rekor time, a public-good timestamp-authority
 time, a current-clock time, or a second authority time is refused. The observed
 time is an RFC 3161 signed timestamp, not a public log inclusion time. This is
 a weaker public-audit property than a public repository gives, and the private
-control-plane boundary requires it. The importer host needs a GitHub CLI that
-supports `--no-public-good`, authenticated with read access to the private Cloud
-repository.
+control-plane boundary requires it. The importer accepts only the reviewed
+GitHub CLI version `2.67.0`. The protected importer image must pin that version
+and authenticate it with read access to the private Cloud repository. A
+different CLI version, host, trust instance, timestamp type, timestamp
+authority, or additional timestamp entry causes refusal.
 
 The expected Cloud commit is an external reviewer input. The importer requires
 the certificate commit, the GitHub signing-certificate source commit, and the
