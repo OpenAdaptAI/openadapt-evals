@@ -486,7 +486,7 @@ def _verified_provenance(
             "verificationResult": {
                 "signature": {
                     "certificate": {
-                        "certificateIssuer": "CN=sigstore-intermediate,O=sigstore.dev",
+                        "certificateIssuer": "CN=Fulcio Intermediate l2,O=GitHub\\, Inc.",
                         "subjectAlternativeName": MODULE.CLOUD_CERTIFICATE_IDENTITY,
                         "issuer": MODULE.GITHUB_OIDC_ISSUER,
                         "githubWorkflowTrigger": "workflow_dispatch",
@@ -517,8 +517,8 @@ def _verified_provenance(
                 },
                 "verifiedTimestamps": [
                     {
-                        "type": "Tlog",
-                        "uri": "https://rekor.sigstore.dev",
+                        "type": "TimestampAuthority",
+                        "uri": MODULE.GITHUB_TIMESTAMP_AUTHORITY,
                         "timestamp": "2026-08-18T12:00:05.000Z",
                     }
                 ],
@@ -1585,6 +1585,7 @@ def test_verifier_uses_exact_repository_workflow_ref_and_hosted_runner_policy(
     assert "--source-digest" not in observed
     assert "--source-ref" not in observed
     assert "--deny-self-hosted-runners" in observed
+    assert "--no-public-good" in observed
     assert result["bundle_sha256"] == MODULE.file_sha256(bundle_path)
 
 
@@ -1737,7 +1738,7 @@ def test_verifier_rejects_real_gh_certificate_policy_drift(
         MODULE.verify_github_attestation(certificate_path, bundle_path, "f" * 40, run=run)
 
 
-def test_verifier_binds_transparency_time_to_record_issuance(tmp_path: Path) -> None:
+def test_verifier_binds_observed_time_to_record_issuance(tmp_path: Path) -> None:
     certificate_path = tmp_path / "certificate.json"
     bundle_path = tmp_path / "bundle.jsonl"
     certificate_path.write_text(json.dumps(_certificate()), encoding="utf-8")
@@ -1751,6 +1752,62 @@ def test_verifier_binds_transparency_time_to_record_issuance(tmp_path: Path) -> 
         return subprocess.CompletedProcess(command, 0, stdout=json.dumps(provenance), stderr="")
 
     with pytest.raises(MODULE.AcceptanceError, match="not bound to record issuance"):
+        MODULE.verify_github_attestation(certificate_path, bundle_path, "f" * 40, run=run)
+
+
+@pytest.mark.parametrize(
+    "timestamps",
+    [
+        [
+            {
+                "type": "Tlog",
+                "uri": "https://rekor.sigstore.dev",
+                "timestamp": "2026-08-18T12:00:05.000Z",
+            }
+        ],
+        [
+            {
+                "type": "TimestampAuthority",
+                "uri": "https://timestamp.sigstore.dev/api/v1/timestamp",
+                "timestamp": "2026-08-18T12:00:05.000Z",
+            }
+        ],
+        [
+            {
+                "type": "CurrentTime",
+                "uri": "",
+                "timestamp": "2026-08-18T12:00:05.000Z",
+            }
+        ],
+        [
+            {
+                "type": "TimestampAuthority",
+                "uri": "timestamp.githubapp.com",
+                "timestamp": "2026-08-18T12:00:05.000Z",
+            },
+            {
+                "type": "TimestampAuthority",
+                "uri": "timestamp.githubapp.com",
+                "timestamp": "2026-08-18T12:00:06.000Z",
+            },
+        ],
+    ],
+)
+def test_verifier_requires_one_github_timestamp_authority_time(
+    tmp_path: Path,
+    timestamps: list[dict[str, str]],
+) -> None:
+    certificate_path = tmp_path / "certificate.json"
+    bundle_path = tmp_path / "bundle.jsonl"
+    certificate_path.write_text(json.dumps(_certificate()), encoding="utf-8")
+    bundle_path.write_text("{}\n", encoding="utf-8")
+    provenance = _verified_provenance(certificate_path)
+    provenance[0]["verificationResult"]["verifiedTimestamps"] = timestamps
+
+    def run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(provenance), stderr="")
+
+    with pytest.raises(MODULE.AcceptanceError, match="one approved timestamp-authority time"):
         MODULE.verify_github_attestation(certificate_path, bundle_path, "f" * 40, run=run)
 
 

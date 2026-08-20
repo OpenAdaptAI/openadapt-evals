@@ -83,6 +83,7 @@ CLOUD_CERTIFICATE_IDENTITY = (
     ".github/workflows/execute-live-acceptance.yml@refs/heads/main"
 )
 GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
+GITHUB_TIMESTAMP_AUTHORITY = "timestamp.githubapp.com"
 
 _HEX_40 = re.compile(r"^[a-f0-9]{40}$")
 _SHA256 = re.compile(r"^sha256:[a-f0-9]{64}$")
@@ -2627,6 +2628,7 @@ def verify_github_attestation(
         "--cert-oidc-issuer",
         GITHUB_OIDC_ISSUER,
         "--deny-self-hosted-runners",
+        "--no-public-good",
         "--format",
         "json",
     ]
@@ -2731,28 +2733,28 @@ def _validate_verified_provenance(
 
     timestamps = verification.get("verifiedTimestamps")
     if not isinstance(timestamps, list) or not timestamps:
-        raise AcceptanceError("GitHub attestation has no verified transparency timestamp")
-    transparency_times: list[datetime] = []
+        raise AcceptanceError("GitHub attestation has no verified observed timestamp")
+    observed_times: list[datetime] = []
     for index, value in enumerate(timestamps):
         timestamp = _mapping(value, f"GitHub verified timestamp {index}")
-        if timestamp.get("type") != "Tlog" or timestamp.get("uri") != (
-            "https://rekor.sigstore.dev"
+        if timestamp.get("type") != "TimestampAuthority" or timestamp.get("uri") != (
+            GITHUB_TIMESTAMP_AUTHORITY
         ):
             continue
         raw_time = timestamp.get("timestamp")
         if not isinstance(raw_time, str):
-            raise AcceptanceError("GitHub transparency timestamp is invalid")
+            raise AcceptanceError("GitHub observed timestamp is invalid")
         try:
             parsed_time = datetime.fromisoformat(raw_time.replace("Z", "+00:00"))
         except ValueError as exc:
-            raise AcceptanceError("GitHub transparency timestamp is invalid") from exc
+            raise AcceptanceError("GitHub observed timestamp is invalid") from exc
         if parsed_time.tzinfo is None:
-            raise AcceptanceError("GitHub transparency timestamp has no timezone")
-        transparency_times.append(parsed_time.astimezone(timezone.utc))
-    if len(transparency_times) != 1:
-        raise AcceptanceError("GitHub attestation must have one public-log timestamp")
-    if not issued_at <= transparency_times[0] <= issued_at + timedelta(minutes=15):
-        raise AcceptanceError("GitHub transparency timestamp is not bound to record issuance")
+            raise AcceptanceError("GitHub observed timestamp has no timezone")
+        observed_times.append(parsed_time.astimezone(timezone.utc))
+    if len(observed_times) != 1:
+        raise AcceptanceError("GitHub attestation must have one approved timestamp-authority time")
+    if not issued_at <= observed_times[0] <= issued_at + timedelta(minutes=15):
+        raise AcceptanceError("GitHub observed timestamp is not bound to record issuance")
 
     statement = _closed(
         verification.get("statement"),
