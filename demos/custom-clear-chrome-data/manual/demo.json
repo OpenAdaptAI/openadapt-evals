@@ -11,8 +11,8 @@
     {
       "step_index": 0,
       "screenshot_path": "",
-      "action_type": "click",
-      "action_description": "CLICK(0.05, 0.20)",
+      "action_type": "double_click",
+      "action_description": "DOUBLE_CLICK(0.05, 0.20)",
       "target_description": "",
       "action_value": "",
       "x": 0.05,
@@ -41,7 +41,7 @@
       "action_value": "",
       "x": 0.5,
       "y": 0.7,
-      "description": "Click the 'Delete from this device' or 'Clear data' button in the Clear Browsing Data dialog",
+      "description": "Click the 'Clear now' button in the Clear Browsing Data dialog",
       "metadata": {}
     }
   ]

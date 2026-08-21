@@ -10,19 +10,42 @@
   "steps": [
     {
       "step_index": 0,
-      "screenshot_path": "",
-      "action_type": "click",
-      "action_description": "CLICK(0.05, 0.20)",
+      "screenshot_path": "step_000_before.png",
+      "action_type": "double_click",
+      "action_description": "DOUBLE_CLICK(0.05, 0.20)",
       "target_description": "",
       "action_value": "",
       "x": 0.05,
       "y": 0.2,
       "description": "Double-click Google Chrome icon on the desktop to open Chrome",
-      "metadata": {}
+      "metadata": {
+        "screenshot_after_path": "step_000_after.png"
+      },
+      "grounding_target": {
+        "description": "Double-click Google Chrome icon on the desktop to open Chrome",
+        "target_type": "button",
+        "crop_path": "crop_step_000.png",
+        "crop_bbox": [
+          36,
+          156,
+          156,
+          276
+        ],
+        "click_offset": [
+          60,
+          60
+        ],
+        "nearby_text": [
+          "Google Chrome"
+        ],
+        "screenshot_before_path": "step_000_before.png",
+        "screenshot_after_path": "step_001_before.png",
+        "expected_change": "Double-click Google Chrome icon on the desktop to open Chrome"
+      }
     },
     {
       "step_index": 1,
-      "screenshot_path": "",
+      "screenshot_path": "step_001_before.png",
       "action_type": "key",
       "action_description": "KEY(ctrl+shift+delete)",
       "target_description": "",
@@ -30,11 +53,13 @@
       "x": null,
       "y": null,
       "description": "Press Ctrl+Shift+Delete to open Clear Browsing Data dialog directly",
-      "metadata": {}
+      "metadata": {
+        "screenshot_after_path": "step_001_after.png"
+      }
     },
     {
       "step_index": 2,
-      "screenshot_path": "",
+      "screenshot_path": "step_002_before.png",
       "action_type": "click",
       "action_description": "CLICK(0.50, 0.70)",
       "target_description": "",
@@ -42,11 +67,34 @@
       "x": 0.5,
       "y": 0.7,
       "description": "Click the 'Clear now' button in the Clear Browsing Data dialog",
-      "metadata": {}
+      "metadata": {
+        "screenshot_after_path": "step_002_after.png"
+      },
+      "grounding_target": {
+        "description": "Click the 'Clear now' button in the Clear Browsing Data dialog",
+        "target_type": "button",
+        "crop_path": "crop_step_002.png",
+        "crop_bbox": [
+          900,
+          696,
+          1020,
+          720
+        ],
+        "click_offset": [
+          60,
+          60
+        ],
+        "nearby_text": [
+          "Clear now"
+        ],
+        "screenshot_before_path": "step_002_before.png",
+        "screenshot_after_path": "step_003_before.png",
+        "expected_change": "Click the 'Clear now' button in the Clear Browsing Data dialog"
+      }
     },
     {
       "step_index": 3,
-      "screenshot_path": "",
+      "screenshot_path": "step_003_before.png",
       "action_type": "key",
       "action_description": "KEY(alt+f4)",
       "target_description": "",
@@ -54,7 +102,9 @@
       "x": null,
       "y": null,
       "description": "Close Chrome after clearing data",
-      "metadata": {}
+      "metadata": {
+        "screenshot_after_path": "step_003_after.png"
+      }
     }
   ]
 }

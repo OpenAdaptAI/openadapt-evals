@@ -71,15 +71,26 @@ def _take_screenshot(server_url: str, timeout: float = 30.0) -> bytes | None:
     try:
         resp = requests.get(url, timeout=timeout)
         resp.raise_for_status()
-        data = resp.json()
 
-        # WAA returns {"screenshot": "<base64 PNG>"} or {"image": "<base64>"}
-        b64 = data.get("screenshot") or data.get("image")
-        if b64:
-            return base64.b64decode(b64)
+        # WAA server may return raw PNG bytes or JSON with base64
+        content_type = resp.headers.get("content-type", "")
+        if "image" in content_type or resp.content[:4] == b"\x89PNG":
+            return resp.content
 
-        logger.warning("Screenshot response missing image data: %s",
-                       list(data.keys()))
+        # Try JSON format: {"screenshot": "<base64>"} or {"image": "<base64>"}
+        try:
+            data = resp.json()
+            b64 = data.get("screenshot") or data.get("image")
+            if b64:
+                return base64.b64decode(b64)
+        except (ValueError, KeyError):
+            pass
+
+        # If content is large enough, assume it's an image
+        if len(resp.content) > 1000:
+            return resp.content
+
+        logger.warning("Screenshot response format unknown (%d bytes)", len(resp.content))
         return None
 
     except requests.RequestException as exc:
@@ -170,22 +181,15 @@ def _execute_action(
 
 def _check_server(server_url: str) -> bool:
     """Check if the WAA server is reachable."""
+    # Try screenshot endpoint directly — /health may not exist or return 500
     try:
         resp = requests.get(
-            f"{server_url.rstrip('/')}/health",
+            f"{server_url.rstrip('/')}{_SCREENSHOT_ENDPOINT}",
             timeout=10,
         )
-        return resp.status_code == 200
+        return resp.status_code == 200 and len(resp.content) > 100
     except requests.RequestException:
-        # Some WAA servers don't have /health, try screenshot instead
-        try:
-            resp = requests.get(
-                f"{server_url.rstrip('/')}{_SCREENSHOT_ENDPOINT}",
-                timeout=10,
-            )
-            return resp.status_code == 200
-        except requests.RequestException:
-            return False
+        return False
 
 
 def record_screenshots(
