@@ -1,6 +1,30 @@
 # CHANGELOG
 
 
+## v0.92.0 (2026-08-22)
+
+### Features
+
+- **evidence**: Publish the Flow 1.32.0 comparison; mark 1.31.0 superseded
+  ([#294](https://github.com/OpenAdaptAI/openadapt-evals/pull/294),
+  [`08f025f`](https://github.com/OpenAdaptAI/openadapt-evals/commit/08f025f3a1f19c72e158eaa6702876d8f2b9cc6b))
+
+The daily evidence-freshness workflow went red when Flow 1.32.0 replaced 1.31.0 on PyPI: published
+  numbers described an engine nobody serves.
+
+Publishes a fresh Flow 1.32.0 comparison, independent replication, transaction-fault probe, and
+  remote-lease contract probe, run against the exact published wheel (d58dcf8b...) and
+  release-tagged source (d1b054c7...), from Evals commit b7d4fe84. 93 counted trials:
+
+- comparison and replication: compiled replay correct in 18 of 18 trials; selector controls halt
+  safely under drift; zero silent incorrect success, wrong actions, over-halts, or model calls -
+  transaction probe: uncertain deliveries return RECONCILIATION_REQUIRED with no blind retry or
+  replay dispatch - remote lease probe: absent-or-changed frame leases refuse actuation
+
+Every campaign states production_acceptance: false. The registry marks the Flow 1.31.0 set
+  superseded instead of changing or deleting it.
+
+
 ## v0.91.2 (2026-08-19)
 
 ### Bug Fixes
