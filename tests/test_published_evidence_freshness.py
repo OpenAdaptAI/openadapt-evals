@@ -28,12 +28,20 @@ def test_repo_manifest_is_internally_consistent() -> None:
 def test_repo_manifest_keeps_old_evidence_stale_and_names_the_exact_rerun() -> None:
     manifest = MODULE.load_manifest(MANIFEST)
     current = MODULE.current_entry(manifest)
-    old = next(item for item in manifest["evidence"] if item["flow_version"] == "1.30.0")
-    assert current["flow_version"] == "1.31.0"
+    for old_version in ("1.30.0", "1.31.0"):
+        old = next(
+            item
+            for item in manifest["evidence"]
+            if item["flow_version"] == old_version
+        )
+        assert old["status"] == "superseded"
+        assert "not relabeled" in old["stale_reason"].lower()
+    assert current["flow_version"] == "1.32.0"
     assert current["production_acceptance"] is False
-    assert old["status"] == "superseded"
-    assert old["superseded_by"] == current["path"]
-    assert "not relabeled" in old["stale_reason"].lower()
+    previous = next(
+        item for item in manifest["evidence"] if item["flow_version"] == "1.31.0"
+    )
+    assert previous["superseded_by"] == current["path"]
 
 
 def test_drift_is_detected_when_a_newer_release_is_published() -> None:
