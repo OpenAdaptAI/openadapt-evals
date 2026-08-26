@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -45,6 +46,7 @@ def test_manual_non_lifecycle_workflows_reject_the_lifecycle_app() -> None:
         ("complex-visual.yml", "headed-pixel-campaign"),
         ("evidence-freshness.yml", "freshness"),
         ("propose-release.yml", "propose-release"),
+        ("import-production-acceptance.yml", "import-production-acceptance"),
     ):
         workflow = _workflow(name)
         assert "reject-lifecycle-app:" in workflow
@@ -84,6 +86,65 @@ def test_release_proposal_can_only_propose() -> None:
 
     # It writes only the three release-metadata files.
     assert "git add pyproject.toml uv.lock CHANGELOG.md" in workflow
+
+
+def test_the_release_proposal_survives_the_built_in_token_suppression() -> None:
+    """A pushed update must end with checks running on the head being merged.
+
+    A force-push made with the built-in token emits a synchronize event GitHub
+    ignores, so without both of these an updated proposal keeps the checks from
+    its previous head and can never be merged.
+    """
+
+    workflow = _workflow("propose-release.yml")
+
+    # An unchanged proposal is not pushed, so a head that already passed is
+    # never disturbed.
+    assert "git diff --quiet \\\n              FETCH_HEAD" in workflow
+    assert "changed=false" in workflow
+    assert "changed=true" in workflow
+    # A changed proposal is reopened, which does start a run.
+    assert "gh pr close \"$existing\"" in workflow
+    assert "gh pr reopen \"$existing\"" in workflow
+    assert 'if [ "${CHANGED}" = \'true\' ]; then' in workflow
+
+
+def test_the_importer_workflow_is_the_one_the_contract_can_name() -> None:
+    workflow = _workflow("import-production-acceptance.yml")
+    template = json.loads(
+        (ROOT / "docs/eval_results/private-export-contract.template.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    # The contract template must name this exact file and ref, or the identity
+    # check refuses every run of it.
+    assert template["importer_workflow_ref"] == (
+        "OpenAdaptAI/openadapt-evals/.github/workflows/"
+        "import-production-acceptance.yml@refs/heads/main"
+    )
+
+    assert re.search(r"(?m)^  workflow_dispatch:\s*$", workflow)
+    assert not re.search(
+        r"(?m)^  (pull_request|pull_request_target|push|release|schedule|repository_dispatch|workflow_call):\s*$",
+        workflow,
+    )
+    assert "environment: production-acceptance-import" in workflow
+    assert "github.repository == 'OpenAdaptAI/openadapt-evals'" in workflow
+    assert "github.ref == 'refs/heads/main'" in workflow
+    assert "validate_private_export_contract" in workflow
+    assert "verify_importer_identity" in workflow
+
+    # It reads evidence. It must never write, tag, publish, or push.
+    assert "contents: read" in workflow
+    assert "contents: write" not in workflow
+    assert "git push" not in workflow
+    assert "gh pr merge" not in workflow
+    assert "gh release" not in workflow
+    assert "pypa/gh-action-pypi-publish" not in workflow
+
+    # A run must fail loudly if the closed gate ever produces a result.
+    assert "the importer produced a result while the gate is closed" in workflow
 
 
 def test_legacy_docs_pat_dispatch_is_removed() -> None:

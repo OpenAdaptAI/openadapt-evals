@@ -13,6 +13,13 @@ name: Propose the next release
 # does not start any further workflow run, and this proposal has to be tested
 # before anybody merges it. The lifecycle App is never granted contents access,
 # so it cannot land the change it proposes.
+#
+# That same suppression bites on updates: a force-push made with the built-in
+# token emits a synchronize event GitHub ignores, so an updated proposal would
+# keep the checks from its previous head and sit unmergeable forever. Two things
+# handle it. An unchanged proposal is not pushed at all, so a head that already
+# passed is never disturbed. A changed proposal is closed and reopened with the
+# App token, which emits an event the built-in token did not create.
 
 on:
   push:
@@ -81,16 +88,27 @@ jobs:
 
       - name: Push the proposal branch
         if: steps.plan.outputs.released == 'true'
+        id: push
         env:
           NEXT: ${{ steps.plan.outputs.next }}
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          # An unchanged proposal must not be pushed. A force-push that changes
+          # nothing still moves the head, and moving the head orphans the checks
+          # that already passed on it.
+          if git fetch --quiet origin release/next 2>/dev/null && git diff --quiet \
+              FETCH_HEAD -- pyproject.toml uv.lock CHANGELOG.md; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            echo 'The open proposal already carries this exact content.'
+            exit 0
+          fi
           git checkout -B release/next
           git add pyproject.toml uv.lock CHANGELOG.md
           git commit -m "chore(release): prepare ${NEXT}"
           git push --force-with-lease origin release/next
+          echo 'changed=true' >> "$GITHUB_OUTPUT"
 
       - name: Create the lifecycle App pull-request token
         if: steps.plan.outputs.released == 'true'
@@ -121,6 +139,7 @@ jobs:
           NEXT: ${{ steps.plan.outputs.next }}
           PREVIOUS: ${{ steps.plan.outputs.previous }}
           COUNT: ${{ steps.plan.outputs.changes }}
+          CHANGED: ${{ steps.push.outputs.changed }}
         run: |
           set -euo pipefail
           existing=$(gh pr list --head release/next --state open --json number --jq '.[0].number // empty')
@@ -133,6 +152,15 @@ jobs:
           if [ -n "$existing" ]; then
             gh pr edit "$existing" --title "chore(release): prepare ${NEXT}" --body "$body"
             echo "updated PR #${existing}"
+            # A branch push made with the built-in token starts no workflow run,
+            # so an updated proposal would keep the checks from its previous
+            # head and sit unmergeable. Reopening emits an event the built-in
+            # token did not create, which does start one.
+            if [ "${CHANGED}" = 'true' ]; then
+              gh pr close "$existing"
+              gh pr reopen "$existing"
+              echo "re-ran checks on PR #${existing}"
+            fi
           else
             gh pr create \
               --base main \

@@ -24,7 +24,7 @@
     "provider": "FILL_UPLOADER_PROVIDER",
     "principal": "FILL_UPLOADER_PRINCIPAL"
   },
-  "importer_workflow_ref": "OpenAdaptAI/openadapt-evals/.github/workflows/FILL_IMPORTER_WORKFLOW.yml@refs/heads/main",
+  "importer_workflow_ref": "OpenAdaptAI/openadapt-evals/.github/workflows/import-production-acceptance.yml@refs/heads/main",
   "minimum_retention_days": 365,
   "maximum_retention_days": 2555,
   "approval_authority": "FILL_APPROVAL_AUTHORITY",
