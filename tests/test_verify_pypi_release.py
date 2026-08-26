@@ -11,6 +11,7 @@ import pytest
 from scripts.verify_pypi_release import (
     MAX_METADATA_BYTES,
     PYPI_PROJECT,
+    PublicationAbsent,
     PublicationPending,
     ReleaseVerificationError,
     verify_pypi_release,
@@ -96,14 +97,93 @@ def test_missing_public_file_is_pending_for_bounded_recovery(tmp_path: Path) -> 
         verify_pypi_release(directory, VERSION, fetch=_fetch(bodies))
 
 
+def test_matching_public_subset_is_accepted_before_publication(tmp_path: Path) -> None:
+    directory, _, bodies = _fixture(tmp_path)
+    metadata_url, metadata = _metadata(bodies)
+    missing = metadata["urls"].pop()
+    bodies.pop(missing["url"])
+    bodies[metadata_url] = json.dumps(metadata).encode()
+
+    verify_pypi_release(
+        directory,
+        VERSION,
+        fetch=_fetch(bodies),
+        allow_matching_subset=True,
+    )
+
+
+def test_absent_release_is_accepted_only_before_publication(tmp_path: Path) -> None:
+    directory, _, _ = _fixture(tmp_path)
+
+    def absent(_url: str, _limit: int) -> bytes:
+        raise PublicationAbsent("not published")
+
+    verify_pypi_release(
+        directory,
+        VERSION,
+        fetch=absent,
+        allow_matching_subset=True,
+    )
+    with pytest.raises(PublicationAbsent):
+        verify_pypi_release(directory, VERSION, fetch=absent)
+
+
+def test_empty_release_inventory_is_accepted_before_publication(tmp_path: Path) -> None:
+    directory, _, bodies = _fixture(tmp_path)
+    metadata_url, metadata = _metadata(bodies)
+    metadata["urls"] = []
+    bodies[metadata_url] = json.dumps(metadata).encode()
+
+    verify_pypi_release(
+        directory,
+        VERSION,
+        fetch=_fetch(bodies),
+        allow_matching_subset=True,
+    )
+
+
 def test_extra_immutable_public_file_is_refused(tmp_path: Path) -> None:
     directory, _, bodies = _fixture(tmp_path)
     metadata_url, metadata = _metadata(bodies)
     metadata["urls"].append(dict(metadata["urls"][0], filename="openadapt_evals-9.8.7-extra.whl"))
     bodies[metadata_url] = json.dumps(metadata).encode()
 
-    with pytest.raises(ReleaseVerificationError, match="unexpected immutable"):
-        verify_pypi_release(directory, VERSION, fetch=_fetch(bodies))
+    for allow_matching_subset in (False, True):
+        with pytest.raises(ReleaseVerificationError, match="unexpected immutable"):
+            verify_pypi_release(
+                directory,
+                VERSION,
+                fetch=_fetch(bodies),
+                allow_matching_subset=allow_matching_subset,
+            )
+
+
+@pytest.mark.parametrize("field", ["digest", "size", "type", "yanked", "bytes"])
+def test_changed_existing_subset_is_refused_before_publication(tmp_path: Path, field: str) -> None:
+    directory, _, bodies = _fixture(tmp_path)
+    metadata_url, metadata = _metadata(bodies)
+    missing = metadata["urls"].pop()
+    bodies.pop(missing["url"])
+    entry = metadata["urls"][0]
+    if field == "digest":
+        entry["digests"]["sha256"] = "0" * 64
+    elif field == "size":
+        entry["size"] += 1
+    elif field == "type":
+        entry["packagetype"] = "sdist"
+    elif field == "yanked":
+        entry["yanked"] = True
+    else:
+        bodies[entry["url"]] = b"X" * entry["size"]
+    bodies[metadata_url] = json.dumps(metadata).encode()
+
+    with pytest.raises(ReleaseVerificationError):
+        verify_pypi_release(
+            directory,
+            VERSION,
+            fetch=_fetch(bodies),
+            allow_matching_subset=True,
+        )
 
 
 @pytest.mark.parametrize("field", ["digest", "size", "type", "yanked"])
