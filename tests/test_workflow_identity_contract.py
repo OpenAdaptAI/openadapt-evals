@@ -44,6 +44,7 @@ def test_manual_non_lifecycle_workflows_reject_the_lifecycle_app() -> None:
     for name, job in (
         ("complex-visual.yml", "headed-pixel-campaign"),
         ("evidence-freshness.yml", "freshness"),
+        ("propose-release.yml", "propose-release"),
     ):
         workflow = _workflow(name)
         assert "reject-lifecycle-app:" in workflow
@@ -57,6 +58,32 @@ def test_manual_non_lifecycle_workflows_reject_the_lifecycle_app() -> None:
         assert group is not None
         assert "github.workflow" in group.group(1)
         assert "github.event_name" in group.group(1)
+
+
+def test_release_proposal_can_only_propose() -> None:
+    workflow = _workflow("propose-release.yml")
+
+    assert "scripts/plan_release.py" in workflow
+    assert "scripts/verify_release_lock.py --write" in workflow
+    assert "gh pr create" in workflow
+    assert "vars.OPENADAPT_LIFECYCLE_APP_ID" in workflow
+    assert "vars.OPENADAPT_LIFECYCLE_INSTALLATION_ID" in workflow
+    assert "secrets.OPENADAPT_LIFECYCLE_APP_PRIVATE_KEY" in workflow
+    assert "permission-pull-requests: write" in workflow
+
+    # It proposes. It must not be able to land, tag, or publish what it wrote.
+    assert "permission-contents: write" not in workflow
+    assert not re.search(r"git\s+push[^\n]*(?:refs/heads/)?main", workflow)
+    assert "gh pr merge" not in workflow
+    assert "--auto" not in workflow
+    assert "git tag" not in workflow
+    assert "gh release" not in workflow
+    assert "pypa/gh-action-pypi-publish" not in workflow
+    assert "OPENADAPT_RELEASE_APP_ID" not in workflow
+    assert "OPENADAPT_RELEASE_APP_PRIVATE_KEY" not in workflow
+
+    # It writes only the three release-metadata files.
+    assert "git add pyproject.toml uv.lock CHANGELOG.md" in workflow
 
 
 def test_legacy_docs_pat_dispatch_is_removed() -> None:
