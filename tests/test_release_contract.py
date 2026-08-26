@@ -79,6 +79,16 @@ def test_release_configuration_is_fail_closed() -> None:
     assert "secrets.OPENADAPT_RELEASE_APP_PRIVATE_KEY" in workflow
     assert "permission-contents: write" in workflow
     assert "permission-pull-requests: write" not in workflow
+    publish_github_job = workflow.split("  publish-github-release:", 1)[1]
+    assert "environment: pypi" in publish_github_job
+    assert "permissions:\n      contents: read" in publish_github_job
+    assert "id: release-app" in publish_github_job
+    assert "owner: OpenAdaptAI" in publish_github_job
+    assert "repositories: openadapt-evals" in publish_github_job
+    assert "permission-contents: write" in publish_github_job
+    assert "test \"$APP_SLUG\" = 'openadapt-release'" in publish_github_job
+    assert "GH_TOKEN: ${{ steps.release-app.outputs.token }}" in publish_github_job
+    assert "GH_TOKEN: ${{ github.token }}" not in publish_github_job
     assert re.search(r"(?m)^  workflow_dispatch:\s*$", workflow)
     assert re.search(r"(?m)^      version:\s*$", workflow)
     assert re.search(r"(?m)^      source_commit:\s*$", workflow)
