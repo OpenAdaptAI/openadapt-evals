@@ -14,8 +14,7 @@ SPEC.loader.exec_module(release_lock)
 
 def _write_release_files(root: Path, project_version: str, lock_version: str) -> None:
     (root / "pyproject.toml").write_text(
-        '[project]\nname = "example-package"\n'
-        f'version = "{project_version}"\n',
+        f'[project]\nname = "example-package"\nversion = "{project_version}"\n',
         encoding="utf-8",
     )
     (root / "uv.lock").write_text(
@@ -59,9 +58,7 @@ def test_sync_changes_only_editable_root_and_is_idempotent(tmp_path: Path) -> No
 def test_release_configuration_is_fail_closed() -> None:
     metadata = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
-    test_workflow = (ROOT / ".github/workflows/test.yml").read_text(
-        encoding="utf-8"
-    )
+    test_workflow = (ROOT / ".github/workflows/test.yml").read_text(encoding="utf-8")
     assert "major_on_zero = false" in metadata
     assert "allow_zero_version = true" in metadata
     assert (
@@ -69,9 +66,12 @@ def test_release_configuration_is_fail_closed() -> None:
         "python scripts/verify_release_lock.py --write && "
         "git add uv.lock && uv build"
     ) in metadata
-    assert metadata.index("python -m pip install uv==0.11.29") < metadata.index(
-        "python scripts/verify_release_lock.py --write"
-    ) < metadata.index("git add uv.lock") < metadata.index("uv build")
+    assert (
+        metadata.index("python -m pip install uv==0.11.29")
+        < metadata.index("python scripts/verify_release_lock.py --write")
+        < metadata.index("git add uv.lock")
+        < metadata.index("uv build")
+    )
     assert "environment: release-identity" in workflow
     assert "environment: pypi" in workflow
     assert "actions/create-github-app-token@" in workflow
@@ -109,9 +109,7 @@ def test_release_configuration_is_fail_closed() -> None:
     app_pushes = [
         line.strip() for line in workflow.splitlines() if line.strip().startswith("git push")
     ]
-    assert app_pushes == [
-        'git push origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"'
-    ]
+    assert app_pushes == ['git push origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"']
     assert "refs/heads/main:refs/heads/main" not in workflow
     assert "gh pr create" not in workflow
     assert "automation/release" not in workflow
@@ -121,9 +119,7 @@ def test_release_configuration_is_fail_closed() -> None:
     assert "pypa/gh-action-pypi-publish@" in workflow
     assert "id-token: write" in workflow
     assert "skip-existing: true" in workflow
-    pypi_job = workflow.split("  publish-pypi:", 1)[1].split(
-        "  publish-github-release:", 1
-    )[0]
+    pypi_job = workflow.split("  publish-pypi:", 1)[1].split("  publish-github-release:", 1)[0]
     preflight = pypi_job.index("Refuse conflicting immutable PyPI files")
     publish = pypi_job.index("pypa/gh-action-pypi-publish@")
     postflight = pypi_job.index("Verify immutable PyPI publication bytes")
@@ -135,15 +131,14 @@ def test_release_configuration_is_fail_closed() -> None:
     assert "python scripts/verify_pypi_release.py" in postflight_body
     assert "--allow-matching-subset" not in postflight_body
     assert "Verify immutable PyPI publication bytes" in pypi_job
-    assert '--directory dist' in pypi_job
+    assert "--directory dist" in pypi_job
     assert '--version "$version"' in pypi_job
-    assert '--wait-seconds 300' in pypi_job
+    assert "--wait-seconds 300" in pypi_job
     assert "first_release_heading=$(grep -Em1" in workflow
     assert "gh release create" in workflow
     assert "--json author,isDraft,isPrerelease,tagName" in publish_github_job
     assert (
-        "test \"$(jq -r '.author.login' <<<\"$state\")\" = "
-        "'openadapt-release[bot]'"
+        "test \"$(jq -r '.author.login' <<<\"$state\")\" = 'openadapt-release[bot]'"
     ) in publish_github_job
     assert "ADMIN_TOKEN" not in workflow
     assert "PYPI_API_TOKEN" not in workflow
