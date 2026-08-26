@@ -1,6 +1,28 @@
 # CHANGELOG
 
 
+## v0.93.0 (2026-08-26)
+
+### Features
+
+- **ci**: Propose the next release as a reviewable pull request (#301) ([`445414a`](https://github.com/OpenAdaptAI/openadapt-evals/commit/445414a4cd96d38ab18d61f9a303777712309a6b))
+- **evidence**: Bind Cloud acceptance to the public Sigstore instance (#300) ([`b063578`](https://github.com/OpenAdaptAI/openadapt-evals/commit/b0635781617982f22ebf0d7298b8331f77647745))
+- **evidence**: Publish the Flow 1.33.0 comparison; supersede 1.32.0 (#297) ([`aae963c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/aae963caf820191bf2fb877b8d76b6d3dd6b4711))
+
+### Bug Fixes
+
+- **evidence**: Accept the timestamp format GitHub CLI actually emits (#299) ([`256152c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/256152cdb4af3b1a5af07839dcc0b18748cc4042))
+- **evidence**: Verify private Cloud attestations on GitHub's instance (#293) ([`55d16ed`](https://github.com/OpenAdaptAI/openadapt-evals/commit/55d16ed04561b0b78c63176cac90b73dbc0cdfad))
+
+### Documentation
+
+- Public tagged copy of the Phase-2 certified-reward RL pre-registration (#295) ([`aca85d4`](https://github.com/OpenAdaptAI/openadapt-evals/commit/aca85d431158ac517c969c5a146b38f1895c9ada))
+
+### Continuous Integration
+
+- Protect release and lifecycle workflows (#296) ([`335b7da`](https://github.com/OpenAdaptAI/openadapt-evals/commit/335b7da479482b6e6251475ba4cc2af5ba106467))
+
+
 ## v0.92.0 (2026-08-22)
 
 ### Features
