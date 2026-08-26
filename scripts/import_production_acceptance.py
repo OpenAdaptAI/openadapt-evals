@@ -1538,6 +1538,29 @@ def _timestamp(value: Any, label: str) -> datetime:
     return parsed
 
 
+def _observed_timestamp(value: Any, label: str) -> datetime:
+    """Read one RFC 3339 time that an external verifier wrote.
+
+    ``_timestamp`` enforces the canonical millisecond UTC form that OpenAdapt
+    itself writes, and no external tool owes us that form.  GitHub CLI
+    serializes a Go ``time.Time``, so it emits the offset of the runner's own
+    location and omits zero sub-second digits: a real
+    ``gh attestation verify --format json`` run emits
+    ``2026-07-28T03:33:58-04:00``.  Require an explicit offset, then normalize
+    to UTC, so the fifteen-minute issuance binding compares real instants.
+    """
+
+    if not isinstance(value, str):
+        raise AcceptanceError(f"{label} is invalid")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise AcceptanceError(f"{label} is invalid") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise AcceptanceError(f"{label} has no timezone")
+    return parsed.astimezone(timezone.utc)
+
+
 def _validate_certificate(
     certificate: Mapping[str, Any],
     *,
@@ -2779,7 +2802,7 @@ def _validate_verified_provenance(
         or timestamp["uri"] != GITHUB_TIMESTAMP_AUTHORITY
     ):
         raise AcceptanceError("GitHub attestation must have one approved timestamp-authority time")
-    observed_time = _timestamp(timestamp["timestamp"], "GitHub observed timestamp")
+    observed_time = _observed_timestamp(timestamp["timestamp"], "GitHub observed timestamp")
     if not issued_at <= observed_time <= issued_at + timedelta(minutes=15):
         raise AcceptanceError("GitHub observed timestamp is not bound to record issuance")
 
