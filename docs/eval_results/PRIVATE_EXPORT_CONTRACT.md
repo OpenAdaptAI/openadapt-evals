@@ -35,74 +35,37 @@ destination, its own key, or its own uploader.
 
 ## The bindings
 
-Each row is a value the approval fixes, the certificate field the importer must
-compare it against, and the approved value. **Every approved value is blank in
-this draft.** They are deployment facts, and only the account owner can supply
-them.
+The approval fixes seven destination fields plus the uploader, the importer, and
+the authority. **Every value is blank in this repository.** They are deployment
+facts, and only the account owner can supply them.
 
-### Payload
-
-| Binding | Certificate field | Approved value |
+| Contract field | What it fixes | Value |
 | --- | --- | --- |
-| Payload schema | `schema_version` on each imported artifact | `openadapt.execute-live-acceptance-record/v2`, `openadapt.qualification-admission/v2`, `openadapt.qualification-campaign/v2` |
-| Ciphertext digest | `retention.ciphertext_sha256` | _(per export; the approval fixes the algorithm and the envelope shape, not one value)_ |
-| Private envelope digest | `retention.private_envelope_sha256` | _(per export)_ |
-| Candidate digest | `retention.candidate_sha256` | _(per export)_ |
+| `destination.account_id` | the AWS account holding the evidence | **TO BE SUPPLIED** |
+| `destination.region` | the region | **TO BE SUPPLIED** |
+| `destination.bucket` | the S3 bucket | **TO BE SUPPLIED** |
+| `destination.object_prefix` | the prefix inside it | **TO BE SUPPLIED** |
+| `destination.kms_key_arn` | the encryption key | **TO BE SUPPLIED** |
+| `destination.retention_mode` | Object Lock mode | `COMPLIANCE`, fixed |
+| `destination.retention_days` | the immutable period | default 2555, inside 365 to 3650 |
+| `uploader_arn` | the principal allowed to write | **TO BE SUPPLIED** |
+| `importer_workflow_ref` | the one workflow allowed to import | pre-filled |
+| `approval_authority`, `approved_at` | who approved, and when | **TO BE SUPPLIED** |
 
-### Destination
+These are the same seven destination fields the Cloud retention writer hashes,
+in the same order, so the approval digest derived here is the one that writer
+already requires.
 
-| Binding | Certificate field | Approved value |
-| --- | --- | --- |
-| Account | `retention.storage_identity_sha256` | **TO BE SUPPLIED** |
-| Service | same digest input | **TO BE SUPPLIED** |
-| Container | same digest input | **TO BE SUPPLIED** |
-| Prefix | same digest input | **TO BE SUPPLIED** |
-
-The four destination facts hash into one `storage_identity_sha256`. The
-approval must state the exact preimage and its domain separator, so a reviewer
-can recompute the digest rather than trust it.
-
-### Encryption key
-
-| Binding | Certificate field | Approved value |
-| --- | --- | --- |
-| Key identity | `retention.kms_key_identity_sha256` | **TO BE SUPPLIED** |
-| Key rotation policy | not carried | **TO BE SUPPLIED** |
-
-### Retention
-
-| Binding | Certificate field | Approved value |
-| --- | --- | --- |
-| Mode | `retention.retention_mode` | `COMPLIANCE`, already enforced |
-| Period | `retention_until - retained_at` | **TO BE SUPPLIED**, inside the enforced one-to-ten-year window |
-| Object version | `retention.object_version_sha256` | _(per export)_ |
-| Locator version | `retention.private_locator_version_sha256` | _(per export)_ |
-
-### Importer
-
-| Binding | Certificate field | Approved value |
-| --- | --- | --- |
-| Authorized importer workflow | not carried | **TO BE SUPPLIED** |
-| Authorized importer ref | not carried | **TO BE SUPPLIED** |
-| Uploader identity | `retention.uploader_identity_sha256` | **TO BE SUPPLIED** |
-
-The importer workflow and ref are not in the certificate at all. The approval
-has to name them, and the importer has to grow a check that it is running as the
-named workflow on the named ref. That check does not exist yet.
-
-### Authority
-
-| Binding | Approved value |
-| --- | --- |
-| Approval authority | **TO BE SUPPLIED** |
-| Approval date | **TO BE SUPPLIED** |
-| Approval digest | computed over this document once the values are filled |
+Two things the certificate carries are not fixed by the approval, because they
+differ per export: the ciphertext, envelope, and candidate digests, and the
+object and locator version digests. The approval fixes where evidence may go and
+who may put it there, not the content of any one export.
 
 ## Where the filled copy lives
 
-This repository is public. The filled contract names an account, a container, a
-prefix, and a key identity, which are deployment-derived facts and fall under
-the source-availability boundary.
+This repository is public. The filled contract names an account, a bucket, a
+prefix, a key ARN, and an uploader ARN, which are deployment-derived facts and
+fall under the source-availability boundary.
 
 So: the shape stays here, the values do not. The approved instance belongs in
 `openadapt-internal`, and this repository receives only its digest, supplied to
@@ -135,21 +98,33 @@ approved Cloud commit.
 
 ## What the mechanism now enforces
 
-The importer derives each identity digest from a preimage under its own domain
-separator, through canonical JSON:
+The Cloud retention writer already computes these digests in
+`scripts/retain-execute-private-evidence.mjs`. The importer derives the same
+values from the contract, so one approval governs both repositories:
 
-| Digest | Domain | Preimage keys |
+| Digest | Domain | Preimage |
 | --- | --- | --- |
-| `storage_identity_sha256` | `OpenAdapt retained evidence storage identity v1\0` | `account`, `service`, `container`, `prefix` |
-| `kms_key_identity_sha256` | `OpenAdapt retained evidence key identity v1\0` | `provider`, `key_identity` |
-| `uploader_identity_sha256` | `OpenAdapt retained evidence uploader identity v1\0` | `provider`, `principal` |
+| `storage_identity_sha256` | `retention store` | `destination.bucket` |
+| `kms_key_identity_sha256` | `retention KMS key` | `destination.kms_key_arn` |
+| `uploader_identity_sha256` | `AWS retention uploader` | `uploader_arn` |
+| `destination_approval_sha256` | `Execute acceptance retention destination` | canonical JSON of all seven `destination` fields |
 
-The contract carries the preimages and never a digest, so an approval cannot
-assert a hash whose input nobody can see. `verify_retention_against_contract`
-compares all three against the certificate, and `verify_importer_identity`
-requires `GITHUB_WORKFLOW_REF` to equal the approved ref exactly. The contract's
-retention window must sit inside the fixed policy window, so an approval can
-tighten that bound and never loosen it.
+Every one is `sha256("OpenAdapt " + domain + " v1\0" + value)`. That separator
+is not the one `opaque_binding_sha256` uses, which inserts the word
+`acceptance`; the two differ by one word and produce different digests, and a
+test pins them apart.
+
+`destination_approval_sha256` is the value the Cloud writer already requires as
+`EXECUTE_ACCEPTANCE_RETENTION_DESTINATION_APPROVAL_SHA256`. Approving this
+contract produces it.
+
+The contract carries values and never a digest, so an approval cannot assert a
+hash whose input nobody can see. `verify_retention_against_contract` compares
+all three identities against the certificate and refuses a retention period
+shorter than the approved one. A longer lock is allowed: the approval sets a
+floor. `verify_importer_identity` requires `GITHUB_WORKFLOW_REF` to equal the
+approved ref exactly. The destination is checked the way the Cloud writer checks
+it, including that the KMS key lives in the approved account and region.
 
 ## Open items that block approval
 
