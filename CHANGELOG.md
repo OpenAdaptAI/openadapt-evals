@@ -1,6 +1,25 @@
 # CHANGELOG
 
 
+## v0.94.0 (2026-08-26)
+
+### Features
+
+- **evidence**: Implement the private-export contract mechanism (#308) ([`6c17731`](https://github.com/OpenAdaptAI/openadapt-evals/commit/6c177313bd478494f271317623572daf3318b4a2))
+
+### Bug Fixes
+
+- **evidence**: Bind retained evidence to the reviewed signing route (#305) ([`efb95c0`](https://github.com/OpenAdaptAI/openadapt-evals/commit/efb95c07306254eceec0b19609d21e72301e8094))
+
+### Documentation
+
+- **evidence**: Draft the private-export contract (#304) ([`c3a1ac0`](https://github.com/OpenAdaptAI/openadapt-evals/commit/c3a1ac095ff05771aa87cf8044c092d9ac6df753))
+
+### Chores
+
+- Ignore every .env variant, not one at a time (#307) ([`82ade2b`](https://github.com/OpenAdaptAI/openadapt-evals/commit/82ade2b48737b0453e0bf8be4469b5ab88e74b49))
+
+
 ## v0.93.0 (2026-08-26)
 
 ### Features
