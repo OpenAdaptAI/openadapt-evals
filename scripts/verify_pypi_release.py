@@ -31,6 +31,10 @@ class PublicationPending(ReleaseVerificationError):
     """The exact immutable PyPI publication is not visible yet."""
 
 
+class PublicationAbsent(PublicationPending):
+    """The exact version or one of its inventoried files is absent."""
+
+
 @dataclass(frozen=True)
 class Artifact:
     """One local immutable distribution file."""
@@ -62,7 +66,7 @@ def _fetch_url(url: str, limit: int) -> bytes:
             body = response.read(limit + 1)
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
-            raise PublicationPending(f"PyPI has not published {url}") from exc
+            raise PublicationAbsent(f"PyPI has not published {url}") from exc
         raise ReleaseVerificationError(f"PyPI request failed with HTTP {exc.code}: {url}") from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise PublicationPending(f"PyPI request is not ready: {url}: {exc}") from exc
@@ -167,8 +171,9 @@ def verify_pypi_release(
     version: str,
     *,
     fetch: Fetch = _fetch_url,
+    allow_matching_subset: bool = False,
 ) -> None:
-    """Require the exact wheel and sdist metadata, hashes, sizes, and bytes."""
+    """Verify all public files; optionally allow an absent or matching subset."""
 
     if STABLE_VERSION.fullmatch(version) is None:
         raise ReleaseVerificationError(f"version is not an exact stable X.Y.Z value: {version!r}")
@@ -181,7 +186,13 @@ def verify_pypi_release(
     if sdist != f"{normalized_release}.tar.gz":
         raise ReleaseVerificationError("local sdist does not identify the exact release")
     metadata_url = f"https://pypi.org/pypi/{PYPI_PROJECT}/{quote(version, safe='')}/json"
-    document = _metadata_object(fetch(metadata_url, MAX_METADATA_BYTES))
+    try:
+        metadata_body = fetch(metadata_url, MAX_METADATA_BYTES)
+    except PublicationAbsent:
+        if allow_matching_subset:
+            return
+        raise
+    document = _metadata_object(metadata_body)
     info = document.get("info")
     if (
         not isinstance(info, dict)
@@ -199,10 +210,12 @@ def verify_pypi_release(
     if extras:
         raise ReleaseVerificationError(f"PyPI has unexpected immutable release files: {extras}")
     missing = sorted(expected_names - published_names)
-    if missing:
+    if missing and not allow_matching_subset:
         raise PublicationPending(f"PyPI release files are not visible yet: {missing}")
 
     for filename, artifact in local.items():
+        if filename not in published:
+            continue
         entry = published[filename]
         digests = entry.get("digests")
         remote_digest = digests.get("sha256") if isinstance(digests, dict) else None
@@ -233,11 +246,16 @@ def _verify_with_wait(
     *,
     wait_seconds: int,
     poll_seconds: int,
+    allow_matching_subset: bool,
 ) -> None:
     deadline = time.monotonic() + wait_seconds
     while True:
         try:
-            verify_pypi_release(directory, version)
+            verify_pypi_release(
+                directory,
+                version,
+                allow_matching_subset=allow_matching_subset,
+            )
             return
         except PublicationPending:
             if time.monotonic() >= deadline:
@@ -251,6 +269,11 @@ def main() -> int:
     parser.add_argument("--version", required=True)
     parser.add_argument("--wait-seconds", type=int, default=300)
     parser.add_argument("--poll-seconds", type=int, default=10)
+    parser.add_argument(
+        "--allow-matching-subset",
+        action="store_true",
+        help="permit an absent release or byte-identical subset before publication",
+    )
     args = parser.parse_args()
     if args.wait_seconds < 0 or args.poll_seconds <= 0:
         parser.error("wait seconds must be nonnegative and poll seconds must be positive")
@@ -260,10 +283,14 @@ def main() -> int:
             args.version,
             wait_seconds=args.wait_seconds,
             poll_seconds=args.poll_seconds,
+            allow_matching_subset=args.allow_matching_subset,
         )
     except (OSError, ReleaseVerificationError) as exc:
         parser.exit(1, f"{exc}\n")
-    print(f"Verified immutable PyPI bytes for {PYPI_PROJECT} {args.version}.")
+    scope = (
+        "existing immutable PyPI bytes" if args.allow_matching_subset else "immutable PyPI bytes"
+    )
+    print(f"Verified {scope} for {PYPI_PROJECT} {args.version}.")
     return 0
 
 
