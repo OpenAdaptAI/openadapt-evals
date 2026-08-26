@@ -83,6 +83,7 @@ CLOUD_CERTIFICATE_IDENTITY = (
     ".github/workflows/execute-live-acceptance.yml@refs/heads/main"
 )
 GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
+RETENTION_PROVENANCE_ROUTE = "sigstore-public-good-slsa-provenance-v1"
 GITHUB_HOSTNAME = "github.com"
 PUBLIC_TRANSPARENCY_LOG = "https://rekor.sigstore.dev"
 PUBLIC_TIMESTAMP_AUTHORITY = "https://timestamp.sigstore.dev/api/v1/timestamp"
@@ -824,7 +825,7 @@ def production_acceptance_policy() -> dict[str, Any]:
         "excluded_trial_count": 0,
         "zero_failure_counts_required": sorted(_PRODUCTION_FAILURES),
         "required_retention_mode": "COMPLIANCE",
-        "required_retention_provenance": "github-artifact-attestation-v4",
+        "required_retention_provenance": RETENTION_PROVENANCE_ROUTE,
         "minimum_retention_days": 365,
         "maximum_retention_days": 3650,
         "browser_evidence_target_set": sorted(_BROWSER_SOURCE_TARGETS),
@@ -1764,7 +1765,7 @@ def _validate_certificate(
     ):
         if retention[key] is not True:
             raise AcceptanceError(f"certificate retention {key} is not verified")
-    if retention["provenance_attestation"] != "github-artifact-attestation-v4":
+    if retention["provenance_attestation"] != RETENTION_PROVENANCE_ROUTE:
         raise AcceptanceError("certificate provenance attestation version is not reviewed")
     acceptance_verified_at = _timestamp(
         retention["acceptance_verified_at"],
@@ -3450,7 +3451,7 @@ def _validated_manifest_source(value: Mapping[str, Any]) -> dict[str, Any]:
         r"retention:[a-f0-9]{32}", retention["receipt_id"]
     ) is None:
         raise AcceptanceError("production acceptance source retention receipt ID is invalid")
-    if retention["provenance_attestation"] != "github-artifact-attestation-v4":
+    if retention["provenance_attestation"] != RETENTION_PROVENANCE_ROUTE:
         raise AcceptanceError(
             "production acceptance source retention provenance is invalid"
         )
