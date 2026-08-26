@@ -20,6 +20,7 @@ import base64
 import binascii
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -84,6 +85,10 @@ CLOUD_CERTIFICATE_IDENTITY = (
 )
 GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 RETENTION_PROVENANCE_ROUTE = "sigstore-public-good-slsa-provenance-v1"
+PRIVATE_EXPORT_CONTRACT_SCHEMA = "openadapt.private-export-contract/v1"
+STORAGE_IDENTITY_DOMAIN = b"OpenAdapt retained evidence storage identity v1\0"
+KMS_KEY_IDENTITY_DOMAIN = b"OpenAdapt retained evidence key identity v1\0"
+UPLOADER_IDENTITY_DOMAIN = b"OpenAdapt retained evidence uploader identity v1\0"
 GITHUB_HOSTNAME = "github.com"
 PUBLIC_TRANSPARENCY_LOG = "https://rekor.sigstore.dev"
 PUBLIC_TIMESTAMP_AUTHORITY = "https://timestamp.sigstore.dev/api/v1/timestamp"
@@ -867,6 +872,165 @@ def _domain_sha256(domain: bytes, value: Any) -> str:
 
 def file_sha256(path: Path) -> str:
     return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+_STORAGE_IDENTITY_KEYS = {"account", "service", "container", "prefix"}
+_KMS_KEY_IDENTITY_KEYS = {"provider", "key_identity"}
+_UPLOADER_IDENTITY_KEYS = {"provider", "principal"}
+_PRIVATE_EXPORT_CONTRACT_KEYS = {
+    "schema_version",
+    "storage_identity",
+    "kms_key_identity",
+    "uploader_identity",
+    "importer_workflow_ref",
+    "minimum_retention_days",
+    "maximum_retention_days",
+    "approval_authority",
+    "approved_at",
+}
+_IMPORTER_WORKFLOW_REF = re.compile(
+    r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/\.github/workflows/[A-Za-z0-9._-]+\.ya?ml@refs/heads/[A-Za-z0-9._/-]+$"
+)
+
+
+def _identity_sha256(domain: bytes, value: Any, keys: set[str], label: str) -> str:
+    """Return the domain-separated digest of one closed identity preimage.
+
+    The certificate carries these identities as opaque digests.  A reviewer can
+    only check an opaque digest by recomputing it, so the preimage has to be
+    exact: a closed key set, non-empty strings, and canonical JSON, which sorts
+    the keys and fixes the separators.  Everything a reviewer needs to reproduce
+    the value is the domain constant and this function.
+    """
+
+    mapping = _closed(value, keys, label)
+    for key in sorted(keys):
+        _nonempty(mapping[key], f"{label} {key}")
+    payload = domain + canonical_json({key: mapping[key] for key in sorted(keys)}).encode(
+        "utf-8"
+    )
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def storage_identity_sha256(value: Any) -> str:
+    """Return the digest binding the destination account, service, and prefix."""
+
+    return _identity_sha256(
+        STORAGE_IDENTITY_DOMAIN,
+        value,
+        _STORAGE_IDENTITY_KEYS,
+        "storage identity",
+    )
+
+
+def kms_key_identity_sha256(value: Any) -> str:
+    """Return the digest binding the encryption-key identity."""
+
+    return _identity_sha256(
+        KMS_KEY_IDENTITY_DOMAIN,
+        value,
+        _KMS_KEY_IDENTITY_KEYS,
+        "key identity",
+    )
+
+
+def uploader_identity_sha256(value: Any) -> str:
+    """Return the digest binding the uploading principal."""
+
+    return _identity_sha256(
+        UPLOADER_IDENTITY_DOMAIN,
+        value,
+        _UPLOADER_IDENTITY_KEYS,
+        "uploader identity",
+    )
+
+
+def validate_private_export_contract(contract: Any) -> dict[str, Any]:
+    """Return the derived expectations from one approved private-export contract.
+
+    The contract carries the preimages, never the digests.  Every digest the
+    importer compares against is derived here, so an approval cannot assert a
+    digest whose preimage nobody can see.
+    """
+
+    document = _closed(contract, _PRIVATE_EXPORT_CONTRACT_KEYS, "private export contract")
+    if document["schema_version"] != PRIVATE_EXPORT_CONTRACT_SCHEMA:
+        raise AcceptanceError("private export contract schema is not supported")
+    workflow_ref = document["importer_workflow_ref"]
+    if (
+        not isinstance(workflow_ref, str)
+        or _IMPORTER_WORKFLOW_REF.fullmatch(workflow_ref) is None
+    ):
+        raise AcceptanceError("private export contract importer workflow ref is invalid")
+    minimum_days = _count(document["minimum_retention_days"], "contract minimum retention")
+    maximum_days = _count(document["maximum_retention_days"], "contract maximum retention")
+    policy = production_acceptance_policy()
+    if not policy["minimum_retention_days"] <= minimum_days <= maximum_days:
+        raise AcceptanceError("private export contract retention floor is outside policy")
+    if maximum_days > policy["maximum_retention_days"]:
+        raise AcceptanceError("private export contract retention ceiling is outside policy")
+    _nonempty(document["approval_authority"], "private export contract approval authority")
+    approved_at = _timestamp(document["approved_at"], "private export contract approved_at")
+    return {
+        "storage_identity_sha256": storage_identity_sha256(document["storage_identity"]),
+        "kms_key_identity_sha256": kms_key_identity_sha256(document["kms_key_identity"]),
+        "uploader_identity_sha256": uploader_identity_sha256(document["uploader_identity"]),
+        "importer_workflow_ref": workflow_ref,
+        "minimum_retention_days": minimum_days,
+        "maximum_retention_days": maximum_days,
+        "approval_authority": document["approval_authority"],
+        "approved_at": approved_at,
+        "contract_sha256": canonical_sha256(document),
+    }
+
+
+def verify_importer_identity(
+    contract: Mapping[str, Any],
+    environ: Mapping[str, str],
+) -> None:
+    """Refuse unless this process is the workflow and ref the approval names.
+
+    GitHub sets ``GITHUB_WORKFLOW_REF`` for the running job.  The evidence
+    cannot influence it, which is the whole point: the approval authorises one
+    importer, and an importer that cannot prove it is that one gets nothing.
+    """
+
+    actual = environ.get("GITHUB_WORKFLOW_REF")
+    if not isinstance(actual, str) or not actual:
+        raise AcceptanceError("importer workflow ref is absent")
+    if actual != contract["importer_workflow_ref"]:
+        raise AcceptanceError("importer is not the approved workflow and ref")
+
+
+def verify_retention_against_contract(
+    retention: Mapping[str, Any],
+    contract: Mapping[str, Any],
+) -> None:
+    """Refuse unless the retained evidence went where the approval says.
+
+    Without this the certificate names its own destination, its own key, and its
+    own uploader, and the importer only checks that those look like digests.
+    """
+
+    for key in (
+        "storage_identity_sha256",
+        "kms_key_identity_sha256",
+        "uploader_identity_sha256",
+    ):
+        if retention.get(key) != contract[key]:
+            raise AcceptanceError(f"retained evidence {key} is not the approved identity")
+    retained_at = _timestamp(retention["retained_at"], "certificate retention retained_at")
+    expires_at = _timestamp(
+        retention["retention_until"],
+        "certificate retention retention_until",
+    )
+    period = expires_at - retained_at
+    if not (
+        timedelta(days=contract["minimum_retention_days"])
+        <= period
+        <= timedelta(days=contract["maximum_retention_days"])
+    ):
+        raise AcceptanceError("retained evidence period is outside the approved contract")
 
 
 def opaque_binding_sha256(domain: str, value: str) -> str:
@@ -3954,9 +4118,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--trusted-admission-signers", type=Path, required=True)
     parser.add_argument("--revoked-admission-ids", type=Path)
     parser.add_argument("--revoked-admission-signer-key-ids", type=Path)
+    parser.add_argument("--private-export-contract", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
+        if args.private_export_contract:
+            contract = validate_private_export_contract(
+                json.loads(args.private_export_contract.read_text(encoding="utf-8"))
+            )
+            verify_importer_identity(contract, os.environ)
         trusted_admission_signers = _mapping(
             json.loads(args.trusted_admission_signers.read_text(encoding="utf-8")),
             "qualification signer trust registry",

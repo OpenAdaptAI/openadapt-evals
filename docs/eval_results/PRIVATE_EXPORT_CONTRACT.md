@@ -109,32 +109,64 @@ So: the shape stays here, the values do not. The approved instance belongs in
 the importer as an external control input beside the signer registry and the
 approved Cloud commit.
 
+## How to fill and approve one
+
+1. Copy `docs/eval_results/private-export-contract.template.json` into
+   `openadapt-internal`.
+2. Replace every `FILL_` value and delete the `_README` key.
+3. Check it against the mechanism:
+
+   ```bash
+   python scripts/import_production_acceptance.py \
+     --private-export-contract <path> \
+     --certificate <path> --campaign <path> \
+     --qualification-admission <path> --attestation-bundle <path> \
+     --expected-cloud-source-commit <sha> \
+     --trusted-admission-signers <path> --output <path>
+   ```
+
+   The run still refuses at the import gate. Before it gets there it validates
+   the contract, derives all three identity digests from your preimages, and
+   checks that this process is the importer workflow the contract names. A
+   contract error is reported before any private evidence is read.
+
+4. Approve the filled copy in `openadapt-internal` and record its
+   `contract_sha256` here.
+
+## What the mechanism now enforces
+
+The importer derives each identity digest from a preimage under its own domain
+separator, through canonical JSON:
+
+| Digest | Domain | Preimage keys |
+| --- | --- | --- |
+| `storage_identity_sha256` | `OpenAdapt retained evidence storage identity v1\0` | `account`, `service`, `container`, `prefix` |
+| `kms_key_identity_sha256` | `OpenAdapt retained evidence key identity v1\0` | `provider`, `key_identity` |
+| `uploader_identity_sha256` | `OpenAdapt retained evidence uploader identity v1\0` | `provider`, `principal` |
+
+The contract carries the preimages and never a digest, so an approval cannot
+assert a hash whose input nobody can see. `verify_retention_against_contract`
+compares all three against the certificate, and `verify_importer_identity`
+requires `GITHUB_WORKFLOW_REF` to equal the approved ref exactly. The contract's
+retention window must sit inside the fixed policy window, so an approval can
+tighten that bound and never loosen it.
+
 ## Open items that block approval
 
-These are not blanks to fill. They are decisions or code changes that must land
-first.
-
-1. **`provenance_attestation` names a route that cannot be produced.** The
-   importer requires `retention.provenance_attestation` to equal
-   `github-artifact-attestation-v4`, pinned in three places:
-   `scripts/import_production_acceptance.py` lines 827, 1767, and 3453. GitHub
-   artifact attestations are limited to public repositories on the Free, Pro,
-   and Team plans, and `openadapt-cloud` is private on Free. The Cloud
-   certificate now signs on the Sigstore public-good instance instead. This
-   constant is the same defect class as the three already fixed, one layer
-   further in, and it must change before any genuine evidence can carry a value
-   the importer accepts.
-2. **The importer has no authorized-workflow check.** The approval binds an
-   importer workflow and ref that nothing verifies. Adding that check is a
-   prerequisite, not a follow-up.
-3. **The destination and key digests need a stated preimage.** Without a
-   documented domain separator and field order, an approved digest cannot be
-   recomputed by a reviewer, and an unrecomputable digest is a trusted assertion
-   rather than a binding.
+1. ~~`provenance_attestation` names a route that cannot be produced.~~
+   **Resolved.** The route is now `sigstore-public-good-slsa-provenance-v1`,
+   held in one constant and referenced by the policy and both validators.
+2. ~~The importer has no authorized-workflow check.~~ **Resolved.**
+   `verify_importer_identity` refuses unless the process is the approved
+   workflow and ref.
+3. ~~The destination and key digests need a stated preimage.~~ **Resolved.**
+   See the table above; a reviewer can recompute every value.
 4. **The Cloud retention gate is still closed on purpose.**
    `tests/unit/execute-live-acceptance.test.mjs` forbids the signing step until
    this contract exists. That test should stay as it is until the approval
    lands, and it is the reason nothing on the Cloud side has moved.
+
+Items 1 to 3 were code. Item 4 waits on this document being filled and approved.
 
 ## What approving this does not do
 

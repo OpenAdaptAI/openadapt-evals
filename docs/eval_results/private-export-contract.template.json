@@ -1,0 +1,32 @@
+{
+  "_README": [
+    "TEMPLATE. This file is not an approval and the importer will refuse it.",
+    "Copy it into openadapt-internal, replace every FILL_ value, delete this",
+    "_README key, and approve the result there. This public repository keeps",
+    "the shape; the filled instance and its values stay private.",
+    "Validate a filled copy with:",
+    "  python scripts/import_production_acceptance.py --private-export-contract <path> ...",
+    "It derives every digest from the preimages below, so a reviewer recomputes",
+    "each one rather than trusting an asserted hash."
+  ],
+  "schema_version": "openadapt.private-export-contract/v1",
+  "storage_identity": {
+    "account": "FILL_DESTINATION_ACCOUNT_ID",
+    "service": "FILL_DESTINATION_SERVICE",
+    "container": "FILL_DESTINATION_CONTAINER",
+    "prefix": "FILL_DESTINATION_PREFIX"
+  },
+  "kms_key_identity": {
+    "provider": "FILL_KEY_PROVIDER",
+    "key_identity": "FILL_KEY_IDENTITY"
+  },
+  "uploader_identity": {
+    "provider": "FILL_UPLOADER_PROVIDER",
+    "principal": "FILL_UPLOADER_PRINCIPAL"
+  },
+  "importer_workflow_ref": "OpenAdaptAI/openadapt-evals/.github/workflows/FILL_IMPORTER_WORKFLOW.yml@refs/heads/main",
+  "minimum_retention_days": 365,
+  "maximum_retention_days": 2555,
+  "approval_authority": "FILL_APPROVAL_AUTHORITY",
+  "approved_at": "FILL_APPROVED_AT"
+}
