@@ -188,7 +188,7 @@ retention alone does not satisfy this contract.
 
 ## What the current public Evals set establishes
 
-The Flow 1.32.0 set contains four campaigns. Every condition has three trials.
+The Flow 1.33.0 set contains four campaigns. Every condition has three trials.
 This set is development evidence. It is not a Production lifecycle admission,
 and this change does not emit a Production record for it.
 
