@@ -124,9 +124,16 @@ def test_release_configuration_is_fail_closed() -> None:
     pypi_job = workflow.split("  publish-pypi:", 1)[1].split(
         "  publish-github-release:", 1
     )[0]
-    assert pypi_job.index("skip-existing: true") < pypi_job.index(
-        "python scripts/verify_pypi_release.py"
-    )
+    preflight = pypi_job.index("Refuse conflicting immutable PyPI files")
+    publish = pypi_job.index("pypa/gh-action-pypi-publish@")
+    postflight = pypi_job.index("Verify immutable PyPI publication bytes")
+    assert preflight < publish < postflight
+    preflight_body = pypi_job[preflight:publish]
+    postflight_body = pypi_job[postflight:]
+    assert "python scripts/verify_pypi_release.py" in preflight_body
+    assert "--allow-matching-subset" in preflight_body
+    assert "python scripts/verify_pypi_release.py" in postflight_body
+    assert "--allow-matching-subset" not in postflight_body
     assert "Verify immutable PyPI publication bytes" in pypi_job
     assert '--directory dist' in pypi_job
     assert '--version "$version"' in pypi_job
