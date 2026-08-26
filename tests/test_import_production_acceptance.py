@@ -1965,14 +1965,16 @@ def test_verifier_requires_one_github_timestamp_authority_time(
             "GitHub verified timestamp keys differ",
         ),
         (
-            lambda value: value.__setitem__(
-                "timestamp", "2026-08-18T08:00:05.000-04:00"
-            ),
-            "must be a canonical UTC timestamp",
+            lambda value: value.__setitem__("timestamp", "2026-08-18T12:00:05"),
+            "has no timezone",
         ),
         (
-            lambda value: value.__setitem__("timestamp", "2026-08-18T12:00:05Z"),
-            "must use canonical millisecond UTC form",
+            lambda value: value.__setitem__("timestamp", "not-a-time"),
+            "is invalid",
+        ),
+        (
+            lambda value: value.__setitem__("timestamp", 1755518405),
+            "is invalid",
         ),
     ],
 )
@@ -1996,6 +1998,40 @@ def test_verifier_refuses_noncanonical_github_timestamp_objects(
             "f" * 40,
             run=_reviewed_gh_run(certificate_path, provenance=provenance),
         )
+
+
+@pytest.mark.parametrize(
+    "observed",
+    [
+        # Exactly what `gh attestation verify --format json` emits: Go renders a
+        # time.Time in the runner's own location and drops zero sub-second
+        # digits. Captured from a real verification of the sigstore 4.5.0 wheel
+        # against its PyPI provenance bundle.
+        "2026-08-18T08:00:05-04:00",
+        "2026-08-18T12:00:05Z",
+        "2026-08-18T12:00:05.000Z",
+        "2026-08-18T21:00:05+09:00",
+    ],
+)
+def test_verifier_accepts_every_rfc3339_form_the_github_cli_emits(
+    tmp_path: Path,
+    observed: str,
+) -> None:
+    certificate_path = tmp_path / "certificate.json"
+    bundle_path = tmp_path / "bundle.jsonl"
+    certificate_path.write_text(json.dumps(_certificate()), encoding="utf-8")
+    bundle_path.write_text("{}\n", encoding="utf-8")
+    provenance = _verified_provenance(certificate_path)
+    provenance[0]["verificationResult"]["verifiedTimestamps"][0]["timestamp"] = observed
+
+    result = MODULE.verify_github_attestation(
+        certificate_path,
+        bundle_path,
+        "f" * 40,
+        run=_reviewed_gh_run(certificate_path, provenance=provenance),
+    )
+
+    assert result["repository"] == MODULE.CLOUD_REPOSITORY
 
 
 @pytest.mark.parametrize(
