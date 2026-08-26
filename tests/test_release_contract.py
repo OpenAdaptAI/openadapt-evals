@@ -72,13 +72,63 @@ def test_release_configuration_is_fail_closed() -> None:
     assert metadata.index("python -m pip install uv==0.11.29") < metadata.index(
         "python scripts/verify_release_lock.py --write"
     ) < metadata.index("git add uv.lock") < metadata.index("uv build")
-    assert "run: uv build" not in workflow
-    assert "astral-sh/setup-uv" not in workflow
-    assert "actions/setup-python" not in workflow
-    assert workflow.count("secrets.ADMIN_TOKEN") >= 3
+    assert "environment: release-identity" in workflow
+    assert "environment: pypi" in workflow
+    assert "actions/create-github-app-token@" in workflow
+    assert "vars.OPENADAPT_RELEASE_APP_ID" in workflow
+    assert "secrets.OPENADAPT_RELEASE_APP_PRIVATE_KEY" in workflow
+    assert "permission-contents: write" in workflow
+    assert "permission-pull-requests: write" not in workflow
+    assert re.search(r"(?m)^  workflow_dispatch:\s*$", workflow)
+    assert re.search(r"(?m)^      version:\s*$", workflow)
+    assert re.search(r"(?m)^      source_commit:\s*$", workflow)
+    assert re.search(r"(?m)^  push:\s*$", workflow)
+    assert re.search(r"(?m)^    tags:\s*$", workflow)
+    assert not re.search(r"(?m)^    branches:\s*$", workflow)
+    assert "github.event_name == 'workflow_dispatch'" in workflow
+    assert "github.workflow }}-${{ github.event_name }}-${{ github.ref" in workflow
+    assert "github.actor == 'openadapt-release[bot]'" in workflow
+    assert "reject-lifecycle-app:" in workflow
+    assert "github.actor != 'openadapt-lifecycle[bot]'" in workflow
+    assert "github.triggering_actor != 'openadapt-lifecycle[bot]'" in workflow
+    assert "test \"$GITHUB_REF\" = 'refs/heads/main'" in workflow
+    assert 'test "$GITHUB_SHA" = "$REQUESTED_SOURCE_COMMIT"' in workflow
+    assert "refs/remotes/origin/main" in workflow
+    assert 'git tag -a "$RELEASE_TAG" "$SOURCE_COMMIT"' in workflow
+    assert "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}" in workflow
+    app_pushes = [
+        line.strip() for line in workflow.splitlines() if line.strip().startswith("git push")
+    ]
+    assert app_pushes == [
+        'git push origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"'
+    ]
+    assert "refs/heads/main:refs/heads/main" not in workflow
+    assert "gh pr create" not in workflow
+    assert "automation/release" not in workflow
+    assert "python-semantic-release" not in workflow
+    assert "run: uv build" in workflow
+    assert "python scripts/check_source_boundary.py --require-dist" in workflow
+    assert "pypa/gh-action-pypi-publish@" in workflow
+    assert "id-token: write" in workflow
+    assert "skip-existing: true" in workflow
+    assert "first_release_heading=$(grep -Em1" in workflow
+    assert "gh release create" in workflow
+    assert "ADMIN_TOKEN" not in workflow
+    assert "PYPI_API_TOKEN" not in workflow
     assert "secrets.GITHUB_TOKEN" not in workflow
     assert 'version: "0.11.29"' in test_workflow
     assert "uv sync --locked --extra dev --no-sources" in test_workflow
+
+
+def test_tag_publication_allows_an_exact_failed_run_to_be_retried() -> None:
+    workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    authorize_job = workflow.split("  create-release-tag:", 1)[0]
+    publish_jobs = workflow.split("  publish-pypi:", 1)[1]
+    assert "test \"$ACTOR\" = 'openadapt-release[bot]'" in authorize_job
+    assert publish_jobs.count("github.actor == 'openadapt-release[bot]'") == 2
+    assert "github.triggering_actor == 'openadapt-release[bot]'" not in authorize_job
+    assert "github.triggering_actor == 'openadapt-release[bot]'" not in publish_jobs
+    assert "gh release view" in publish_jobs
 
 
 def test_all_third_party_actions_are_commit_pinned() -> None:
