@@ -277,7 +277,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
-      contents: write
+      contents: read
     steps:
       - name: Checkout the exact release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -285,9 +285,36 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Create the release App token
+        id: release-app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.OPENADAPT_RELEASE_APP_ID }}
+          private-key: ${{ secrets.OPENADAPT_RELEASE_APP_PRIVATE_KEY }}
+          owner: OpenAdaptAI
+          repositories: openadapt-evals
+          permission-contents: write
+
+      - name: Verify the release App identity
+        env:
+          APP_SLUG: ${{ steps.release-app.outputs.app-slug }}
+          APP_TOKEN: ${{ steps.release-app.outputs.token }}
+          EXPECTED_APP_ID: ${{ vars.OPENADAPT_RELEASE_APP_ID }}
+        run: |
+          set -euo pipefail
+          test "$APP_SLUG" = 'openadapt-release'
+          test -n "$APP_TOKEN"
+          case "$EXPECTED_APP_ID" in
+            ''|*[!0-9]*)
+              echo '::error::OPENADAPT_RELEASE_APP_ID must be a positive integer.'
+              exit 1
+              ;;
+          esac
+          test "$EXPECTED_APP_ID" -gt 0
+
       - name: Publish the exact GitHub release
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.release-app.outputs.token }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
