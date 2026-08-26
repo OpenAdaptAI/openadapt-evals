@@ -264,6 +264,19 @@ jobs:
           print-hash: true
           skip-existing: true
 
+      - name: Verify immutable PyPI publication bytes
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          test "$RELEASE_TAG" = "v${version}"
+          python scripts/verify_pypi_release.py \
+            --directory dist \
+            --version "$version" \
+            --wait-seconds 300 \
+            --poll-seconds 10
+
   publish-github-release:
     needs:
       - authorize-release-tag
@@ -321,12 +334,6 @@ jobs:
           test "$(git cat-file -t "$GITHUB_REF")" = 'tag'
           test "$(git rev-parse "${GITHUB_REF}^{commit}")" = "$GITHUB_SHA"
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            state=$(gh release view "$RELEASE_TAG" \
-              --repo "$GITHUB_REPOSITORY" \
-              --json isDraft,isPrerelease,tagName)
-            test "$(jq -r '.tagName' <<<"$state")" = "$RELEASE_TAG"
-            test "$(jq -r '.isDraft' <<<"$state")" = 'false'
-            test "$(jq -r '.isPrerelease' <<<"$state")" = 'false'
             echo 'The exact GitHub release already exists.'
           else
             gh release create "$RELEASE_TAG" \
@@ -335,3 +342,10 @@ jobs:
               --generate-notes \
               --title "$RELEASE_TAG"
           fi
+          state=$(gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json author,isDraft,isPrerelease,tagName)
+          test "$(jq -r '.tagName' <<<"$state")" = "$RELEASE_TAG"
+          test "$(jq -r '.isDraft' <<<"$state")" = 'false'
+          test "$(jq -r '.isPrerelease' <<<"$state")" = 'false'
+          test "$(jq -r '.author.login' <<<"$state")" = 'openadapt-release[bot]'

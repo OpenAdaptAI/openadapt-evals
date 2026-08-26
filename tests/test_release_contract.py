@@ -121,8 +121,23 @@ def test_release_configuration_is_fail_closed() -> None:
     assert "pypa/gh-action-pypi-publish@" in workflow
     assert "id-token: write" in workflow
     assert "skip-existing: true" in workflow
+    pypi_job = workflow.split("  publish-pypi:", 1)[1].split(
+        "  publish-github-release:", 1
+    )[0]
+    assert pypi_job.index("skip-existing: true") < pypi_job.index(
+        "python scripts/verify_pypi_release.py"
+    )
+    assert "Verify immutable PyPI publication bytes" in pypi_job
+    assert '--directory dist' in pypi_job
+    assert '--version "$version"' in pypi_job
+    assert '--wait-seconds 300' in pypi_job
     assert "first_release_heading=$(grep -Em1" in workflow
     assert "gh release create" in workflow
+    assert "--json author,isDraft,isPrerelease,tagName" in publish_github_job
+    assert (
+        "test \"$(jq -r '.author.login' <<<\"$state\")\" = "
+        "'openadapt-release[bot]'"
+    ) in publish_github_job
     assert "ADMIN_TOKEN" not in workflow
     assert "PYPI_API_TOKEN" not in workflow
     assert "secrets.GITHUB_TOKEN" not in workflow
