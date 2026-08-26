@@ -258,6 +258,20 @@ jobs:
       - name: Verify the public distribution boundary
         run: python scripts/check_source_boundary.py --require-dist
 
+      - name: Refuse conflicting immutable PyPI files
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          test "$RELEASE_TAG" = "v${version}"
+          python scripts/verify_pypi_release.py \
+            --directory dist \
+            --version "$version" \
+            --allow-matching-subset \
+            --wait-seconds 300 \
+            --poll-seconds 10
+
       - name: Publish to PyPI with OIDC
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
