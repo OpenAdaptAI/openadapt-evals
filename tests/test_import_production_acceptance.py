@@ -974,6 +974,38 @@ def test_rejects_noncanonical_or_inconsistent_retention() -> None:
         _derive(certificate)
 
 
+@pytest.mark.parametrize(
+    "route",
+    [
+        # The retired route. GitHub artifact attestations are unavailable to a
+        # private repository on the Free, Pro, and Team plans, so no genuine
+        # Cloud certificate can carry this value.
+        "github-artifact-attestation-v4",
+        "github-artifact-attestation-v5",
+        "sigstore-public-good-slsa-provenance-v2",
+        "unreviewed-v1",
+        "",
+    ],
+)
+def test_rejects_any_retention_provenance_but_the_reviewed_route(route: str) -> None:
+    certificate = _certificate()
+    certificate["retention"]["provenance_attestation"] = route
+
+    with pytest.raises(MODULE.AcceptanceError, match="provenance attestation version"):
+        _derive(certificate)
+
+
+def test_the_reviewed_retention_route_is_the_public_good_instance() -> None:
+    assert MODULE.RETENTION_PROVENANCE_ROUTE == "sigstore-public-good-slsa-provenance-v1"
+    assert (
+        MODULE.production_acceptance_policy()["required_retention_provenance"]
+        == MODULE.RETENTION_PROVENANCE_ROUTE
+    )
+    assert _certificate()["retention"]["provenance_attestation"] == (
+        MODULE.RETENTION_PROVENANCE_ROUTE
+    )
+
+
 def test_rejects_unhashed_workflow_binding() -> None:
     certificate = _certificate()
     certificate["qualification"]["workflow_digest"] = "workflow-v1"
@@ -2433,7 +2465,7 @@ def test_production_acceptance_target_scope_map_is_closed() -> None:
         "openadapt": "qualified_workflow_launcher_release",
     }
     assert MODULE.production_acceptance_policy_sha256() == (
-        "sha256:9b1fe55bc6796ae0a46960ca4aa335d88de60b0562c383afa1e85fa0a0c204b8"
+        "sha256:bc013d6533b13288ae996b413519ac4b185da94ee0b1cc9727b662e04b989b31"
     )
 
 

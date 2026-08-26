@@ -103,7 +103,7 @@
     "private_envelope_sha256": "sha256:6363636363636363636363636363636363636363636363636363636363636363",
     "private_locator_recorded": true,
     "private_locator_version_sha256": "sha256:6767676767676767676767676767676767676767676767676767676767676767",
-    "provenance_attestation": "github-artifact-attestation-v4",
+    "provenance_attestation": "sigstore-public-good-slsa-provenance-v1",
     "receipt_id": "retention:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "retained_at": "2026-08-18T12:01:00.000Z",
     "retention_mode": "COMPLIANCE",
