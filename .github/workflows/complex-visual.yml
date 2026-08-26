@@ -9,11 +9,27 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: complex-visual-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  reject-lifecycle-app:
+    permissions: {}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reject the lifecycle App
+        env:
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          test "$ACTOR" != 'openadapt-lifecycle[bot]'
+          test "$TRIGGERING_ACTOR" != 'openadapt-lifecycle[bot]'
+
   headed-pixel-campaign:
+    needs: reject-lifecycle-app
+    if: >-
+      github.actor != 'openadapt-lifecycle[bot]' &&
+      github.triggering_actor != 'openadapt-lifecycle[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
