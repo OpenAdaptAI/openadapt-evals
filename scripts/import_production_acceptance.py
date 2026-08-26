@@ -84,8 +84,13 @@ CLOUD_CERTIFICATE_IDENTITY = (
 )
 GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 GITHUB_HOSTNAME = "github.com"
-GITHUB_TIMESTAMP_AUTHORITY = "timestamp.githubapp.com"
+PUBLIC_TRANSPARENCY_LOG = "https://rekor.sigstore.dev"
+PUBLIC_TIMESTAMP_AUTHORITY = "https://timestamp.sigstore.dev/api/v1/timestamp"
 REVIEWED_GITHUB_CLI_VERSION = "2.67.0"
+
+_PUBLIC_TRANSPARENCY_LOG = ("Tlog", PUBLIC_TRANSPARENCY_LOG)
+_PUBLIC_TIMESTAMP_AUTHORITY = ("TimestampAuthority", PUBLIC_TIMESTAMP_AUTHORITY)
+_APPROVED_OBSERVERS = frozenset({_PUBLIC_TRANSPARENCY_LOG, _PUBLIC_TIMESTAMP_AUTHORITY})
 
 _HEX_40 = re.compile(r"^[a-f0-9]{40}$")
 _SHA256 = re.compile(r"^sha256:[a-f0-9]{64}$")
@@ -2686,7 +2691,6 @@ def verify_github_attestation(
         "--hostname",
         GITHUB_HOSTNAME,
         "--deny-self-hosted-runners",
-        "--no-public-good",
         "--format",
         "json",
     ]
@@ -2790,21 +2794,32 @@ def _validate_verified_provenance(
             raise AcceptanceError(f"GitHub signing certificate {key} is invalid")
 
     timestamps = verification.get("verifiedTimestamps")
-    if not isinstance(timestamps, list) or len(timestamps) != 1:
-        raise AcceptanceError("GitHub attestation must have one approved timestamp-authority time")
-    timestamp = _closed(
-        timestamps[0],
-        {"type", "uri", "timestamp"},
-        "GitHub verified timestamp",
-    )
-    if (
-        timestamp["type"] != "TimestampAuthority"
-        or timestamp["uri"] != GITHUB_TIMESTAMP_AUTHORITY
-    ):
-        raise AcceptanceError("GitHub attestation must have one approved timestamp-authority time")
-    observed_time = _observed_timestamp(timestamp["timestamp"], "GitHub observed timestamp")
-    if not issued_at <= observed_time <= issued_at + timedelta(minutes=15):
-        raise AcceptanceError("GitHub observed timestamp is not bound to record issuance")
+    if not isinstance(timestamps, list) or not timestamps:
+        raise AcceptanceError("GitHub attestation has no verified observed timestamp")
+    log_times: list[datetime] = []
+    authority_times: list[datetime] = []
+    for value in timestamps:
+        timestamp = _closed(
+            value,
+            {"type", "uri", "timestamp"},
+            "GitHub verified timestamp",
+        )
+        observer = (timestamp["type"], timestamp["uri"])
+        if observer not in _APPROVED_OBSERVERS:
+            raise AcceptanceError("GitHub attestation carries an unapproved timestamp observer")
+        observed_time = _observed_timestamp(
+            timestamp["timestamp"],
+            "GitHub observed timestamp",
+        )
+        if observer == _PUBLIC_TRANSPARENCY_LOG:
+            log_times.append(observed_time)
+        else:
+            authority_times.append(observed_time)
+    if len(log_times) != 1 or len(authority_times) > 1:
+        raise AcceptanceError("GitHub attestation must have one public transparency-log time")
+    for observed_time in log_times + authority_times:
+        if not issued_at <= observed_time <= issued_at + timedelta(minutes=15):
+            raise AcceptanceError("GitHub observed timestamp is not bound to record issuance")
 
     statement = _closed(
         verification.get("statement"),

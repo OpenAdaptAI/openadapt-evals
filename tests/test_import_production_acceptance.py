@@ -516,12 +516,20 @@ def _verified_provenance(
                         "sourceRepositoryVisibilityAtSigning": "private",
                     }
                 },
+                # Both entries, and both time formats, exactly as gh 2.67.0
+                # emitted them when it verified a cosign-signed bundle produced
+                # by the private OpenAdaptAI/openadapt-cloud repository.
                 "verifiedTimestamps": [
                     {
+                        "type": "Tlog",
+                        "uri": MODULE.PUBLIC_TRANSPARENCY_LOG,
+                        "timestamp": "2026-08-18T08:00:05-04:00",
+                    },
+                    {
                         "type": "TimestampAuthority",
-                        "uri": MODULE.GITHUB_TIMESTAMP_AUTHORITY,
-                        "timestamp": "2026-08-18T12:00:05.000Z",
-                    }
+                        "uri": MODULE.PUBLIC_TIMESTAMP_AUTHORITY,
+                        "timestamp": "2026-08-18T12:00:04Z",
+                    },
                 ],
                 "verifiedIdentity": MODULE.CLOUD_CERTIFICATE_IDENTITY,
                 "statement": {
@@ -1627,7 +1635,10 @@ def test_verifier_uses_exact_repository_workflow_ref_and_hosted_runner_policy(
     assert "--source-digest" not in verify_command
     assert "--source-ref" not in verify_command
     assert "--deny-self-hosted-runners" in verify_command
-    assert "--no-public-good" in verify_command
+    # The Cloud certificate is signed on the Sigstore public-good instance, so
+    # the flag that refuses that instance must stay off. The private-repository
+    # binding is carried by sourceRepositoryVisibilityAtSigning instead.
+    assert "--no-public-good" not in verify_command
     assert result["bundle_sha256"] == MODULE.file_sha256(bundle_path)
 
 
@@ -1863,83 +1874,79 @@ def test_verifier_binds_observed_time_to_record_issuance(tmp_path: Path) -> None
         )
 
 
+def _time(value: str) -> dict[str, str]:
+    return {"type": "Tlog", "uri": MODULE.PUBLIC_TRANSPARENCY_LOG, "timestamp": value}
+
+
+def _authority(value: str) -> dict[str, str]:
+    return {
+        "type": "TimestampAuthority",
+        "uri": MODULE.PUBLIC_TIMESTAMP_AUTHORITY,
+        "timestamp": value,
+    }
+
+
 @pytest.mark.parametrize(
-    "timestamps",
+    "timestamps,expected",
     [
-        [
-            {
-                "type": "Tlog",
-                "uri": "https://rekor.sigstore.dev",
-                "timestamp": "2026-08-18T12:00:05.000Z",
-            }
-        ],
-        [
-            {
-                "type": "TimestampAuthority",
-                "uri": "https://timestamp.sigstore.dev/api/v1/timestamp",
-                "timestamp": "2026-08-18T12:00:05.000Z",
-            }
-        ],
-        [
-            {
-                "type": "CurrentTime",
-                "uri": "",
-                "timestamp": "2026-08-18T12:00:05.000Z",
-            }
-        ],
-        [
-            {
-                "type": "TimestampAuthority",
-                "uri": "timestamp.githubapp.com",
-                "timestamp": "2026-08-18T12:00:05.000Z",
-            },
-            {
-                "type": "TimestampAuthority",
-                "uri": "timestamp.githubapp.com",
-                "timestamp": "2026-08-18T12:00:06.000Z",
-            },
-        ],
-        [
-            {
-                "type": "TimestampAuthority",
-                "uri": "timestamp.githubapp.com",
-                "timestamp": "2026-08-18T12:00:05.000Z",
-            },
-            {
-                "type": "Tlog",
-                "uri": "https://rekor.sigstore.dev",
-                "timestamp": "2026-08-18T12:00:06.000Z",
-            },
-        ],
-        [
-            {
-                "type": "TimestampAuthority",
-                "uri": "timestamp.githubapp.com",
-                "timestamp": "2026-08-18T12:00:05.000Z",
-            },
-            {
-                "type": "TimestampAuthority",
-                "uri": "https://timestamp.sigstore.dev/api/v1/timestamp",
-                "timestamp": "2026-08-18T12:00:06.000Z",
-            },
-        ],
-        [
-            {
-                "type": "TimestampAuthority",
-                "uri": "timestamp.githubapp.com",
-                "timestamp": "2026-08-18T12:00:05.000Z",
-            },
-            {
-                "type": "CurrentTime",
-                "uri": "",
-                "timestamp": "2026-08-18T12:00:06.000Z",
-            },
-        ],
+        # No public transparency-log time at all. A timestamp authority alone
+        # proves when, not that the signature is in an append-only public log.
+        ([_authority("2026-08-18T12:00:05Z")], "one public transparency-log time"),
+        # The GitHub private instance. Its timestamp authority is not the
+        # public-good one, and it publishes to no log.
+        (
+            [
+                {
+                    "type": "TimestampAuthority",
+                    "uri": "timestamp.githubapp.com",
+                    "timestamp": "2026-08-18T12:00:05Z",
+                }
+            ],
+            "unapproved timestamp observer",
+        ),
+        # A clock reading is not an observer.
+        (
+            [{"type": "CurrentTime", "uri": "", "timestamp": "2026-08-18T12:00:05Z"}],
+            "unapproved timestamp observer",
+        ),
+        # An unknown log, even one that calls itself Tlog.
+        (
+            [
+                {
+                    "type": "Tlog",
+                    "uri": "https://rekor.example.test",
+                    "timestamp": "2026-08-18T12:00:05Z",
+                }
+            ],
+            "unapproved timestamp observer",
+        ),
+        # Two log times, so the run cannot be pinned to one public entry.
+        (
+            [_time("2026-08-18T12:00:05Z"), _time("2026-08-18T12:00:06Z")],
+            "one public transparency-log time",
+        ),
+        # Two authority times alongside the log time.
+        (
+            [
+                _time("2026-08-18T12:00:05Z"),
+                _authority("2026-08-18T12:00:04Z"),
+                _authority("2026-08-18T12:00:03Z"),
+            ],
+            "one public transparency-log time",
+        ),
+        # An authority time outside the issuance window, while the log time is
+        # inside it. Every observed time must bind, not just the first.
+        (
+            [_time("2026-08-18T12:00:05Z"), _authority("2026-08-18T13:30:00Z")],
+            "not bound to record issuance",
+        ),
+        ([], "no verified observed timestamp"),
     ],
 )
-def test_verifier_requires_one_github_timestamp_authority_time(
+def test_verifier_requires_one_public_transparency_log_time(
     tmp_path: Path,
     timestamps: list[dict[str, str]],
+    expected: str,
 ) -> None:
     certificate_path = tmp_path / "certificate.json"
     bundle_path = tmp_path / "bundle.jsonl"
@@ -1948,7 +1955,7 @@ def test_verifier_requires_one_github_timestamp_authority_time(
     provenance = _verified_provenance(certificate_path)
     provenance[0]["verificationResult"]["verifiedTimestamps"] = timestamps
 
-    with pytest.raises(MODULE.AcceptanceError, match="one approved timestamp-authority time"):
+    with pytest.raises(MODULE.AcceptanceError, match=expected):
         MODULE.verify_github_attestation(
             certificate_path,
             bundle_path,

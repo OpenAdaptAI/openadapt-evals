@@ -60,26 +60,44 @@ then validates the verified SLSA provenance. It refuses an unknown repository,
 workflow, ref, source digest, issuer, runner class, signature, or empty
 verification result.
 
-A private repository does not use the Sigstore public-good instance. GitHub
-signs these attestations with its own instance: the internal Fulcio at
-`fulcio.githubapp.com` and the GitHub timestamp authority at
-`timestamp.githubapp.com`. That instance has no public transparency log, so no
-Rekor inclusion proof exists for this certificate. The verifier binds the
-substitute instead. It passes `--no-public-good`, which refuses a certificate
-signed by the public-good instance, and it passes `--hostname github.com` so a
-local GitHub CLI host setting cannot select a different private trust root. It
-then requires exactly one verified
-`TimestampAuthority` time from `timestamp.githubapp.com`, and requires that time
-to fall inside the fifteen minutes after the certificate
-`acceptance_verified_at` value. A Rekor time, a public-good timestamp-authority
-time, a current-clock time, or a second authority time is refused. The observed
-time is an RFC 3161 signed timestamp, not a public log inclusion time. This is
-a weaker public-audit property than a public repository gives, and the private
-control-plane boundary requires it. The importer accepts only the reviewed
-GitHub CLI version `2.67.0`. The protected importer image must pin that version
-and authenticate it with read access to the private Cloud repository. A
-different CLI version, host, trust instance, timestamp type, timestamp
-authority, or additional timestamp entry causes refusal.
+The Cloud repository is private, and GitHub artifact attestations are limited
+to public repositories on the GitHub Free, Pro, and Team plans. The Cloud
+workflow therefore does not use `actions/attest`. It signs the certificate
+bytes itself, with an Actions OIDC token, on the Sigstore public-good instance.
+GitHub does not gate that token by plan, and the Sigstore public-good instance
+does not check repository visibility. A measured run from the private Cloud
+repository produced a certificate from `CN=sigstore-intermediate,O=sigstore.dev`
+carrying `sourceRepositoryVisibilityAtSigning: private` and one Rekor entry.
+
+That choice buys a public transparency log. GitHub's own private instance has
+no log at all, so the public-good route is the stronger audit property, not a
+concession. It costs one exposure: the Rekor entry publishes the repository
+name, the workflow path, the source commit, the certificate digest, and the
+time of the run. It publishes no certificate content, no tenant, and no
+workflow identity.
+
+The verifier binds that route exactly. It passes `--hostname github.com`, so a
+local GitHub CLI host setting cannot select a different trust root. Every
+verified timestamp must come from an approved observer: the Rekor log at
+`https://rekor.sigstore.dev`, or the public-good timestamp authority at
+`https://timestamp.sigstore.dev/api/v1/timestamp`. Exactly one Rekor time must
+be present, at most one authority time may accompany it, and every observed
+time must fall inside the fifteen minutes after the certificate
+`acceptance_verified_at` value. The GitHub private timestamp authority, a
+current-clock reading, an unknown log, a second Rekor time, and an unapproved
+observer are all refused.
+
+An external verifier owns the format of the times it writes, so the importer
+reads them as RFC 3339 with an explicit offset rather than in the canonical
+millisecond UTC form that OpenAdapt uses for its own fields. A real GitHub CLI
+run emits both `2026-08-26T15:50:11-04:00` and `2026-08-26T19:50:10Z` in one
+payload. A time without an offset is refused.
+
+The importer accepts only the reviewed GitHub CLI version `2.67.0`. The
+protected importer image must pin that version and authenticate it with read
+access to the private Cloud repository. A different CLI version, host, trust
+instance, timestamp type, timestamp authority, or extra timestamp entry causes
+refusal.
 
 The expected Cloud commit is an external reviewer input. The importer requires
 the certificate commit, the GitHub signing-certificate source commit, and the
