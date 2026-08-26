@@ -86,9 +86,6 @@ CLOUD_CERTIFICATE_IDENTITY = (
 GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 RETENTION_PROVENANCE_ROUTE = "sigstore-public-good-slsa-provenance-v1"
 PRIVATE_EXPORT_CONTRACT_SCHEMA = "openadapt.private-export-contract/v1"
-STORAGE_IDENTITY_DOMAIN = b"OpenAdapt retained evidence storage identity v1\0"
-KMS_KEY_IDENTITY_DOMAIN = b"OpenAdapt retained evidence key identity v1\0"
-UPLOADER_IDENTITY_DOMAIN = b"OpenAdapt retained evidence uploader identity v1\0"
 GITHUB_HOSTNAME = "github.com"
 PUBLIC_TRANSPARENCY_LOG = "https://rekor.sigstore.dev"
 PUBLIC_TIMESTAMP_AUTHORITY = "https://timestamp.sigstore.dev/api/v1/timestamp"
@@ -874,110 +871,149 @@ def file_sha256(path: Path) -> str:
     return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-_STORAGE_IDENTITY_KEYS = {"account", "service", "container", "prefix"}
-_KMS_KEY_IDENTITY_KEYS = {"provider", "key_identity"}
-_UPLOADER_IDENTITY_KEYS = {"provider", "principal"}
+_RETENTION_DESTINATION_KEYS = {
+    "account_id",
+    "region",
+    "bucket",
+    "object_prefix",
+    "kms_key_arn",
+    "retention_mode",
+    "retention_days",
+}
 _PRIVATE_EXPORT_CONTRACT_KEYS = {
     "schema_version",
-    "storage_identity",
-    "kms_key_identity",
-    "uploader_identity",
+    "destination",
+    "uploader_arn",
     "importer_workflow_ref",
-    "minimum_retention_days",
-    "maximum_retention_days",
     "approval_authority",
     "approved_at",
 }
 _IMPORTER_WORKFLOW_REF = re.compile(
     r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/\.github/workflows/[A-Za-z0-9._-]+\.ya?ml@refs/heads/[A-Za-z0-9._/-]+$"
 )
+_AWS_ACCOUNT_ID = re.compile(r"^[0-9]{12}$")
+_AWS_REGION = re.compile(r"^[a-z]{2}(-gov)?-[a-z]+-[0-9]$")
+_S3_BUCKET = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
+_S3_PREFIX = re.compile(r"^[A-Za-z0-9._/-]{1,256}$")
+_KMS_KEY_ARN = re.compile(
+    r"^arn:aws:kms:([a-z0-9-]+):([0-9]{12}):key/[A-Za-z0-9-]+$"
+)
+_UPLOADER_ARN = re.compile(r"^arn:aws:(iam|sts)::[0-9]{12}:[A-Za-z0-9+=,.@_/-]+$")
 
 
-def _identity_sha256(domain: bytes, value: Any, keys: set[str], label: str) -> str:
-    """Return the domain-separated digest of one closed identity preimage.
+def retention_binding_sha256(domain: str, value: str) -> str:
+    """Return the digest the retention writer produces for one opaque binding.
 
-    The certificate carries these identities as opaque digests.  A reviewer can
-    only check an opaque digest by recomputing it, so the preimage has to be
-    exact: a closed key set, non-empty strings, and canonical JSON, which sorts
-    the keys and fixes the separators.  Everything a reviewer needs to reproduce
-    the value is the domain constant and this function.
+    This must stay byte-identical to ``opaqueDigest`` in the Cloud repository's
+    ``scripts/retain-execute-private-evidence.mjs``:
+
+        sha256(`OpenAdapt ${domain} v1\\0` + value)
+
+    Note that this is *not* ``opaque_binding_sha256`` above, which inserts the
+    word ``acceptance`` into the separator and is used for other bindings.  The
+    two produce different digests for the same domain, and only this one matches
+    what a real certificate carries.
     """
 
-    mapping = _closed(value, keys, label)
-    for key in sorted(keys):
-        _nonempty(mapping[key], f"{label} {key}")
-    payload = domain + canonical_json({key: mapping[key] for key in sorted(keys)}).encode(
-        "utf-8"
-    )
+    payload = f"OpenAdapt {domain} v1\0".encode("utf-8") + value.encode("utf-8")
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
-def storage_identity_sha256(value: Any) -> str:
-    """Return the digest binding the destination account, service, and prefix."""
+def retention_destination_approval_sha256(destination: Mapping[str, Any]) -> str:
+    """Return the destination approval digest the retention writer checks.
 
-    return _identity_sha256(
-        STORAGE_IDENTITY_DOMAIN,
-        value,
-        _STORAGE_IDENTITY_KEYS,
-        "storage identity",
+    The Cloud writer refuses to retain anything unless
+    ``EXECUTE_ACCEPTANCE_RETENTION_DESTINATION_APPROVAL_SHA256`` equals this
+    value, so one approval governs both sides instead of two schemes that can
+    disagree.
+    """
+
+    return retention_binding_sha256(
+        "Execute acceptance retention destination",
+        canonical_json({key: destination[key] for key in sorted(destination)}),
     )
 
 
-def kms_key_identity_sha256(value: Any) -> str:
-    """Return the digest binding the encryption-key identity."""
-
-    return _identity_sha256(
-        KMS_KEY_IDENTITY_DOMAIN,
-        value,
-        _KMS_KEY_IDENTITY_KEYS,
-        "key identity",
-    )
-
-
-def uploader_identity_sha256(value: Any) -> str:
-    """Return the digest binding the uploading principal."""
-
-    return _identity_sha256(
-        UPLOADER_IDENTITY_DOMAIN,
-        value,
-        _UPLOADER_IDENTITY_KEYS,
-        "uploader identity",
-    )
+def _validate_retention_destination(value: Any) -> dict[str, Any]:
+    destination = _closed(value, _RETENTION_DESTINATION_KEYS, "retention destination")
+    account_id = _nonempty(destination["account_id"], "retention destination account_id")
+    region = _nonempty(destination["region"], "retention destination region")
+    bucket = _nonempty(destination["bucket"], "retention destination bucket")
+    prefix = _nonempty(destination["object_prefix"], "retention destination object_prefix")
+    key_arn = _nonempty(destination["kms_key_arn"], "retention destination kms_key_arn")
+    if _AWS_ACCOUNT_ID.fullmatch(account_id) is None:
+        raise AcceptanceError("retention destination account is not an AWS account ID")
+    if _AWS_REGION.fullmatch(region) is None:
+        raise AcceptanceError("retention destination region is invalid")
+    if _S3_BUCKET.fullmatch(bucket) is None:
+        raise AcceptanceError("retention destination bucket is invalid")
+    if (
+        _S3_PREFIX.fullmatch(prefix) is None
+        or prefix.startswith("/")
+        or prefix.endswith("/")
+        or ".." in prefix
+        or "//" in prefix
+    ):
+        raise AcceptanceError("retention destination object prefix is invalid")
+    key_match = _KMS_KEY_ARN.fullmatch(key_arn)
+    if key_match is None:
+        raise AcceptanceError("retention destination KMS key ARN is invalid")
+    if key_match.group(1) != region or key_match.group(2) != account_id:
+        raise AcceptanceError(
+            "retention destination KMS key is outside the approved account or region"
+        )
+    if destination["retention_mode"] != "COMPLIANCE":
+        raise AcceptanceError("retention destination mode is not Object Lock COMPLIANCE")
+    days = destination["retention_days"]
+    if not isinstance(days, int) or isinstance(days, bool):
+        raise AcceptanceError("retention destination retention_days must be an integer")
+    policy = production_acceptance_policy()
+    if not policy["minimum_retention_days"] <= days <= policy["maximum_retention_days"]:
+        raise AcceptanceError("retention destination retention period is outside policy")
+    return dict(destination)
 
 
 def validate_private_export_contract(contract: Any) -> dict[str, Any]:
     """Return the derived expectations from one approved private-export contract.
 
-    The contract carries the preimages, never the digests.  Every digest the
-    importer compares against is derived here, so an approval cannot assert a
+    The contract carries the destination fields, never the digests.  Every digest
+    the importer compares against is derived here, so an approval cannot assert a
     digest whose preimage nobody can see.
     """
 
     document = _closed(contract, _PRIVATE_EXPORT_CONTRACT_KEYS, "private export contract")
     if document["schema_version"] != PRIVATE_EXPORT_CONTRACT_SCHEMA:
         raise AcceptanceError("private export contract schema is not supported")
+    destination = _validate_retention_destination(document["destination"])
+    uploader_arn = _nonempty(document["uploader_arn"], "private export contract uploader_arn")
+    if _UPLOADER_ARN.fullmatch(uploader_arn) is None:
+        raise AcceptanceError("private export contract uploader ARN is invalid")
+    if uploader_arn.split(":")[4] != destination["account_id"]:
+        raise AcceptanceError("private export contract uploader is outside the approved account")
     workflow_ref = document["importer_workflow_ref"]
     if (
         not isinstance(workflow_ref, str)
         or _IMPORTER_WORKFLOW_REF.fullmatch(workflow_ref) is None
     ):
         raise AcceptanceError("private export contract importer workflow ref is invalid")
-    minimum_days = _count(document["minimum_retention_days"], "contract minimum retention")
-    maximum_days = _count(document["maximum_retention_days"], "contract maximum retention")
-    policy = production_acceptance_policy()
-    if not policy["minimum_retention_days"] <= minimum_days <= maximum_days:
-        raise AcceptanceError("private export contract retention floor is outside policy")
-    if maximum_days > policy["maximum_retention_days"]:
-        raise AcceptanceError("private export contract retention ceiling is outside policy")
     _nonempty(document["approval_authority"], "private export contract approval authority")
     approved_at = _timestamp(document["approved_at"], "private export contract approved_at")
     return {
-        "storage_identity_sha256": storage_identity_sha256(document["storage_identity"]),
-        "kms_key_identity_sha256": kms_key_identity_sha256(document["kms_key_identity"]),
-        "uploader_identity_sha256": uploader_identity_sha256(document["uploader_identity"]),
+        "destination_approval_sha256": retention_destination_approval_sha256(destination),
+        "storage_identity_sha256": retention_binding_sha256(
+            "retention store",
+            destination["bucket"],
+        ),
+        "kms_key_identity_sha256": retention_binding_sha256(
+            "retention KMS key",
+            destination["kms_key_arn"],
+        ),
+        "uploader_identity_sha256": retention_binding_sha256(
+            "AWS retention uploader",
+            uploader_arn,
+        ),
         "importer_workflow_ref": workflow_ref,
-        "minimum_retention_days": minimum_days,
-        "maximum_retention_days": maximum_days,
+        "retention_days": destination["retention_days"],
         "approval_authority": document["approval_authority"],
         "approved_at": approved_at,
         "contract_sha256": canonical_sha256(document),
@@ -1024,15 +1060,8 @@ def verify_retention_against_contract(
         retention["retention_until"],
         "certificate retention retention_until",
     )
-    period = expires_at - retained_at
-    if not (
-        timedelta(days=contract["minimum_retention_days"])
-        <= period
-        <= timedelta(days=contract["maximum_retention_days"])
-    ):
-        raise AcceptanceError("retained evidence period is outside the approved contract")
-
-
+    if expires_at - retained_at < timedelta(days=contract["retention_days"]):
+        raise AcceptanceError("retained evidence period is shorter than the approved contract")
 def opaque_binding_sha256(domain: str, value: str) -> str:
     payload = f"OpenAdapt acceptance {domain} v1\0".encode("utf-8") + value.encode(
         "utf-8"

@@ -25,49 +25,77 @@ WORKFLOW_REF = (
 def _contract() -> dict[str, Any]:
     return {
         "schema_version": MODULE.PRIVATE_EXPORT_CONTRACT_SCHEMA,
-        "storage_identity": {
-            "account": "123456789012",
-            "service": "s3",
-            "container": "openadapt-retained-evidence",
-            "prefix": "production-acceptance/",
+        "destination": {
+            "account_id": "123456789012",
+            "region": "us-east-1",
+            "bucket": "openadapt-retained-evidence",
+            "object_prefix": "production-acceptance",
+            "kms_key_arn": (
+                "arn:aws:kms:us-east-1:123456789012:key/1111-2222"
+            ),
+            "retention_mode": "COMPLIANCE",
+            "retention_days": 2555,
         },
-        "kms_key_identity": {
-            "provider": "aws-kms",
-            "key_identity": "arn:aws:kms:us-east-1:123456789012:key/1111-2222",
-        },
-        "uploader_identity": {
-            "provider": "github-actions",
-            "principal": "OpenAdaptAI/openadapt-cloud",
-        },
+        "uploader_arn": "arn:aws:iam::123456789012:role/openadapt-retention-writer",
         "importer_workflow_ref": WORKFLOW_REF,
-        "minimum_retention_days": 365,
-        "maximum_retention_days": 2555,
         "approval_authority": "OpenAdapt",
         "approved_at": "2026-08-26T12:00:00.000Z",
     }
 
 
-def test_a_reviewer_can_recompute_every_identity_digest() -> None:
+def test_every_digest_matches_the_cloud_retention_writer() -> None:
+    """The Cloud writer emits these digests. Ours must be byte-identical.
+
+    `opaqueDigest` in openadapt-cloud's scripts/retain-execute-private-evidence.mjs
+    is sha256(`OpenAdapt ${domain} v1\\0` + value) over a single string. This
+    recomputes that independently of the implementation.
+    """
+
     contract = _contract()
     facts = MODULE.validate_private_export_contract(contract)
+    destination = contract["destination"]
 
-    for domain, field, digest in (
-        (MODULE.STORAGE_IDENTITY_DOMAIN, "storage_identity", "storage_identity_sha256"),
-        (MODULE.KMS_KEY_IDENTITY_DOMAIN, "kms_key_identity", "kms_key_identity_sha256"),
-        (MODULE.UPLOADER_IDENTITY_DOMAIN, "uploader_identity", "uploader_identity_sha256"),
-    ):
-        preimage = domain + MODULE.canonical_json(
-            {key: contract[field][key] for key in sorted(contract[field])}
-        ).encode("utf-8")
-        assert facts[digest] == "sha256:" + hashlib.sha256(preimage).hexdigest()
+    def cloud(domain: str, value: str) -> str:
+        payload = f"OpenAdapt {domain} v1\0".encode("utf-8") + value.encode("utf-8")
+        return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+    assert facts["storage_identity_sha256"] == cloud(
+        "retention store", destination["bucket"]
+    )
+    assert facts["kms_key_identity_sha256"] == cloud(
+        "retention KMS key", destination["kms_key_arn"]
+    )
+    assert facts["uploader_identity_sha256"] == cloud(
+        "AWS retention uploader", contract["uploader_arn"]
+    )
+    assert facts["destination_approval_sha256"] == cloud(
+        "Execute acceptance retention destination",
+        MODULE.canonical_json({k: destination[k] for k in sorted(destination)}),
+    )
 
 
-def test_the_contract_carries_preimages_not_digests() -> None:
+def test_the_retention_separator_is_not_the_acceptance_separator() -> None:
+    """These two helpers differ by one word and produce different digests.
+
+    `opaque_binding_sha256` inserts "acceptance" into the separator. Using it
+    for a retention binding would refuse every genuine certificate, which is
+    exactly the defect this file exists to prevent recurring.
+    """
+
+    bucket = _contract()["destination"]["bucket"]
+
+    assert MODULE.retention_binding_sha256("retention store", bucket) != (
+        MODULE.opaque_binding_sha256("retention store", bucket)
+    )
+
+
+def test_the_contract_carries_values_not_digests() -> None:
     contract = _contract()
 
     # An approval that asserted a digest would be unverifiable. Every digest the
-    # importer compares against has to be derived from a visible preimage.
+    # importer compares against has to be derived from a visible value.
     assert not any(key.endswith("_sha256") for key in contract)
+    assert not any(key.endswith("_sha256") for key in contract["destination"])
     facts = MODULE.validate_private_export_contract(contract)
     assert facts["storage_identity_sha256"].startswith("sha256:")
 
@@ -87,13 +115,39 @@ def test_the_contract_carries_preimages_not_digests() -> None:
             ),
             "workflow ref is invalid",
         ),
-        (lambda c: c.__setitem__("minimum_retention_days", 30), "floor is outside policy"),
-        (lambda c: c.__setitem__("maximum_retention_days", 4000), "ceiling is outside policy"),
-        (lambda c: c.__setitem__("maximum_retention_days", 100), "floor is outside policy"),
-        (lambda c: c["storage_identity"].__setitem__("prefix", ""), "storage identity prefix"),
-        (lambda c: c["storage_identity"].pop("account"), "storage identity keys differ"),
-        (lambda c: c["kms_key_identity"].__setitem__("key_identity", ""), "key identity"),
-        (lambda c: c["uploader_identity"].pop("principal"), "uploader identity keys differ"),
+        (lambda c: c["destination"].pop("region"), "retention destination keys differ"),
+        (lambda c: c["destination"].__setitem__("account_id", "12345"), "AWS account ID"),
+        (lambda c: c["destination"].__setitem__("region", "nowhere"), "region is invalid"),
+        (lambda c: c["destination"].__setitem__("bucket", "Bad_Bucket"), "bucket is invalid"),
+        (lambda c: c["destination"].__setitem__("object_prefix", "/x"), "object prefix"),
+        (lambda c: c["destination"].__setitem__("object_prefix", "a//b"), "object prefix"),
+        (lambda c: c["destination"].__setitem__("object_prefix", "a/../b"), "object prefix"),
+        (lambda c: c["destination"].__setitem__("kms_key_arn", "arn:aws:kms:x"), "KMS key ARN"),
+        # The key must live in the approved account and region, the same rule
+        # the Cloud writer enforces before it retains anything.
+        (
+            lambda c: c["destination"].__setitem__(
+                "kms_key_arn", "arn:aws:kms:eu-west-1:123456789012:key/1111"
+            ),
+            "outside the approved account or region",
+        ),
+        (
+            lambda c: c["destination"].__setitem__(
+                "kms_key_arn", "arn:aws:kms:us-east-1:999999999999:key/1111"
+            ),
+            "outside the approved account or region",
+        ),
+        (lambda c: c["destination"].__setitem__("retention_mode", "GOVERNANCE"), "COMPLIANCE"),
+        (lambda c: c["destination"].__setitem__("retention_days", 30), "outside policy"),
+        (lambda c: c["destination"].__setitem__("retention_days", 4000), "outside policy"),
+        (lambda c: c["destination"].__setitem__("retention_days", "2555"), "must be an integer"),
+        (lambda c: c.__setitem__("uploader_arn", "not-an-arn"), "uploader ARN is invalid"),
+        (
+            lambda c: c.__setitem__(
+                "uploader_arn", "arn:aws:iam::999999999999:role/other"
+            ),
+            "uploader is outside the approved account",
+        ),
         (lambda c: c.__setitem__("approved_at", "2026-08-26T12:00:00Z"), "canonical"),
     ],
 )
@@ -105,12 +159,12 @@ def test_contract_refuses_anything_inexact(mutation: object, expected: str) -> N
         MODULE.validate_private_export_contract(contract)
 
 
-def test_contract_bounds_must_sit_inside_the_fixed_policy() -> None:
+def test_retention_days_must_sit_inside_the_fixed_policy() -> None:
     policy = MODULE.production_acceptance_policy()
     facts = MODULE.validate_private_export_contract(_contract())
 
-    assert policy["minimum_retention_days"] <= facts["minimum_retention_days"]
-    assert facts["maximum_retention_days"] <= policy["maximum_retention_days"]
+    assert policy["minimum_retention_days"] <= facts["retention_days"]
+    assert facts["retention_days"] <= policy["maximum_retention_days"]
 
 
 def test_importer_identity_must_be_the_approved_workflow_and_ref() -> None:
@@ -148,7 +202,7 @@ def _retention(facts: dict[str, Any]) -> dict[str, Any]:
         "kms_key_identity_sha256": facts["kms_key_identity_sha256"],
         "uploader_identity_sha256": facts["uploader_identity_sha256"],
         "retained_at": "2026-08-18T12:00:00.000Z",
-        "retention_until": "2028-08-18T12:00:00.000Z",
+        "retention_until": "2034-08-18T12:00:00.000Z",
     }
 
 
@@ -176,7 +230,7 @@ def test_retention_must_match_the_approved_destination_key_and_uploader() -> Non
 def test_a_certificate_cannot_choose_its_own_destination() -> None:
     facts = MODULE.validate_private_export_contract(_contract())
     elsewhere = copy.deepcopy(_contract())
-    elsewhere["storage_identity"]["container"] = "attacker-bucket"
+    elsewhere["destination"]["bucket"] = "attacker-bucket"
     forged = MODULE.validate_private_export_contract(elsewhere)
 
     retention = _retention(facts)
@@ -186,25 +240,23 @@ def test_a_certificate_cannot_choose_its_own_destination() -> None:
         MODULE.verify_retention_against_contract(retention, facts)
 
 
-@pytest.mark.parametrize(
-    "retained_at,retention_until,expected",
-    [
-        ("2026-08-18T12:00:00.000Z", "2026-09-18T12:00:00.000Z", "outside the approved"),
-        ("2026-08-18T12:00:00.000Z", "2040-08-18T12:00:00.000Z", "outside the approved"),
-    ],
-)
-def test_retention_period_must_sit_inside_the_approved_window(
-    retained_at: str,
-    retention_until: str,
-    expected: str,
-) -> None:
+def test_a_shorter_retention_period_than_approved_is_refused() -> None:
     facts = MODULE.validate_private_export_contract(_contract())
     retention = _retention(facts)
-    retention["retained_at"] = retained_at
-    retention["retention_until"] = retention_until
+    retention["retention_until"] = "2026-09-18T12:00:00.000Z"
 
-    with pytest.raises(MODULE.AcceptanceError, match=expected):
+    with pytest.raises(MODULE.AcceptanceError, match="shorter than the approved"):
         MODULE.verify_retention_against_contract(retention, facts)
+
+
+def test_a_longer_retention_period_than_approved_is_allowed() -> None:
+    """An approval sets a floor. Locking evidence for longer is never a fault."""
+
+    facts = MODULE.validate_private_export_contract(_contract())
+    retention = _retention(facts)
+    retention["retention_until"] = "2044-08-18T12:00:00.000Z"
+
+    MODULE.verify_retention_against_contract(retention, facts)
 
 
 def test_cli_refuses_a_contract_it_is_not_authorised_to_use(

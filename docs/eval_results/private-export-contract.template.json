@@ -4,29 +4,29 @@
     "Copy it into openadapt-internal, replace every FILL_ value, delete this",
     "_README key, and approve the result there. This public repository keeps",
     "the shape; the filled instance and its values stay private.",
+    "",
+    "The destination fields are the same seven the Cloud retention writer",
+    "hashes in scripts/retain-execute-private-evidence.mjs. Its approval digest",
+    "EXECUTE_ACCEPTANCE_RETENTION_DESTINATION_APPROVAL_SHA256 is derived from",
+    "exactly these values, so one approval governs both repositories.",
+    "",
     "Validate a filled copy with:",
     "  python scripts/import_production_acceptance.py --private-export-contract <path> ...",
-    "It derives every digest from the preimages below, so a reviewer recomputes",
+    "It derives every digest from the values below, so a reviewer recomputes",
     "each one rather than trusting an asserted hash."
   ],
   "schema_version": "openadapt.private-export-contract/v1",
-  "storage_identity": {
-    "account": "FILL_DESTINATION_ACCOUNT_ID",
-    "service": "FILL_DESTINATION_SERVICE",
-    "container": "FILL_DESTINATION_CONTAINER",
-    "prefix": "FILL_DESTINATION_PREFIX"
+  "destination": {
+    "account_id": "FILL_AWS_ACCOUNT_ID",
+    "region": "FILL_AWS_REGION",
+    "bucket": "FILL_RETENTION_BUCKET",
+    "object_prefix": "FILL_RETENTION_OBJECT_PREFIX",
+    "kms_key_arn": "FILL_RETENTION_KMS_KEY_ARN",
+    "retention_mode": "COMPLIANCE",
+    "retention_days": 2555
   },
-  "kms_key_identity": {
-    "provider": "FILL_KEY_PROVIDER",
-    "key_identity": "FILL_KEY_IDENTITY"
-  },
-  "uploader_identity": {
-    "provider": "FILL_UPLOADER_PROVIDER",
-    "principal": "FILL_UPLOADER_PRINCIPAL"
-  },
+  "uploader_arn": "FILL_UPLOADER_ROLE_OR_USER_ARN",
   "importer_workflow_ref": "OpenAdaptAI/openadapt-evals/.github/workflows/import-production-acceptance.yml@refs/heads/main",
-  "minimum_retention_days": 365,
-  "maximum_retention_days": 2555,
   "approval_authority": "FILL_APPROVAL_AUTHORITY",
   "approved_at": "FILL_APPROVED_AT"
 }
