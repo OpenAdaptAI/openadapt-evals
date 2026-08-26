@@ -1,6 +1,13 @@
 # CHANGELOG
 
 
+## v0.94.1 (2026-08-26)
+
+### Bug Fixes
+
+- **evidence**: Match the retention digests the Cloud writer emits (#311) ([`df12b3c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/df12b3ce72ad02992a7c7e389d8ccf2cfd01774c))
+
+
 ## v0.94.0 (2026-08-26)
 
 ### Features
