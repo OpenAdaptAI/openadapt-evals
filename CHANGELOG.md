@@ -5,6 +5,7 @@
 
 ### Features
 
+- **ci**: Add the authorized importer workflow and fix the proposal bot (#309) ([`c577e33`](https://github.com/OpenAdaptAI/openadapt-evals/commit/c577e33d7abaa8fdce3c83647ae7991b6707c368))
 - **evidence**: Implement the private-export contract mechanism (#308) ([`6c17731`](https://github.com/OpenAdaptAI/openadapt-evals/commit/6c177313bd478494f271317623572daf3318b4a2))
 
 ### Bug Fixes
