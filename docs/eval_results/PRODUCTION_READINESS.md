@@ -25,9 +25,9 @@ repository. Do not set `production_acceptance: true` while this gate is closed.
 The checked-in fixtures are synthetic test vectors only.
 
 The future approval must bind the complete payload schema and digest, the
-destination account, service, container, and prefix, the encryption-key
-identity, the immutable retention mode and period, the authorized importer
-workflow and ref, and the approval authority. A broad enable flag or approval
+destination account, repository, ref, and path prefix, the encryption-key
+identity, the recorded retention commitment, the authorized importer workflow
+and ref, and the approval authority. A broad enable flag or approval
 of only the admission and campaign digests is not sufficient.
 
 After approval, the importer will compose four evidence inputs:
@@ -39,7 +39,8 @@ After approval, the importer will compose four evidence inputs:
 3. The full `openadapt.qualification-campaign/v2` artifact with every retained
    trial row and normalized evidence receipt for the exact qualification
    contract.
-4. The GitHub artifact-attestation bundle for the certificate bytes.
+4. The Sigstore bundle signing the certificate bytes on the public-good
+   instance.
 
 The future importer also needs external control inputs: the approved Cloud
 source commit, the approved qualification signer registry, the admission and
@@ -219,8 +220,9 @@ that output. Until then, the importer refuses. A bare registry boolean or
 campaign label fails the check.
 
 Cloud does not issue a complete acceptance record before it verifies durable
-retention. The private evidence envelope uses encrypted immutable storage with
-Object Lock and KMS. The public record retains only opaque digests and the
+retention. The private evidence envelope is encrypted with an AES-256-GCM data
+key wrapped by KMS, then committed to a private repository and signed on the
+Sigstore public-good instance. The public record retains only opaque digests and the
 verified retention facts. The importer verifies the public retention receipt
 and its exact binding to the candidate and retained envelope. GitHub artifact
 retention alone does not satisfy this contract.

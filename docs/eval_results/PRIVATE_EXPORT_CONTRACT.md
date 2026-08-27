@@ -13,6 +13,12 @@ below are blank.
 > workflow and ref, and the approval authority. A broad enable flag or approval
 > of only the admission and campaign digests is not sufficient.
 
+That bar was written when the store was an S3 bucket with Object Lock. The store
+is now a signed git commit, so "container and prefix" reads as repository and
+path prefix, and "immutable retention mode and period" reads as the transparency
+log entry plus a recorded commitment. Every other clause holds unchanged. The
+next section explains why the medium changed.
+
 ## Why an approval is needed at all, and what it fixes
 
 The certificate already carries a `retention` block, and the importer already
@@ -62,16 +68,16 @@ account root.
 ## The bindings
 
 The approval fixes six destination fields plus the uploader, the importer, and
-the authority. **Every value is blank in this repository.** They are deployment
-facts, and only the account owner can supply them.
+the authority. The store and its path are settled: `openadapt-evidence` exists
+and is empty by design. The remaining blanks are AWS facts and your signature.
 
 | Contract field | What it fixes | Value |
 | --- | --- | --- |
 | `destination.account_id` | the AWS account holding the KMS key | **TO BE SUPPLIED** |
 | `destination.region` | the region of that key | **TO BE SUPPLIED** |
-| `destination.repository` | the private repository holding the ciphertext | **TO BE SUPPLIED** |
+| `destination.repository` | the private repository holding the ciphertext | `OpenAdaptAI/openadapt-evidence` |
 | `destination.ref` | the branch it lands on | `refs/heads/main` |
-| `destination.path_prefix` | the path inside it | **TO BE SUPPLIED** |
+| `destination.path_prefix` | the path inside it | `production-acceptance` |
 | `destination.kms_key_arn` | the key wrapping each data key | **TO BE SUPPLIED** |
 | `destination.retention_commitment_days` | how long you commit to keep it | default 2555 |
 | `uploader_arn` | the principal allowed to write | **TO BE SUPPLIED** |

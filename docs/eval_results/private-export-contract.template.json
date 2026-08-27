@@ -22,9 +22,9 @@
   "destination": {
     "account_id": "FILL_AWS_ACCOUNT_ID",
     "region": "FILL_AWS_REGION",
-    "repository": "FILL_EVIDENCE_REPOSITORY",
+    "repository": "OpenAdaptAI/openadapt-evidence",
     "ref": "refs/heads/main",
-    "path_prefix": "FILL_EVIDENCE_PATH_PREFIX",
+    "path_prefix": "production-acceptance",
     "kms_key_arn": "FILL_DATA_KEY_KMS_ARN",
     "retention_commitment_days": 2555
   },
