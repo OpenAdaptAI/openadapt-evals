@@ -93,6 +93,9 @@ class PoolRunResult:
     terminal_receipts: tuple[Mapping[str, Any], ...] = ()
     """One centrally issued terminal receipt for each requested task."""
 
+    dispatch_ids_by_worker: Mapping[str, str] = field(default_factory=dict)
+    """Exact local worker-to-dispatch correlation for those receipts."""
+
 
 def validate_terminal_pool_result(
     result: PoolRunResult,
@@ -101,11 +104,15 @@ def validate_terminal_pool_result(
 ) -> PoolRunResult:
     """Require closed task counts and one central receipt per dispatch."""
 
+    if not isinstance(expected_dispatches, Mapping):
+        raise RuntimeError("Qualified terminal expectations are invalid.")
     task_count = len(expected_dispatches)
     expected_workers = set(expected_dispatches)
     expected_dispatch_ids = set(expected_dispatches.values())
     if (
         result.total_tasks != task_count
+        or not isinstance(result.dispatch_ids_by_worker, Mapping)
+        or dict(result.dispatch_ids_by_worker) != dict(expected_dispatches)
         or len(expected_dispatch_ids) != task_count
         or any(
             not isinstance(worker, str)
@@ -237,6 +244,36 @@ def _build_postlaunch_terminal_evidence(
         process=process,
         terminal_readback=terminal_readback,
         interrupt_evidence=interrupt_evidence,
+    )
+
+
+def _build_qualified_terminal_evidence(
+    *,
+    manager: Any,
+    admission: Any,
+    dispatch: Any,
+    launch_outcome: Any,
+    interrupt_requested: Event,
+) -> Mapping[str, Any]:
+    """Build terminal evidence for either closed launch outcome."""
+
+    from openadapt_evals.infrastructure.windows_worker_dispatch import (
+        QualifiedPrelaunchEvidence,
+        build_terminal_evidence,
+    )
+
+    if isinstance(launch_outcome, QualifiedPrelaunchEvidence):
+        return build_terminal_evidence(
+            admission=admission,
+            dispatch=dispatch,
+            process=launch_outcome,
+        )
+    return _build_postlaunch_terminal_evidence(
+        manager=manager,
+        admission=admission,
+        dispatch=dispatch,
+        process=launch_outcome,
+        interrupt_requested=interrupt_requested,
     )
 
 
@@ -873,10 +910,9 @@ class PoolManager:
             )
         if task_ids is not None and (
             len(task_ids) != tasks
-            or len(set(task_ids)) != len(task_ids)
             or any(not isinstance(task_id, str) or not task_id for task_id in task_ids)
         ):
-            raise RuntimeError("Exact task identities must be nonempty, unique, and complete.")
+            raise RuntimeError("Exact task identities must be nonempty and complete.")
         if agent_factory is not None and task_ids is None:
             raise RuntimeError("An external agent requires exact task identities.")
 
@@ -957,19 +993,10 @@ class PoolManager:
             )
             if not isinstance(result, PoolRunResult):
                 raise RuntimeError("The external task authority returned an invalid result.")
-            accounted = result.completed + result.failed
-            names = [item[0] for item in result.worker_results]
-            expected_names = [worker.name for worker in ready_workers]
-            if (
-                result.total_tasks != tasks
-                or accounted != tasks
-                or len(result.worker_results) != tasks
-                or sorted(names) != sorted(expected_names)
-            ):
-                raise RuntimeError(
-                    "The external task authority did not return one terminal receipt per task."
-                )
-            return result
+            return validate_terminal_pool_result(
+                result,
+                expected_dispatches=result.dispatch_ids_by_worker,
+            )
 
         def run_on_worker(
             worker: PoolWorker,
@@ -1052,7 +1079,7 @@ class PoolManager:
             )
             if api_key is None:
                 raise RuntimeError("The protected API credential is absent.")
-            process = launch_authorized_process(
+            launch_outcome = launch_authorized_process(
                 manager,
                 admission=admission,
                 dispatch=authorized,
@@ -1074,11 +1101,11 @@ class PoolManager:
                 current_task=exact_task_id,
                 qualified_task_binding_sha256=authorized.object["dispatch_id_sha256"],
             )
-            terminal_evidence = _build_postlaunch_terminal_evidence(
+            terminal_evidence = _build_qualified_terminal_evidence(
                 manager=manager,
                 admission=admission,
                 dispatch=authorized,
-                process=process,
+                launch_outcome=launch_outcome,
                 interrupt_requested=interrupt_requested,
             )
             terminal = self.worker_trust_authority.issue_terminal(
@@ -1157,6 +1184,7 @@ class PoolManager:
             elapsed_seconds=elapsed,
             worker_results=results,
             terminal_receipts=tuple(terminal_receipts),
+            dispatch_ids_by_worker=dict(expected_dispatches),
         )
         return validate_terminal_pool_result(
             result,

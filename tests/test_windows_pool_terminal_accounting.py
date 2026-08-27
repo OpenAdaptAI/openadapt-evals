@@ -11,7 +11,11 @@ import pytest
 from openadapt_evals.infrastructure.pool import (
     PoolRunResult,
     _build_postlaunch_terminal_evidence,
+    _build_qualified_terminal_evidence,
     validate_terminal_pool_result,
+)
+from openadapt_evals.infrastructure.windows_worker_dispatch import (
+    QualifiedPrelaunchEvidence,
 )
 
 
@@ -170,6 +174,35 @@ def test_worker_interrupt_enters_the_same_termination_proof_path() -> None:
     build.assert_called_once()
 
 
+def test_prelaunch_quarantine_uses_the_canonical_evidence_builder() -> None:
+    outcome = QualifiedPrelaunchEvidence(terminal_evidence={"process": None})
+    built = {"terminal_state": "PRELAUNCH_QUARANTINED"}
+    with (
+        patch(
+            "openadapt_evals.infrastructure.windows_worker_dispatch.build_terminal_evidence",
+            return_value=built,
+        ) as build,
+        patch(
+            "openadapt_evals.infrastructure.pool._build_postlaunch_terminal_evidence"
+        ) as postlaunch,
+    ):
+        result = _build_qualified_terminal_evidence(
+            manager="manager",
+            admission="admission",
+            dispatch="dispatch",
+            launch_outcome=outcome,
+            interrupt_requested=Event(),
+        )
+
+    assert result is built
+    postlaunch.assert_not_called()
+    build.assert_called_once_with(
+        admission="admission",
+        dispatch="dispatch",
+        process=outcome,
+    )
+
+
 def _receipt(worker: str, state: str = "VERIFIED") -> dict[str, object]:
     return {
         "receipt_id_sha256": _sha(f"receipt:{worker}"),
@@ -198,6 +231,10 @@ def _result(*, second_state: str = "SAFE_HALT") -> PoolRunResult:
             ),
         ],
         terminal_receipts=(first, second),
+        dispatch_ids_by_worker={
+            "worker-1": _sha("dispatch:worker-1"),
+            "worker-2": _sha("dispatch:worker-2"),
+        },
     )
 
 
@@ -223,6 +260,16 @@ def test_external_partial_failure_needs_a_terminal_receipt() -> None:
     result = _result()
     result.terminal_receipts = result.terminal_receipts[:1]
     with pytest.raises(RuntimeError, match="no central terminal receipt"):
+        _validate(result)
+
+
+def test_external_result_retains_exact_worker_dispatch_correlation() -> None:
+    result = _result()
+    result.dispatch_ids_by_worker = {
+        "worker-1": _sha("dispatch:worker-1"),
+        "worker-2": _sha("different-dispatch"),
+    }
+    with pytest.raises(RuntimeError, match="expectations are not exact"):
         _validate(result)
 
 
