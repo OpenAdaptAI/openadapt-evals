@@ -898,6 +898,54 @@ def cmd_pool_resume(args):
         return 1
 
 
+def cmd_pool_reset(args):
+    """Restore one worker from its exact verified Windows baseline."""
+
+    init_logging()
+    from openadapt_evals.infrastructure.pool import PoolManager
+
+    vm_manager = _create_vm_manager(getattr(args, "cloud", None))
+    manager = PoolManager(vm_manager=vm_manager, log_fn=log)
+    try:
+        proof = manager.reset_worker(
+            args.worker,
+            run_id=args.run_id,
+            baseline_sha256=args.baseline_sha256,
+        )
+    except (RuntimeError, ValueError) as exc:
+        log("POOL-RESET", f"ERROR: {exc}")
+        return 1
+    print(json.dumps(proof.__dict__, sort_keys=True, separators=(",", ":")))
+    return 0
+
+
+def cmd_pool_egress(args):
+    """Apply one host-enforced egress policy to a dedicated worker."""
+
+    init_logging()
+    from openadapt_evals.infrastructure.pool import PoolManager
+
+    vm_manager = _create_vm_manager(getattr(args, "cloud", None))
+    manager = PoolManager(vm_manager=vm_manager, log_fn=log)
+    try:
+        digest = manager.apply_worker_egress(args.worker, args.policy)
+    except (RuntimeError, ValueError) as exc:
+        log("POOL-EGRESS", f"ERROR: {exc}")
+        return 1
+    print(
+        json.dumps(
+            {
+                "schema_version": "openadapt.windows-host-egress-result/v1",
+                "worker": args.worker,
+                "policy_sha256": digest,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
+    return 0
+
+
 def cmd_pool_vnc(args):
     """Open VNC to a specific pool worker via SSH tunnel.
 
@@ -8189,6 +8237,27 @@ Examples:
         help="Timeout in minutes for WAA readiness (default: 10)",
     )
     p_pool_resume.set_defaults(func=cmd_pool_resume)
+
+    # pool-reset
+    p_pool_reset = subparsers.add_parser(
+        "pool-reset",
+        help="Restore one Windows worker from an exact verified baseline",
+    )
+    p_pool_reset.add_argument("--cloud", **_cloud_kwargs)
+    p_pool_reset.add_argument("--worker", required=True)
+    p_pool_reset.add_argument("--run-id", required=True)
+    p_pool_reset.add_argument("--baseline-sha256", required=True)
+    p_pool_reset.set_defaults(func=cmd_pool_reset)
+
+    # pool-egress
+    p_pool_egress = subparsers.add_parser(
+        "pool-egress",
+        help="Apply an exact host-enforced egress policy to one worker",
+    )
+    p_pool_egress.add_argument("--cloud", **_cloud_kwargs)
+    p_pool_egress.add_argument("--worker", required=True)
+    p_pool_egress.add_argument("--policy", required=True, type=Path)
+    p_pool_egress.set_defaults(func=cmd_pool_egress)
 
     # pool-logs
     p_pool_logs = subparsers.add_parser(
