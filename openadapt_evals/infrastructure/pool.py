@@ -188,6 +188,51 @@ sudo systemctl daemon-reload
 sudo systemctl enable socat-waa-evaluate.service
 """
 
+# Install one host-owned, fail-closed nftables boundary for the dedicated
+# Windows guest. This runs for fresh and golden-image workers. The service
+# restores the last checked policy before Docker can start after a reboot.
+WINDOWS_EGRESS_BOOTSTRAP_SCRIPT = r"""
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nftables
+sudo install -d -m 0700 /etc/openadapt
+sudo tee /etc/openadapt/windows-egress.nft > /dev/null <<'NFT'
+flush chain inet oa_windows forward
+add rule inet oa_windows forward iifname "docker0" counter drop
+NFT
+sudo chmod 0600 /etc/openadapt/windows-egress.nft
+sudo tee /usr/local/sbin/openadapt-windows-egress-restore > /dev/null <<'SCRIPT'
+#!/bin/sh
+set -eu
+nft list table inet oa_windows > /dev/null 2>&1 || nft add table inet oa_windows
+nft list chain inet oa_windows forward > /dev/null 2>&1 || \
+    nft 'add chain inet oa_windows forward { type filter hook forward priority -50; policy accept; }'
+nft -c -f /etc/openadapt/windows-egress.nft
+nft -f /etc/openadapt/windows-egress.nft
+SCRIPT
+sudo chmod 0755 /usr/local/sbin/openadapt-windows-egress-restore
+sudo tee /etc/systemd/system/openadapt-windows-egress.service > /dev/null <<'UNIT'
+[Unit]
+Description=OpenAdapt fail-closed Windows guest egress boundary
+DefaultDependencies=no
+After=local-fs.target
+Before=network-pre.target docker.service
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/openadapt-windows-egress-restore
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+sudo systemctl daemon-reload
+sudo systemctl enable openadapt-windows-egress.service
+sudo systemctl restart openadapt-windows-egress.service
+"""
+
 # WAA container start script template.
 # {home_dir} and {ssh_username} are formatted at runtime.
 WAA_START_SCRIPT_TEMPLATE = """
@@ -442,6 +487,47 @@ class PoolManager:
 
             if not workers_docker_ok:
                 raise RuntimeError("Docker setup failed on all VMs")
+
+        # Install and activate the host-owned egress boundary before a guest
+        # can start. Do this for golden images too. A stale image policy cannot
+        # become the new pool's initial policy because bootstrap writes the
+        # fail-closed rule first.
+        self._log("POOL", "Installing Windows guest egress boundaries...")
+
+        def setup_egress_boundary(
+            name_ip: tuple[str, str],
+        ) -> tuple[str, bool, str]:
+            name, ip = name_ip
+            result = ssh_run(
+                ip,
+                WINDOWS_EGRESS_BOOTSTRAP_SCRIPT,
+                stream=False,
+                step="EGRESS",
+                username=username,
+            )
+            error = result.stderr[:200] if result.stderr else ""
+            return (name, result.returncode == 0, error)
+
+        isolated_workers: list[tuple[str, str]] = []
+        with ThreadPoolExecutor(max_workers=min(len(workers_docker_ok), 5)) as executor:
+            futures = {
+                executor.submit(setup_egress_boundary, worker): worker[0]
+                for worker in workers_docker_ok
+            }
+            for future in as_completed(futures):
+                name, success, error = future.result()
+                status = (
+                    "egress boundary ready"
+                    if success
+                    else f"egress FAILED: {error[:100]}"
+                )
+                self._log("POOL", f"  {name}: {status}")
+                if success:
+                    isolated_workers.append((name, dict(workers_docker_ok)[name]))
+
+        if not isolated_workers:
+            raise RuntimeError("Windows guest egress setup failed on all VMs")
+        workers_docker_ok = isolated_workers
 
         # Register pool
         pool = self.registry.create_pool(
@@ -1086,6 +1172,60 @@ class PoolManager:
             VMPool if a pool exists, None otherwise.
         """
         return self.registry.get_pool()
+
+    def _isolation_manager(self, worker_name: str):
+        """Return the host isolation manager for one exact active worker."""
+
+        from openadapt_evals.infrastructure.windows_pool_isolation import (
+            WindowsPoolIsolationManager,
+        )
+
+        pool = self.registry.get_pool()
+        if pool is None:
+            raise RuntimeError("No active pool. Create one with: pool-create --workers N")
+        if pool.status == "paused":
+            raise RuntimeError("Pool is paused. Resume it before worker isolation.")
+        matches = [worker for worker in pool.workers if worker.name == worker_name]
+        if len(matches) != 1:
+            raise RuntimeError(f"Pool worker not found: {worker_name}")
+        worker = matches[0]
+        current_ip = self.vm_manager.get_vm_ip(worker.name)
+        if current_ip:
+            worker.ip = current_ip
+            self.registry.update_worker(worker.name, ip=current_ip)
+        if not worker.ip:
+            raise RuntimeError(f"Pool worker has no reachable IP: {worker_name}")
+        return WindowsPoolIsolationManager(
+            ssh_host=worker.ip,
+            ssh_user=self._ssh_username,
+            worker=worker.name,
+            storage_dir=f"{self._home_dir}/waa-storage",
+            baseline_dir=f"{self._home_dir}/openadapt-windows-baseline",
+        )
+
+    def reset_worker(
+        self,
+        worker_name: str,
+        *,
+        run_id: str,
+        baseline_sha256: str,
+    ):
+        """Restore one worker from an exact verified baseline."""
+
+        manager = self._isolation_manager(worker_name)
+        proof = manager.reset(run_id=run_id, baseline_sha256=baseline_sha256)
+        self.registry.update_worker(worker_name, status="reset", waa_ready=False)
+        return proof
+
+    def apply_worker_egress(self, worker_name: str, policy_path: Path) -> str:
+        """Apply one exact host-enforced egress policy to a worker."""
+
+        from openadapt_evals.infrastructure.windows_pool_isolation import (
+            load_egress_policy,
+        )
+
+        manager = self._isolation_manager(worker_name)
+        return manager.apply_egress(load_egress_policy(policy_path))
 
     def pause(self) -> bool:
         """Deallocate all pool VMs. Stops compute billing, keeps disks.
