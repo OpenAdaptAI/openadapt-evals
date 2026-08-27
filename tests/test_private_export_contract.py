@@ -26,17 +26,13 @@ def _contract() -> dict[str, Any]:
     return {
         "schema_version": MODULE.PRIVATE_EXPORT_CONTRACT_SCHEMA,
         "destination": {
-            "account_id": "123456789012",
-            "region": "us-east-1",
-            "repository": "OpenAdaptAI/openadapt-retained-evidence",
+            "repository": "OpenAdaptAI/openadapt-evidence",
             "ref": "refs/heads/main",
             "path_prefix": "production-acceptance",
-            "kms_key_arn": (
-                "arn:aws:kms:us-east-1:123456789012:key/1111-2222"
-            ),
+            "encryption_recipient": "age19gxzh0n7d6r8hdwpdfvuwxgc46gtcq0fd298nq2v8puqprtphetsg7sdh2",
             "retention_commitment_days": 2555,
         },
-        "uploader_arn": "arn:aws:iam::123456789012:role/openadapt-retention-writer",
+        "uploader_identity": "openadapt-release[bot]",
         "importer_workflow_ref": WORKFLOW_REF,
         "approval_authority": "OpenAdapt",
         "approved_at": "2026-08-26T12:00:00.000Z",
@@ -62,11 +58,11 @@ def test_every_digest_matches_the_cloud_retention_writer() -> None:
     assert facts["storage_identity_sha256"] == cloud(
         "retention store", destination["repository"]
     )
-    assert facts["kms_key_identity_sha256"] == cloud(
-        "retention KMS key", destination["kms_key_arn"]
+    assert facts["encryption_recipient_sha256"] == cloud(
+        "retention encryption recipient", destination["encryption_recipient"]
     )
     assert facts["uploader_identity_sha256"] == cloud(
-        "AWS retention uploader", contract["uploader_arn"]
+        "retention uploader", contract["uploader_identity"]
     )
     assert facts["destination_approval_sha256"] == cloud(
         "Execute acceptance retention destination",
@@ -115,39 +111,17 @@ def test_the_contract_carries_values_not_digests() -> None:
             ),
             "workflow ref is invalid",
         ),
-        (lambda c: c["destination"].pop("region"), "retention destination keys differ"),
-        (lambda c: c["destination"].__setitem__("account_id", "12345"), "AWS account ID"),
-        (lambda c: c["destination"].__setitem__("region", "nowhere"), "region is invalid"),
         (lambda c: c["destination"].__setitem__("repository", "nope"), "repository is invalid"),
         (lambda c: c["destination"].__setitem__("ref", "refs/tags/v1"), "ref is invalid"),
         (lambda c: c["destination"].__setitem__("path_prefix", "/x"), "path prefix"),
         (lambda c: c["destination"].__setitem__("path_prefix", "a//b"), "path prefix"),
         (lambda c: c["destination"].__setitem__("path_prefix", "a/../b"), "path prefix"),
-        (lambda c: c["destination"].__setitem__("kms_key_arn", "arn:aws:kms:x"), "KMS key ARN"),
-        # The key must live in the approved account and region, the same rule
-        # the Cloud writer enforces before it retains anything.
-        (
-            lambda c: c["destination"].__setitem__(
-                "kms_key_arn", "arn:aws:kms:eu-west-1:123456789012:key/1111"
-            ),
-            "outside the approved account or region",
-        ),
-        (
-            lambda c: c["destination"].__setitem__(
-                "kms_key_arn", "arn:aws:kms:us-east-1:999999999999:key/1111"
-            ),
-            "outside the approved account or region",
-        ),
         (lambda c: c["destination"].__setitem__("retention_commitment_days", 30), "outside policy"),
         (lambda c: c["destination"].__setitem__("retention_commitment_days", 4000), "outside policy"),
         (lambda c: c["destination"].__setitem__("retention_commitment_days", "2555"), "must be an integer"),
-        (lambda c: c.__setitem__("uploader_arn", "not-an-arn"), "uploader ARN is invalid"),
-        (
-            lambda c: c.__setitem__(
-                "uploader_arn", "arn:aws:iam::999999999999:role/other"
-            ),
-            "uploader is outside the approved account",
-        ),
+        (lambda c: c.__setitem__("uploader_identity", "bad identity!"), "uploader identity is invalid"),
+        (lambda c: c["destination"].__setitem__("encryption_recipient", "age1short"), "encryption recipient is invalid"),
+        (lambda c: c["destination"].pop("ref"), "retention destination keys differ"),
         (lambda c: c.__setitem__("approved_at", "2026-08-26T12:00:00Z"), "canonical"),
     ],
 )
@@ -199,7 +173,7 @@ def test_importer_identity_must_be_the_approved_workflow_and_ref() -> None:
 def _retention(facts: dict[str, Any]) -> dict[str, Any]:
     return {
         "storage_identity_sha256": facts["storage_identity_sha256"],
-        "kms_key_identity_sha256": facts["kms_key_identity_sha256"],
+        "encryption_recipient_sha256": facts["encryption_recipient_sha256"],
         "uploader_identity_sha256": facts["uploader_identity_sha256"],
         "retained_at": "2026-08-18T12:00:00.000Z",
         "retention_until": "2034-08-18T12:00:00.000Z",
@@ -213,7 +187,7 @@ def test_retention_must_match_the_approved_destination_key_and_uploader() -> Non
 
     for key in (
         "storage_identity_sha256",
-        "kms_key_identity_sha256",
+        "encryption_recipient_sha256",
         "uploader_identity_sha256",
     ):
         retention = _retention(facts)
@@ -256,7 +230,7 @@ def test_the_commitment_is_recorded_and_not_enforced() -> None:
     MODULE.verify_retention_against_contract(
         {
             "storage_identity_sha256": facts["storage_identity_sha256"],
-            "kms_key_identity_sha256": facts["kms_key_identity_sha256"],
+            "encryption_recipient_sha256": facts["encryption_recipient_sha256"],
             "uploader_identity_sha256": facts["uploader_identity_sha256"],
         },
         facts,

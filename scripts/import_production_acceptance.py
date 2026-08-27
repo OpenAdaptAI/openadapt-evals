@@ -237,7 +237,7 @@ _RETENTION_KEYS = {
     "storage_identity_sha256",
     "retention_commit",
     "private_locator_version_sha256",
-    "kms_key_identity_sha256",
+    "encryption_recipient_sha256",
     "uploader_identity_sha256",
     "transparency_log_entry_sha256",
     "retained_at",
@@ -872,18 +872,16 @@ def file_sha256(path: Path) -> str:
 
 
 _RETENTION_DESTINATION_KEYS = {
-    "account_id",
-    "region",
     "repository",
     "ref",
     "path_prefix",
-    "kms_key_arn",
+    "encryption_recipient",
     "retention_commitment_days",
 }
 _PRIVATE_EXPORT_CONTRACT_KEYS = {
     "schema_version",
     "destination",
-    "uploader_arn",
+    "uploader_identity",
     "importer_workflow_ref",
     "approval_authority",
     "approved_at",
@@ -891,15 +889,13 @@ _PRIVATE_EXPORT_CONTRACT_KEYS = {
 _IMPORTER_WORKFLOW_REF = re.compile(
     r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/\.github/workflows/[A-Za-z0-9._-]+\.ya?ml@refs/heads/[A-Za-z0-9._/-]+$"
 )
-_AWS_ACCOUNT_ID = re.compile(r"^[0-9]{12}$")
-_AWS_REGION = re.compile(r"^[a-z]{2}(-gov)?-[a-z]+-[0-9]$")
 _REPOSITORY = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 _GIT_REF = re.compile(r"^refs/heads/[A-Za-z0-9._/-]+$")
 _PATH_PREFIX = re.compile(r"^[A-Za-z0-9._/-]{1,256}$")
-_KMS_KEY_ARN = re.compile(
-    r"^arn:aws:kms:([a-z0-9-]+):([0-9]{12}):key/[A-Za-z0-9-]+$"
-)
-_UPLOADER_ARN = re.compile(r"^arn:aws:(iam|sts)::[0-9]{12}:[A-Za-z0-9+=,.@_/-]+$")
+# An age X25519 recipient. The private half never reaches CI: the writer only
+# ever encrypts, so nothing in any workflow can read the evidence back.
+_AGE_RECIPIENT = re.compile(r"^age1[0-9a-z]{58}$")
+_UPLOADER_IDENTITY = re.compile(r"^[A-Za-z0-9._/\[\]-]{1,128}$")
 
 
 def retention_binding_sha256(domain: str, value: str) -> str:
@@ -937,16 +933,13 @@ def retention_destination_approval_sha256(destination: Mapping[str, Any]) -> str
 
 def _validate_retention_destination(value: Any) -> dict[str, Any]:
     destination = _closed(value, _RETENTION_DESTINATION_KEYS, "retention destination")
-    account_id = _nonempty(destination["account_id"], "retention destination account_id")
-    region = _nonempty(destination["region"], "retention destination region")
     repository = _nonempty(destination["repository"], "retention destination repository")
     ref = _nonempty(destination["ref"], "retention destination ref")
     prefix = _nonempty(destination["path_prefix"], "retention destination path_prefix")
-    key_arn = _nonempty(destination["kms_key_arn"], "retention destination kms_key_arn")
-    if _AWS_ACCOUNT_ID.fullmatch(account_id) is None:
-        raise AcceptanceError("retention destination account is not an AWS account ID")
-    if _AWS_REGION.fullmatch(region) is None:
-        raise AcceptanceError("retention destination region is invalid")
+    recipient = _nonempty(
+        destination["encryption_recipient"],
+        "retention destination encryption_recipient",
+    )
     if _REPOSITORY.fullmatch(repository) is None:
         raise AcceptanceError("retention destination repository is invalid")
     if _GIT_REF.fullmatch(ref) is None:
@@ -959,13 +952,8 @@ def _validate_retention_destination(value: Any) -> dict[str, Any]:
         or "//" in prefix
     ):
         raise AcceptanceError("retention destination path prefix is invalid")
-    key_match = _KMS_KEY_ARN.fullmatch(key_arn)
-    if key_match is None:
-        raise AcceptanceError("retention destination KMS key ARN is invalid")
-    if key_match.group(1) != region or key_match.group(2) != account_id:
-        raise AcceptanceError(
-            "retention destination KMS key is outside the approved account or region"
-        )
+    if _AGE_RECIPIENT.fullmatch(recipient) is None:
+        raise AcceptanceError("retention destination encryption recipient is invalid")
     days = destination["retention_commitment_days"]
     if not isinstance(days, int) or isinstance(days, bool):
         raise AcceptanceError(
@@ -989,11 +977,12 @@ def validate_private_export_contract(contract: Any) -> dict[str, Any]:
     if document["schema_version"] != PRIVATE_EXPORT_CONTRACT_SCHEMA:
         raise AcceptanceError("private export contract schema is not supported")
     destination = _validate_retention_destination(document["destination"])
-    uploader_arn = _nonempty(document["uploader_arn"], "private export contract uploader_arn")
-    if _UPLOADER_ARN.fullmatch(uploader_arn) is None:
-        raise AcceptanceError("private export contract uploader ARN is invalid")
-    if uploader_arn.split(":")[4] != destination["account_id"]:
-        raise AcceptanceError("private export contract uploader is outside the approved account")
+    uploader_identity = _nonempty(
+        document["uploader_identity"],
+        "private export contract uploader_identity",
+    )
+    if _UPLOADER_IDENTITY.fullmatch(uploader_identity) is None:
+        raise AcceptanceError("private export contract uploader identity is invalid")
     workflow_ref = document["importer_workflow_ref"]
     if (
         not isinstance(workflow_ref, str)
@@ -1008,13 +997,13 @@ def validate_private_export_contract(contract: Any) -> dict[str, Any]:
             "retention store",
             destination["repository"],
         ),
-        "kms_key_identity_sha256": retention_binding_sha256(
-            "retention KMS key",
-            destination["kms_key_arn"],
+        "encryption_recipient_sha256": retention_binding_sha256(
+            "retention encryption recipient",
+            destination["encryption_recipient"],
         ),
         "uploader_identity_sha256": retention_binding_sha256(
-            "AWS retention uploader",
-            uploader_arn,
+            "retention uploader",
+            uploader_identity,
         ),
         "importer_workflow_ref": workflow_ref,
         "retention_commitment_days": destination["retention_commitment_days"],
@@ -1059,7 +1048,7 @@ def verify_retention_against_contract(
 
     for key in (
         "storage_identity_sha256",
-        "kms_key_identity_sha256",
+        "encryption_recipient_sha256",
         "uploader_identity_sha256",
     ):
         if retention.get(key) != contract[key]:
@@ -1943,7 +1932,7 @@ def _validate_certificate(
         "store_attestation_sha256",
         "storage_identity_sha256",
         "private_locator_version_sha256",
-        "kms_key_identity_sha256",
+        "encryption_recipient_sha256",
         "uploader_identity_sha256",
         "transparency_log_entry_sha256",
     ):
@@ -3623,7 +3612,7 @@ def _validated_manifest_source(value: Mapping[str, Any]) -> dict[str, Any]:
         "store_attestation_sha256",
         "storage_identity_sha256",
         "private_locator_version_sha256",
-        "kms_key_identity_sha256",
+        "encryption_recipient_sha256",
         "uploader_identity_sha256",
         "transparency_log_entry_sha256",
     ):
