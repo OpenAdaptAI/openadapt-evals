@@ -235,15 +235,11 @@ _RETENTION_KEYS = {
     "private_envelope_sha256",
     "store_attestation_sha256",
     "storage_identity_sha256",
-    "retention_commit",
     "private_locator_version_sha256",
     "encryption_recipient_sha256",
     "uploader_identity_sha256",
-    "transparency_log_entry_sha256",
     "retained_at",
-    "push_verified",
-    "commit_verified",
-    "transparency_logged",
+    "visibility_verified",
     "private_locator_recorded",
     "acceptance_verified_at",
     "provenance_attestation",
@@ -1934,22 +1930,14 @@ def _validate_certificate(
         "private_locator_version_sha256",
         "encryption_recipient_sha256",
         "uploader_identity_sha256",
-        "transparency_log_entry_sha256",
     ):
         _digest(retention[key], f"certificate retention {key}")
     if not isinstance(retention["receipt_id"], str) or re.fullmatch(
         r"retention:[a-f0-9]{32}", retention["receipt_id"]
     ) is None:
         raise AcceptanceError("certificate retention receipt ID is invalid")
-    if (
-        not isinstance(retention["retention_commit"], str)
-        or _HEX_40.fullmatch(retention["retention_commit"]) is None
-    ):
-        raise AcceptanceError("certificate retention commit is not exact")
     for key in (
-        "push_verified",
-        "commit_verified",
-        "transparency_logged",
+        "visibility_verified",
         "private_locator_recorded",
     ):
         if retention[key] is not True:
@@ -3614,22 +3602,11 @@ def _validated_manifest_source(value: Mapping[str, Any]) -> dict[str, Any]:
         "private_locator_version_sha256",
         "encryption_recipient_sha256",
         "uploader_identity_sha256",
-        "transparency_log_entry_sha256",
     ):
         _digest(retention[key], f"production acceptance source retention {key}")
-    for key in (
-        "push_verified",
-        "commit_verified",
-        "transparency_logged",
-        "private_locator_recorded",
-    ):
+    for key in ("visibility_verified", "private_locator_recorded"):
         if retention[key] is not True:
             raise AcceptanceError(f"production acceptance source retention {key} is false")
-    if (
-        not isinstance(retention["retention_commit"], str)
-        or _HEX_40.fullmatch(retention["retention_commit"]) is None
-    ):
-        raise AcceptanceError("production acceptance source retention commit is not exact")
     if not isinstance(retention["receipt_id"], str) or re.fullmatch(
         r"retention:[a-f0-9]{32}", retention["receipt_id"]
     ) is None:

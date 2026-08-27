@@ -982,13 +982,6 @@ def test_rejects_retention_dated_in_the_future() -> None:
         _derive(certificate)
 
 
-def test_rejects_an_inexact_retention_commit() -> None:
-    certificate = _certificate()
-    certificate["retention"]["retention_commit"] = "f" * 39
-
-    with pytest.raises(MODULE.AcceptanceError, match="retention commit is not exact"):
-        _derive(certificate)
-
 
 @pytest.mark.parametrize(
     "route",
@@ -2959,10 +2952,7 @@ def test_private_source_reliability_schema_is_closed() -> None:
     [
         ("receipt_id", "retention:not-a-receipt", "receipt ID"),
         ("provenance_attestation", "unreviewed-v1", "provenance"),
-        ("commit_verified", False, "commit_verified is false"),
-        ("push_verified", False, "push_verified is false"),
-        ("transparency_logged", False, "transparency_logged is false"),
-        ("retention_commit", "not-a-commit", "retention commit is not exact"),
+        ("visibility_verified", False, "visibility_verified is false"),
         (
             "acceptance_verified_at",
             "2026-08-18T12:00:00Z",
