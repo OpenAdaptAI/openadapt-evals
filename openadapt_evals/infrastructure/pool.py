@@ -195,7 +195,7 @@ WINDOWS_EGRESS_BOOTSTRAP_SCRIPT = r"""
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nftables
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq conntrack nftables
 sudo install -d -m 0700 /etc/openadapt
 sudo tee /etc/openadapt/windows-egress.nft > /dev/null <<'NFT'
 flush chain inet oa_windows forward
@@ -207,9 +207,12 @@ sudo tee /usr/local/sbin/openadapt-windows-egress-restore > /dev/null <<'SCRIPT'
 set -eu
 nft list table inet oa_windows > /dev/null 2>&1 || nft add table inet oa_windows
 nft list chain inet oa_windows forward > /dev/null 2>&1 || \
-    nft 'add chain inet oa_windows forward { type filter hook forward priority -50; policy accept; }'
+    nft 'add chain inet oa_windows forward { type filter hook forward priority -50; policy drop; }'
+nft 'chain inet oa_windows forward { policy drop; }'
 nft -c -f /etc/openadapt/windows-egress.nft
 nft -f /etc/openadapt/windows-egress.nft
+install -d -m 0700 /var/lib/openadapt/windows-run-gates
+find /var/lib/openadapt/windows-run-gates -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
 SCRIPT
 sudo chmod 0755 /usr/local/sbin/openadapt-windows-egress-restore
 sudo tee /etc/systemd/system/openadapt-windows-egress.service > /dev/null <<'UNIT'
@@ -264,7 +267,7 @@ docker run -d --name winarena \\
   -e CPU_CORES=4 \\
   -e DISK_SIZE=64G \\
   -e ARGUMENTS="-qmp tcp:0.0.0.0:7200,server,nowait" \\
-  waa-auto:latest \\
+  {admitted_image} \\
   /entry.sh --prepare-image false --start-client false
 
 # Start the socat proxy via systemd (installed during Docker setup).
@@ -560,9 +563,10 @@ class PoolManager:
             self._log("POOL", f"  Auto-shutdown: in {auto_shutdown_hours} hours")
         self._log("POOL", "")
         self._log("POOL", "Next steps:")
-        self._log("POOL", "  1. Wait for WAA ready: pool-wait")
-        self._log("POOL", "  2. Run benchmark:      pool-run --tasks 154")
-        self._log("POOL", "  3. Delete pool:        delete-pool")
+        self._log("POOL", "  1. Qualify each worker: pool-reset, pool-egress, pool-start")
+        self._log("POOL", "  2. Wait for WAA ready: pool-wait")
+        self._log("POOL", "  3. Run benchmark:      pool-run --tasks 154")
+        self._log("POOL", "  4. Delete pool:        delete-pool")
         self._log("POOL", "=" * 60)
 
         return pool
@@ -570,15 +574,16 @@ class PoolManager:
     def wait(
         self,
         timeout_minutes: int = 30,
-        start_containers: bool = True,
+        start_containers: bool = False,
     ) -> list[PoolWorker]:
         """Wait for all pool workers to have WAA ready.
 
-        Optionally starts WAA containers on each worker first.
+        This method does not start a guest. A caller must use the qualified
+        reset, egress, and start sequence first.
 
         Args:
             timeout_minutes: Maximum minutes to wait for WAA readiness.
-            start_containers: If True, start WAA containers before waiting.
+            start_containers: Legacy argument. A true value is refused.
 
         Returns:
             List of ready PoolWorker instances.
@@ -594,36 +599,10 @@ class PoolManager:
 
         # Start WAA containers
         if start_containers:
-            self._log("POOL-WAIT", "Checking WAA containers on all workers...")
-            username = self._ssh_username
-            waa_start_script = WAA_START_SCRIPT_TEMPLATE.format(
-                home_dir=self._home_dir,
-                ssh_username=username,
+            raise RuntimeError(
+                "Ungated guest startup is disabled. Use pool-reset, pool-egress, "
+                "and pool-start, then run pool-wait."
             )
-
-            def start_container(
-                worker: PoolWorker,
-            ) -> tuple[str, bool, str]:
-                result = ssh_run(
-                    worker.ip, waa_start_script, stream=False, step="START",
-                    username=username,
-                )
-                output = result.stdout.strip() if result.stdout else ""
-                return (worker.name, result.returncode == 0, output)
-
-            with ThreadPoolExecutor(max_workers=min(len(pool.workers), 5)) as executor:
-                futures = {executor.submit(start_container, w): w.name for w in pool.workers}
-                for future in as_completed(futures):
-                    name, success, output = future.result()
-                    if "ALREADY_RUNNING" in output:
-                        status = "already running"
-                    elif "STARTED" in output:
-                        status = "container started"
-                    elif success:
-                        status = "ok"
-                    else:
-                        status = "FAILED"
-                    self._log("POOL-WAIT", f"  {name}: {status}")
 
         # Wait for WAA readiness
         self._log(
@@ -664,7 +643,12 @@ class PoolManager:
                         self._log("POOL-WAIT", f"  {name}: READY{eval_status}")
                         workers_ready.append(worker)
                         del workers_pending[name]
-                        self.registry.update_worker(name, waa_ready=True, status="ready")
+                        status = (
+                            "qualified-ready"
+                            if worker.status == "qualified-starting"
+                            else "ready"
+                        )
+                        self.registry.update_worker(name, waa_ready=True, status=status)
                 except Exception:
                     pass
 
@@ -750,10 +734,22 @@ class PoolManager:
                 "No API key provided. Use api_key param or set OPENAI_API_KEY in .env"
             )
 
-        # Get ready workers
-        ready_workers = [w for w in pool.workers if w.waa_ready or w.status == "ready"]
+        # A responsive legacy guest is not enough. Only a guest that crossed the
+        # exact reset, egress, and one-use start gate can receive work.
+        ready_workers = [
+            worker
+            for worker in pool.workers
+            if worker.waa_ready
+            and worker.status == "qualified-ready"
+            and worker.qualified_run_id
+            and worker.qualified_worker_identity_sha256
+            and worker.qualified_egress_policy_sha256
+            and worker.qualified_start_proof_sha256
+        ]
         if not ready_workers:
-            raise RuntimeError("No workers ready. Run wait() first.")
+            raise RuntimeError(
+                "No qualified workers are ready. Complete reset, egress, start, and wait first."
+            )
 
         self._log("POOL-RUN", "=" * 60)
         self._log(
@@ -1173,11 +1169,12 @@ class PoolManager:
         """
         return self.registry.get_pool()
 
-    def _isolation_manager(self, worker_name: str):
+    def _isolation_manager(self, worker_name: str, identity_path: Path):
         """Return the host isolation manager for one exact active worker."""
 
         from openadapt_evals.infrastructure.windows_pool_isolation import (
             WindowsPoolIsolationManager,
+            load_worker_identity,
         )
 
         pool = self.registry.get_pool()
@@ -1199,6 +1196,7 @@ class PoolManager:
             ssh_host=worker.ip,
             ssh_user=self._ssh_username,
             worker=worker.name,
+            identity=load_worker_identity(identity_path),
             storage_dir=f"{self._home_dir}/waa-storage",
             baseline_dir=f"{self._home_dir}/openadapt-windows-baseline",
         )
@@ -1209,23 +1207,137 @@ class PoolManager:
         *,
         run_id: str,
         baseline_sha256: str,
+        identity_path: Path,
     ):
         """Restore one worker from an exact verified baseline."""
 
-        manager = self._isolation_manager(worker_name)
+        manager = self._isolation_manager(worker_name, identity_path)
         proof = manager.reset(run_id=run_id, baseline_sha256=baseline_sha256)
-        self.registry.update_worker(worker_name, status="reset", waa_ready=False)
+        self.registry.update_worker(
+            worker_name,
+            status="reset",
+            waa_ready=False,
+            qualified_run_id=None,
+            qualified_worker_identity_sha256=None,
+            qualified_egress_policy_sha256=None,
+            qualified_start_proof_sha256=None,
+        )
         return proof
 
-    def apply_worker_egress(self, worker_name: str, policy_path: Path) -> str:
+    def apply_worker_egress(
+        self,
+        worker_name: str,
+        policy_path: Path,
+        *,
+        identity_path: Path,
+        reset_proof_path: Path,
+    ):
         """Apply one exact host-enforced egress policy to a worker."""
 
         from openadapt_evals.infrastructure.windows_pool_isolation import (
             load_egress_policy,
+            load_reset_proof,
         )
 
-        manager = self._isolation_manager(worker_name)
-        return manager.apply_egress(load_egress_policy(policy_path))
+        manager = self._isolation_manager(worker_name, identity_path)
+        return manager.apply_egress(
+            load_egress_policy(policy_path),
+            reset_proof=load_reset_proof(reset_proof_path),
+        )
+
+    def start_worker(
+        self,
+        worker_name: str,
+        *,
+        identity_path: Path,
+        policy_path: Path,
+        reset_proof_path: Path,
+        egress_proof_path: Path,
+    ):
+        """Start one guest only through a fresh, one-use run gate."""
+
+        from openadapt_evals.infrastructure.windows_pool_isolation import (
+            load_egress_policy,
+            load_egress_proof,
+            load_reset_proof,
+            start_proof_sha256,
+        )
+
+        manager = self._isolation_manager(worker_name, identity_path)
+        start_script = WAA_START_SCRIPT_TEMPLATE.format(
+            home_dir=self._home_dir,
+            ssh_username=self._ssh_username,
+            admitted_image=manager.identity.admitted_image_sha256,
+        )
+        proof = manager.start(
+            policy=load_egress_policy(policy_path),
+            reset_proof=load_reset_proof(reset_proof_path),
+            egress_proof=load_egress_proof(egress_proof_path),
+            start_script=start_script,
+        )
+        self.registry.update_worker(
+            worker_name,
+            status="qualified-starting",
+            waa_ready=False,
+            qualified_run_id=proof.run_id,
+            qualified_worker_identity_sha256=proof.worker_identity_sha256,
+            qualified_egress_policy_sha256=proof.egress_policy_sha256,
+            qualified_start_proof_sha256=start_proof_sha256(proof),
+        )
+        return proof
+
+    def qualify_worker(
+        self,
+        worker_name: str,
+        *,
+        identity_path: Path,
+        policy_path: Path,
+        baseline_sha256: str,
+    ):
+        """Reset, apply egress, and start one worker as one local operation."""
+
+        from openadapt_evals.infrastructure.windows_pool_isolation import (
+            load_egress_policy,
+            start_proof_sha256,
+        )
+
+        manager = self._isolation_manager(worker_name, identity_path)
+        policy = load_egress_policy(policy_path)
+        reset_proof = manager.reset(
+            run_id=policy["run_id"],
+            baseline_sha256=baseline_sha256,
+        )
+        self.registry.update_worker(
+            worker_name,
+            status="reset",
+            waa_ready=False,
+            qualified_run_id=None,
+            qualified_worker_identity_sha256=None,
+            qualified_egress_policy_sha256=None,
+            qualified_start_proof_sha256=None,
+        )
+        egress_proof = manager.apply_egress(policy, reset_proof=reset_proof)
+        start_script = WAA_START_SCRIPT_TEMPLATE.format(
+            home_dir=self._home_dir,
+            ssh_username=self._ssh_username,
+            admitted_image=manager.identity.admitted_image_sha256,
+        )
+        start_proof = manager.start(
+            policy=policy,
+            reset_proof=reset_proof,
+            egress_proof=egress_proof,
+            start_script=start_script,
+        )
+        self.registry.update_worker(
+            worker_name,
+            status="qualified-starting",
+            waa_ready=False,
+            qualified_run_id=start_proof.run_id,
+            qualified_worker_identity_sha256=start_proof.worker_identity_sha256,
+            qualified_egress_policy_sha256=start_proof.egress_policy_sha256,
+            qualified_start_proof_sha256=start_proof_sha256(start_proof),
+        )
+        return reset_proof, egress_proof, start_proof
 
     def pause(self) -> bool:
         """Deallocate all pool VMs. Stops compute billing, keeps disks.
@@ -1257,7 +1369,15 @@ class PoolManager:
             success = self.vm_manager.deallocate_vm(worker.name)
             if success:
                 self._log("POOL-PAUSE", f"  {worker.name}: deallocated")
-                self.registry.update_worker(worker.name, status="deallocated", waa_ready=False)
+                self.registry.update_worker(
+                    worker.name,
+                    status="deallocated",
+                    waa_ready=False,
+                    qualified_run_id=None,
+                    qualified_worker_identity_sha256=None,
+                    qualified_egress_policy_sha256=None,
+                    qualified_start_proof_sha256=None,
+                )
             else:
                 self._log("POOL-PAUSE", f"  {worker.name}: FAILED to deallocate")
                 all_ok = False
@@ -1278,10 +1398,8 @@ class PoolManager:
     def resume(self, timeout_minutes: int = 10) -> list[PoolWorker]:
         """Start deallocated pool VMs and wait for WAA ready.
 
-        Starts all VMs in the pool, waits for SSH access, then starts
-        WAA containers and waits for readiness. This is much faster than
-        creating a new pool (~5 min vs ~42 min) because Docker images
-        and Windows disk state are preserved.
+        Starts all VM hosts and waits for SSH access. It leaves every guest
+        stopped. A caller must qualify each guest again before use.
 
         Args:
             timeout_minutes: Maximum minutes to wait for WAA readiness.
@@ -1346,22 +1464,25 @@ class PoolManager:
         # Update pool status back to active
         self.registry.update_pool_status(status="active", paused_since=None)
         for worker in workers_ssh_ok:
-            self.registry.update_worker(worker.name, status="ready")
+            self.registry.update_worker(
+                worker.name,
+                status="ready",
+                waa_ready=False,
+                qualified_run_id=None,
+                qualified_worker_identity_sha256=None,
+                qualified_egress_policy_sha256=None,
+                qualified_start_proof_sha256=None,
+            )
 
-        # Wait for WAA readiness (starts containers, waits for probe)
-        self._log("POOL-RESUME", "Starting WAA containers and waiting for readiness...")
-        ready_workers = self.wait(
-            timeout_minutes=timeout_minutes,
-            start_containers=True,
+        self._log("POOL-RESUME", "=" * 60)
+        self._log(
+            "POOL-RESUME",
+            f"Pool hosts resumed: {len(workers_ssh_ok)}/{len(pool.workers)}; guests remain stopped",
         )
-
-        self._log("POOL-RESUME", "=" * 60)
-        self._log("POOL-RESUME", f"Pool resumed: {len(ready_workers)}/{len(pool.workers)} workers ready")
-        if ready_workers:
-            self._log("POOL-RESUME", "  Run benchmark: oa-vm pool-run --tasks 10")
+        self._log("POOL-RESUME", "  Qualify each guest with pool-reset, pool-egress, pool-start")
         self._log("POOL-RESUME", "=" * 60)
 
-        return ready_workers
+        return workers_ssh_ok
 
     def cleanup(
         self,
