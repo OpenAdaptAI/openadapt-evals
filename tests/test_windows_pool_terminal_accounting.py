@@ -3,11 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from threading import Event
+from unittest.mock import patch
 
 import pytest
 
 from openadapt_evals.infrastructure.pool import (
     PoolRunResult,
+    _build_postlaunch_terminal_evidence,
     validate_terminal_pool_result,
 )
 
@@ -55,6 +58,116 @@ def test_central_schema_binds_prelaunch_and_postlaunch_process_identity() -> Non
     assert conditions[2]["then"]["properties"]["launch_attempt"]["properties"][
         "child_created"
     ] == {"const": True}
+
+
+def test_postlaunch_terminal_uses_one_canonical_evidence_build() -> None:
+    terminal_readback = {"state": "TERMINAL", "oracle_success": True}
+    built = {"schema_version": "openadapt.qualification-worker-terminal-evidence/v1"}
+    with (
+        patch(
+            "openadapt_evals.infrastructure.windows_worker_dispatch.read_process_terminal",
+            return_value=terminal_readback,
+        ),
+        patch(
+            "openadapt_evals.infrastructure.windows_worker_dispatch.interrupt_process"
+        ) as interrupt,
+        patch(
+            "openadapt_evals.infrastructure.windows_worker_dispatch.build_terminal_evidence",
+            return_value=built,
+        ) as build,
+    ):
+        result = _build_postlaunch_terminal_evidence(
+            manager="manager",
+            admission="admission",
+            dispatch="dispatch",
+            process="process",
+            interrupt_requested=Event(),
+            poll_seconds=0,
+        )
+
+    assert result is built
+    interrupt.assert_not_called()
+    build.assert_called_once_with(
+        admission="admission",
+        dispatch="dispatch",
+        process="process",
+        terminal_readback=terminal_readback,
+        interrupt_evidence=None,
+    )
+
+
+def test_shared_interrupt_proves_termination_before_terminal_build() -> None:
+    interrupt_requested = Event()
+    interrupt_requested.set()
+    interrupt_evidence = {"state": "INTERRUPTED_PROVEN"}
+    terminal_readback = {"state": "UNCERTAIN"}
+    built = {"schema_version": "openadapt.qualification-worker-terminal-evidence/v1"}
+    with (
+        patch(
+            "openadapt_evals.infrastructure.windows_worker_dispatch.interrupt_process",
+            return_value=interrupt_evidence,
+        ) as interrupt,
+        patch(
+            "openadapt_evals.infrastructure.windows_worker_dispatch.read_process_terminal",
+            return_value=terminal_readback,
+        ) as read,
+        patch(
+            "openadapt_evals.infrastructure.windows_worker_dispatch.build_terminal_evidence",
+            return_value=built,
+        ) as build,
+    ):
+        result = _build_postlaunch_terminal_evidence(
+            manager="manager",
+            admission="admission",
+            dispatch="dispatch",
+            process="process",
+            interrupt_requested=interrupt_requested,
+            poll_seconds=0,
+        )
+
+    assert result is built
+    interrupt.assert_called_once_with("manager", "process")
+    read.assert_called_once_with("manager", "process")
+    build.assert_called_once_with(
+        admission="admission",
+        dispatch="dispatch",
+        process="process",
+        terminal_readback=terminal_readback,
+        interrupt_evidence=interrupt_evidence,
+    )
+
+
+def test_worker_interrupt_enters_the_same_termination_proof_path() -> None:
+    interrupt_requested = Event()
+    interrupt_evidence = {"state": "INTERRUPTED_PROVEN"}
+    terminal_readback = {"state": "UNCERTAIN"}
+    with (
+        patch(
+            "openadapt_evals.infrastructure.windows_worker_dispatch.interrupt_process",
+            return_value=interrupt_evidence,
+        ) as interrupt,
+        patch(
+            "openadapt_evals.infrastructure.windows_worker_dispatch.read_process_terminal",
+            side_effect=[KeyboardInterrupt, terminal_readback],
+        ) as read,
+        patch(
+            "openadapt_evals.infrastructure.windows_worker_dispatch.build_terminal_evidence",
+            return_value={"terminal_state": "QUARANTINED"},
+        ) as build,
+    ):
+        _build_postlaunch_terminal_evidence(
+            manager="manager",
+            admission="admission",
+            dispatch="dispatch",
+            process="process",
+            interrupt_requested=interrupt_requested,
+            poll_seconds=0,
+        )
+
+    assert interrupt_requested.is_set()
+    assert read.call_count == 2
+    interrupt.assert_called_once_with("manager", "process")
+    build.assert_called_once()
 
 
 def _receipt(worker: str, state: str = "VERIFIED") -> dict[str, object]:
