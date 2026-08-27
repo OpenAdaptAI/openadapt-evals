@@ -3,15 +3,22 @@ from __future__ import annotations
 import hashlib
 from copy import deepcopy
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
+import openadapt_evals.infrastructure.windows_worker_trust as worker_trust
 from openadapt_evals.infrastructure.windows_worker_dispatch import (
     QualifiedPrelaunchEvidence,
     WorkerDispatchError,
     _parse_prelaunch,
     _parse_process,
     build_terminal_evidence,
+)
+from openadapt_evals.infrastructure.windows_worker_task_contract import (
+    WorkerTaskContract,
+    derive_task_condition,
+    derive_task_selector,
 )
 from openadapt_evals.infrastructure.windows_worker_trust import (
     BURN_RECEIPT_DOMAIN,
@@ -23,6 +30,7 @@ from openadapt_evals.infrastructure.windows_worker_trust import (
     TERMINAL_RECEIPT_IDENTITY_DOMAIN,
     ProviderObservation,
     VerifiedWorkerAdmission,
+    WorkerTrustAuthority,
     WorkerTrustError,
     canonical_json,
     live_provider_observation_sha256,
@@ -35,6 +43,7 @@ from openadapt_evals.infrastructure.windows_worker_trust import (
 )
 
 NOW = datetime(2026, 8, 27, 12, 0, 0, tzinfo=timezone.utc)
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _sha(label: str) -> str:
@@ -156,6 +165,60 @@ def _dispatch(
     }
     value["dispatch_id_sha256"] = _domain_sha(DISPATCH_ID_DOMAIN, value)
     return value
+
+
+def _task_contract() -> WorkerTaskContract:
+    selector = derive_task_selector(
+        campaign_artifact_sha256=_sha("campaign"),
+        task_source_sha256=_sha("task-source"),
+        task_ordinal=1,
+    )
+    condition = derive_task_condition(
+        task_id_sha256=selector.task_id_sha256,
+        condition_source_sha256=_sha("condition-source"),
+        condition_ordinal=1,
+    )
+    return WorkerTaskContract(selector=selector, condition=condition)
+
+
+def _bind_dispatch_task(
+    dispatch: dict[str, object],
+    contract: WorkerTaskContract,
+) -> None:
+    dispatch["campaign_artifact_sha256"] = contract.selector.campaign_artifact_sha256
+    dispatch["task_id_sha256"] = contract.selector.task_id_sha256
+    dispatch["task_condition_sha256"] = contract.condition.task_condition_sha256
+    start = {
+        "worker_admission_sha256": dispatch["worker_admission_sha256"],
+        "worker_identity_sha256": dispatch["worker_identity_sha256"],
+        "run_id": dispatch["run_id"],
+        "run_attempt": dispatch["run_attempt"],
+        "task_id_sha256": dispatch["task_id_sha256"],
+        "task_condition_sha256": dispatch["task_condition_sha256"],
+        "capability_handle_sha256": dispatch["capability_handle_sha256"],
+    }
+    dispatch["start_id_sha256"] = _domain_sha(START_ID_DOMAIN, start)
+    dispatch["dispatch_id_sha256"] = _domain_sha(
+        DISPATCH_ID_DOMAIN,
+        {key: value for key, value in dispatch.items() if key != "dispatch_id_sha256"},
+    )
+
+
+class _DispatchAuthority(WorkerTrustAuthority):
+    def __init__(self, dispatch: dict[str, object], capability: bytes) -> None:
+        self.dispatch = dispatch
+        self.capability = capability
+        self.bindings: dict[str, object] | None = None
+
+    def _verify_worker(self, **bindings):
+        raise AssertionError("not used")
+
+    def _authorize_dispatch(self, **bindings):
+        self.bindings = bindings
+        return self.dispatch, self.capability
+
+    def _issue_terminal(self, **bindings):
+        raise AssertionError("not used")
 
 
 def _terminal(
@@ -365,6 +428,97 @@ def test_central_worker_admission_dispatch_and_terminal_contracts() -> None:
         )["terminal_state"]
         == "VERIFIED"
     )
+
+
+def test_worker_admission_and_dispatch_schemas_are_exact_central_copies() -> None:
+    expected = {
+        "qualification-worker-admission.schema.json": (
+            "852dc3cb93f0c74ec79c135e46001e0c8637b33efc147d1e21ad1f1946b63327"
+        ),
+        "qualification-worker-admission-verifier-result.schema.json": (
+            "6e1f938a565250ecaed5b3e84cf939a4150737d78f5476659d349a68f5fd6886"
+        ),
+        "qualification-worker-dispatch.schema.json": (
+            "1ff432becdfc836b23b4b60959584881f75960d7803e15724b64da90400acb8e"
+        ),
+    }
+    for name, digest in expected.items():
+        schema = (ROOT / "openadapt_evals" / "schemas" / name).read_bytes()
+        assert hashlib.sha256(schema).hexdigest() == digest
+
+
+def test_authority_sends_and_requires_the_exact_task_contract(monkeypatch) -> None:
+    class _FixedDateTime:
+        @classmethod
+        def now(cls, tz=None):
+            return NOW
+
+        @classmethod
+        def fromisoformat(cls, value):
+            return datetime.fromisoformat(value)
+
+    monkeypatch.setattr(worker_trust, "datetime", _FixedDateTime)
+    observation = _observation()
+    admission = _admission(observation)
+    capability = b"c" * 32
+    dispatch = _dispatch(admission, capability)
+    contract = _task_contract()
+    _bind_dispatch_task(dispatch, contract)
+    authority = _DispatchAuthority(dispatch, capability)
+
+    authorized = authority.authorize_dispatch(
+        admission=VerifiedWorkerAdmission._from_authority(admission),
+        run_id="123",
+        task_contract=contract,
+    )
+
+    assert authorized.object["task_id_sha256"] == contract.selector.task_id_sha256
+    assert authority.bindings is not None
+    assert authority.bindings["task_selector"] == contract.selector.as_mapping()
+    assert authority.bindings["task_condition"] == contract.condition.as_mapping()
+
+
+def test_authority_refuses_a_central_dispatch_for_a_different_task(monkeypatch) -> None:
+    class _FixedDateTime:
+        @classmethod
+        def now(cls, tz=None):
+            return NOW
+
+        @classmethod
+        def fromisoformat(cls, value):
+            return datetime.fromisoformat(value)
+
+    monkeypatch.setattr(worker_trust, "datetime", _FixedDateTime)
+    observation = _observation()
+    admission = _admission(observation)
+    capability = b"c" * 32
+    dispatch = _dispatch(admission, capability)
+    expected = _task_contract()
+    different_selector = derive_task_selector(
+        campaign_artifact_sha256=_sha("campaign"),
+        task_source_sha256=_sha("different-task-source"),
+        task_ordinal=1,
+    )
+    different_condition = derive_task_condition(
+        task_id_sha256=different_selector.task_id_sha256,
+        condition_source_sha256=_sha("condition-source"),
+        condition_ordinal=1,
+    )
+    _bind_dispatch_task(
+        dispatch,
+        WorkerTaskContract(
+            selector=different_selector,
+            condition=different_condition,
+        ),
+    )
+    authority = _DispatchAuthority(dispatch, capability)
+
+    with pytest.raises(WorkerTrustError, match="task contract differs"):
+        authority.authorize_dispatch(
+            admission=VerifiedWorkerAdmission._from_authority(admission),
+            run_id="123",
+            task_contract=expected,
+        )
 
 
 def _prelaunch_evidence(

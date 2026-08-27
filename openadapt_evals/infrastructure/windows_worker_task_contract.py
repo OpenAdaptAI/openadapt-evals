@@ -11,6 +11,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Mapping
 
 TASK_SELECTOR_DOMAIN = b"OpenAdapt qualification worker task selector v1\0"
@@ -89,6 +90,30 @@ class WorkerTaskContract:
 
     selector: WorkerTaskSelector
     condition: WorkerTaskCondition
+
+
+def load_task_contracts(path: Path) -> list[WorkerTaskContract]:
+    """Load exact task contracts from one local protected input file."""
+
+    if path.is_symlink() or not path.is_file():
+        raise WorkerTaskContractError("worker task contract path is not a regular file")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise WorkerTaskContractError("worker task contract file is invalid") from exc
+    if not isinstance(value, list) or not value:
+        raise WorkerTaskContractError("worker task contract list is invalid")
+    contracts: list[WorkerTaskContract] = []
+    for entry in value:
+        wrapper = _closed_mapping(entry, {"selector", "condition"}, "task contract")
+        selector = validate_task_selector(wrapper["selector"])
+        condition = validate_task_condition(wrapper["condition"])
+        if condition.task_id_sha256 != selector.task_id_sha256:
+            raise WorkerTaskContractError(
+                "worker task condition selects a different task identity"
+            )
+        contracts.append(WorkerTaskContract(selector=selector, condition=condition))
+    return contracts
 
 
 def canonical_json(value: object) -> bytes:

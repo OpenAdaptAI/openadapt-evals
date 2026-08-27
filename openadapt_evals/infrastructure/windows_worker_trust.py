@@ -16,6 +16,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
+from openadapt_evals.infrastructure.windows_worker_task_contract import (
+    WorkerTaskContract,
+)
+
 SHA256 = re.compile(r"^sha256:[a-f0-9]{64}$")
 HEX40 = re.compile(r"^[a-f0-9]{40}$")
 DECIMAL_ID = re.compile(r"^[1-9][0-9]*$")
@@ -917,12 +921,13 @@ class WorkerTrustAuthority(ABC):
         *,
         admission: VerifiedWorkerAdmission,
         run_id: str,
-        task_selector: Mapping[str, str],
+        task_contract: WorkerTaskContract,
     ) -> AuthorizedWorkerDispatch:
         raw, capability = self._authorize_dispatch(
             admission=admission.object,
             run_id=run_id,
-            task_selector=task_selector,
+            task_selector=task_contract.selector.as_mapping(),
+            task_condition=task_contract.condition.as_mapping(),
         )
         validated = validate_authorized_dispatch(
             raw,
@@ -930,6 +935,20 @@ class WorkerTrustAuthority(ABC):
             admission=admission.object,
             run_id=run_id,
         )
+        expected_task_bindings = {
+            "campaign_artifact_sha256": (
+                task_contract.selector.campaign_artifact_sha256
+            ),
+            "task_id_sha256": task_contract.selector.task_id_sha256,
+            "task_condition_sha256": (
+                task_contract.condition.task_condition_sha256
+            ),
+        }
+        if any(
+            validated[key] != expected
+            for key, expected in expected_task_bindings.items()
+        ):
+            raise WorkerTrustError("worker dispatch task contract differs")
         return AuthorizedWorkerDispatch._from_authority(validated, capability)
 
     def issue_terminal(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from copy import deepcopy
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from openadapt_evals.infrastructure.windows_worker_task_contract import (
     consume_task_contract,
     derive_task_condition,
     derive_task_selector,
+    load_task_contracts,
     validate_task_condition,
     validate_task_selector,
 )
@@ -135,6 +137,44 @@ def test_exact_contract_is_consumed() -> None:
 
     assert contract.selector.as_mapping() == selector
     assert contract.condition.as_mapping() == condition
+
+
+def test_exact_contract_file_is_loaded_without_identity_discovery(tmp_path: Path) -> None:
+    selector = _selector()
+    condition = _condition(selector)
+    path = tmp_path / "task-contracts.json"
+    path.write_text(
+        json.dumps(
+            [{"selector": selector, "condition": condition}],
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        encoding="utf-8",
+    )
+
+    contracts = load_task_contracts(path)
+
+    assert len(contracts) == 1
+    assert contracts[0].selector.as_mapping() == selector
+    assert contracts[0].condition.as_mapping() == condition
+
+
+def test_contract_file_refuses_symlink_and_private_label_fields(tmp_path: Path) -> None:
+    selector = _selector()
+    condition = _condition(selector)
+    condition["task_name"] = "private-customer-task"
+    path = tmp_path / "task-contracts.json"
+    path.write_text(
+        json.dumps([{"selector": selector, "condition": condition}]),
+        encoding="utf-8",
+    )
+    with pytest.raises(WorkerTaskContractError, match="closed object"):
+        load_task_contracts(path)
+
+    symlink = tmp_path / "task-contracts-link.json"
+    symlink.symlink_to(path)
+    with pytest.raises(WorkerTaskContractError, match="regular file"):
+        load_task_contracts(symlink)
 
 
 @pytest.mark.parametrize(

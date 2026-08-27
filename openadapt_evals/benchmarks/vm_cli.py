@@ -768,6 +768,10 @@ def cmd_pool_run(args):
     """
     init_logging()
     from openadapt_evals.infrastructure.pool import PoolManager
+    from openadapt_evals.infrastructure.windows_worker_task_contract import (
+        WorkerTaskContractError,
+        load_task_contracts,
+    )
 
     num_tasks = getattr(args, "tasks", 10)
     agent = getattr(args, "agent", "navi")
@@ -778,15 +782,17 @@ def cmd_pool_run(args):
     manager = PoolManager(vm_manager=vm_manager, log_fn=log)
 
     try:
+        task_contracts = load_task_contracts(args.task_contracts)
         result = manager.run(
             tasks=num_tasks,
             agent=agent,
             model=model,
             api_key=api_key,
             qualification_dir=args.qualification_dir,
+            task_contracts=task_contracts,
         )
         return 0 if result.failed == 0 else 1
-    except RuntimeError as e:
+    except (RuntimeError, WorkerTaskContractError) as e:
         log("POOL-RUN", f"ERROR: {e}")
         return 1
 
@@ -818,6 +824,10 @@ def cmd_pool_auto(args):
     """
     init_logging()
     from openadapt_evals.infrastructure.pool import PoolManager
+    from openadapt_evals.infrastructure.windows_worker_task_contract import (
+        WorkerTaskContractError,
+        load_task_contracts,
+    )
 
     num_workers = getattr(args, "workers", 1)
     auto_shutdown_hours = getattr(args, "auto_shutdown_hours", 4)
@@ -843,6 +853,7 @@ def cmd_pool_auto(args):
     manager = PoolManager(vm_manager=vm_manager, log_fn=log)
 
     try:
+        task_contracts = load_task_contracts(args.task_contracts)
         # Step 1: Create pool (skip if one already exists)
         pool = manager.status()
         if pool is not None:
@@ -909,6 +920,7 @@ def cmd_pool_auto(args):
             model=model,
             api_key=api_key,
             qualification_dir=qualification_dir,
+            task_contracts=task_contracts,
         )
 
         log("POOL-AUTO", "")
@@ -921,7 +933,7 @@ def cmd_pool_auto(args):
         log("POOL-AUTO", "Next: oa-vm pool-cleanup -y  (to stop billing)")
 
         return 0 if result.failed == 0 else 1
-    except RuntimeError as e:
+    except (RuntimeError, WorkerTaskContractError) as e:
         log("POOL-AUTO", f"ERROR: {e}")
         return 1
 

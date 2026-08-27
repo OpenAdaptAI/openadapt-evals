@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "qualification-worker-admission.schema.json",
+  "title": "OpenAdapt qualification worker admission v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "admission_id_sha256", "provider_identity_sha256",
+    "worker_identity_sha256", "live_provider_observation_sha256",
+    "admitted_runtime_sha256", "worker_image_sha256", "baseline_sha256",
+    "host_identity_sha256", "tls_identity_sha256", "egress_policy_sha256",
+    "campaign_permit_sha256", "capability_handle_sha256",
+    "authority_state_sha256", "revocation_state_sha256",
+    "signer_registry_sha256", "issued_at", "not_before", "expires_at", "issuer"
+  ],
+  "properties": {
+    "schema_version": {"const": "openadapt.qualification-worker-admission/v1"},
+    "admission_id_sha256": {"$ref": "#/$defs/digest"},
+    "provider_identity_sha256": {"$ref": "#/$defs/digest"},
+    "worker_identity_sha256": {"$ref": "#/$defs/digest"},
+    "live_provider_observation_sha256": {"$ref": "#/$defs/digest"},
+    "admitted_runtime_sha256": {"$ref": "#/$defs/digest"},
+    "worker_image_sha256": {"$ref": "#/$defs/digest"},
+    "baseline_sha256": {"$ref": "#/$defs/digest"},
+    "host_identity_sha256": {"$ref": "#/$defs/digest"},
+    "tls_identity_sha256": {"$ref": "#/$defs/digest"},
+    "egress_policy_sha256": {"$ref": "#/$defs/digest"},
+    "campaign_permit_sha256": {"$ref": "#/$defs/digest"},
+    "capability_handle_sha256": {"$ref": "#/$defs/digest"},
+    "authority_state_sha256": {"$ref": "#/$defs/digest"},
+    "revocation_state_sha256": {"$ref": "#/$defs/digest"},
+    "signer_registry_sha256": {"$ref": "#/$defs/digest"},
+    "issued_at": {"$ref": "#/$defs/timestamp"},
+    "not_before": {"$ref": "#/$defs/timestamp"},
+    "expires_at": {"$ref": "#/$defs/timestamp"},
+    "issuer": {"$ref": "#/$defs/issuer"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "timestamp": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+    "issuer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "repository_id", "repository_owner_id", "workflow", "ref", "source_commit", "environment"],
+      "properties": {
+        "repository": {"const": "OpenAdaptAI/.github"},
+        "repository_id": {"const": "858454062"},
+        "repository_owner_id": {"const": "132681217"},
+        "workflow": {"const": ".github/workflows/issue-qualification-worker-admission.yml"},
+        "ref": {"const": "refs/heads/main"},
+        "source_commit": {"$ref": "#/$defs/commit"},
+        "environment": {"const": "qualification-worker-admission"}
+      }
+    }
+  }
+}

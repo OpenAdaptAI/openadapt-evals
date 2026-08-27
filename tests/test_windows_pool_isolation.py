@@ -522,6 +522,30 @@ def test_benchmark_dispatch_refuses_start_proof_reuse_for_a_task_batch():
         manager.run(tasks=2, api_key="test-only", qualification_dir=Path("."))
 
 
+def test_benchmark_dispatch_requires_one_exact_task_contract_per_worker():
+    worker = SimpleNamespace(
+        name="waa-pool-00",
+        waa_ready=True,
+        status="qualified-ready",
+        qualified_run_id="run-123",
+        qualified_worker_admission_sha256="sha256:" + "4" * 64,
+        qualified_provider_identity_sha256="sha256:" + "5" * 64,
+        qualified_live_provider_observation_sha256="sha256:" + "6" * 64,
+        qualified_worker_identity_sha256="sha256:" + "1" * 64,
+        qualified_local_worker_identity_sha256="sha256:" + "7" * 64,
+        qualified_egress_policy_sha256="sha256:" + "2" * 64,
+        qualified_live_nft_sha256=LIVE_NFT_SHA256,
+        qualified_start_proof_sha256="sha256:" + "3" * 64,
+        qualified_container_state_sha256="sha256:" + "8" * 64,
+        qualified_dispatch_expires_at="2026-08-27T18:05:00Z",
+    )
+    manager = object.__new__(PoolManager)
+    manager.registry = SimpleNamespace(get_pool=lambda: SimpleNamespace(workers=[worker]))
+
+    with pytest.raises(RuntimeError, match="one exact task contract"):
+        manager.run(tasks=1, api_key="test-only", qualification_dir=Path("."))
+
+
 def test_live_start_and_dispatch_rechecks_use_the_pinned_boundary():
     calls = []
     dispatches = 0

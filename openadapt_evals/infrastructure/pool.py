@@ -46,6 +46,9 @@ from openadapt_evals.infrastructure.azure_vm import (
     ssh_run,
     wait_for_ssh,
 )
+from openadapt_evals.infrastructure.windows_worker_task_contract import (
+    WorkerTaskContract,
+)
 
 if TYPE_CHECKING:
     from openadapt_evals.infrastructure.vm_provider import VMProvider
@@ -833,6 +836,7 @@ class PoolManager:
         agent_factory: Callable[[], Any] | None = None,
         qualification_dir: Path | None = None,
         task_ids: list[str] | None = None,
+        task_contracts: list[WorkerTaskContract] | None = None,
     ) -> PoolRunResult:
         """Run benchmark tasks distributed across pool workers.
 
@@ -851,6 +855,8 @@ class PoolManager:
                 When provided, overrides agent/model and runs externally.
             qualification_dir: Exact worker identity and egress policy directory.
             task_ids: Exact task identities. Required for an external agent.
+            task_contracts: Exact central task and condition contracts. One is
+                required for each qualified worker.
 
         Returns:
             PoolRunResult with task counts and timing.
@@ -907,6 +913,17 @@ class PoolManager:
             raise RuntimeError(
                 "A qualified start proof can dispatch exactly one task. "
                 "The task count must equal the qualified worker count."
+            )
+        if (
+            task_contracts is None
+            or len(task_contracts) != tasks
+            or any(
+                not isinstance(contract, WorkerTaskContract)
+                for contract in task_contracts
+            )
+        ):
+            raise RuntimeError(
+                "Pool dispatch requires one exact task contract for each task."
             )
         if task_ids is not None and (
             len(task_ids) != tasks
@@ -983,6 +1000,7 @@ class PoolManager:
             result = self.external_task_session_authority.run_qualified_tasks(
                 workers=ready_workers,
                 task_ids=task_ids,
+                task_contracts=task_contracts,
                 agent_factory=agent_factory,
                 experiment=exp_name,
                 managers=qualified_managers,
@@ -1014,6 +1032,7 @@ class PoolManager:
             manager = qualified_managers[worker.name]
             admission = qualified_admissions[worker.name]
             policy = qualified_policies[worker.name]
+            task_contract = task_contracts[worker_idx]
             qualified_live_nft_sha256 = worker.qualified_live_nft_sha256
 
             def qualified_command(remote_command, **kwargs):
@@ -1054,9 +1073,12 @@ class PoolManager:
             ]
             requested_task = task_ids[worker_idx] if task_ids is not None else "-"
             if requested_task == "-":
-                if worker_idx >= len(pairs):
-                    raise RuntimeError("Qualified task index is outside the admitted metadata.")
-                domain, exact_task = pairs[worker_idx]
+                task_index = task_contract.selector.task_ordinal - 1
+                if task_index >= len(pairs):
+                    raise RuntimeError(
+                        "Qualified task ordinal is outside the admitted metadata."
+                    )
+                domain, exact_task = pairs[task_index]
             else:
                 matches = [pair for pair in pairs if pair[1] == requested_task]
                 if len(matches) != 1:
@@ -1079,7 +1101,7 @@ class PoolManager:
             authorized = self.worker_trust_authority.authorize_dispatch(
                 admission=admission,
                 run_id=worker.qualified_run_id,
-                task_selector={"domain": domain, "task_id": exact_task},
+                task_contract=task_contract,
             )
             if api_key is None:
                 raise RuntimeError("The protected API credential is absent.")
