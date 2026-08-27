@@ -41,6 +41,12 @@ WORKER_IDENTITY_DOMAIN = b"OpenAdapt qualification WorkerIdentity v1\0"
 START_ID_DOMAIN = b"OpenAdapt qualification worker start v1\0"
 DISPATCH_ID_DOMAIN = b"OpenAdapt qualification worker dispatch v1\0"
 PROCESS_START_IDENTITY_DOMAIN = b"OpenAdapt qualification worker process start v1\0"
+LAUNCH_ATTEMPT_IDENTITY_DOMAIN = (
+    b"OpenAdapt qualification worker launch attempt v1\0"
+)
+TERMINAL_RECEIPT_IDENTITY_DOMAIN = (
+    b"OpenAdapt qualification worker terminal receipt v1\0"
+)
 BURNED_IDENTITIES_DOMAIN = b"OpenAdapt qualification worker burned identities v1\0"
 BURN_RECEIPT_DOMAIN = b"OpenAdapt qualification worker burn receipt v1\0"
 
@@ -539,6 +545,7 @@ def validate_worker_terminal(
             "executable_sha256",
             "capability_handle_sha256",
             "evidence_sha256",
+            "child_created",
             "failure_classification",
         },
         "worker terminal launch attempt",
@@ -557,14 +564,33 @@ def validate_worker_terminal(
         "capability_handle_sha256"
     ]:
         raise WorkerTrustError("worker launch capability differs")
+    if type(launch_attempt["child_created"]) is not bool:
+        raise WorkerTrustError("worker launch child_created is invalid")
     if launch_attempt["failure_classification"] not in {
         None,
         "PROCESS_START_REFUSED",
         "PROCESS_START_FAILED",
-        "PROCESS_IDENTITY_UNAVAILABLE",
     }:
         raise WorkerTrustError("worker launch failure classification is invalid")
-    _require_digest(receipt["launch_attempt_sha256"], "worker launch attempt identity")
+    launch_projection = {
+        "worker_admission_sha256": admission["admission_object_sha256"],
+        "dispatch_id_sha256": dispatch["dispatch_id_sha256"],
+        "provider_identity_sha256": dispatch["provider_identity_sha256"],
+        "worker_identity_sha256": dispatch["worker_identity_sha256"],
+        "live_provider_observation_sha256": dispatch[
+            "live_provider_observation_sha256"
+        ],
+        "admitted_runtime_sha256": dispatch["admitted_runtime_sha256"],
+        "run_id": dispatch["run_id"],
+        "run_attempt": dispatch["run_attempt"],
+        "start_id_sha256": dispatch["start_id_sha256"],
+        "capability_handle_sha256": dispatch["capability_handle_sha256"],
+        "launch_attempt": launch_attempt,
+    }
+    if _digest(LAUNCH_ATTEMPT_IDENTITY_DOMAIN, launch_projection) != receipt[
+        "launch_attempt_sha256"
+    ]:
+        raise WorkerTrustError("worker launch attempt identity differs")
     process: Mapping[str, Any] | None
     if receipt["process"] is None:
         process = None
@@ -606,6 +632,10 @@ def validate_worker_terminal(
         process_projection = {
             "provider_identity_sha256": dispatch["provider_identity_sha256"],
             "worker_identity_sha256": dispatch["worker_identity_sha256"],
+            "live_provider_observation_sha256": dispatch[
+                "live_provider_observation_sha256"
+            ],
+            "admitted_runtime_sha256": dispatch["admitted_runtime_sha256"],
             "run_id": dispatch["run_id"],
             "run_attempt": dispatch["run_attempt"],
             "start_id_sha256": dispatch["start_id_sha256"],
@@ -665,13 +695,19 @@ def validate_worker_terminal(
         or receipt["burn_ledger_revision"] <= 0
     ):
         raise WorkerTrustError("worker terminal burn ledger revision is invalid")
-    _timestamp(receipt["burned_at"], "worker terminal burned_at")
+    attempted_at = _timestamp(
+        launch_attempt["attempted_at"],
+        "worker terminal attempted_at",
+    )
+    burned_at = _timestamp(receipt["burned_at"], "worker terminal burned_at")
     completed_at = _timestamp(receipt["completed_at"], "worker terminal completed_at")
+    if attempted_at > burned_at:
+        raise WorkerTrustError("worker terminal burned before its launch attempt")
     if process is not None and completed_at < _timestamp(
         process["launched_at"], "worker terminal launched_at"
     ):
         raise WorkerTrustError("worker terminal completed before process launch")
-    if completed_at < _timestamp(receipt["burned_at"], "worker terminal burned_at"):
+    if completed_at < burned_at:
         raise WorkerTrustError("worker terminal completed before dispatch burn")
     if type(receipt["effect_started"]) is not bool:
         raise WorkerTrustError("worker terminal effect_started is invalid")
@@ -740,11 +776,15 @@ def validate_worker_terminal(
             or receipt["exit_code"] is not None
             or receipt["uncertainty_sha256"] is not None
             or quarantine["active"] is not True
+            or launch_attempt["child_created"] is not False
             or launch_attempt["failure_classification"] is None
         ):
             raise WorkerTrustError("prelaunch terminal receipt is invalid")
-    elif receipt["terminal_state"] == "PRELAUNCH_QUARANTINED":
-        raise WorkerTrustError("prelaunch terminal receipt has a process")
+    else:
+        if launch_attempt["child_created"] is not True:
+            raise WorkerTrustError("postlaunch terminal receipt has no child proof")
+        if receipt["terminal_state"] == "PRELAUNCH_QUARANTINED":
+            raise WorkerTrustError("prelaunch terminal receipt has a process")
     burned_projection = {
         "worker_identity_sha256": dispatch["worker_identity_sha256"],
         "run_id": dispatch["run_id"],
@@ -770,6 +810,10 @@ def validate_worker_terminal(
         "burn_receipt_sha256"
     ]:
         raise WorkerTrustError("worker terminal burn receipt differs")
+    terminal_projection = dict(receipt)
+    supplied_receipt_id = terminal_projection.pop("receipt_id_sha256")
+    if _digest(TERMINAL_RECEIPT_IDENTITY_DOMAIN, terminal_projection) != supplied_receipt_id:
+        raise WorkerTrustError("worker terminal receipt identity differs")
     if terminal_evidence is not None:
         evidence_process = terminal_evidence.get("process")
         terminal_readback = terminal_evidence.get("terminal_readback")

@@ -10,8 +10,10 @@ from openadapt_evals.infrastructure.windows_worker_trust import (
     BURN_RECEIPT_DOMAIN,
     BURNED_IDENTITIES_DOMAIN,
     DISPATCH_ID_DOMAIN,
+    LAUNCH_ATTEMPT_IDENTITY_DOMAIN,
     PROCESS_START_IDENTITY_DOMAIN,
     START_ID_DOMAIN,
+    TERMINAL_RECEIPT_IDENTITY_DOMAIN,
     ProviderObservation,
     VerifiedWorkerAdmission,
     WorkerTrustError,
@@ -156,6 +158,10 @@ def _terminal(
     process_projection = {
         "provider_identity_sha256": dispatch["provider_identity_sha256"],
         "worker_identity_sha256": dispatch["worker_identity_sha256"],
+        "live_provider_observation_sha256": dispatch[
+            "live_provider_observation_sha256"
+        ],
+        "admitted_runtime_sha256": dispatch["admitted_runtime_sha256"],
         "run_id": "123",
         "run_attempt": "1",
         "start_id_sha256": dispatch["start_id_sha256"],
@@ -195,6 +201,30 @@ def _terminal(
         "burned_at": "2026-08-27T11:59:59Z",
         "ledger_readback_sha256": _sha("ledger-readback"),
     }
+    launch_attempt = {
+        "attempted_at": "2026-08-27T11:59:59Z",
+        "host_identity_sha256": admission["host_identity_sha256"],
+        "executable_sha256": _sha("bash-executable"),
+        "capability_handle_sha256": dispatch["capability_handle_sha256"],
+        "evidence_sha256": _sha("launch-evidence"),
+        "child_created": True,
+        "failure_classification": None,
+    }
+    launch_projection = {
+        "worker_admission_sha256": admission["admission_object_sha256"],
+        "dispatch_id_sha256": dispatch["dispatch_id_sha256"],
+        "provider_identity_sha256": dispatch["provider_identity_sha256"],
+        "worker_identity_sha256": dispatch["worker_identity_sha256"],
+        "live_provider_observation_sha256": dispatch[
+            "live_provider_observation_sha256"
+        ],
+        "admitted_runtime_sha256": dispatch["admitted_runtime_sha256"],
+        "run_id": "123",
+        "run_attempt": "1",
+        "start_id_sha256": dispatch["start_id_sha256"],
+        "capability_handle_sha256": dispatch["capability_handle_sha256"],
+        "launch_attempt": launch_attempt,
+    }
     receipt = {
         "schema_version": "openadapt.qualification-worker-terminal-receipt/v1",
         "receipt_id_sha256": _sha("receipt"),
@@ -212,15 +242,11 @@ def _terminal(
         "task_id_sha256": dispatch["task_id_sha256"],
         "task_condition_sha256": dispatch["task_condition_sha256"],
         "capability_handle_sha256": dispatch["capability_handle_sha256"],
-        "launch_attempt": {
-            "attempted_at": "2026-08-27T11:59:59Z",
-            "host_identity_sha256": admission["host_identity_sha256"],
-            "executable_sha256": _sha("bash-executable"),
-            "capability_handle_sha256": dispatch["capability_handle_sha256"],
-            "evidence_sha256": _sha("launch-evidence"),
-            "failure_classification": None,
-        },
-        "launch_attempt_sha256": _sha("launch-attempt"),
+        "launch_attempt": launch_attempt,
+        "launch_attempt_sha256": _domain_sha(
+            LAUNCH_ATTEMPT_IDENTITY_DOMAIN,
+            launch_projection,
+        ),
         "process": process,
         "oracle_sha256": _sha("oracle"),
         "result_sha256": _sha("result"),
@@ -251,6 +277,10 @@ def _terminal(
             "environment": "qualification-worker-terminal-receipt",
         },
     }
+    receipt["receipt_id_sha256"] = _domain_sha(
+        TERMINAL_RECEIPT_IDENTITY_DOMAIN,
+        {key: value for key, value in receipt.items() if key != "receipt_id_sha256"},
+    )
     local_process = {
         **process,
         "schema_version": "openadapt.qualification-worker-process-evidence/v1",
@@ -260,6 +290,7 @@ def _terminal(
         "live_provider_observation_sha256": dispatch[
             "live_provider_observation_sha256"
         ],
+        "admitted_runtime_sha256": dispatch["admitted_runtime_sha256"],
         "run_id": "123",
         "run_attempt": "1",
         "start_id_sha256": dispatch["start_id_sha256"],

@@ -945,9 +945,6 @@ class PoolManager:
             manager = qualified_managers[worker.name]
             admission = qualified_admissions[worker.name]
             policy = qualified_policies[worker.name]
-            proxy = policy["proxy"]
-            qualified_run_id = worker.qualified_run_id
-            qualified_policy_sha256 = worker.qualified_egress_policy_sha256
             qualified_live_nft_sha256 = worker.qualified_live_nft_sha256
 
             def qualified_command(remote_command, **kwargs):
@@ -1019,14 +1016,14 @@ class PoolManager:
                 dispatch=authorized,
                 policy_sha256=worker.qualified_egress_policy_sha256,
                 container_state_sha256=worker.qualified_container_state_sha256,
+                live_nft_sha256=worker.qualified_live_nft_sha256,
+                policy=policy,
+                proxy_authorization=proxy_authorization,
                 agent=agent,
                 model=model,
                 experiment=f"{exp_name}_{worker.name}",
                 subset=subset,
                 api_key=api_key,
-                live_nft_sha256=worker.qualified_live_nft_sha256,
-                proxy=proxy,
-                proxy_authorization=proxy_authorization,
             )
             self.registry.update_worker(
                 worker.name,

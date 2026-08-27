@@ -58,7 +58,9 @@ def canonical_json(value: object) -> bytes:
 
 def egress_policy_sha256(value: object) -> str:
     policy = validate_egress_policy(value)
-    return hashlib.sha256(EGRESS_DOMAIN + canonical_json(policy)).hexdigest()
+    return "sha256:" + hashlib.sha256(
+        EGRESS_DOMAIN + canonical_json(policy)
+    ).hexdigest()
 
 
 def egress_proxy_authorization_sha256(
@@ -1053,7 +1055,7 @@ try:
     if not live_ruleset:
         raise SystemExit('live nft ruleset is empty')
     live_digest = 'sha256:' + hashlib.sha256(
-        b'OpenAdapt Windows live nftables ruleset v1\0' + live_ruleset
+        b'OpenAdapt Windows live nftables ruleset v1\\0' + live_ruleset
     ).hexdigest()
     digest_temporary = digest_target.with_name('.windows-egress.sha256.tmp')
     try:
@@ -1505,7 +1507,7 @@ PY
         """Revalidate one admitted guest and its consumed start gate."""
 
         run_id = _safe_name(run_id, "run id")
-        if not isinstance(policy_sha256, str) or HEX64.fullmatch(policy_sha256) is None:
+        if not isinstance(policy_sha256, str) or SHA256.fullmatch(policy_sha256) is None:
             raise WindowsPoolIsolationError("egress policy digest is invalid")
         if not isinstance(container_state_sha256, str) or SHA256.fullmatch(
             container_state_sha256

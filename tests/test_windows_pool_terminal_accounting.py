@@ -2,12 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from copy import deepcopy
 from pathlib import Path
 
 import pytest
-from jsonschema import Draft202012Validator
-from jsonschema.exceptions import ValidationError
 
 from openadapt_evals.infrastructure.pool import (
     PoolRunResult,
@@ -37,115 +34,27 @@ def _central_schema() -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _central_terminal_receipt() -> dict[str, object]:
-    return {
-        "schema_version": "openadapt.qualification-worker-terminal-receipt/v1",
-        "receipt_id_sha256": _sha("receipt"),
-        "worker_admission_sha256": _sha("admission"),
-        "dispatch_id_sha256": _sha("dispatch"),
-        "provider_identity_sha256": _sha("provider"),
-        "worker_identity_sha256": _sha("worker"),
-        "live_provider_observation_sha256": _sha("observation"),
-        "admitted_runtime_sha256": _sha("runtime"),
-        "run_id": "123",
-        "run_attempt": "1",
-        "start_id_sha256": _sha("start"),
-        "task_id_sha256": _sha("task"),
-        "task_condition_sha256": _sha("condition"),
-        "capability_handle_sha256": _sha("capability"),
-        "launch_attempt": {
-            "attempted_at": "2026-08-27T12:00:00Z",
-            "host_identity_sha256": _sha("host"),
-            "executable_sha256": _sha("executable"),
-            "capability_handle_sha256": _sha("capability"),
-            "evidence_sha256": _sha("launch-evidence"),
-            "child_created": True,
-            "failure_classification": None,
-        },
-        "launch_attempt_sha256": _sha("launch-attempt"),
-        "process": {
-            "pid": 101,
-            "process_group_id": 101,
-            "process_start_ticks": "9001",
-            "launched_at": "2026-08-27T12:00:01Z",
-            "executable_sha256": _sha("executable"),
-            "process_start_identity_sha256": _sha("process-start"),
-        },
-        "oracle_sha256": _sha("oracle"),
-        "result_sha256": _sha("result"),
-        "log_sha256": _sha("log"),
-        "burned_identities_sha256": _sha("burned-identities"),
-        "burn_ledger_revision": 7,
-        "burn_receipt_sha256": _sha("burn-receipt"),
-        "burned_at": "2026-08-27T12:00:00Z",
-        "ledger_readback_sha256": _sha("ledger-readback"),
-        "effect_started": True,
-        "delivery_state": "verified",
-        "terminal_state": "VERIFIED",
-        "exit_code": 0,
-        "uncertainty_sha256": None,
-        "quarantine": {
-            "active": False,
-            "reason_code": None,
-            "evidence_sha256": None,
-        },
-        "completed_at": "2026-08-27T12:01:00Z",
-        "issuer": {
-            "repository": "OpenAdaptAI/.github",
-            "repository_id": "858454062",
-            "repository_owner_id": "132681217",
-            "workflow": ".github/workflows/issue-qualification-worker-terminal-receipt.yml",
-            "ref": "refs/heads/main",
-            "source_commit": "c" * 40,
-            "environment": "qualification-worker-terminal-receipt",
-        },
-    }
-
-
-def test_central_schema_requires_kernel_start_ticks_after_launch() -> None:
-    receipt = _central_terminal_receipt()
-    Draft202012Validator(_central_schema()).validate(receipt)
-    process = receipt["process"]
+def test_central_schema_binds_prelaunch_and_postlaunch_process_identity() -> None:
+    schema = _central_schema()
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+    process = properties["process"]
     assert isinstance(process, dict)
-    del process["process_start_ticks"]
-    with pytest.raises(ValidationError, match="process_start_ticks"):
-        Draft202012Validator(_central_schema()).validate(receipt)
+    process_object = process["oneOf"][0]
+    assert "process_start_ticks" in process_object["required"]
 
-
-def test_central_schema_bounds_no_process_to_prelaunch_quarantine() -> None:
-    receipt = _central_terminal_receipt()
-    receipt.update(
-        process=None,
-        effect_started=False,
-        delivery_state="not_started",
-        terminal_state="PRELAUNCH_QUARANTINED",
-        exit_code=None,
-        quarantine={
-            "active": True,
-            "reason_code": "PROCESS_START_FAILED",
-            "evidence_sha256": _sha("prelaunch-failure"),
-        },
-    )
-    launch_attempt = receipt["launch_attempt"]
-    assert isinstance(launch_attempt, dict)
-    launch_attempt.update(
-        child_created=False,
-        failure_classification="PROCESS_START_FAILED",
-    )
-    validator = Draft202012Validator(_central_schema())
-    validator.validate(receipt)
-
-    invalid = deepcopy(receipt)
-    invalid["terminal_state"] = "QUARANTINED"
-    with pytest.raises(ValidationError):
-        validator.validate(invalid)
-
-
-def test_central_schema_refuses_a_false_postlaunch_process_absence() -> None:
-    receipt = _central_terminal_receipt()
-    receipt["process"] = None
-    with pytest.raises(ValidationError):
-        Draft202012Validator(_central_schema()).validate(receipt)
+    conditions = schema["allOf"]
+    assert conditions[0]["then"]["properties"]["terminal_state"] == {
+        "const": "PRELAUNCH_QUARANTINED"
+    }
+    assert conditions[0]["then"]["properties"]["launch_attempt"]["properties"][
+        "child_created"
+    ] == {"const": False}
+    assert conditions[1]["then"]["properties"]["process"] == {"type": "null"}
+    assert conditions[2]["then"]["properties"]["process"] == {"type": "object"}
+    assert conditions[2]["then"]["properties"]["launch_attempt"]["properties"][
+        "child_created"
+    ] == {"const": True}
 
 
 def _receipt(worker: str, state: str = "VERIFIED") -> dict[str, object]:

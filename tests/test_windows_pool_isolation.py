@@ -148,7 +148,8 @@ def _manager(identity=None):
 def test_egress_policy_is_closed_unique_sorted_and_domain_bound():
     policy = _policy()
     assert validate_egress_policy(policy) == policy
-    assert len(egress_policy_sha256(policy)) == 64
+    assert len(egress_policy_sha256(policy)) == 71
+    assert egress_policy_sha256(policy).startswith("sha256:")
     changed_proxy = {**policy["proxy"], "resolved_ipv4": ["10.20.30.41"]}
     assert egress_policy_sha256(_policy(proxy=changed_proxy)) != (
         egress_policy_sha256(policy)

@@ -8,9 +8,18 @@ import json
 import re
 import subprocess
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from typing import Any, Mapping
 
+from openadapt_evals.infrastructure.windows_pool_isolation import (
+    egress_policy_sha256,
+    egress_proxy_authorization_sha256,
+    validate_egress_policy,
+)
 from openadapt_evals.infrastructure.windows_worker_trust import (
+    BURN_RECEIPT_DOMAIN,
+    BURNED_IDENTITIES_DOMAIN,
+    LAUNCH_ATTEMPT_IDENTITY_DOMAIN,
     PROCESS_START_IDENTITY_DOMAIN,
     AuthorizedWorkerDispatch,
     VerifiedWorkerAdmission,
@@ -37,6 +46,7 @@ class QualifiedProcessEvidence:
     provider_identity_sha256: str
     worker_identity_sha256: str
     live_provider_observation_sha256: str
+    admitted_runtime_sha256: str
     run_id: str
     run_attempt: str
     start_id_sha256: str
@@ -51,6 +61,8 @@ class QualifiedProcessEvidence:
     launched_at: str
     executable_sha256: str
     process_start_identity_sha256: str
+    launch_attempt: Mapping[str, Any]
+    launch_attempt_sha256: str
     subset_sha256: str
     oracle_sha256: str
     container_state_sha256: str
@@ -81,6 +93,7 @@ def _parse_process(value: object) -> QualifiedProcessEvidence:
         "provider_identity_sha256",
         "worker_identity_sha256",
         "live_provider_observation_sha256",
+        "admitted_runtime_sha256",
         "start_id_sha256",
         "dispatch_id_sha256",
         "task_id_sha256",
@@ -89,6 +102,7 @@ def _parse_process(value: object) -> QualifiedProcessEvidence:
         "process_lease_sha256",
         "executable_sha256",
         "process_start_identity_sha256",
+        "launch_attempt_sha256",
         "subset_sha256",
         "oracle_sha256",
         "container_state_sha256",
@@ -124,6 +138,36 @@ def _parse_process(value: object) -> QualifiedProcessEvidence:
         or TIMESTAMP.fullmatch(process.burned_at) is None
     ):
         raise WorkerDispatchError("qualified process timestamp is invalid")
+    launch_attempt = process.launch_attempt
+    if not isinstance(launch_attempt, Mapping) or set(launch_attempt) != {
+        "attempted_at",
+        "host_identity_sha256",
+        "executable_sha256",
+        "capability_handle_sha256",
+        "evidence_sha256",
+        "child_created",
+        "failure_classification",
+    }:
+        raise WorkerDispatchError("qualified launch attempt is not closed")
+    if (
+        launch_attempt["attempted_at"] != process.burned_at
+        or launch_attempt["executable_sha256"] != process.executable_sha256
+        or launch_attempt["capability_handle_sha256"]
+        != process.capability_handle_sha256
+        or launch_attempt["child_created"] is not True
+        or launch_attempt["failure_classification"] is not None
+    ):
+        raise WorkerDispatchError("qualified launch attempt differs")
+    for field in (
+        "host_identity_sha256",
+        "executable_sha256",
+        "capability_handle_sha256",
+        "evidence_sha256",
+    ):
+        if not isinstance(launch_attempt[field], str) or SHA256.fullmatch(
+            launch_attempt[field]
+        ) is None:
+            raise WorkerDispatchError(f"qualified launch {field} is invalid")
     return process
 
 
@@ -140,23 +184,51 @@ import subprocess
 import sys
 import time
 
-worker, container, policy_sha256, container_state_sha256 = sys.argv[1:]
+worker, container, policy_sha256, container_state_sha256, live_nft_sha256 = sys.argv[1:]
 payload = json.loads(sys.stdin.buffer.read())
 if set(payload) != {
     'admission', 'dispatch', 'capability_base64', 'subset_base64',
-    'agent', 'model', 'experiment', 'api_key_base64'
+    'agent', 'model', 'experiment', 'api_key_base64',
+    'egress_policy', 'proxy_authorization_base64'
 }:
     raise SystemExit('dispatch payload is not closed')
 admission = payload['admission']
 dispatch = payload['dispatch']
 capability = base64.b64decode(payload['capability_base64'], validate=True)
 api_key = base64.b64decode(payload['api_key_base64'], validate=True)
+proxy_authorization = base64.b64decode(
+    payload['proxy_authorization_base64'], validate=True
+)
 subset = base64.b64decode(payload['subset_base64'], validate=True)
 if not capability or hashlib.sha256(capability).hexdigest() != dispatch['capability_handle_sha256'][7:]:
     raise SystemExit('dispatch capability differs')
 if b'\x00' in api_key or b'\n' in api_key or not api_key:
     raise SystemExit('API credential is invalid')
+if b'\x00' in proxy_authorization or b'\n' in proxy_authorization or not proxy_authorization:
+    raise SystemExit('proxy credential is invalid')
 run_id = dispatch['run_id']
+policy = payload['egress_policy']
+policy_bytes = json.dumps(policy, sort_keys=True, separators=(',', ':')).encode('utf-8')
+if 'sha256:' + hashlib.sha256(b'openadapt-windows-host-egress-v2\0' + policy_bytes).hexdigest() != policy_sha256:
+    raise SystemExit('egress policy identity differs')
+if policy.get('run_id') != run_id:
+    raise SystemExit('egress policy run identity differs')
+proxy = policy.get('proxy')
+if not isinstance(proxy, dict):
+    raise SystemExit('egress proxy is absent')
+proxy_projection = {
+    'run_id': run_id,
+    'host_bindings_sha256': policy.get('host_bindings_sha256'),
+    'allowed_endpoints': policy.get('allowed_endpoints'),
+    'proxy': {key: value for key, value in proxy.items() if key != 'authorization_sha256'},
+}
+expected_proxy_authorization = 'sha256:' + hashlib.sha256(
+    b'OpenAdapt Windows egress proxy authorization v1\0' +
+    json.dumps(proxy_projection, sort_keys=True, separators=(',', ':')).encode('utf-8') +
+    b'\0' + proxy_authorization
+).hexdigest()
+if expected_proxy_authorization != proxy.get('authorization_sha256'):
+    raise SystemExit('proxy authorization differs')
 root = pathlib.Path('/var/lib/openadapt/windows-burned-runs') / run_id
 lock_fd = os.open(
     pathlib.Path('/var/lock') / f'openadapt-windows-{worker}.lock',
@@ -179,9 +251,20 @@ if not authority_record.is_file() or authority_record.read_text(encoding='ascii'
     raise SystemExit('start authority binding differs')
 active_policy = pathlib.Path('/run/openadapt/windows-egress.sha256')
 active_rules = pathlib.Path('/run/openadapt/windows-egress-active.nft')
+active_live_nft = pathlib.Path('/run/openadapt/windows-egress-live-nft.sha256')
 if not active_policy.is_file() or active_policy.read_text(encoding='ascii').strip() != policy_sha256:
     raise SystemExit('active egress policy differs')
-subprocess.run(['nft', '-c', '-f', str(active_rules)], check=True)
+if not active_live_nft.is_file() or active_live_nft.read_text(encoding='ascii').strip() != live_nft_sha256:
+    raise SystemExit('stored live nft identity differs')
+live_rules = subprocess.run(
+    ['nft', '--stateless', 'list', 'table', 'inet', 'oa_windows'],
+    check=True, capture_output=True,
+).stdout
+actual_live_nft = 'sha256:' + hashlib.sha256(
+    b'OpenAdapt Windows live nftables ruleset v1\0' + live_rules
+).hexdigest()
+if actual_live_nft != live_nft_sha256:
+    raise SystemExit('live nft ruleset differs')
 
 raw_container = json.loads(subprocess.run(
     ['docker', 'inspect', container], check=True, capture_output=True, text=True
@@ -303,8 +386,13 @@ if actual_subset != subset_digest[7:]:
     raise SystemExit('guest subset readback differs')
 launch_script = r'''set -euo pipefail
 IFS= read -r OPENAI_API_KEY
+IFS= read -r OPENADAPT_PROXY_PASSWORD
 export OPENAI_API_KEY
 root="$1"; agent="$2"; model="$3"; experiment="$4"; run_id="$5"
+proxy_username="$6"; proxy_hostname="$7"; proxy_port="$8"
+HTTPS_PROXY="https://${proxy_username}:${OPENADAPT_PROXY_PASSWORD}@${proxy_hostname}:${proxy_port}"
+HTTP_PROXY="$HTTPS_PROXY"
+export HTTPS_PROXY HTTP_PROXY
 executable="$(command -v bash)"
 executable_sha256="sha256:$(sha256sum "$executable" | cut -d' ' -f1)"
 launched_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -326,8 +414,9 @@ printf '{"pid":%s,"process_group_id":%s,"start_ticks":"%s","launched_at":"%s","e
 '''
 launched = subprocess.run(
     ['docker', 'exec', '-i', container, 'bash', '-c', launch_script, '--', guest_root,
-     payload['agent'], payload['model'], payload['experiment'], run_id],
-    input=api_key + b'\n',
+     payload['agent'], payload['model'], payload['experiment'], run_id,
+     proxy['authorization_username'], proxy['hostname'], str(proxy['port'])],
+    input=api_key + b'\n' + proxy_authorization + b'\n',
     check=True, capture_output=True,
 )
 try:
@@ -337,6 +426,8 @@ except (IndexError, json.JSONDecodeError) as exc:
 process_projection = {
     'provider_identity_sha256': dispatch['provider_identity_sha256'],
     'worker_identity_sha256': dispatch['worker_identity_sha256'],
+    'live_provider_observation_sha256': dispatch['live_provider_observation_sha256'],
+    'admitted_runtime_sha256': dispatch['admitted_runtime_sha256'],
     'run_id': run_id, 'run_attempt': '1',
     'start_id_sha256': dispatch['start_id_sha256'],
     'dispatch_id_sha256': dispatch['dispatch_id_sha256'],
@@ -349,12 +440,60 @@ process_start = 'sha256:' + hashlib.sha256(
     b'OpenAdapt qualification worker process start v1\0' +
     json.dumps(process_projection, sort_keys=True, separators=(',', ':')).encode('utf-8')
 ).hexdigest()
+launch_evidence = {
+    'schema_version': 'openadapt.qualification-worker-local-launch-evidence/v1',
+    'worker_admission_sha256': dispatch['worker_admission_sha256'],
+    'dispatch_id_sha256': dispatch['dispatch_id_sha256'],
+    'attempted_at': burned_at,
+    'host_identity_sha256': admission['host_identity_sha256'],
+    'executable_sha256': process['executable_sha256'],
+    'capability_handle_sha256': dispatch['capability_handle_sha256'],
+    'child_created': True,
+    'failure_classification': None,
+    'process_start_identity_sha256': process_start,
+    'burn_ledger_revision': revision,
+    'ledger_readback_sha256': ledger_readback,
+}
+launch_evidence_bytes = json.dumps(
+    launch_evidence, sort_keys=True, separators=(',', ':')
+).encode('utf-8') + b'\n'
+launch_evidence_sha256 = 'sha256:' + hashlib.sha256(launch_evidence_bytes).hexdigest()
+fd = os.open(root / 'launch-attempt.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
+with os.fdopen(fd, 'wb') as stream:
+    stream.write(launch_evidence_bytes); stream.flush(); os.fsync(stream.fileno())
+launch_attempt = {
+    'attempted_at': burned_at,
+    'host_identity_sha256': admission['host_identity_sha256'],
+    'executable_sha256': process['executable_sha256'],
+    'capability_handle_sha256': dispatch['capability_handle_sha256'],
+    'evidence_sha256': launch_evidence_sha256,
+    'child_created': True,
+    'failure_classification': None,
+}
+launch_projection = {
+    'worker_admission_sha256': dispatch['worker_admission_sha256'],
+    'dispatch_id_sha256': dispatch['dispatch_id_sha256'],
+    'provider_identity_sha256': dispatch['provider_identity_sha256'],
+    'worker_identity_sha256': dispatch['worker_identity_sha256'],
+    'live_provider_observation_sha256': dispatch['live_provider_observation_sha256'],
+    'admitted_runtime_sha256': dispatch['admitted_runtime_sha256'],
+    'run_id': run_id,
+    'run_attempt': '1',
+    'start_id_sha256': dispatch['start_id_sha256'],
+    'capability_handle_sha256': dispatch['capability_handle_sha256'],
+    'launch_attempt': launch_attempt,
+}
+launch_attempt_sha256 = 'sha256:' + hashlib.sha256(
+    b'OpenAdapt qualification worker launch attempt v1\0' +
+    json.dumps(launch_projection, sort_keys=True, separators=(',', ':')).encode('utf-8')
+).hexdigest()
 evidence = {
     'schema_version': 'openadapt.qualification-worker-process-evidence/v1',
     'worker_admission_sha256': dispatch['worker_admission_sha256'],
     'provider_identity_sha256': dispatch['provider_identity_sha256'],
     'worker_identity_sha256': dispatch['worker_identity_sha256'],
     'live_provider_observation_sha256': dispatch['live_provider_observation_sha256'],
+    'admitted_runtime_sha256': dispatch['admitted_runtime_sha256'],
     'run_id': run_id, 'run_attempt': '1',
     'start_id_sha256': dispatch['start_id_sha256'],
     'dispatch_id_sha256': dispatch['dispatch_id_sha256'],
@@ -367,6 +506,8 @@ evidence = {
     'launched_at': process['launched_at'],
     'executable_sha256': process['executable_sha256'],
     'process_start_identity_sha256': process_start,
+    'launch_attempt': launch_attempt,
+    'launch_attempt_sha256': launch_attempt_sha256,
     'subset_sha256': subset_digest,
     'oracle_sha256': oracle_sha256,
     'container_state_sha256': container_state_sha256,
@@ -388,6 +529,9 @@ def launch_authorized_process(
     dispatch: AuthorizedWorkerDispatch,
     policy_sha256: str,
     container_state_sha256: str,
+    live_nft_sha256: str,
+    policy: Mapping[str, Any],
+    proxy_authorization: str,
     agent: str,
     model: str,
     experiment: str,
@@ -402,6 +546,20 @@ def launch_authorized_process(
         raise WorkerDispatchError("task subset is invalid")
     if not isinstance(api_key, str) or not api_key or "\n" in api_key or "\x00" in api_key:
         raise WorkerDispatchError("API credential is invalid")
+    parsed_policy = validate_egress_policy(policy)
+    if egress_policy_sha256(parsed_policy) != policy_sha256:
+        raise WorkerDispatchError("egress policy identity differs")
+    if parsed_policy["run_id"] != dispatch.object["run_id"]:
+        raise WorkerDispatchError("egress policy run identity differs")
+    if not isinstance(live_nft_sha256, str) or SHA256.fullmatch(live_nft_sha256) is None:
+        raise WorkerDispatchError("live nft identity is invalid")
+    if not isinstance(proxy_authorization, str) or not proxy_authorization:
+        raise WorkerDispatchError("proxy credential is invalid")
+    if egress_proxy_authorization_sha256(
+        parsed_policy,
+        proxy_authorization,
+    ) != parsed_policy["proxy"]["authorization_sha256"]:
+        raise WorkerDispatchError("proxy authorization differs")
     payload = {
         "admission": dict(admission.object),
         "dispatch": dict(dispatch.object),
@@ -411,6 +569,10 @@ def launch_authorized_process(
         "model": model,
         "experiment": experiment,
         "api_key_base64": base64.b64encode(api_key.encode("utf-8")).decode("ascii"),
+        "egress_policy": parsed_policy,
+        "proxy_authorization_base64": base64.b64encode(
+            proxy_authorization.encode("utf-8")
+        ).decode("ascii"),
     }
     result: subprocess.CompletedProcess[bytes] = manager._ssh(
         [
@@ -422,6 +584,7 @@ def launch_authorized_process(
             manager.container,
             policy_sha256,
             container_state_sha256,
+            live_nft_sha256,
         ],
         input_bytes=canonical_json(payload),
         timeout_seconds=300,
@@ -437,6 +600,7 @@ def launch_authorized_process(
         "live_provider_observation_sha256": dispatch.object[
             "live_provider_observation_sha256"
         ],
+        "admitted_runtime_sha256": dispatch.object["admitted_runtime_sha256"],
         "run_id": dispatch.object["run_id"],
         "start_id_sha256": dispatch.object["start_id_sha256"],
         "dispatch_id_sha256": dispatch.object["dispatch_id_sha256"],
@@ -445,6 +609,7 @@ def launch_authorized_process(
         "capability_handle_sha256": dispatch.object["capability_handle_sha256"],
         "process_lease_sha256": dispatch.object["process_lease_sha256"],
         "container_state_sha256": container_state_sha256,
+        "launch_attempt": process.launch_attempt,
     }
     if any(getattr(process, key) != expected_value for key, expected_value in expected.items()):
         raise WorkerDispatchError("qualified process binding differs")
@@ -453,6 +618,8 @@ def launch_authorized_process(
     process_projection = {
         "provider_identity_sha256": process.provider_identity_sha256,
         "worker_identity_sha256": process.worker_identity_sha256,
+        "live_provider_observation_sha256": process.live_provider_observation_sha256,
+        "admitted_runtime_sha256": process.admitted_runtime_sha256,
         "run_id": process.run_id,
         "run_attempt": process.run_attempt,
         "start_id_sha256": process.start_id_sha256,
@@ -468,6 +635,24 @@ def launch_authorized_process(
     ).hexdigest()
     if process.process_start_identity_sha256 != expected_process_start:
         raise WorkerDispatchError("qualified process start identity differs")
+    launch_projection = {
+        "worker_admission_sha256": process.worker_admission_sha256,
+        "dispatch_id_sha256": process.dispatch_id_sha256,
+        "provider_identity_sha256": process.provider_identity_sha256,
+        "worker_identity_sha256": process.worker_identity_sha256,
+        "live_provider_observation_sha256": process.live_provider_observation_sha256,
+        "admitted_runtime_sha256": process.admitted_runtime_sha256,
+        "run_id": process.run_id,
+        "run_attempt": process.run_attempt,
+        "start_id_sha256": process.start_id_sha256,
+        "capability_handle_sha256": process.capability_handle_sha256,
+        "launch_attempt": process.launch_attempt,
+    }
+    expected_launch_attempt = "sha256:" + hashlib.sha256(
+        LAUNCH_ATTEMPT_IDENTITY_DOMAIN + canonical_json(launch_projection)
+    ).hexdigest()
+    if process.launch_attempt_sha256 != expected_launch_attempt:
+        raise WorkerDispatchError("qualified launch attempt identity differs")
     return process
 
 
@@ -782,11 +967,17 @@ if leader_matches:
                 break
             time.sleep(0.1)
 remaining = group_members()
+log_result = subprocess.run(
+    ['docker', 'exec', container, 'cat', f'/tmp/openadapt-qualified/{run_id}/log'],
+    capture_output=True,
+)
 print(json.dumps({
     'state': 'INTERRUPTED_PROVEN' if not remaining else 'INTERRUPT_UNCERTAIN',
     'leader_identity_matched': leader_matches,
     'process_group_absent': not remaining,
     'remaining_member_count': len(remaining),
+    'log_sha256': 'sha256:' + hashlib.sha256(log_result.stdout).hexdigest(),
+    'log_size_bytes': len(log_result.stdout),
     'process': process,
 }, sort_keys=True, separators=(',', ':')))
 """
@@ -821,6 +1012,8 @@ def interrupt_process(
         "leader_identity_matched",
         "process_group_absent",
         "remaining_member_count",
+        "log_sha256",
+        "log_size_bytes",
         "process",
     }:
         raise WorkerDispatchError("qualified interrupt evidence is not closed")
@@ -838,8 +1031,158 @@ def interrupt_process(
         raise WorkerDispatchError("qualified interrupt member count is invalid")
     if value["process"] != asdict(process):
         raise WorkerDispatchError("qualified interrupt process binding differs")
+    if not isinstance(value["log_sha256"], str) or SHA256.fullmatch(
+        value["log_sha256"]
+    ) is None:
+        raise WorkerDispatchError("qualified interrupt log identity is invalid")
+    if (
+        not isinstance(value["log_size_bytes"], int)
+        or isinstance(value["log_size_bytes"], bool)
+        or value["log_size_bytes"] < 0
+    ):
+        raise WorkerDispatchError("qualified interrupt log size is invalid")
     if (value["remaining_member_count"] == 0) != value["process_group_absent"]:
         raise WorkerDispatchError("qualified interrupt absence proof differs")
     if (value["state"] == "INTERRUPTED_PROVEN") != value["process_group_absent"]:
         raise WorkerDispatchError("qualified interrupt terminal proof differs")
     return value
+
+
+def build_terminal_evidence(
+    *,
+    admission: VerifiedWorkerAdmission,
+    dispatch: AuthorizedWorkerDispatch,
+    process: QualifiedProcessEvidence,
+    terminal_readback: Mapping[str, Any],
+    interrupt_evidence: Mapping[str, Any] | None = None,
+    completed_at: datetime | None = None,
+) -> Mapping[str, Any]:
+    """Build one closed local fact set for the central terminal issuer."""
+
+    if terminal_readback.get("state") == "RUNNING":
+        raise WorkerDispatchError("a running process has no terminal evidence")
+    if terminal_readback.get("process") != asdict(process):
+        raise WorkerDispatchError("terminal readback process differs")
+    if interrupt_evidence is not None and interrupt_evidence.get("process") != asdict(
+        process
+    ):
+        raise WorkerDispatchError("interrupt evidence process differs")
+    log_sha256 = terminal_readback.get("log_sha256")
+    if not isinstance(log_sha256, str) or SHA256.fullmatch(log_sha256) is None:
+        if interrupt_evidence is None:
+            raise WorkerDispatchError("terminal log identity is absent")
+        log_sha256 = interrupt_evidence.get("log_sha256")
+    if not isinstance(log_sha256, str) or SHA256.fullmatch(log_sha256) is None:
+        raise WorkerDispatchError("terminal log identity is absent")
+
+    terminal_state: str
+    delivery_state: str
+    effect_started: bool
+    quarantine: Mapping[str, Any]
+    uncertainty_sha256: str | None
+    if (
+        terminal_readback.get("state") == "TERMINAL"
+        and terminal_readback.get("exit_code") == 0
+        and terminal_readback.get("oracle_success") is True
+        and interrupt_evidence is None
+    ):
+        terminal_state = "VERIFIED"
+        delivery_state = "verified"
+        effect_started = True
+        uncertainty_sha256 = None
+        quarantine = {
+            "active": False,
+            "reason_code": None,
+            "evidence_sha256": None,
+        }
+        result_sha256 = terminal_readback.get("result_sha256")
+    else:
+        uncertainty = {
+            "schema_version": "openadapt.qualification-worker-uncertainty-evidence/v1",
+            "dispatch_id_sha256": dispatch.object["dispatch_id_sha256"],
+            "process_start_identity_sha256": process.process_start_identity_sha256,
+            "terminal_readback": terminal_readback,
+            "interrupt_evidence": interrupt_evidence,
+        }
+        uncertainty_bytes = canonical_json(uncertainty) + b"\n"
+        uncertainty_sha256 = "sha256:" + hashlib.sha256(uncertainty_bytes).hexdigest()
+        terminal_state = (
+            "QUARANTINED"
+            if interrupt_evidence is not None
+            else "RECONCILIATION_REQUIRED"
+        )
+        delivery_state = "uncertain"
+        effect_started = True
+        quarantine = {
+            "active": True,
+            "reason_code": (
+                "OPERATOR_INTERRUPT"
+                if interrupt_evidence is not None
+                else "DELIVERY_NOT_VERIFIED"
+            ),
+            "evidence_sha256": uncertainty_sha256,
+        }
+        result_sha256 = terminal_readback.get("result_sha256", uncertainty_sha256)
+    if not isinstance(result_sha256, str) or SHA256.fullmatch(result_sha256) is None:
+        raise WorkerDispatchError("terminal result identity is absent")
+
+    burned_projection = {
+        "worker_identity_sha256": process.worker_identity_sha256,
+        "run_id": process.run_id,
+        "run_attempt": process.run_attempt,
+        "start_id_sha256": process.start_id_sha256,
+        "dispatch_id_sha256": process.dispatch_id_sha256,
+        "task_id_sha256": process.task_id_sha256,
+        "capability_handle_sha256": process.capability_handle_sha256,
+        "burn_ledger_revision": process.burn_ledger_revision,
+        "burned_at": process.burned_at,
+    }
+    burned_identities_sha256 = "sha256:" + hashlib.sha256(
+        BURNED_IDENTITIES_DOMAIN + canonical_json(burned_projection)
+    ).hexdigest()
+    burn_projection = {
+        "burned_identities_sha256": burned_identities_sha256,
+        "burn_ledger_revision": process.burn_ledger_revision,
+        "burned_at": process.burned_at,
+        "ledger_readback_sha256": process.ledger_readback_sha256,
+    }
+    burn_receipt_sha256 = "sha256:" + hashlib.sha256(
+        BURN_RECEIPT_DOMAIN + canonical_json(burn_projection)
+    ).hexdigest()
+    finished = (completed_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    completed_timestamp = finished.isoformat(timespec="seconds").replace("+00:00", "Z")
+    return {
+        "schema_version": "openadapt.qualification-worker-terminal-evidence/v1",
+        "worker_admission_sha256": admission.object["admission_object_sha256"],
+        "dispatch_id_sha256": dispatch.object["dispatch_id_sha256"],
+        "provider_identity_sha256": process.provider_identity_sha256,
+        "worker_identity_sha256": process.worker_identity_sha256,
+        "live_provider_observation_sha256": process.live_provider_observation_sha256,
+        "admitted_runtime_sha256": process.admitted_runtime_sha256,
+        "run_id": process.run_id,
+        "run_attempt": process.run_attempt,
+        "start_id_sha256": process.start_id_sha256,
+        "task_id_sha256": process.task_id_sha256,
+        "task_condition_sha256": process.task_condition_sha256,
+        "capability_handle_sha256": process.capability_handle_sha256,
+        "launch_attempt": process.launch_attempt,
+        "launch_attempt_sha256": process.launch_attempt_sha256,
+        "process": asdict(process),
+        "oracle_sha256": process.oracle_sha256,
+        "result_sha256": result_sha256,
+        "log_sha256": log_sha256,
+        "burned_identities_sha256": burned_identities_sha256,
+        "burn_ledger_revision": process.burn_ledger_revision,
+        "burn_receipt_sha256": burn_receipt_sha256,
+        "burned_at": process.burned_at,
+        "ledger_readback_sha256": process.ledger_readback_sha256,
+        "effect_started": effect_started,
+        "delivery_state": delivery_state,
+        "terminal_state": terminal_state,
+        "exit_code": terminal_readback.get("exit_code"),
+        "uncertainty_sha256": uncertainty_sha256,
+        "quarantine": quarantine,
+        "completed_at": completed_timestamp,
+        "terminal_readback": terminal_readback,
+        "interrupt_evidence": interrupt_evidence,
+    }
