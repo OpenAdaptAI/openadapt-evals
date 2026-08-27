@@ -715,22 +715,20 @@ def cmd_pool_create(args):
 def cmd_pool_wait(args):
     """Wait for all pool workers to have WAA ready.
 
-    Starts WAA containers on each worker and waits for the Windows VM to boot
-    and the WAA server to respond.
+    The command waits for guests that crossed the separate qualified start gate.
     """
     init_logging()
     from openadapt_evals.infrastructure.pool import PoolManager
 
     timeout_minutes = getattr(args, "timeout", 30)
-    no_start = getattr(args, "no_start", False)
-
     vm_manager = _create_vm_manager(getattr(args, "cloud", None))
     manager = PoolManager(vm_manager=vm_manager, log_fn=log)
 
     try:
         workers_ready = manager.wait(
             timeout_minutes=timeout_minutes,
-            start_containers=not no_start,
+            start_containers=False,
+            qualification_dir=args.qualification_dir,
         )
         return 0 if workers_ready else 1
     except RuntimeError as e:
@@ -761,6 +759,7 @@ def cmd_pool_run(args):
             agent=agent,
             model=model,
             api_key=api_key,
+            qualification_dir=args.qualification_dir,
         )
         return 0 if result.failed == 0 else 1
     except RuntimeError as e:
@@ -786,13 +785,12 @@ def cmd_pool_cleanup(args):
 
 
 def cmd_pool_auto(args):
-    """Fully automated pool workflow: create → wait → run.
+    """Create, qualify, wait for, and run a Windows worker pool.
 
-    Creates VMs, installs Docker, builds WAA image, starts containers,
-    waits for WAA server readiness, then runs benchmark tasks — all in
-    one command.
+    Each worker crosses the reset, exact egress, and one-use start gate before
+    the command waits for WAA readiness or dispatches a benchmark task.
 
-    If a pool already exists, skips creation and resumes from wait → run.
+    If a pool already exists, the command still repeats qualification.
     """
     init_logging()
     from openadapt_evals.infrastructure.pool import PoolManager
@@ -800,10 +798,22 @@ def cmd_pool_auto(args):
     num_workers = getattr(args, "workers", 1)
     auto_shutdown_hours = getattr(args, "auto_shutdown_hours", 4)
     timeout_minutes = getattr(args, "timeout", 45)
-    num_tasks = getattr(args, "tasks", 10)
+    num_tasks = getattr(args, "tasks", None) or num_workers
     agent = getattr(args, "agent", "navi")
     model = getattr(args, "model", "gpt-4o-mini")
     api_key = getattr(args, "api_key", None)
+    qualification_dir = args.qualification_dir
+    if qualification_dir.is_symlink() or not qualification_dir.is_dir():
+        log("POOL-AUTO", "ERROR: qualification directory is not a regular directory")
+        return 1
+    run_evidence_dir = args.run_evidence_dir
+    if run_evidence_dir.is_symlink():
+        log("POOL-AUTO", "ERROR: run evidence directory is a symbolic link")
+        return 1
+    run_evidence_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if not run_evidence_dir.is_dir():
+        log("POOL-AUTO", "ERROR: run evidence path is not a directory")
+        return 1
 
     vm_manager = _create_vm_manager(getattr(args, "cloud", None))
     manager = PoolManager(vm_manager=vm_manager, log_fn=log)
@@ -814,30 +824,67 @@ def cmd_pool_auto(args):
         if pool is not None:
             log("POOL-AUTO", f"Pool already exists ({len(pool.workers)} workers). Skipping create.")
         else:
-            log("POOL-AUTO", "=== Step 1/3: Creating pool ===")
+            log("POOL-AUTO", "=== Step 1/4: Creating pool ===")
             manager.create(
                 workers=num_workers,
                 auto_shutdown_hours=auto_shutdown_hours,
             )
 
-        # Step 2: Wait for WAA readiness
-        log("POOL-AUTO", "=== Step 2/3: Waiting for WAA server ===")
+        pool = manager.status()
+        if pool is None:
+            log("POOL-AUTO", "ERROR: Pool state is absent after creation.")
+            return 1
+
+        # Step 2: qualify every guest before it can start.
+        log("POOL-AUTO", "=== Step 2/4: Qualifying workers ===")
+        for worker in pool.workers:
+            proofs = manager.qualify_worker(
+                worker.name,
+                identity_path=qualification_dir / f"{worker.name}.identity.json",
+                policy_path=qualification_dir / f"{worker.name}.egress.json",
+            )
+            for kind, proof in zip(
+                ("reset", "egress", "start"),
+                proofs,
+                strict=True,
+            ):
+                evidence_path = run_evidence_dir / f"{worker.name}.{kind}.json"
+                evidence_fd = os.open(
+                    evidence_path,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                )
+                with os.fdopen(evidence_fd, "w", encoding="utf-8") as evidence_file:
+                    json.dump(proof.__dict__, evidence_file, sort_keys=True, separators=(",", ":"))
+                    evidence_file.write("\n")
+                    evidence_file.flush()
+                    os.fsync(evidence_file.fileno())
+            evidence_directory = os.open(run_evidence_dir, os.O_RDONLY)
+            try:
+                os.fsync(evidence_directory)
+            finally:
+                os.close(evidence_directory)
+
+        # Step 3: wait for WAA readiness without starting another container.
+        log("POOL-AUTO", "=== Step 3/4: Waiting for WAA server ===")
         workers_ready = manager.wait(
             timeout_minutes=timeout_minutes,
-            start_containers=True,
+            start_containers=False,
+            qualification_dir=qualification_dir,
         )
 
         if not workers_ready:
             log("POOL-AUTO", "ERROR: No workers became ready. Aborting.")
             return 1
 
-        # Step 3: Run benchmark
-        log("POOL-AUTO", "=== Step 3/3: Running benchmark ===")
+        # Step 4: Run benchmark
+        log("POOL-AUTO", "=== Step 4/4: Running benchmark ===")
         result = manager.run(
             tasks=num_tasks,
             agent=agent,
             model=model,
             api_key=api_key,
+            qualification_dir=qualification_dir,
         )
 
         log("POOL-AUTO", "")
@@ -896,6 +943,80 @@ def cmd_pool_resume(args):
     except RuntimeError as e:
         log("POOL-RESUME", f"ERROR: {e}")
         return 1
+
+
+def cmd_pool_reset(args):
+    """Restore one worker from its exact verified Windows baseline."""
+
+    init_logging()
+    from openadapt_evals.infrastructure.pool import PoolManager
+
+    vm_manager = _create_vm_manager(getattr(args, "cloud", None))
+    manager = PoolManager(vm_manager=vm_manager, log_fn=log)
+    try:
+        proof = manager.reset_worker(
+            args.worker,
+            run_id=args.run_id,
+            identity_path=args.worker_identity,
+        )
+    except (RuntimeError, ValueError) as exc:
+        log("POOL-RESET", f"ERROR: {exc}")
+        return 1
+    print(json.dumps(proof.__dict__, sort_keys=True, separators=(",", ":")))
+    return 0
+
+
+def cmd_pool_egress(args):
+    """Apply one host-enforced egress policy to a dedicated worker."""
+
+    init_logging()
+    from openadapt_evals.infrastructure.pool import PoolManager
+
+    vm_manager = _create_vm_manager(getattr(args, "cloud", None))
+    manager = PoolManager(vm_manager=vm_manager, log_fn=log)
+    try:
+        proof = manager.apply_worker_egress(
+            args.worker,
+            args.policy,
+            identity_path=args.worker_identity,
+            reset_proof_path=args.reset_proof,
+        )
+    except (RuntimeError, ValueError) as exc:
+        log("POOL-EGRESS", f"ERROR: {exc}")
+        return 1
+    print(
+        json.dumps(
+            {
+                **proof.__dict__,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
+    return 0
+
+
+def cmd_pool_start(args):
+    """Start one worker through the fresh reset and egress gate."""
+
+    init_logging()
+    from openadapt_evals.infrastructure.pool import PoolManager
+
+    vm_manager = _create_vm_manager(getattr(args, "cloud", None))
+    manager = PoolManager(vm_manager=vm_manager, log_fn=log)
+    try:
+        proof = manager.start_worker(
+            args.worker,
+            identity_path=args.worker_identity,
+            policy_path=args.policy,
+            reset_proof_path=args.reset_proof,
+            egress_proof_path=args.egress_proof,
+        )
+    except (RuntimeError, ValueError) as exc:
+        log("POOL-START", f"ERROR: {exc}")
+        return 1
+    print(json.dumps(proof.__dict__, sort_keys=True, separators=(",", ":")))
+    return 0
 
 
 def cmd_pool_vnc(args):
@@ -8105,11 +8226,7 @@ Examples:
     p_pool_wait.add_argument(
         "--timeout", "-t", type=int, default=30, help="Timeout in minutes (default: 30)"
     )
-    p_pool_wait.add_argument(
-        "--no-start",
-        action="store_true",
-        help="Don't start containers, just wait for existing ones",
-    )
+    p_pool_wait.add_argument("--qualification-dir", required=True, type=Path)
     p_pool_wait.set_defaults(func=cmd_pool_wait)
 
     # pool-run
@@ -8129,6 +8246,7 @@ Examples:
         "--model", default="gpt-4o-mini", help="Model name (default: gpt-4o-mini)"
     )
     p_pool_run.add_argument("--api-key", help="OpenAI API key (default: from .env)")
+    p_pool_run.add_argument("--qualification-dir", required=True, type=Path)
     p_pool_run.set_defaults(func=cmd_pool_run)
 
     # pool-cleanup
@@ -8149,8 +8267,8 @@ Examples:
         "--workers", "-w", type=int, default=1, help="Number of worker VMs (default: 1)"
     )
     p_pool_auto.add_argument(
-        "--tasks", "-n", type=int, default=10,
-        help="Number of tasks to run (default: 10, use 154 for full benchmark)",
+        "--tasks", "-n", type=int,
+        help="Number of tasks to run (default: one per worker)",
     )
     p_pool_auto.add_argument("--agent", default="navi", help="Agent type (default: navi)")
     p_pool_auto.add_argument(
@@ -8165,6 +8283,13 @@ Examples:
         "--auto-shutdown-hours", type=int, default=4,
         help="Auto-shutdown VMs after N hours (default: 4)",
     )
+    p_pool_auto.add_argument(
+        "--qualification-dir",
+        required=True,
+        type=Path,
+        help="Directory with <worker>.identity.json and <worker>.egress.json",
+    )
+    p_pool_auto.add_argument("--run-evidence-dir", required=True, type=Path)
     p_pool_auto.set_defaults(func=cmd_pool_auto)
 
     # pool-pause
@@ -8189,6 +8314,42 @@ Examples:
         help="Timeout in minutes for WAA readiness (default: 10)",
     )
     p_pool_resume.set_defaults(func=cmd_pool_resume)
+
+    # pool-reset
+    p_pool_reset = subparsers.add_parser(
+        "pool-reset",
+        help="Restore one Windows worker from an exact verified baseline",
+    )
+    p_pool_reset.add_argument("--cloud", **_cloud_kwargs)
+    p_pool_reset.add_argument("--worker", required=True)
+    p_pool_reset.add_argument("--run-id", required=True)
+    p_pool_reset.add_argument("--worker-identity", required=True, type=Path)
+    p_pool_reset.set_defaults(func=cmd_pool_reset)
+
+    # pool-egress
+    p_pool_egress = subparsers.add_parser(
+        "pool-egress",
+        help="Apply an exact host-enforced egress policy to one worker",
+    )
+    p_pool_egress.add_argument("--cloud", **_cloud_kwargs)
+    p_pool_egress.add_argument("--worker", required=True)
+    p_pool_egress.add_argument("--policy", required=True, type=Path)
+    p_pool_egress.add_argument("--worker-identity", required=True, type=Path)
+    p_pool_egress.add_argument("--reset-proof", required=True, type=Path)
+    p_pool_egress.set_defaults(func=cmd_pool_egress)
+
+    # pool-start
+    p_pool_start = subparsers.add_parser(
+        "pool-start",
+        help="Start one Windows worker through a fresh one-use run gate",
+    )
+    p_pool_start.add_argument("--cloud", **_cloud_kwargs)
+    p_pool_start.add_argument("--worker", required=True)
+    p_pool_start.add_argument("--worker-identity", required=True, type=Path)
+    p_pool_start.add_argument("--policy", required=True, type=Path)
+    p_pool_start.add_argument("--reset-proof", required=True, type=Path)
+    p_pool_start.add_argument("--egress-proof", required=True, type=Path)
+    p_pool_start.set_defaults(func=cmd_pool_start)
 
     # pool-logs
     p_pool_logs = subparsers.add_parser(

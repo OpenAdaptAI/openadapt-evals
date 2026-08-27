@@ -27,6 +27,7 @@ Example:
 
 from __future__ import annotations
 
+import json
 import logging
 import subprocess
 import time
@@ -47,8 +48,6 @@ if TYPE_CHECKING:
     from openadapt_evals.infrastructure.vm_provider import VMProvider
 from openadapt_evals.infrastructure.vm_monitor import (
     PoolWorker,
-    VMConfig,
-    VMMonitor,
     VMPool,
     VMPoolRegistry,
 )
@@ -188,6 +187,54 @@ sudo systemctl daemon-reload
 sudo systemctl enable socat-waa-evaluate.service
 """
 
+# Install one host-owned, fail-closed nftables boundary for the dedicated
+# Windows guest. This runs for fresh and golden-image workers. The service
+# restores the last checked policy before Docker can start after a reboot.
+WINDOWS_EGRESS_BOOTSTRAP_SCRIPT = r"""
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq conntrack nftables
+sudo install -d -m 0700 /etc/openadapt
+sudo tee /etc/openadapt/windows-egress.nft > /dev/null <<'NFT'
+flush chain inet oa_windows forward
+add rule inet oa_windows forward iifname "docker0" counter drop
+NFT
+sudo chmod 0600 /etc/openadapt/windows-egress.nft
+sudo tee /usr/local/sbin/openadapt-windows-egress-restore > /dev/null <<'SCRIPT'
+#!/bin/sh
+set -eu
+nft list table inet oa_windows > /dev/null 2>&1 || nft add table inet oa_windows
+nft list chain inet oa_windows forward > /dev/null 2>&1 || \
+    nft 'add chain inet oa_windows forward { type filter hook forward priority -50; policy drop; }'
+nft 'chain inet oa_windows forward { policy drop; }'
+nft -c -f /etc/openadapt/windows-egress.nft
+nft -f /etc/openadapt/windows-egress.nft
+install -d -m 0700 /var/lib/openadapt/windows-run-gates
+find /var/lib/openadapt/windows-run-gates -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+SCRIPT
+sudo chmod 0755 /usr/local/sbin/openadapt-windows-egress-restore
+sudo tee /etc/systemd/system/openadapt-windows-egress.service > /dev/null <<'UNIT'
+[Unit]
+Description=OpenAdapt fail-closed Windows guest egress boundary
+DefaultDependencies=no
+After=local-fs.target
+Before=network-pre.target docker.service
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/openadapt-windows-egress-restore
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+sudo systemctl daemon-reload
+sudo systemctl enable openadapt-windows-egress.service
+sudo systemctl restart openadapt-windows-egress.service
+"""
+
 # WAA container start script template.
 # {home_dir} and {ssh_username} are formatted at runtime.
 WAA_START_SCRIPT_TEMPLATE = """
@@ -219,7 +266,7 @@ docker run -d --name winarena \\
   -e CPU_CORES=4 \\
   -e DISK_SIZE=64G \\
   -e ARGUMENTS="-qmp tcp:0.0.0.0:7200,server,nowait" \\
-  waa-auto:latest \\
+  {admitted_image} \\
   /entry.sh --prepare-image false --start-client false
 
 # Start the socat proxy via systemd (installed during Docker setup).
@@ -443,6 +490,47 @@ class PoolManager:
             if not workers_docker_ok:
                 raise RuntimeError("Docker setup failed on all VMs")
 
+        # Install and activate the host-owned egress boundary before a guest
+        # can start. Do this for golden images too. A stale image policy cannot
+        # become the new pool's initial policy because bootstrap writes the
+        # fail-closed rule first.
+        self._log("POOL", "Installing Windows guest egress boundaries...")
+
+        def setup_egress_boundary(
+            name_ip: tuple[str, str],
+        ) -> tuple[str, bool, str]:
+            name, ip = name_ip
+            result = ssh_run(
+                ip,
+                WINDOWS_EGRESS_BOOTSTRAP_SCRIPT,
+                stream=False,
+                step="EGRESS",
+                username=username,
+            )
+            error = result.stderr[:200] if result.stderr else ""
+            return (name, result.returncode == 0, error)
+
+        isolated_workers: list[tuple[str, str]] = []
+        with ThreadPoolExecutor(max_workers=min(len(workers_docker_ok), 5)) as executor:
+            futures = {
+                executor.submit(setup_egress_boundary, worker): worker[0]
+                for worker in workers_docker_ok
+            }
+            for future in as_completed(futures):
+                name, success, error = future.result()
+                status = (
+                    "egress boundary ready"
+                    if success
+                    else f"egress FAILED: {error[:100]}"
+                )
+                self._log("POOL", f"  {name}: {status}")
+                if success:
+                    isolated_workers.append((name, dict(workers_docker_ok)[name]))
+
+        if not isolated_workers:
+            raise RuntimeError("Windows guest egress setup failed on all VMs")
+        workers_docker_ok = isolated_workers
+
         # Register pool
         pool = self.registry.create_pool(
             workers=workers_docker_ok,
@@ -474,9 +562,10 @@ class PoolManager:
             self._log("POOL", f"  Auto-shutdown: in {auto_shutdown_hours} hours")
         self._log("POOL", "")
         self._log("POOL", "Next steps:")
-        self._log("POOL", "  1. Wait for WAA ready: pool-wait")
-        self._log("POOL", "  2. Run benchmark:      pool-run --tasks 154")
-        self._log("POOL", "  3. Delete pool:        delete-pool")
+        self._log("POOL", "  1. Qualify each worker: pool-reset, pool-egress, pool-start")
+        self._log("POOL", "  2. Wait for WAA ready: pool-wait")
+        self._log("POOL", "  3. Run benchmark:      pool-run --tasks 154")
+        self._log("POOL", "  4. Delete pool:        delete-pool")
         self._log("POOL", "=" * 60)
 
         return pool
@@ -484,15 +573,18 @@ class PoolManager:
     def wait(
         self,
         timeout_minutes: int = 30,
-        start_containers: bool = True,
+        start_containers: bool = False,
+        qualification_dir: Path | None = None,
     ) -> list[PoolWorker]:
         """Wait for all pool workers to have WAA ready.
 
-        Optionally starts WAA containers on each worker first.
+        This method does not start a guest. A caller must use the qualified
+        reset, egress, and start sequence first.
 
         Args:
             timeout_minutes: Maximum minutes to wait for WAA readiness.
-            start_containers: If True, start WAA containers before waiting.
+            start_containers: Legacy argument. A true value is refused.
+            qualification_dir: Exact worker identity and egress policy directory.
 
         Returns:
             List of ready PoolWorker instances.
@@ -508,36 +600,12 @@ class PoolManager:
 
         # Start WAA containers
         if start_containers:
-            self._log("POOL-WAIT", "Checking WAA containers on all workers...")
-            username = self._ssh_username
-            waa_start_script = WAA_START_SCRIPT_TEMPLATE.format(
-                home_dir=self._home_dir,
-                ssh_username=username,
+            raise RuntimeError(
+                "Ungated guest startup is disabled. Use pool-reset, pool-egress, "
+                "and pool-start, then run pool-wait."
             )
-
-            def start_container(
-                worker: PoolWorker,
-            ) -> tuple[str, bool, str]:
-                result = ssh_run(
-                    worker.ip, waa_start_script, stream=False, step="START",
-                    username=username,
-                )
-                output = result.stdout.strip() if result.stdout else ""
-                return (worker.name, result.returncode == 0, output)
-
-            with ThreadPoolExecutor(max_workers=min(len(pool.workers), 5)) as executor:
-                futures = {executor.submit(start_container, w): w.name for w in pool.workers}
-                for future in as_completed(futures):
-                    name, success, output = future.result()
-                    if "ALREADY_RUNNING" in output:
-                        status = "already running"
-                    elif "STARTED" in output:
-                        status = "container started"
-                    elif success:
-                        status = "ok"
-                    else:
-                        status = "FAILED"
-                    self._log("POOL-WAIT", f"  {name}: {status}")
+        if qualification_dir is None:
+            raise RuntimeError("Pool readiness requires the qualification directory.")
 
         # Wait for WAA readiness
         self._log(
@@ -553,34 +621,28 @@ class PoolManager:
         while workers_pending and (time.time() - start_time) < timeout_seconds:
             for name, worker in list(workers_pending.items()):
                 try:
-                    config = VMConfig(
-                        name=name,
-                        ssh_host=worker.ip,
-                        internal_ip="localhost",
+                    manager, _policy = self._qualified_isolation_manager(
+                        worker,
+                        qualification_dir,
                     )
-                    monitor = VMMonitor(config, timeout=5)
-                    ready, _response = monitor.check_waa_probe()
+                    ready, eval_ok = manager.probe_services(
+                        run_id=worker.qualified_run_id,
+                        policy_sha256=worker.qualified_egress_policy_sha256,
+                    )
 
                     if ready:
-                        # Also check evaluate server (informational)
-                        try:
-                            eval_result = ssh_run(
-                                worker.ip,
-                                "curl -sf http://localhost:5051/probe",
-                                stream=False,
-                                step="EVAL",
-                                username=self._ssh_username,
-                            )
-                            eval_ok = eval_result.returncode == 0
-                        except Exception:
-                            eval_ok = False
                         eval_status = ", evaluate: ok" if eval_ok else ", evaluate: not ready"
                         self._log("POOL-WAIT", f"  {name}: READY{eval_status}")
                         workers_ready.append(worker)
                         del workers_pending[name]
-                        self.registry.update_worker(name, waa_ready=True, status="ready")
-                except Exception:
-                    pass
+                        status = (
+                            "qualified-ready"
+                            if worker.status == "qualified-starting"
+                            else "ready"
+                        )
+                        self.registry.update_worker(name, waa_ready=True, status=status)
+                except Exception as exc:
+                    logger.debug("Qualified readiness check failed for %s: %s", name, exc)
 
             if workers_pending:
                 elapsed = int(time.time() - start_time)
@@ -625,6 +687,8 @@ class PoolManager:
         model: str = "gpt-4o-mini",
         api_key: str | None = None,
         agent_factory: Callable[[], Any] | None = None,
+        qualification_dir: Path | None = None,
+        task_ids: list[str] | None = None,
     ) -> PoolRunResult:
         """Run benchmark tasks distributed across pool workers.
 
@@ -639,6 +703,8 @@ class PoolManager:
             api_key: API key for the agent. Auto-loaded from config if None.
             agent_factory: Optional callable that returns a BenchmarkAgent.
                 When provided, overrides agent/model and runs externally.
+            qualification_dir: Exact worker identity and egress policy directory.
+            task_ids: Exact task identities. Required for an external agent.
 
         Returns:
             PoolRunResult with task counts and timing.
@@ -664,10 +730,42 @@ class PoolManager:
                 "No API key provided. Use api_key param or set OPENAI_API_KEY in .env"
             )
 
-        # Get ready workers
-        ready_workers = [w for w in pool.workers if w.waa_ready or w.status == "ready"]
+        # A responsive legacy guest is not enough. Only a guest that crossed the
+        # exact reset, egress, and one-use start gate can receive work.
+        ready_workers = [
+            worker
+            for worker in pool.workers
+            if worker.waa_ready
+            and worker.status == "qualified-ready"
+            and worker.qualified_run_id
+            and worker.qualified_worker_identity_sha256
+            and worker.qualified_egress_policy_sha256
+            and worker.qualified_start_proof_sha256
+        ]
         if not ready_workers:
-            raise RuntimeError("No workers ready. Run wait() first.")
+            raise RuntimeError(
+                "No qualified workers are ready. Complete reset, egress, start, and wait first."
+            )
+        if qualification_dir is None:
+            raise RuntimeError("Pool dispatch requires the qualification directory.")
+        if tasks != len(ready_workers):
+            raise RuntimeError(
+                "A qualified start proof can dispatch exactly one task. "
+                "The task count must equal the qualified worker count."
+            )
+        if task_ids is not None and (
+            len(task_ids) != tasks
+            or len(set(task_ids)) != len(task_ids)
+            or any(not isinstance(task_id, str) or not task_id for task_id in task_ids)
+        ):
+            raise RuntimeError("Exact task identities must be nonempty, unique, and complete.")
+        if agent_factory is not None and task_ids is None:
+            raise RuntimeError("An external agent requires exact task identities.")
+
+        qualified_managers = {
+            worker.name: self._qualified_isolation_manager(worker, qualification_dir)[0]
+            for worker in ready_workers
+        }
 
         self._log("POOL-RUN", "=" * 60)
         self._log(
@@ -691,7 +789,43 @@ class PoolManager:
         num_workers = len(ready_workers)
 
         if agent_factory is not None:
-            return self._run_external_agent(ready_workers, tasks, agent_factory, exp_name)
+            from openadapt_evals.infrastructure.windows_pool_isolation import (
+                dispatch_binding_sha256,
+            )
+
+            assert task_ids is not None
+            for worker, task_id in zip(ready_workers, task_ids, strict=True):
+                binding = dispatch_binding_sha256(
+                    {
+                        "schema_version": "openadapt.windows-qualified-dispatch/v1",
+                        "worker": worker.name,
+                        "qualified_run_id": worker.qualified_run_id,
+                        "qualified_start_proof_sha256": worker.qualified_start_proof_sha256,
+                        "task_id": task_id,
+                        "agent": "external",
+                        "model": "external",
+                    }
+                )
+                qualified_managers[worker.name].consume_dispatch(
+                    run_id=worker.qualified_run_id,
+                    policy_sha256=worker.qualified_egress_policy_sha256,
+                    task_binding_sha256=binding,
+                )
+                self.registry.update_worker(
+                    worker.name,
+                    status="qualified-dispatched",
+                    waa_ready=False,
+                    current_task=task_id,
+                    qualified_task_binding_sha256=binding,
+                )
+            return self._run_external_agent(
+                ready_workers,
+                tasks,
+                agent_factory,
+                exp_name,
+                task_ids=task_ids,
+                qualified_managers=qualified_managers,
+            )
 
         # Default path: run WAA's built-in agent via docker exec
         # Uses docker exec -d (detached) + tail -f for streaming.
@@ -704,113 +838,228 @@ class PoolManager:
             worker_idx: int,
             total_workers: int,
         ) -> tuple[str, int, int, str | None]:
+            from openadapt_evals.infrastructure.windows_pool_isolation import (
+                dispatch_binding_sha256,
+            )
+
+            manager = qualified_managers[worker.name]
+            qualified_run_id = worker.qualified_run_id
+            qualified_policy_sha256 = worker.qualified_egress_policy_sha256
+
+            def qualified_command(remote_command, **kwargs):
+                return manager.run_qualified_command(
+                    remote_command,
+                    run_id=qualified_run_id,
+                    policy_sha256=qualified_policy_sha256,
+                    **kwargs,
+                )
+
             log_file = "/tmp/benchmark.log"
             exit_file = "/tmp/benchmark.exit"
+            subset_json = "/tmp/test_subset.json"
+            requested_task = task_ids[worker_idx] if task_ids is not None else "-"
+            selection_program = r"""
+import json
+import sys
 
-            # Create a subset test JSON if --tasks limits the count.
-            # WAA's run.py uses --test_all_meta_path to decide which tasks to run.
-            # Without this, it runs ALL 154 tasks regardless of our --tasks flag.
-            test_meta_arg = ""
-            if tasks and tasks < 154:
-                subset_json = "/tmp/test_subset.json"
-                py_cmd = (
-                    f"import json; "
-                    f"data=json.load(open('/client/evaluation_examples_windows/test_all.json')); "
-                    f"pairs=[(d,t) for d in data for t in data[d]][:{tasks}]; "
-                    f"s={{}}; [s.setdefault(d,[]).append(t) for d,t in pairs]; "
-                    f"json.dump(s,open('{subset_json}','w'),indent=2); "
-                    f"print(f'Created subset: {{len(pairs)}} tasks')"
-                )
-                ssh_run(
-                    worker.ip,
-                    f'docker exec winarena python -c "{py_cmd}"',
-                    username=_username,
-                )
-                self._log("RUN", f"  {worker.name}: limited to {tasks} tasks")
-                test_meta_arg = f"--test_all_meta_path {subset_json} "
-
-            # Start benchmark detached inside container (returns immediately)
-            run_cmd = (
-                f"cd /client && python -u run.py "
-                f"--agent {agent} --model {model} "
-                f"--exp_name {exp_name}_{worker.name} "
-                f"--worker_id {worker_idx} --num_workers {total_workers} "
-                f"--emulator_ip 172.30.0.2 {test_meta_arg}"
-                f"> {log_file} 2>&1; echo $? > {exit_file}"
+source = "/client/evaluation_examples_windows/test_all.json"
+target = "/tmp/test_subset.json"
+requested = sys.argv[1]
+index = int(sys.argv[2])
+with open(source, encoding="utf-8") as source_file:
+    data = json.load(source_file)
+pairs = [(domain, task) for domain in data for task in data[domain]]
+if requested == "-":
+    selected = pairs[index]
+else:
+    matches = [pair for pair in pairs if pair[1] == requested]
+    if len(matches) != 1:
+        raise SystemExit("requested task identity is not unique")
+    selected = matches[0]
+domain, task_id = selected
+with open(target, "w", encoding="utf-8") as target_file:
+    json.dump({domain: [task_id]}, target_file, sort_keys=True, separators=(",", ":"))
+    target_file.write("\n")
+print(json.dumps({"domain": domain, "task_id": task_id}, sort_keys=True, separators=(",", ":")))
+""".strip()
+            selected = qualified_command(
+                [
+                    "docker",
+                    "exec",
+                    "winarena",
+                    "python",
+                    "-c",
+                    selection_program,
+                    requested_task,
+                    str(worker_idx),
+                ]
             )
-            ssh_run(
-                worker.ip,
-                f"docker exec -d -e OPENAI_API_KEY='{api_key}' winarena "
-                f"bash -c '{run_cmd}'",
-                username=_username,
+            try:
+                selected_task = json.loads(selected.stdout)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError("Qualified task selection returned invalid JSON.") from exc
+            if (
+                not isinstance(selected_task, dict)
+                or set(selected_task) != {"domain", "task_id"}
+                or not all(
+                    isinstance(selected_task[key], str) and selected_task[key]
+                    for key in selected_task
+                )
+            ):
+                raise RuntimeError("Qualified task selection returned an invalid identity.")
+            exact_task_id = f"{selected_task['domain']}:{selected_task['task_id']}"
+            binding = dispatch_binding_sha256(
+                {
+                    "schema_version": "openadapt.windows-qualified-dispatch/v1",
+                    "worker": worker.name,
+                    "qualified_run_id": worker.qualified_run_id,
+                    "qualified_start_proof_sha256": worker.qualified_start_proof_sha256,
+                    "task_id": exact_task_id,
+                    "agent": agent,
+                    "model": model,
+                }
+            )
+            manager.consume_dispatch(
+                run_id=worker.qualified_run_id,
+                policy_sha256=worker.qualified_egress_policy_sha256,
+                task_binding_sha256=binding,
+            )
+            self.registry.update_worker(
+                worker.name,
+                status="qualified-dispatched",
+                waa_ready=False,
+                current_task=exact_task_id,
+                qualified_task_binding_sha256=binding,
+            )
+
+            if api_key is None or "\n" in api_key or "\x00" in api_key:
+                raise RuntimeError("The API key is invalid.")
+            launch_program = r"""
+set -euo pipefail
+IFS= read -r OPENAI_API_KEY
+export OPENAI_API_KEY
+export OPENADAPT_QUALIFIED_RUN_ID="$5"
+rm -f -- "$6" "$7"
+OPENAI_API_KEY="$OPENAI_API_KEY" OPENADAPT_QUALIFIED_RUN_ID="$5" \
+  nohup bash -c '
+    set +e
+    cd /client
+    python -u run.py --agent "$1" --model "$2" --exp_name "$3" \
+      --worker_id 0 --num_workers 1 --emulator_ip 172.30.0.2 \
+      --test_all_meta_path "$4" > "$5" 2>&1
+    code=$?
+    printf "%s\n" "$code" > "$6"
+  ' -- "$1" "$2" "$3" "$4" "$6" "$7" >/dev/null 2>&1 &
+printf '%s\n' "$!"
+""".strip()
+            qualified_command(
+                [
+                    "docker",
+                    "exec",
+                    "-i",
+                    "winarena",
+                    "bash",
+                    "-c",
+                    launch_program,
+                    "--",
+                    agent,
+                    model,
+                    f"{exp_name}_{worker.name}",
+                    subset_json,
+                    worker.qualified_run_id,
+                    log_file,
+                    exit_file,
+                ],
+                input_bytes=(api_key + "\n").encode(),
             )
             self._log("RUN", f"  {worker.name}: started (detached), log: {log_file}")
 
             # Wait for process to start and get its PID
             time.sleep(3)
-            pid_result = ssh_run(
-                worker.ip,
-                "docker exec winarena pgrep -f 'python.*run.py' || echo ''",
-                username=_username,
+            pid_result = qualified_command(
+                [
+                    "docker",
+                    "exec",
+                    "winarena",
+                    "bash",
+                    "-c",
+                    "pgrep -f 'python.*run.py' || true",
+                ]
             )
-            pid = pid_result.stdout.strip().splitlines()[0] if pid_result.stdout.strip() else ""
+            pid_output = pid_result.stdout.decode(errors="replace").strip()
+            pid = pid_output.splitlines()[0] if pid_output else ""
             if pid:
                 self._log("RUN", f"  {worker.name}: benchmark PID {pid}")
-                tail_cmd = f"docker exec winarena tail -f --pid={pid} {log_file}"
             else:
-                self._log("RUN", f"  {worker.name}: could not get PID, using plain tail -f")
-                tail_cmd = f"docker exec winarena tail -f {log_file}"
+                self._log("RUN", f"  {worker.name}: benchmark PID is not available yet")
 
-            # Stream logs via tail -f with auto-reconnect on SSH drop
-            # tail -f --pid exits when the benchmark process dies
+            # Poll through a new pinned connection. Every poll rechecks the
+            # root-owned runtime, host, TLS, and baseline bindings.
             while True:
                 try:
-                    ssh_run(
-                        worker.ip,
-                        tail_cmd,
-                        stream=True,
-                        step="RUN",
-                        log_fn=self.log_fn,
-                        username=_username,
+                    check = qualified_command(
+                        [
+                            "docker",
+                            "exec",
+                            "winarena",
+                            "bash",
+                            "-c",
+                            "if pgrep -f 'python.*run.py' >/dev/null; then echo RUNNING; else echo DONE; fi",
+                        ]
                     )
-                    # tail -f exited — process likely done
-                    break
+                    state = check.stdout.decode(errors="replace").strip()
+                    logs = qualified_command(
+                        [
+                            "docker",
+                            "exec",
+                            "winarena",
+                            "bash",
+                            "-c",
+                            "tail -n 20 /tmp/benchmark.log 2>/dev/null || true",
+                        ]
+                    ).stdout.decode(errors="replace").strip()
+                    if logs:
+                        self._log("RUN", f"  {worker.name}:\n{logs}")
+                    if state == "DONE":
+                        break
+                    time.sleep(5)
                 except KeyboardInterrupt:
                     self._log("RUN", f"  {worker.name}: interrupted (process continues on VM)")
                     return (worker.name, 0, 1, "interrupted by user")
                 except Exception as e:
-                    # SSH dropped — check if benchmark is still running
                     self._log("RUN", f"  {worker.name}: SSH reconnecting ({e})")
                     time.sleep(5)
                     try:
-                        check = ssh_run(
-                            worker.ip,
-                            "docker exec winarena pgrep -f run.py > /dev/null "
-                            "&& echo RUNNING || echo DONE",
-                            username=_username,
+                        mtime_result = qualified_command(
+                            [
+                                "docker",
+                                "exec",
+                                "winarena",
+                                "bash",
+                                "-c",
+                                "stat -c %Y /tmp/benchmark.log 2>/dev/null || echo 0",
+                            ]
                         )
-                        if "DONE" in check.stdout:
-                            break
-                        # Check for stale progress
-                        mtime_result = ssh_run(
-                            worker.ip,
-                            f"docker exec winarena stat -c %Y {log_file} 2>/dev/null || echo 0",
-                            username=_username,
-                        )
-                        now_result = ssh_run(worker.ip, "date +%s", username=_username)
-                        mtime = int(mtime_result.stdout.strip()) if mtime_result.stdout.strip().isdigit() else 0
-                        now = int(now_result.stdout.strip()) if now_result.stdout.strip().isdigit() else 0
+                        now_result = qualified_command(["date", "+%s"])
+                        mtime_raw = mtime_result.stdout.decode().strip()
+                        now_raw = now_result.stdout.decode().strip()
+                        mtime = int(mtime_raw) if mtime_raw.isdigit() else 0
+                        now = int(now_raw) if now_raw.isdigit() else 0
                         if mtime > 0 and now - mtime > stale_timeout:
                             self._log(
                                 "RUN",
                                 f"  {worker.name}: no log activity for "
                                 f"{stale_timeout // 60}m — killing",
                             )
-                            ssh_run(
-                                worker.ip,
-                                "docker exec winarena bash -c "
-                                "'kill -9 $(pgrep -f run.py) 2>/dev/null' || true",
-                                username=_username,
+                            qualified_command(
+                                [
+                                    "docker",
+                                    "exec",
+                                    "winarena",
+                                    "bash",
+                                    "-c",
+                                    "pids=$(pgrep -f run.py || true); test -z \"$pids\" || kill -9 $pids",
+                                ]
                             )
                             return (
                                 worker.name, 0, 1,
@@ -822,12 +1071,18 @@ class PoolManager:
 
             # Get exit code
             try:
-                exit_result = ssh_run(
-                    worker.ip,
-                    f"docker exec winarena cat {exit_file} 2>/dev/null || echo 1",
-                    username=_username,
+                exit_result = qualified_command(
+                    [
+                        "docker",
+                        "exec",
+                        "winarena",
+                        "bash",
+                        "-c",
+                        "cat /tmp/benchmark.exit 2>/dev/null || echo 1",
+                    ]
                 )
-                exit_code = int(exit_result.stdout.strip()) if exit_result.stdout.strip().isdigit() else 1
+                exit_raw = exit_result.stdout.decode().strip()
+                exit_code = int(exit_raw) if exit_raw.isdigit() else 1
             except Exception:
                 exit_code = 1
 
@@ -882,7 +1137,8 @@ class PoolManager:
         tasks: int,
         agent_factory: Callable[[], Any],
         exp_name: str,
-        task_ids: list[str] | None = None,
+        task_ids: list[str],
+        qualified_managers: dict[str, Any],
     ) -> PoolRunResult:
         """Run an external agent against pool workers via Flask API.
 
@@ -895,8 +1151,8 @@ class PoolManager:
             tasks: Number of tasks to run (used if task_ids is None).
             agent_factory: Callable that returns a BenchmarkAgent.
             exp_name: Experiment name for result tracking.
-            task_ids: Optional list of specific task IDs to run.
-                Distributed round-robin across workers.
+            task_ids: One exact task identity for each qualified worker.
+            qualified_managers: Pinned identity managers for those workers.
 
         Returns:
             PoolRunResult.
@@ -923,10 +1179,15 @@ class PoolManager:
         # Set up SSH tunnels per worker
         tunnel_managers: list[SSHTunnelManager] = []
         worker_ports: list[tuple[int, int]] = []  # (waa_port, eval_port)
+        tunneled_workers: list[PoolWorker] = []
 
         for i, worker in enumerate(workers):
             waa_port = base_waa_port + i
             eval_port = base_eval_port + i
+            qualified_managers[worker.name].verify_started(
+                run_id=worker.qualified_run_id,
+                policy_sha256=worker.qualified_egress_policy_sha256,
+            )
 
             tunnel_mgr = SSHTunnelManager(
                 tunnels=[
@@ -941,6 +1202,8 @@ class PoolManager:
                         remote_port=5051,
                     ),
                 ],
+                host_key_alias=qualified_managers[worker.name].identity.instance_id,
+                host_public_key=qualified_managers[worker.name].identity.ssh_host_public_key,
             )
             statuses = tunnel_mgr.start_tunnels_for_vm(
                 vm_ip=worker.ip,
@@ -956,6 +1219,7 @@ class PoolManager:
                 )
                 tunnel_managers.append(tunnel_mgr)
                 worker_ports.append((waa_port, eval_port))
+                tunneled_workers.append(worker)
             else:
                 failed = [n for n, s in statuses.items() if not s.active]
                 self._log(
@@ -974,24 +1238,18 @@ class PoolManager:
                 ],
             )
 
-        active_workers = [
-            (workers[i], worker_ports[i]) for i in range(len(tunnel_managers))
-        ]
+        active_workers = list(zip(tunneled_workers, worker_ports, strict=True))
 
         # Distribute task_ids round-robin across workers
-        if task_ids:
-            per_worker_tasks: list[list[str]] = [[] for _ in active_workers]
-            for idx, tid in enumerate(task_ids):
-                per_worker_tasks[idx % len(active_workers)].append(tid)
-        else:
-            per_worker_tasks = [None] * len(active_workers)  # type: ignore[list-item]
+        task_by_worker = dict(zip((worker.name for worker in workers), task_ids, strict=True))
+        per_worker_tasks = [[task_by_worker[worker.name]] for worker, _ in active_workers]
 
         # Run evaluation on each worker in parallel
         start_time = time.time()
         results: list[tuple[str, int, int, str | None]] = []
 
         def run_on_worker(
-            worker_info: tuple[tuple[PoolWorker, tuple[int, int]], list[str] | None],
+            worker_info: tuple[tuple[PoolWorker, tuple[int, int]], list[str]],
         ) -> tuple[str, int, int, str | None]:
             (worker, (waa_port, eval_port)), w_task_ids = worker_info
 
@@ -1017,6 +1275,10 @@ class PoolManager:
                     adapter=adapter,
                     task_ids=w_task_ids,
                     config=config,
+                )
+                qualified_managers[worker.name].verify_started(
+                    run_id=worker.qualified_run_id,
+                    policy_sha256=worker.qualified_egress_policy_sha256,
                 )
 
                 completed = sum(1 for r in eval_results if r.success)
@@ -1072,7 +1334,7 @@ class PoolManager:
         self._log("POOL-RUN", "=" * 60)
 
         return PoolRunResult(
-            total_tasks=len(task_ids) if task_ids else tasks,
+            total_tasks=len(task_ids),
             completed=total_completed,
             failed=total_failed,
             elapsed_seconds=elapsed,
@@ -1086,6 +1348,218 @@ class PoolManager:
             VMPool if a pool exists, None otherwise.
         """
         return self.registry.get_pool()
+
+    def _isolation_manager(self, worker_name: str, identity_path: Path):
+        """Return the host isolation manager for one exact active worker."""
+
+        from openadapt_evals.infrastructure.windows_pool_isolation import (
+            WindowsPoolIsolationManager,
+            load_worker_identity,
+        )
+
+        pool = self.registry.get_pool()
+        if pool is None:
+            raise RuntimeError("No active pool. Create one with: pool-create --workers N")
+        if pool.status == "paused":
+            raise RuntimeError("Pool is paused. Resume it before worker isolation.")
+        matches = [worker for worker in pool.workers if worker.name == worker_name]
+        if len(matches) != 1:
+            raise RuntimeError(f"Pool worker not found: {worker_name}")
+        worker = matches[0]
+        current_ip = self.vm_manager.get_vm_ip(worker.name)
+        if current_ip:
+            worker.ip = current_ip
+            self.registry.update_worker(worker.name, ip=current_ip)
+        if not worker.ip:
+            raise RuntimeError(f"Pool worker has no reachable IP: {worker_name}")
+        return WindowsPoolIsolationManager(
+            ssh_host=worker.ip,
+            ssh_user=self._ssh_username,
+            worker=worker.name,
+            identity=load_worker_identity(identity_path),
+            storage_dir=f"{self._home_dir}/waa-storage",
+            baseline_dir=f"{self._home_dir}/openadapt-windows-baseline",
+        )
+
+    def _qualified_isolation_manager(
+        self,
+        worker: PoolWorker,
+        qualification_dir: Path,
+    ):
+        """Resolve and revalidate one exact qualified worker boundary."""
+
+        from openadapt_evals.infrastructure.windows_pool_isolation import (
+            egress_policy_sha256,
+            load_egress_policy,
+            worker_identity_sha256,
+        )
+
+        if qualification_dir.is_symlink() or not qualification_dir.is_dir():
+            raise RuntimeError("Qualification directory is not a regular directory.")
+        required = (
+            worker.status in {"qualified-starting", "qualified-ready"}
+            and worker.qualified_run_id
+            and worker.qualified_worker_identity_sha256
+            and worker.qualified_egress_policy_sha256
+            and worker.qualified_start_proof_sha256
+        )
+        if not required:
+            raise RuntimeError(f"Worker {worker.name} has no complete qualification state.")
+        manager = self._isolation_manager(
+            worker.name,
+            qualification_dir / f"{worker.name}.identity.json",
+        )
+        policy = load_egress_policy(
+            qualification_dir / f"{worker.name}.egress.json"
+        )
+        if worker_identity_sha256(manager.identity) != worker.qualified_worker_identity_sha256:
+            raise RuntimeError(f"Worker {worker.name} identity differs from the start proof.")
+        if policy["run_id"] != worker.qualified_run_id:
+            raise RuntimeError(f"Worker {worker.name} run identity differs from the policy.")
+        if egress_policy_sha256(policy) != worker.qualified_egress_policy_sha256:
+            raise RuntimeError(f"Worker {worker.name} egress policy differs from the start proof.")
+        manager.verify_started(
+            run_id=worker.qualified_run_id,
+            policy_sha256=worker.qualified_egress_policy_sha256,
+        )
+        return manager, policy
+
+    def reset_worker(
+        self,
+        worker_name: str,
+        *,
+        run_id: str,
+        identity_path: Path,
+    ):
+        """Restore one worker from an exact verified baseline."""
+
+        manager = self._isolation_manager(worker_name, identity_path)
+        proof = manager.reset(run_id=run_id)
+        self.registry.update_worker(
+            worker_name,
+            status="reset",
+            waa_ready=False,
+            qualified_run_id=None,
+            qualified_worker_identity_sha256=None,
+            qualified_egress_policy_sha256=None,
+            qualified_start_proof_sha256=None,
+            qualified_task_binding_sha256=None,
+        )
+        return proof
+
+    def apply_worker_egress(
+        self,
+        worker_name: str,
+        policy_path: Path,
+        *,
+        identity_path: Path,
+        reset_proof_path: Path,
+    ):
+        """Apply one exact host-enforced egress policy to a worker."""
+
+        from openadapt_evals.infrastructure.windows_pool_isolation import (
+            load_egress_policy,
+            load_reset_proof,
+        )
+
+        manager = self._isolation_manager(worker_name, identity_path)
+        return manager.apply_egress(
+            load_egress_policy(policy_path),
+            reset_proof=load_reset_proof(reset_proof_path),
+        )
+
+    def start_worker(
+        self,
+        worker_name: str,
+        *,
+        identity_path: Path,
+        policy_path: Path,
+        reset_proof_path: Path,
+        egress_proof_path: Path,
+    ):
+        """Start one guest only through a fresh, one-use run gate."""
+
+        from openadapt_evals.infrastructure.windows_pool_isolation import (
+            load_egress_policy,
+            load_egress_proof,
+            load_reset_proof,
+            start_proof_sha256,
+        )
+
+        manager = self._isolation_manager(worker_name, identity_path)
+        start_script = WAA_START_SCRIPT_TEMPLATE.format(
+            home_dir=self._home_dir,
+            ssh_username=self._ssh_username,
+            admitted_image=manager.identity.admitted_image_sha256,
+        )
+        proof = manager.start(
+            policy=load_egress_policy(policy_path),
+            reset_proof=load_reset_proof(reset_proof_path),
+            egress_proof=load_egress_proof(egress_proof_path),
+            start_script=start_script,
+        )
+        self.registry.update_worker(
+            worker_name,
+            status="qualified-starting",
+            waa_ready=False,
+            qualified_run_id=proof.run_id,
+            qualified_worker_identity_sha256=proof.worker_identity_sha256,
+            qualified_egress_policy_sha256=proof.egress_policy_sha256,
+            qualified_start_proof_sha256=start_proof_sha256(proof),
+            qualified_task_binding_sha256=None,
+        )
+        return proof
+
+    def qualify_worker(
+        self,
+        worker_name: str,
+        *,
+        identity_path: Path,
+        policy_path: Path,
+    ):
+        """Reset, apply egress, and start one worker as one local operation."""
+
+        from openadapt_evals.infrastructure.windows_pool_isolation import (
+            load_egress_policy,
+            start_proof_sha256,
+        )
+
+        manager = self._isolation_manager(worker_name, identity_path)
+        policy = load_egress_policy(policy_path)
+        reset_proof = manager.reset(run_id=policy["run_id"])
+        self.registry.update_worker(
+            worker_name,
+            status="reset",
+            waa_ready=False,
+            qualified_run_id=None,
+            qualified_worker_identity_sha256=None,
+            qualified_egress_policy_sha256=None,
+            qualified_start_proof_sha256=None,
+            qualified_task_binding_sha256=None,
+        )
+        egress_proof = manager.apply_egress(policy, reset_proof=reset_proof)
+        start_script = WAA_START_SCRIPT_TEMPLATE.format(
+            home_dir=self._home_dir,
+            ssh_username=self._ssh_username,
+            admitted_image=manager.identity.admitted_image_sha256,
+        )
+        start_proof = manager.start(
+            policy=policy,
+            reset_proof=reset_proof,
+            egress_proof=egress_proof,
+            start_script=start_script,
+        )
+        self.registry.update_worker(
+            worker_name,
+            status="qualified-starting",
+            waa_ready=False,
+            qualified_run_id=start_proof.run_id,
+            qualified_worker_identity_sha256=start_proof.worker_identity_sha256,
+            qualified_egress_policy_sha256=start_proof.egress_policy_sha256,
+            qualified_start_proof_sha256=start_proof_sha256(start_proof),
+            qualified_task_binding_sha256=None,
+        )
+        return reset_proof, egress_proof, start_proof
 
     def pause(self) -> bool:
         """Deallocate all pool VMs. Stops compute billing, keeps disks.
@@ -1117,7 +1591,16 @@ class PoolManager:
             success = self.vm_manager.deallocate_vm(worker.name)
             if success:
                 self._log("POOL-PAUSE", f"  {worker.name}: deallocated")
-                self.registry.update_worker(worker.name, status="deallocated", waa_ready=False)
+                self.registry.update_worker(
+                    worker.name,
+                    status="deallocated",
+                    waa_ready=False,
+                    qualified_run_id=None,
+                    qualified_worker_identity_sha256=None,
+                    qualified_egress_policy_sha256=None,
+                    qualified_start_proof_sha256=None,
+                    qualified_task_binding_sha256=None,
+                )
             else:
                 self._log("POOL-PAUSE", f"  {worker.name}: FAILED to deallocate")
                 all_ok = False
@@ -1138,10 +1621,8 @@ class PoolManager:
     def resume(self, timeout_minutes: int = 10) -> list[PoolWorker]:
         """Start deallocated pool VMs and wait for WAA ready.
 
-        Starts all VMs in the pool, waits for SSH access, then starts
-        WAA containers and waits for readiness. This is much faster than
-        creating a new pool (~5 min vs ~42 min) because Docker images
-        and Windows disk state are preserved.
+        Starts all VM hosts and waits for SSH access. It leaves every guest
+        stopped. A caller must qualify each guest again before use.
 
         Args:
             timeout_minutes: Maximum minutes to wait for WAA readiness.
@@ -1206,22 +1687,26 @@ class PoolManager:
         # Update pool status back to active
         self.registry.update_pool_status(status="active", paused_since=None)
         for worker in workers_ssh_ok:
-            self.registry.update_worker(worker.name, status="ready")
+            self.registry.update_worker(
+                worker.name,
+                status="ready",
+                waa_ready=False,
+                qualified_run_id=None,
+                qualified_worker_identity_sha256=None,
+                qualified_egress_policy_sha256=None,
+                qualified_start_proof_sha256=None,
+                qualified_task_binding_sha256=None,
+            )
 
-        # Wait for WAA readiness (starts containers, waits for probe)
-        self._log("POOL-RESUME", "Starting WAA containers and waiting for readiness...")
-        ready_workers = self.wait(
-            timeout_minutes=timeout_minutes,
-            start_containers=True,
+        self._log("POOL-RESUME", "=" * 60)
+        self._log(
+            "POOL-RESUME",
+            f"Pool hosts resumed: {len(workers_ssh_ok)}/{len(pool.workers)}; guests remain stopped",
         )
-
-        self._log("POOL-RESUME", "=" * 60)
-        self._log("POOL-RESUME", f"Pool resumed: {len(ready_workers)}/{len(pool.workers)} workers ready")
-        if ready_workers:
-            self._log("POOL-RESUME", "  Run benchmark: oa-vm pool-run --tasks 10")
+        self._log("POOL-RESUME", "  Qualify each guest with pool-reset, pool-egress, pool-start")
         self._log("POOL-RESUME", "=" * 60)
 
-        return ready_workers
+        return workers_ssh_ok
 
     def cleanup(
         self,

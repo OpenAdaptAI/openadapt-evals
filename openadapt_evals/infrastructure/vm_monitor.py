@@ -380,13 +380,18 @@ class PoolWorker:
 
     name: str
     ip: str
-    status: str = "creating"  # creating, ready, running, completed, failed, deleted
+    status: str = "creating"  # includes qualified-starting/qualified-ready for gated pool runs
     docker_container: str = "winarena"
     waa_ready: bool = False
     assigned_tasks: list[str] = field(default_factory=list)
     completed_tasks: list[str] = field(default_factory=list)
     current_task: str | None = None
     error: str | None = None
+    qualified_run_id: str | None = None
+    qualified_worker_identity_sha256: str | None = None
+    qualified_egress_policy_sha256: str | None = None
+    qualified_start_proof_sha256: str | None = None
+    qualified_task_binding_sha256: str | None = None
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
 
