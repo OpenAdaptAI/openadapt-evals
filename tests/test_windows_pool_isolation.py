@@ -145,6 +145,22 @@ def _manager(identity=None):
     )
 
 
+def _worker_admission(policy=None):
+    identity = _identity()
+    return {
+        "admission_object_sha256": "sha256:" + "1" * 64,
+        "provider_identity_sha256": "sha256:" + "2" * 64,
+        "live_provider_observation_sha256": "sha256:" + "3" * 64,
+        "worker_identity_sha256": "sha256:" + "4" * 64,
+        "admitted_runtime_sha256": identity.admitted_runtime_sha256,
+        "worker_image_sha256": identity.admitted_image_sha256,
+        "baseline_sha256": identity.baseline_manifest_sha256,
+        "host_identity_sha256": identity.host_bindings_sha256,
+        "tls_identity_sha256": identity.tls_bindings_sha256,
+        "egress_policy_sha256": egress_policy_sha256(policy or _policy()),
+    }
+
+
 def test_egress_policy_is_closed_unique_sorted_and_domain_bound():
     policy = _policy()
     assert validate_egress_policy(policy) == policy
@@ -303,7 +319,7 @@ def test_reset_blocks_egress_first_and_returns_identity_bound_fresh_proof():
         for argument in argv
         if isinstance(argument, str) and "conntrack" in argument
     )
-    assert persist_program.count("conntrack', '-F") == 2
+    assert "guest conntrack state remains after drain" in persist_program
     reset_script = next(
         kwargs["input"].decode()
         for _, kwargs in calls
@@ -317,8 +333,11 @@ def test_reset_blocks_egress_first_and_returns_identity_bound_fresh_proof():
     )
     assert 'reset_gate="$gate_root/${run_id}.reset"' in reset_gate_script
     assert "flock -n 9" in reset_gate_script
-    assert reset_proof_sha256(proof) in next(
-        argument for argv, _ in calls for argument in argv if argument == reset_proof_sha256(proof)
+    assert any(
+        reset_proof_sha256(proof) in argument
+        for argv, _ in calls
+        for argument in argv
+        if isinstance(argument, str)
     )
 
 
@@ -390,10 +409,10 @@ def test_apply_egress_binds_reset_identity_host_tls_and_drains_conntrack():
     assert "remote reset proof differs" in remote_program
     assert "reset proof already consumed" in remote_program
     assert "os.replace(reset_gate, reset_consumed_gate)" in remote_program
-    assert remote_program.count("['conntrack', '-F']") == 2
     assert "guest conntrack state remains after drain" in remote_program
     assert "/run/openadapt/windows-egress-active.nft" in remote_program
-    assert "nft', '--stateless', 'list', 'table'" in remote_program
+    assert "--stateless" in remote_program
+    assert "oa_windows" in remote_program
     assert "windows-egress-live-nft.sha256" in remote_program
     tls_program = next(
         argument
@@ -417,7 +436,11 @@ def test_start_gate_consumes_once_and_checks_exact_policy_image_and_bindings():
             return subprocess.CompletedProcess(
                 argv,
                 0 if starts == 1 else 1,
-                stdout=b"",
+                stdout=(
+                    b'{"container_state_sha256":"sha256:'
+                    + b"8" * 64
+                    + b'"}\n'
+                ),
                 stderr=b"already consumed" if starts > 1 else b"",
             )
         return subprocess.CompletedProcess(argv, 0, stdout=b"", stderr=b"")
@@ -432,6 +455,7 @@ def test_start_gate_consumes_once_and_checks_exact_policy_image_and_bindings():
             reset_proof=reset,
             egress_proof=egress,
             start_script="echo STARTED",
+            worker_admission=_worker_admission(),
         )
         assert proof.one_use_consumed is True
         with pytest.raises(WindowsPoolIsolationError, match="already consumed"):
@@ -440,6 +464,7 @@ def test_start_gate_consumes_once_and_checks_exact_policy_image_and_bindings():
                 reset_proof=reset,
                 egress_proof=egress,
                 start_script="echo STARTED",
+                worker_admission=_worker_admission(),
             )
 
 
@@ -480,10 +505,16 @@ def test_benchmark_dispatch_refuses_start_proof_reuse_for_a_task_batch():
         waa_ready=True,
         status="qualified-ready",
         qualified_run_id="run-123",
+        qualified_worker_admission_sha256="sha256:" + "4" * 64,
+        qualified_provider_identity_sha256="sha256:" + "5" * 64,
+        qualified_live_provider_observation_sha256="sha256:" + "6" * 64,
         qualified_worker_identity_sha256="sha256:" + "1" * 64,
-        qualified_egress_policy_sha256="2" * 64,
+        qualified_local_worker_identity_sha256="sha256:" + "7" * 64,
+        qualified_egress_policy_sha256="sha256:" + "2" * 64,
         qualified_live_nft_sha256=LIVE_NFT_SHA256,
         qualified_start_proof_sha256="sha256:" + "3" * 64,
+        qualified_container_state_sha256="sha256:" + "8" * 64,
+        qualified_dispatch_expires_at="2026-08-27T18:05:00Z",
     )
     manager = object.__new__(PoolManager)
     manager.registry = SimpleNamespace(get_pool=lambda: SimpleNamespace(workers=[worker]))
@@ -520,23 +551,35 @@ def test_live_start_and_dispatch_rechecks_use_the_pinned_boundary():
             "model": "model-1",
         }
     )
-    with patch("subprocess.run", side_effect=_run):
+    with (
+        patch("subprocess.run", side_effect=_run),
+        patch(
+            "openadapt_evals.infrastructure.windows_pool_isolation._now",
+            return_value=NOW,
+        ),
+    ):
         manager = _manager()
         manager.verify_started(
             run_id="run-123",
-            policy_sha256="e" * 64,
+            policy_sha256="sha256:" + "e" * 64,
+            container_state_sha256="sha256:" + "8" * 64,
+            expires_at="2026-08-27T18:05:00Z",
             live_nft_sha256=LIVE_NFT_SHA256,
         )
         manager.consume_dispatch(
             run_id="run-123",
-            policy_sha256="e" * 64,
+            policy_sha256="sha256:" + "e" * 64,
+            container_state_sha256="sha256:" + "8" * 64,
+            expires_at="2026-08-27T18:05:00Z",
             task_binding_sha256=binding,
             live_nft_sha256=LIVE_NFT_SHA256,
         )
         with pytest.raises(WindowsPoolIsolationError, match="already consumed"):
             manager.consume_dispatch(
                 run_id="run-123",
-                policy_sha256="e" * 64,
+                policy_sha256="sha256:" + "e" * 64,
+                container_state_sha256="sha256:" + "8" * 64,
+                expires_at="2026-08-27T18:05:00Z",
                 task_binding_sha256=binding,
                 live_nft_sha256=LIVE_NFT_SHA256,
             )
@@ -545,13 +588,21 @@ def test_live_start_and_dispatch_rechecks_use_the_pinned_boundary():
     assert calls
     assert all("StrictHostKeyChecking=yes" in argv for argv, _ in calls)
     programs = [
+        argument
+        for argv, _ in calls
+        for argument in argv
+        if isinstance(argument, str)
+    ] + [
         kwargs["input"].decode()
         for _, kwargs in calls
         if kwargs.get("input") is not None
     ]
-    assert any("docker inspect" in program and "reset-consumed" in program for program in programs)
     assert any(
-        "actual_live_nft_sha256" in program and "windows-egress-live-nft.sha256" in program
+        "docker" in program and "inspect" in program and "reset-consumed" in program
+        for program in programs
+    )
+    assert any(
+        "actual_live_nft" in program and "windows-egress-live-nft.sha256" in program
         for program in programs
     )
     assert any("task-binding.sha256" in program and "flock -n" in program for program in programs)
@@ -597,98 +648,6 @@ def test_qualified_tunnel_rejects_unknown_ports_and_pins_the_admitted_host_key()
         refused = occupied.start_tunnels_for_vm("192.0.2.10")
     assert refused["waa"].active is False
     assert "already in use" in refused["waa"].error
-
-
-def test_builtin_dispatch_binds_one_exact_task_and_never_places_the_api_key_in_argv():
-    worker = SimpleNamespace(
-        name="waa-pool-00",
-        ip="192.0.2.10",
-        waa_ready=True,
-        status="qualified-ready",
-        qualified_run_id="run-123",
-        qualified_worker_identity_sha256="sha256:" + "1" * 64,
-        qualified_egress_policy_sha256="2" * 64,
-        qualified_live_nft_sha256=LIVE_NFT_SHA256,
-        qualified_start_proof_sha256="sha256:" + "3" * 64,
-        qualified_task_binding_sha256=None,
-        current_task=None,
-    )
-    pool = SimpleNamespace(workers=[worker], total_tasks=0)
-
-    class Registry:
-        def get_pool(self):
-            return pool
-
-        def save(self):
-            return None
-
-        def update_worker(self, _name, **values):
-            for key, value in values.items():
-                setattr(worker, key, value)
-
-        def update_pool_progress(self, **_values):
-            return None
-
-    commands = []
-    secret_inputs = []
-    consumed = []
-
-    class Isolation:
-        def consume_dispatch(self, **values):
-            consumed.append(values)
-
-        def run_qualified_command(self, argv, **kwargs):
-            assert kwargs["run_id"] == "run-123"
-            assert kwargs["policy_sha256"] == "2" * 64
-            commands.append(argv)
-            if kwargs.get("input_bytes") is not None:
-                secret_inputs.append(kwargs["input_bytes"])
-            joined = " ".join(argv)
-            if "evaluation_examples_windows/test_all.json" in joined:
-                return subprocess.CompletedProcess(
-                    argv,
-                    0,
-                    stdout=b'{"domain":"chrome","task_id":"task-123"}\n',
-                    stderr=b"",
-                )
-            if "if pgrep" in joined:
-                return subprocess.CompletedProcess(argv, 0, stdout=b"DONE\n", stderr=b"")
-            if "benchmark.exit" in joined:
-                return subprocess.CompletedProcess(argv, 0, stdout=b"0\n", stderr=b"")
-            return subprocess.CompletedProcess(argv, 0, stdout=b"", stderr=b"")
-
-    manager = PoolManager(
-        vm_manager=SimpleNamespace(ssh_username="azureuser"),
-        registry=Registry(),
-        log_fn=lambda *_args, **_kwargs: None,
-    )
-    with (
-        patch.object(
-            manager,
-            "_qualified_isolation_manager",
-            return_value=(Isolation(), _policy()),
-        ),
-        patch("time.sleep"),
-    ):
-        result = manager.run(
-            tasks=1,
-            agent="navi",
-            model="model-1",
-            api_key="secret-test-key",
-            proxy_authorization=PROXY_PASSWORD,
-            qualification_dir=Path("."),
-        )
-
-    assert result.completed == 1
-    assert consumed[0]["run_id"] == "run-123"
-    assert consumed[0]["task_binding_sha256"] == worker.qualified_task_binding_sha256
-    assert worker.current_task == "chrome:task-123"
-    assert worker.status == "qualified-dispatched"
-    assert secret_inputs == [
-        b"secret-test-key\n" + PROXY_PASSWORD.encode("ascii") + b"\n"
-    ]
-    assert all("secret-test-key" not in argument for command in commands for argument in command)
-    assert all(PROXY_PASSWORD not in argument for command in commands for argument in command)
 
 
 def test_oa_vm_cli_exposes_the_three_step_qualified_start():

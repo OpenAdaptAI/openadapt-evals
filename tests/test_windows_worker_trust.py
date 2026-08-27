@@ -10,6 +10,7 @@ from openadapt_evals.infrastructure.windows_worker_dispatch import (
     QualifiedPrelaunchEvidence,
     WorkerDispatchError,
     _parse_prelaunch,
+    _parse_process,
     build_terminal_evidence,
 )
 from openadapt_evals.infrastructure.windows_worker_trust import (
@@ -306,6 +307,8 @@ def _terminal(
         "capability_handle_sha256": dispatch["capability_handle_sha256"],
         "process_lease_sha256": dispatch["process_lease_sha256"],
         "process_start_ticks": "9001",
+        "launch_attempt": receipt["launch_attempt"],
+        "launch_attempt_sha256": receipt["launch_attempt_sha256"],
         "subset_sha256": _sha("subset"),
         "oracle_sha256": _sha("oracle"),
         "container_state_sha256": _sha("container"),
@@ -453,6 +456,41 @@ def test_bounded_prelaunch_evidence_requires_no_child_and_exact_burn() -> None:
             admission=opaque_admission,
             dispatch=opaque_dispatch,
         )
+
+
+def test_uncertain_interrupt_can_quarantine_a_still_running_process() -> None:
+    observation = _observation()
+    admission = _admission(observation)
+    capability = b"c" * 32
+    dispatch = _dispatch(admission, capability)
+    receipt, evidence = _terminal(admission, dispatch)
+    process = _parse_process(evidence["process"])
+    opaque_admission = VerifiedWorkerAdmission._from_authority(admission)
+    from openadapt_evals.infrastructure.windows_worker_trust import (
+        AuthorizedWorkerDispatch,
+    )
+
+    opaque_dispatch = AuthorizedWorkerDispatch._from_authority(dispatch, capability)
+    interrupted = {
+        "state": "INTERRUPT_UNCERTAIN",
+        "leader_identity_matched": True,
+        "process_group_absent": False,
+        "remaining_member_count": 1,
+        "log_sha256": _sha("running-log"),
+        "log_size_bytes": 12,
+        "process": evidence["process"],
+    }
+    terminal = build_terminal_evidence(
+        admission=opaque_admission,
+        dispatch=opaque_dispatch,
+        process=process,
+        terminal_readback={"state": "RUNNING"},
+        interrupt_evidence=interrupted,
+        completed_at=NOW,
+    )
+    assert terminal["terminal_state"] == "QUARANTINED"
+    assert terminal["delivery_state"] == "uncertain"
+    assert terminal["quarantine"]["active"] is True
 
 
 @pytest.mark.parametrize(

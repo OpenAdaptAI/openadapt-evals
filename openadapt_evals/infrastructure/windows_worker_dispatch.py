@@ -367,7 +367,7 @@ payload = json.loads(sys.stdin.buffer.read())
 if set(payload) != {
     'admission', 'dispatch', 'capability_base64', 'subset_base64',
     'agent', 'model', 'experiment', 'api_key_base64',
-    'egress_policy', 'proxy_authorization_base64'
+    'egress_policy', 'proxy_authorization_base64', 'cancel_before_launch'
 }:
     raise SystemExit('dispatch payload is not closed')
 admission = payload['admission']
@@ -509,6 +509,8 @@ finally: os.close(directory_fd)
 ledger_readback = 'sha256:' + hashlib.sha256(
     revision_path.read_bytes() + dispatch_path.read_bytes() + (root / 'burn.json').read_bytes()
 ).hexdigest()
+if payload['cancel_before_launch'] is True:
+    raise SystemExit('launch refused before child creation')
 
 # Every guest write occurs after the durable one-use claim and while the same
 # host lock remains held.  A failure leaves the identity burned.
@@ -946,6 +948,7 @@ def launch_authorized_process(
     experiment: str,
     subset: bytes,
     api_key: str,
+    cancel_before_launch: bool = False,
 ) -> QualifiedProcessEvidence | QualifiedPrelaunchEvidence:
     """Consume one capability and start its exact process in one host lock."""
 
@@ -955,6 +958,8 @@ def launch_authorized_process(
         raise WorkerDispatchError("task subset is invalid")
     if not isinstance(api_key, str) or not api_key or "\n" in api_key or "\x00" in api_key:
         raise WorkerDispatchError("API credential is invalid")
+    if type(cancel_before_launch) is not bool:
+        raise WorkerDispatchError("launch cancellation flag is invalid")
     parsed_policy = validate_egress_policy(policy)
     if egress_policy_sha256(parsed_policy) != policy_sha256:
         raise WorkerDispatchError("egress policy identity differs")
@@ -982,6 +987,7 @@ def launch_authorized_process(
         "proxy_authorization_base64": base64.b64encode(
             proxy_authorization.encode("utf-8")
         ).decode("ascii"),
+        "cancel_before_launch": cancel_before_launch,
     }
     try:
         result: subprocess.CompletedProcess[bytes] = manager._ssh(
@@ -1511,9 +1517,18 @@ def build_terminal_evidence(
         return process.terminal_evidence
     if terminal_readback is None:
         raise WorkerDispatchError("postlaunch terminal readback is absent")
-    if terminal_readback.get("state") == "RUNNING":
+    running_after_uncertain_interrupt = (
+        terminal_readback.get("state") == "RUNNING"
+        and isinstance(interrupt_evidence, Mapping)
+        and interrupt_evidence.get("state") == "INTERRUPT_UNCERTAIN"
+        and interrupt_evidence.get("process") == asdict(process)
+    )
+    if terminal_readback.get("state") == "RUNNING" and not running_after_uncertain_interrupt:
         raise WorkerDispatchError("a running process has no terminal evidence")
-    if terminal_readback.get("process") != asdict(process):
+    if (
+        terminal_readback.get("state") != "RUNNING"
+        and terminal_readback.get("process") != asdict(process)
+    ):
         raise WorkerDispatchError("terminal readback process differs")
     if interrupt_evidence is not None and interrupt_evidence.get("process") != asdict(
         process
