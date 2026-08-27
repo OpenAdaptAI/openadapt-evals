@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 import pytest
 
+from openadapt_evals.benchmarks.vm_cli import cmd_pool_exec, cmd_pool_vnc
 from openadapt_evals.infrastructure.pool import (
     WAA_START_SCRIPT_TEMPLATE,
     WINDOWS_EGRESS_BOOTSTRAP_SCRIPT,
@@ -32,6 +33,7 @@ from openadapt_evals.infrastructure.windows_pool_isolation import (
     build_nft_batch,
     dispatch_binding_sha256,
     egress_policy_sha256,
+    egress_proxy_authorization_sha256,
     reset_proof_sha256,
     validate_egress_policy,
     validate_reset_proof,
@@ -40,6 +42,8 @@ from openadapt_evals.infrastructure.windows_pool_isolation import (
 )
 
 NOW = datetime(2026, 8, 27, 18, 0, tzinfo=timezone.utc)
+LIVE_NFT_SHA256 = "sha256:" + "f" * 64
+PROXY_PASSWORD = "proxy-secret-credential"
 
 
 def _identity(**overrides):
@@ -67,10 +71,26 @@ def _policy(**overrides):
     value = {
         "schema_version": EGRESS_SCHEMA,
         "run_id": "run-123",
-        "allowed_ipv4": ["10.20.30.40", "198.51.100.10"],
-        "allowed_ipv6": ["2001:db8::10"],
+        "proxy": {
+            "hostname": "egress.example.com",
+            "protocol": "https",
+            "port": 8443,
+            "resolved_ipv4": ["10.20.30.40", "198.51.100.10"],
+            "resolved_ipv6": ["2001:db8::10"],
+            "tls_spki_sha256": "sha256:" + "9" * 64,
+            "authorization_username": "oa-runner",
+            "authorization_sha256": "sha256:" + "0" * 64,
+        },
+        "allowed_endpoints": [
+            {"hostname": "api.openai.com", "protocol": "https", "port": 443},
+            {"hostname": "realtime.openai.com", "protocol": "wss", "port": 443},
+        ],
         "host_bindings_sha256": "a" * 64,
     }
+    value["proxy"]["authorization_sha256"] = egress_proxy_authorization_sha256(
+        value,
+        PROXY_PASSWORD,
+    )
     value.update(overrides)
     return value
 
@@ -107,6 +127,7 @@ def _egress_proof(identity=None, reset=None, **overrides):
         "worker_identity_sha256": worker_identity_sha256(identity),
         "host_bindings_sha256": identity.host_bindings_sha256,
         "tls_bindings_sha256": identity.tls_bindings_sha256,
+        "live_nft_sha256": LIVE_NFT_SHA256,
         "conntrack_drained": True,
         "issued_at": "2026-08-27T18:00:00Z",
         "expires_at": "2026-08-27T18:05:00Z",
@@ -128,11 +149,21 @@ def test_egress_policy_is_closed_unique_sorted_and_domain_bound():
     policy = _policy()
     assert validate_egress_policy(policy) == policy
     assert len(egress_policy_sha256(policy)) == 64
-    assert egress_policy_sha256(_policy(allowed_ipv4=["10.20.30.41"])) != (
+    changed_proxy = {**policy["proxy"], "resolved_ipv4": ["10.20.30.41"]}
+    assert egress_policy_sha256(_policy(proxy=changed_proxy)) != (
         egress_policy_sha256(policy)
     )
     with pytest.raises(WindowsPoolIsolationError, match="closed"):
         validate_egress_policy({**policy, "hidden": True})
+    changed_endpoints = _policy(
+        allowed_endpoints=[
+            {"hostname": "different.example.com", "protocol": "https", "port": 443}
+        ]
+    )
+    assert egress_proxy_authorization_sha256(
+        changed_endpoints,
+        PROXY_PASSWORD,
+    ) != policy["proxy"]["authorization_sha256"]
 
 
 @pytest.mark.parametrize(
@@ -149,18 +180,46 @@ def test_egress_policy_is_closed_unique_sorted_and_domain_bound():
     ],
 )
 def test_egress_policy_rejects_unsafe_or_metadata_targets(address):
-    key = "allowed_ipv6" if ":" in address else "allowed_ipv4"
+    key = "resolved_ipv6" if ":" in address else "resolved_ipv4"
+    proxy = {**_policy()["proxy"], key: [address]}
     with pytest.raises(WindowsPoolIsolationError):
-        validate_egress_policy(_policy(**{key: [address]}))
+        validate_egress_policy(_policy(proxy=proxy))
+
+
+def test_egress_policy_requires_exact_sorted_endpoints_and_authenticated_https_proxy():
+    with pytest.raises(WindowsPoolIsolationError, match="protocol must be https"):
+        validate_egress_policy(
+            _policy(proxy={**_policy()["proxy"], "protocol": "http"})
+        )
+    with pytest.raises(WindowsPoolIsolationError, match="not a closed object"):
+        validate_egress_policy(
+            _policy(
+                allowed_endpoints=[
+                    {**_policy()["allowed_endpoints"][0], "path": "/v1"}
+                ]
+            )
+        )
+    with pytest.raises(WindowsPoolIsolationError, match="unique and sorted"):
+        validate_egress_policy(
+            _policy(allowed_endpoints=list(reversed(_policy()["allowed_endpoints"])))
+        )
 
 
 def test_block_all_and_replacement_never_preserve_an_old_established_flow():
     allowed = build_nft_batch("waa-pool-00", _policy())
     blocked = build_block_all_batch("waa-pool-00", "run-123")
-    assert "ct state established,related accept" not in blocked
-    return_rules = [line for line in allowed.splitlines() if "ct state" in line]
+    assert not any(
+        "forward" in line and "ct state established,related accept" in line
+        for line in blocked.splitlines()
+    )
+    return_rules = [
+        line for line in allowed.splitlines() if "forward" in line and "ct state" in line
+    ]
     assert return_rules
     assert all(" saddr " in line and 'oifname "docker0"' in line for line in return_rules)
+    assert all("tcp sport 8443" in line for line in return_rules)
+    assert all("tcp dport 8443" in line for line in allowed.splitlines() if " daddr " in line)
+    assert 'input iifname "docker0" counter drop' in allowed
     assert " daddr " not in blocked
     assert blocked.rstrip().endswith("counter drop")
 
@@ -168,6 +227,7 @@ def test_block_all_and_replacement_never_preserve_an_old_established_flow():
 def test_worker_bootstrap_restores_block_all_and_conntrack_before_docker():
     script = WINDOWS_EGRESS_BOOTSTRAP_SCRIPT
     assert 'iifname "docker0" counter drop' in script
+    assert 'input iifname "docker0" counter drop' in script
     assert "conntrack nftables" in script
     assert "nft -c -f /etc/openadapt/windows-egress.nft" in script
     assert "policy drop" in script
@@ -189,6 +249,20 @@ def test_worker_identity_pins_host_key_image_runtime_host_and_tls_bindings():
         )
 
 
+def test_pinned_ssh_ignores_hostile_user_config_agent_and_implicit_keys():
+    completed = subprocess.CompletedProcess([], 0, stdout=b"", stderr=b"")
+    with patch("subprocess.run", return_value=completed) as run:
+        _manager().run_command(["true"])
+    argv = run.call_args_list[-1].args[0]
+    assert argv[:3] == ["ssh", "-F", "/dev/null"]
+    assert "GlobalKnownHostsFile=/dev/null" in argv
+    assert "IdentitiesOnly=yes" in argv
+    assert "IdentityAgent=none" in argv
+    assert "ProxyCommand=none" in argv
+    assert "PermitLocalCommand=no" in argv
+    assert argv.count("-i") == 1
+
+
 def test_reset_blocks_egress_first_and_returns_identity_bound_fresh_proof():
     remote = {
         "schema_version": RESET_SCHEMA,
@@ -202,6 +276,8 @@ def test_reset_blocks_egress_first_and_returns_identity_bound_fresh_proof():
     def _run(argv, **kwargs):
         calls.append((argv, kwargs))
         stdout = b""
+        if any(isinstance(argument, str) and "live_digest_target" in argument for argument in argv):
+            stdout = (LIVE_NFT_SHA256 + "\n").encode("ascii")
         if kwargs.get("input") and b"openadapt-windows-baseline-manifest" in kwargs["input"]:
             stdout = json.dumps(remote).encode()
         return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr=b"")
@@ -283,7 +359,9 @@ def test_reset_proof_refuses_expiry_identity_drift_and_run_reuse():
 
 def test_apply_egress_binds_reset_identity_host_tls_and_drains_conntrack():
     reset = _reset_proof()
-    completed = subprocess.CompletedProcess([], 0, stdout=b"", stderr=b"")
+    completed = subprocess.CompletedProcess(
+        [], 0, stdout=(LIVE_NFT_SHA256 + "\n").encode("ascii"), stderr=b""
+    )
     with (
         patch("openadapt_evals.infrastructure.windows_pool_isolation._now", return_value=NOW),
         patch("subprocess.run", return_value=completed) as run,
@@ -292,10 +370,11 @@ def test_apply_egress_binds_reset_identity_host_tls_and_drains_conntrack():
     assert proof.policy_sha256 == egress_policy_sha256(_policy())
     assert proof.reset_proof_sha256 == reset_proof_sha256(reset)
     assert proof.conntrack_drained is True
+    assert proof.live_nft_sha256 == LIVE_NFT_SHA256
     sent = next(
         call.kwargs["input"].decode()
         for call in run.call_args_list
-        if call.kwargs.get("input") and b"flush chain" in call.kwargs["input"]
+        if call.kwargs.get("input") and b"delete table" in call.kwargs["input"]
     )
     assert sent == build_nft_batch("waa-pool-00", _policy())
     remote_program = next(
@@ -313,6 +392,16 @@ def test_apply_egress_binds_reset_identity_host_tls_and_drains_conntrack():
     assert remote_program.count("['conntrack', '-F']") == 2
     assert "guest conntrack state remains after drain" in remote_program
     assert "/run/openadapt/windows-egress-active.nft" in remote_program
+    assert "nft', '--stateless', 'list', 'table'" in remote_program
+    assert "windows-egress-live-nft.sha256" in remote_program
+    tls_program = next(
+        argument
+        for call in run.call_args_list
+        for argument in call.args[0]
+        if isinstance(argument, str) and "proxy TLS SPKI differs" in argument
+    )
+    assert "-verify_hostname" in tls_program
+    assert "-verify_return_error" in tls_program
 
 
 def test_start_gate_consumes_once_and_checks_exact_policy_image_and_bindings():
@@ -358,9 +447,14 @@ def test_start_command_uses_the_admitted_image_digest_instead_of_a_mutable_tag()
         home_dir="/home/azureuser",
         ssh_username="azureuser",
         admitted_image="sha256:" + "b" * 64,
+        proxy_hostname="egress.example.com",
+        proxy_address="198.51.100.10",
+        proxy_port=8443,
     )
     assert "waa-auto:latest" not in rendered
     assert "sha256:" + "b" * 64 in rendered
+    assert "--add-host egress.example.com=198.51.100.10" in rendered
+    assert "HTTPS_PROXY=https://egress.example.com:8443" in rendered
 
 
 def test_benchmark_dispatch_refuses_a_responsive_legacy_worker():
@@ -370,6 +464,7 @@ def test_benchmark_dispatch_refuses_a_responsive_legacy_worker():
         qualified_run_id=None,
         qualified_worker_identity_sha256=None,
         qualified_egress_policy_sha256=None,
+        qualified_live_nft_sha256=None,
         qualified_start_proof_sha256=None,
     )
     manager = object.__new__(PoolManager)
@@ -386,6 +481,7 @@ def test_benchmark_dispatch_refuses_start_proof_reuse_for_a_task_batch():
         qualified_run_id="run-123",
         qualified_worker_identity_sha256="sha256:" + "1" * 64,
         qualified_egress_policy_sha256="2" * 64,
+        qualified_live_nft_sha256=LIVE_NFT_SHA256,
         qualified_start_proof_sha256="sha256:" + "3" * 64,
     )
     manager = object.__new__(PoolManager)
@@ -428,17 +524,20 @@ def test_live_start_and_dispatch_rechecks_use_the_pinned_boundary():
         manager.verify_started(
             run_id="run-123",
             policy_sha256="e" * 64,
+            live_nft_sha256=LIVE_NFT_SHA256,
         )
         manager.consume_dispatch(
             run_id="run-123",
             policy_sha256="e" * 64,
             task_binding_sha256=binding,
+            live_nft_sha256=LIVE_NFT_SHA256,
         )
         with pytest.raises(WindowsPoolIsolationError, match="already consumed"):
             manager.consume_dispatch(
                 run_id="run-123",
                 policy_sha256="e" * 64,
                 task_binding_sha256=binding,
+                live_nft_sha256=LIVE_NFT_SHA256,
             )
         manager.run_command(["docker", "exec", "winarena", "true"])
 
@@ -450,6 +549,10 @@ def test_live_start_and_dispatch_rechecks_use_the_pinned_boundary():
         if kwargs.get("input") is not None
     ]
     assert any("docker inspect" in program and "reset-consumed" in program for program in programs)
+    assert any(
+        "actual_live_nft_sha256" in program and "windows-egress-live-nft.sha256" in program
+        for program in programs
+    )
     assert any("task-binding.sha256" in program and "flock -n" in program for program in programs)
 
 
@@ -477,6 +580,10 @@ def test_qualified_tunnel_rejects_unknown_ports_and_pins_the_admitted_host_key()
     assert "StrictHostKeyChecking=yes" in command
     assert "StrictHostKeyChecking=no" not in command
     assert "HostKeyAlias=waa-pool-00-instance" in command
+    assert command[:3] == ["ssh", "-F", "/dev/null"]
+    assert "IdentitiesOnly=yes" in command
+    assert "IdentityAgent=none" in command
+    assert "ProxyCommand=none" in command
     tunnel._active_tunnels.clear()
     tunnel.stop_all_tunnels()
 
@@ -500,6 +607,7 @@ def test_builtin_dispatch_binds_one_exact_task_and_never_places_the_api_key_in_a
         qualified_run_id="run-123",
         qualified_worker_identity_sha256="sha256:" + "1" * 64,
         qualified_egress_policy_sha256="2" * 64,
+        qualified_live_nft_sha256=LIVE_NFT_SHA256,
         qualified_start_proof_sha256="sha256:" + "3" * 64,
         qualified_task_binding_sha256=None,
         current_task=None,
@@ -554,7 +662,11 @@ def test_builtin_dispatch_binds_one_exact_task_and_never_places_the_api_key_in_a
         log_fn=lambda *_args, **_kwargs: None,
     )
     with (
-        patch.object(manager, "_qualified_isolation_manager", return_value=(Isolation(), {})),
+        patch.object(
+            manager,
+            "_qualified_isolation_manager",
+            return_value=(Isolation(), _policy()),
+        ),
         patch("time.sleep"),
     ):
         result = manager.run(
@@ -562,6 +674,7 @@ def test_builtin_dispatch_binds_one_exact_task_and_never_places_the_api_key_in_a
             agent="navi",
             model="model-1",
             api_key="secret-test-key",
+            proxy_authorization=PROXY_PASSWORD,
             qualification_dir=Path("."),
         )
 
@@ -570,8 +683,11 @@ def test_builtin_dispatch_binds_one_exact_task_and_never_places_the_api_key_in_a
     assert consumed[0]["task_binding_sha256"] == worker.qualified_task_binding_sha256
     assert worker.current_task == "chrome:task-123"
     assert worker.status == "qualified-dispatched"
-    assert secret_inputs == [b"secret-test-key\n"]
+    assert secret_inputs == [
+        b"secret-test-key\n" + PROXY_PASSWORD.encode("ascii") + b"\n"
+    ]
     assert all("secret-test-key" not in argument for command in commands for argument in command)
+    assert all(PROXY_PASSWORD not in argument for command in commands for argument in command)
 
 
 def test_oa_vm_cli_exposes_the_three_step_qualified_start():
@@ -596,3 +712,103 @@ def test_oa_vm_cli_exposes_the_three_step_qualified_start():
     assert "--qualification-dir" in auto_help.stdout
     assert "--run-evidence-dir" in auto_help.stdout
     assert "--baseline-sha256" not in auto_help.stdout
+
+    assert "--api-key" not in result.stdout
+    assert "--api-key" not in auto_help.stdout
+    run_help = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "openadapt_evals.benchmarks.vm_cli",
+            "pool-run",
+            "--help",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert run_help.returncode == 0, run_help.stderr
+    assert "--api-key" not in run_help.stdout
+
+
+def test_acr_provisioning_uses_pinned_manager_and_password_stdin_only():
+    calls = []
+
+    class Isolation:
+        identity = _identity()
+
+        def run_command(self, argv, **kwargs):
+            calls.append((argv, kwargs))
+            return subprocess.CompletedProcess(argv, 0, stdout=b"", stderr=b"")
+
+    manager = PoolManager(
+        vm_manager=SimpleNamespace(ssh_username="azureuser"),
+        registry=SimpleNamespace(get_pool=lambda: None),
+        log_fn=lambda *_args, **_kwargs: None,
+    )
+    image = "registry.example.com/openadapt/waa@sha256:" + "7" * 64
+    with patch.object(manager, "_isolation_manager", return_value=Isolation()):
+        manager.provision_worker_from_acr(
+            "waa-pool-00",
+            identity_path=Path("worker.identity.json"),
+            login_server="registry.example.com",
+            username="admitted-puller",
+            image_ref=image,
+            password="acr-secret-value",
+        )
+    argv, kwargs = calls[0]
+    assert kwargs["input_bytes"] == b"acr-secret-value\n"
+    assert "--password-stdin" in " ".join(argv)
+    assert "acr-secret-value" not in " ".join(argv)
+    assert "docker', 'pull', image_ref" in " ".join(argv)
+
+
+def test_one_step_acr_create_refuses_before_provider_mutation():
+    manager = PoolManager(
+        vm_manager=SimpleNamespace(),
+        registry=SimpleNamespace(),
+        log_fn=lambda *_args, **_kwargs: None,
+    )
+    with pytest.raises(RuntimeError, match="no admitted SSH identity"):
+        manager.create(use_acr=True)
+
+
+@pytest.mark.parametrize("command", ["exec", "vnc"])
+def test_legacy_mutation_controls_refuse_active_qualified_workers(
+    command,
+    tmp_path,
+    monkeypatch,
+):
+    registry = tmp_path / "benchmark_results" / "vm_pool_registry.json"
+    registry.parent.mkdir()
+    registry.write_text(
+        json.dumps(
+            {
+                "workers": [
+                    {
+                        "name": "waa-pool-00",
+                        "ip": "192.0.2.10",
+                        "status": "qualified-ready",
+                        "qualified_run_id": "run-123",
+                        "qualified_start_proof_sha256": "sha256:" + "3" * 64,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    args = (
+        SimpleNamespace(cmd="true", docker=False, worker="waa-pool-00")
+        if command == "exec"
+        else SimpleNamespace(worker="waa-pool-00", all=False)
+    )
+    with (
+        patch("openadapt_evals.benchmarks.vm_cli.init_logging"),
+        patch("subprocess.run") as run,
+        patch("subprocess.Popen") as popen,
+    ):
+        result = cmd_pool_exec(args) if command == "exec" else cmd_pool_vnc(args)
+    assert result == 1
+    run.assert_not_called()
+    popen.assert_not_called()

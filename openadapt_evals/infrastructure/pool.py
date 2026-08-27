@@ -29,6 +29,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import re
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -53,6 +55,27 @@ from openadapt_evals.infrastructure.vm_monitor import (
 )
 
 logger = logging.getLogger(__name__)
+PROXY_SECRET = re.compile(r"^[A-Za-z0-9._~-]{16,512}$")
+
+
+def _proxy_start_values(policy: dict[str, Any]) -> dict[str, str | int]:
+    """Return Docker-safe values for one validated egress proxy."""
+
+    from openadapt_evals.infrastructure.windows_pool_isolation import (
+        validate_egress_policy,
+    )
+
+    parsed = validate_egress_policy(policy)
+    proxy = parsed["proxy"]
+    addresses = [*proxy["resolved_ipv4"], *proxy["resolved_ipv6"]]
+    address = addresses[0]
+    if ":" in address:
+        address = f"[{address}]"
+    return {
+        "proxy_hostname": proxy["hostname"],
+        "proxy_address": address,
+        "proxy_port": proxy["port"],
+    }
 
 
 @dataclass
@@ -127,66 +150,6 @@ sudo systemctl daemon-reload
 sudo systemctl enable socat-waa-evaluate.service
 """
 
-# Docker setup script that pulls pre-built image from ACR instead of building.
-# {home_dir} is formatted at runtime with the provider's ssh_username home path.
-DOCKER_SETUP_SCRIPT_WITH_ACR = """
-set -e
-export DEBIAN_FRONTEND=noninteractive
-
-# Wait for apt lock (unattended upgrades on fresh VMs)
-echo "Waiting for apt lock..."
-while sudo fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
-    sleep 5
-done
-echo "Apt lock released"
-
-sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io
-sudo systemctl start docker
-sudo systemctl enable docker
-sudo usermod -aG docker $USER
-
-# Configure Docker to use persistent storage (NOT /mnt which is ephemeral
-# and gets wiped on VM deallocate, breaking pool-resume)
-sudo systemctl stop docker
-sudo mkdir -p {home_dir}/docker
-sudo bash -c 'echo "{{\\"data-root\\": \\"{home_dir}/docker\\"}}" > /etc/docker/daemon.json'
-sudo systemctl start docker
-
-# Pull pre-built image from ACR (faster than building)
-echo "Pulling pre-built image from ACR..."
-sudo docker login {acr_login_server} -u {acr_username} -p '{acr_password}'
-sudo docker pull {acr_login_server}/waa-auto:latest
-sudo docker tag {acr_login_server}/waa-auto:latest waa-auto:latest
-
-# Pull base images (needed for WAA container)
-sudo docker pull dockurr/windows:latest
-
-# Install socat and register systemd unit for the evaluate proxy
-# (replaces the fragile nohup socat background process with a supervised service
-# that auto-restarts on failure and survives container/VM restarts)
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq socat
-
-sudo tee /etc/systemd/system/socat-waa-evaluate.service > /dev/null << 'UNIT'
-[Unit]
-Description=socat proxy for WAA /evaluate endpoint (VM:5051 -> container:5050)
-After=docker.service
-Requires=docker.service
-
-[Service]
-Type=simple
-ExecStart=/usr/bin/socat TCP-LISTEN:5051,fork,reuseaddr EXEC:"docker exec -i winarena socat STDIO TCP:localhost:5050"
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-
-sudo systemctl daemon-reload
-sudo systemctl enable socat-waa-evaluate.service
-"""
-
 # Install one host-owned, fail-closed nftables boundary for the dedicated
 # Windows guest. This runs for fresh and golden-image workers. The service
 # restores the last checked policy before Docker can start after a reboot.
@@ -197,7 +160,12 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq conntrack nftables
 sudo install -d -m 0700 /etc/openadapt
 sudo tee /etc/openadapt/windows-egress.nft > /dev/null <<'NFT'
-flush chain inet oa_windows forward
+delete table inet oa_windows
+add table inet oa_windows
+add chain inet oa_windows input { type filter hook input priority -50; policy accept; }
+add chain inet oa_windows forward { type filter hook forward priority -50; policy drop; }
+add rule inet oa_windows input iifname "docker0" ct state established,related accept
+add rule inet oa_windows input iifname "docker0" counter drop
 add rule inet oa_windows forward iifname "docker0" counter drop
 NFT
 sudo chmod 0600 /etc/openadapt/windows-egress.nft
@@ -205,11 +173,10 @@ sudo tee /usr/local/sbin/openadapt-windows-egress-restore > /dev/null <<'SCRIPT'
 #!/bin/sh
 set -eu
 nft list table inet oa_windows > /dev/null 2>&1 || nft add table inet oa_windows
-nft list chain inet oa_windows forward > /dev/null 2>&1 || \
-    nft 'add chain inet oa_windows forward { type filter hook forward priority -50; policy drop; }'
-nft 'chain inet oa_windows forward { policy drop; }'
 nft -c -f /etc/openadapt/windows-egress.nft
 nft -f /etc/openadapt/windows-egress.nft
+conntrack -F >/dev/null
+conntrack -F >/dev/null
 install -d -m 0700 /var/lib/openadapt/windows-run-gates
 find /var/lib/openadapt/windows-run-gates -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
 SCRIPT
@@ -236,7 +203,8 @@ sudo systemctl restart openadapt-windows-egress.service
 """
 
 # WAA container start script template.
-# {home_dir} and {ssh_username} are formatted at runtime.
+# The exact admitted egress proxy is also formatted at runtime. Direct guest
+# egress is denied by nftables.
 WAA_START_SCRIPT_TEMPLATE = """
 # Check if container already running
 if docker ps --format '{{{{.Names}}}}' | grep -q '^winarena$'; then
@@ -266,6 +234,10 @@ docker run -d --name winarena \\
   -e CPU_CORES=4 \\
   -e DISK_SIZE=64G \\
   -e ARGUMENTS="-qmp tcp:0.0.0.0:7200,server,nowait" \\
+  --add-host {proxy_hostname}={proxy_address} \\
+  -e HTTPS_PROXY=https://{proxy_hostname}:{proxy_port} \\
+  -e HTTP_PROXY=https://{proxy_hostname}:{proxy_port} \\
+  -e NO_PROXY=localhost,127.0.0.1,172.30.0.2 \\
   {admitted_image} \\
   /entry.sh --prepare-image false --start-client false
 
@@ -313,19 +285,6 @@ class PoolManager:
         """Home directory path for the VM provider's SSH user."""
         return f"/home/{self._ssh_username}"
 
-    def _get_acr_password(self, acr_name: str) -> str | None:
-        """Get ACR admin password via az CLI."""
-        try:
-            result = subprocess.run(
-                ["az", "acr", "credential", "show", "--name", acr_name, "--query", "passwords[0].value", "-o", "tsv"],
-                capture_output=True, text=True, timeout=30,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                return result.stdout.strip()
-        except Exception as e:
-            logger.debug(f"Failed to get ACR password: {e}")
-        return None
-
     def create(
         self,
         workers: int = 3,
@@ -350,6 +309,12 @@ class PoolManager:
         Raises:
             RuntimeError: If no VMs could be created.
         """
+        if use_acr:
+            raise RuntimeError(
+                "One-step ACR provisioning has no admitted SSH identity. Create the "
+                "worker with the local-build or golden-image path, then use the admitted "
+                "ACR provisioning operation."
+            )
         self._log("POOL", f"Creating pool with {workers} workers...")
 
         # Check for existing pool
@@ -430,20 +395,6 @@ class PoolManager:
 
             # Determine which setup script to use
             docker_script = DOCKER_SETUP_SCRIPT.format(home_dir=home_dir)
-            if use_acr:
-                from openadapt_evals.config import settings
-                acr_password = self._get_acr_password(settings.acr_name)
-                if acr_password:
-                    docker_script = DOCKER_SETUP_SCRIPT_WITH_ACR.format(
-                        home_dir=home_dir,
-                        acr_login_server=settings.acr_login_server,
-                        acr_username=settings.acr_name,
-                        acr_password=acr_password,
-                    )
-                    self._log("POOL", f"Using ACR: {settings.acr_login_server}")
-                else:
-                    self._log("POOL", "WARNING: ACR password not found, falling back to local build")
-
             def setup_docker(
                 name_ip: tuple[str, str],
             ) -> tuple[str, bool, str]:
@@ -628,6 +579,7 @@ class PoolManager:
                     ready, eval_ok = manager.probe_services(
                         run_id=worker.qualified_run_id,
                         policy_sha256=worker.qualified_egress_policy_sha256,
+                        live_nft_sha256=worker.qualified_live_nft_sha256,
                     )
 
                     if ready:
@@ -686,6 +638,7 @@ class PoolManager:
         agent: str = "navi",
         model: str = "gpt-4o-mini",
         api_key: str | None = None,
+        proxy_authorization: str | None = None,
         agent_factory: Callable[[], Any] | None = None,
         qualification_dir: Path | None = None,
         task_ids: list[str] | None = None,
@@ -701,6 +654,8 @@ class PoolManager:
             agent: Agent name for WAA's run.py (default: "navi").
             model: Model name for the agent.
             api_key: API key for the agent. Auto-loaded from config if None.
+            proxy_authorization: Proxy password. Auto-loaded from the process
+                environment and sent only on standard input.
             agent_factory: Optional callable that returns a BenchmarkAgent.
                 When provided, overrides agent/model and runs externally.
             qualification_dir: Exact worker identity and egress policy directory.
@@ -729,6 +684,8 @@ class PoolManager:
             raise RuntimeError(
                 "No API key provided. Use api_key param or set OPENAI_API_KEY in .env"
             )
+        if proxy_authorization is None:
+            proxy_authorization = os.environ.get("OPENADAPT_EGRESS_PROXY_AUTHORIZATION")
 
         # A responsive legacy guest is not enough. Only a guest that crossed the
         # exact reset, egress, and one-use start gate can receive work.
@@ -740,6 +697,7 @@ class PoolManager:
             and worker.qualified_run_id
             and worker.qualified_worker_identity_sha256
             and worker.qualified_egress_policy_sha256
+            and worker.qualified_live_nft_sha256
             and worker.qualified_start_proof_sha256
         ]
         if not ready_workers:
@@ -762,10 +720,38 @@ class PoolManager:
         if agent_factory is not None and task_ids is None:
             raise RuntimeError("An external agent requires exact task identities.")
 
-        qualified_managers = {
-            worker.name: self._qualified_isolation_manager(worker, qualification_dir)[0]
+        qualified_boundaries = {
+            worker.name: self._qualified_isolation_manager(worker, qualification_dir)
             for worker in ready_workers
         }
+        qualified_managers = {
+            name: boundary[0] for name, boundary in qualified_boundaries.items()
+        }
+        qualified_policies = {
+            name: boundary[1] for name, boundary in qualified_boundaries.items()
+        }
+        if agent_factory is None:
+            if not isinstance(proxy_authorization, str) or PROXY_SECRET.fullmatch(
+                proxy_authorization
+            ) is None:
+                raise RuntimeError(
+                    "The authenticated egress proxy password is absent or invalid. "
+                    "Set OPENADAPT_EGRESS_PROXY_AUTHORIZATION."
+                )
+            from openadapt_evals.infrastructure.windows_pool_isolation import (
+                egress_proxy_authorization_sha256,
+            )
+
+            for worker in ready_workers:
+                authorization_sha256 = egress_proxy_authorization_sha256(
+                    qualified_policies[worker.name],
+                    proxy_authorization,
+                )
+                expected = qualified_policies[worker.name]["proxy"]["authorization_sha256"]
+                if authorization_sha256 != expected:
+                    raise RuntimeError(
+                        f"Worker {worker.name} proxy authorization differs from its policy."
+                    )
 
         self._log("POOL-RUN", "=" * 60)
         self._log(
@@ -810,6 +796,7 @@ class PoolManager:
                     run_id=worker.qualified_run_id,
                     policy_sha256=worker.qualified_egress_policy_sha256,
                     task_binding_sha256=binding,
+                    live_nft_sha256=worker.qualified_live_nft_sha256,
                 )
                 self.registry.update_worker(
                     worker.name,
@@ -843,14 +830,18 @@ class PoolManager:
             )
 
             manager = qualified_managers[worker.name]
+            policy = qualified_policies[worker.name]
+            proxy = policy["proxy"]
             qualified_run_id = worker.qualified_run_id
             qualified_policy_sha256 = worker.qualified_egress_policy_sha256
+            qualified_live_nft_sha256 = worker.qualified_live_nft_sha256
 
             def qualified_command(remote_command, **kwargs):
                 return manager.run_qualified_command(
                     remote_command,
                     run_id=qualified_run_id,
                     policy_sha256=qualified_policy_sha256,
+                    live_nft_sha256=qualified_live_nft_sha256,
                     **kwargs,
                 )
 
@@ -923,6 +914,7 @@ print(json.dumps({"domain": domain, "task_id": task_id}, sort_keys=True, separat
                 run_id=worker.qualified_run_id,
                 policy_sha256=worker.qualified_egress_policy_sha256,
                 task_binding_sha256=binding,
+                live_nft_sha256=worker.qualified_live_nft_sha256,
             )
             self.registry.update_worker(
                 worker.name,
@@ -934,10 +926,16 @@ print(json.dumps({"domain": domain, "task_id": task_id}, sort_keys=True, separat
 
             if api_key is None or "\n" in api_key or "\x00" in api_key:
                 raise RuntimeError("The API key is invalid.")
+            assert proxy_authorization is not None
             launch_program = r"""
 set -euo pipefail
 IFS= read -r OPENAI_API_KEY
+IFS= read -r PROXY_AUTHORIZATION
 export OPENAI_API_KEY
+export HTTPS_PROXY="https://$8:$PROXY_AUTHORIZATION@$9:$10"
+export HTTP_PROXY="$HTTPS_PROXY"
+export NO_PROXY=localhost,127.0.0.1,172.30.0.2
+unset PROXY_AUTHORIZATION
 export OPENADAPT_QUALIFIED_RUN_ID="$5"
 rm -f -- "$6" "$7"
 OPENAI_API_KEY="$OPENAI_API_KEY" OPENADAPT_QUALIFIED_RUN_ID="$5" \
@@ -969,8 +967,11 @@ printf '%s\n' "$!"
                     worker.qualified_run_id,
                     log_file,
                     exit_file,
+                    proxy["authorization_username"],
+                    proxy["hostname"],
+                    str(proxy["port"]),
                 ],
-                input_bytes=(api_key + "\n").encode(),
+                input_bytes=(api_key + "\n" + proxy_authorization + "\n").encode("ascii"),
             )
             self._log("RUN", f"  {worker.name}: started (detached), log: {log_file}")
 
@@ -1187,9 +1188,11 @@ printf '%s\n' "$!"
             qualified_managers[worker.name].verify_started(
                 run_id=worker.qualified_run_id,
                 policy_sha256=worker.qualified_egress_policy_sha256,
+                live_nft_sha256=worker.qualified_live_nft_sha256,
             )
 
             tunnel_mgr = SSHTunnelManager(
+                ssh_key_path=qualified_managers[worker.name].ssh_key_path,
                 tunnels=[
                     TunnelConfig(
                         name=f"waa-{worker.name}",
@@ -1279,6 +1282,7 @@ printf '%s\n' "$!"
                 qualified_managers[worker.name].verify_started(
                     run_id=worker.qualified_run_id,
                     policy_sha256=worker.qualified_egress_policy_sha256,
+                    live_nft_sha256=worker.qualified_live_nft_sha256,
                 )
 
                 completed = sum(1 for r in eval_results if r.success)
@@ -1379,6 +1383,7 @@ printf '%s\n' "$!"
             identity=load_worker_identity(identity_path),
             storage_dir=f"{self._home_dir}/waa-storage",
             baseline_dir=f"{self._home_dir}/openadapt-windows-baseline",
+            ssh_key_path=getattr(self.vm_manager, "ssh_private_key_path", None),
         )
 
     def _qualified_isolation_manager(
@@ -1401,6 +1406,7 @@ printf '%s\n' "$!"
             and worker.qualified_run_id
             and worker.qualified_worker_identity_sha256
             and worker.qualified_egress_policy_sha256
+            and worker.qualified_live_nft_sha256
             and worker.qualified_start_proof_sha256
         )
         if not required:
@@ -1418,11 +1424,94 @@ printf '%s\n' "$!"
             raise RuntimeError(f"Worker {worker.name} run identity differs from the policy.")
         if egress_policy_sha256(policy) != worker.qualified_egress_policy_sha256:
             raise RuntimeError(f"Worker {worker.name} egress policy differs from the start proof.")
+        manager.verify_proxy_tls(policy)
         manager.verify_started(
             run_id=worker.qualified_run_id,
             policy_sha256=worker.qualified_egress_policy_sha256,
+            live_nft_sha256=worker.qualified_live_nft_sha256,
         )
         return manager, policy
+
+    def provision_worker_from_acr(
+        self,
+        worker_name: str,
+        *,
+        identity_path: Path,
+        login_server: str,
+        username: str,
+        image_ref: str,
+        password: str,
+    ) -> None:
+        """Pull one exact ACR image through an admitted pinned SSH boundary."""
+
+        server_pattern = re.compile(
+            r"^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?(?::[1-9][0-9]{0,4})?$"
+        )
+        if server_pattern.fullmatch(login_server) is None:
+            raise RuntimeError("The ACR login server is invalid.")
+        _, separator, port = login_server.rpartition(":")
+        if separator and (not port.isdigit() or not 1 <= int(port) <= 65535):
+            raise RuntimeError("The ACR login server port is invalid.")
+        if re.fullmatch(r"[A-Za-z0-9._@-]{1,128}", username) is None:
+            raise RuntimeError("The ACR username is invalid.")
+        prefix = login_server + "/"
+        if not image_ref.startswith(prefix) or "@sha256:" not in image_ref:
+            raise RuntimeError("The ACR image reference is not an exact digest reference.")
+        repository, digest = image_ref[len(prefix) :].rsplit("@sha256:", 1)
+        repository_segment = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
+        if (
+            not repository
+            or any(repository_segment.fullmatch(part) is None for part in repository.split("/"))
+            or re.fullmatch(r"[a-f0-9]{64}", digest) is None
+        ):
+            raise RuntimeError("The ACR image reference is not an exact digest reference.")
+        if not password or len(password) > 4096 or "\n" in password or "\x00" in password:
+            raise RuntimeError("The ACR password is invalid.")
+
+        manager = self._isolation_manager(worker_name, identity_path)
+        program = r"""
+import subprocess
+import sys
+
+login_server, username, image_ref, expected_image = sys.argv[1:]
+password = sys.stdin.buffer.readline()
+if not password.endswith(b'\n') or sys.stdin.buffer.read(1):
+    raise SystemExit('ACR password framing is invalid')
+password = password[:-1]
+if not password or b'\x00' in password:
+    raise SystemExit('ACR password is invalid')
+subprocess.run(
+    ['docker', 'login', login_server, '--username', username, '--password-stdin'],
+    input=password,
+    check=True,
+)
+try:
+    subprocess.run(['docker', 'pull', image_ref], check=True)
+    actual = subprocess.run(
+        ['docker', 'image', 'inspect', image_ref, '--format', '{{.Id}}'],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if actual != expected_image:
+        raise SystemExit('pulled ACR image differs from the worker admission')
+finally:
+    subprocess.run(['docker', 'logout', login_server], check=False)
+""".strip()
+        manager.run_command(
+            [
+                "sudo",
+                "python3",
+                "-c",
+                program,
+                login_server,
+                username,
+                image_ref,
+                manager.identity.admitted_image_sha256,
+            ],
+            input_bytes=(password + "\n").encode("utf-8"),
+            timeout_seconds=15 * 60,
+        )
 
     def reset_worker(
         self,
@@ -1442,6 +1531,7 @@ printf '%s\n' "$!"
             qualified_run_id=None,
             qualified_worker_identity_sha256=None,
             qualified_egress_policy_sha256=None,
+            qualified_live_nft_sha256=None,
             qualified_start_proof_sha256=None,
             qualified_task_binding_sha256=None,
         )
@@ -1487,13 +1577,15 @@ printf '%s\n' "$!"
         )
 
         manager = self._isolation_manager(worker_name, identity_path)
+        policy = load_egress_policy(policy_path)
         start_script = WAA_START_SCRIPT_TEMPLATE.format(
             home_dir=self._home_dir,
             ssh_username=self._ssh_username,
             admitted_image=manager.identity.admitted_image_sha256,
+            **_proxy_start_values(policy),
         )
         proof = manager.start(
-            policy=load_egress_policy(policy_path),
+            policy=policy,
             reset_proof=load_reset_proof(reset_proof_path),
             egress_proof=load_egress_proof(egress_proof_path),
             start_script=start_script,
@@ -1505,6 +1597,7 @@ printf '%s\n' "$!"
             qualified_run_id=proof.run_id,
             qualified_worker_identity_sha256=proof.worker_identity_sha256,
             qualified_egress_policy_sha256=proof.egress_policy_sha256,
+            qualified_live_nft_sha256=proof.live_nft_sha256,
             qualified_start_proof_sha256=start_proof_sha256(proof),
             qualified_task_binding_sha256=None,
         )
@@ -1534,6 +1627,7 @@ printf '%s\n' "$!"
             qualified_run_id=None,
             qualified_worker_identity_sha256=None,
             qualified_egress_policy_sha256=None,
+            qualified_live_nft_sha256=None,
             qualified_start_proof_sha256=None,
             qualified_task_binding_sha256=None,
         )
@@ -1542,6 +1636,7 @@ printf '%s\n' "$!"
             home_dir=self._home_dir,
             ssh_username=self._ssh_username,
             admitted_image=manager.identity.admitted_image_sha256,
+            **_proxy_start_values(policy),
         )
         start_proof = manager.start(
             policy=policy,
@@ -1556,6 +1651,7 @@ printf '%s\n' "$!"
             qualified_run_id=start_proof.run_id,
             qualified_worker_identity_sha256=start_proof.worker_identity_sha256,
             qualified_egress_policy_sha256=start_proof.egress_policy_sha256,
+            qualified_live_nft_sha256=start_proof.live_nft_sha256,
             qualified_start_proof_sha256=start_proof_sha256(start_proof),
             qualified_task_binding_sha256=None,
         )
@@ -1598,6 +1694,7 @@ printf '%s\n' "$!"
                     qualified_run_id=None,
                     qualified_worker_identity_sha256=None,
                     qualified_egress_policy_sha256=None,
+                    qualified_live_nft_sha256=None,
                     qualified_start_proof_sha256=None,
                     qualified_task_binding_sha256=None,
                 )
@@ -1694,6 +1791,7 @@ printf '%s\n' "$!"
                 qualified_run_id=None,
                 qualified_worker_identity_sha256=None,
                 qualified_egress_policy_sha256=None,
+                qualified_live_nft_sha256=None,
                 qualified_start_proof_sha256=None,
                 qualified_task_binding_sha256=None,
             )
