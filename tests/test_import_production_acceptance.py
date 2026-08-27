@@ -2474,7 +2474,7 @@ def test_production_acceptance_target_scope_map_is_closed() -> None:
         "openadapt": "qualified_workflow_launcher_release",
     }
     assert MODULE.production_acceptance_policy_sha256() == (
-        "sha256:6cd6cfeeb6d430c0e9d3a4a55770cb2d9962c8769edc52fac5cc46bff31bee21"
+        "sha256:7aadc8434aeea62e88a5d8622e68a3dd325b28a8ca90480b561d40ace0995b48"
     )
 
 
