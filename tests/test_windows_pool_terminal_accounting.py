@@ -99,6 +99,13 @@ def test_exit_zero_cannot_override_a_non_verified_terminal_receipt() -> None:
         _validate(result)
 
 
+def test_prelaunch_quarantine_is_one_closed_failed_task() -> None:
+    result = _result(second_state="PRELAUNCH_QUARANTINED")
+    validated = _validate(result)
+    assert validated.completed == 1
+    assert validated.failed == 1
+
+
 def test_duplicate_dispatch_or_task_receipt_is_refused() -> None:
     result = _result()
     duplicate = dict(result.terminal_receipts[1])

@@ -164,6 +164,7 @@ def validate_terminal_pool_result(
                 "SAFE_HALT",
                 "RECONCILIATION_REQUIRED",
                 "QUARANTINED",
+                "PRELAUNCH_QUARANTINED",
             }
         ):
             raise RuntimeError("Central terminal receipt identities are not exact and unique.")
