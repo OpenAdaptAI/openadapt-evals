@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "qualification-worker-terminal-receipt.schema.json",
+  "title": "OpenAdapt qualification worker terminal receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "receipt_id_sha256", "worker_admission_sha256",
+    "dispatch_id_sha256", "provider_identity_sha256", "worker_identity_sha256",
+    "run_id", "run_attempt", "start_id_sha256", "task_id_sha256",
+    "task_condition_sha256", "capability_handle_sha256", "process",
+    "oracle_sha256", "result_sha256", "log_sha256", "burned_identities_sha256",
+    "burn_ledger_revision", "burn_receipt_sha256", "burned_at",
+    "ledger_readback_sha256", "effect_started", "delivery_state",
+    "terminal_state", "exit_code", "uncertainty_sha256", "quarantine",
+    "completed_at", "issuer"
+  ],
+  "properties": {
+    "schema_version": {"const": "openadapt.qualification-worker-terminal-receipt/v1"},
+    "receipt_id_sha256": {"$ref": "#/$defs/digest"},
+    "worker_admission_sha256": {"$ref": "#/$defs/digest"},
+    "dispatch_id_sha256": {"$ref": "#/$defs/digest"},
+    "provider_identity_sha256": {"$ref": "#/$defs/digest"},
+    "worker_identity_sha256": {"$ref": "#/$defs/digest"},
+    "run_id": {"$ref": "#/$defs/decimal_id"},
+    "run_attempt": {"const": "1"},
+    "start_id_sha256": {"$ref": "#/$defs/digest"},
+    "task_id_sha256": {"$ref": "#/$defs/digest"},
+    "task_condition_sha256": {"$ref": "#/$defs/digest"},
+    "capability_handle_sha256": {"$ref": "#/$defs/digest"},
+    "process": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pid", "process_group_id", "launched_at", "executable_sha256", "process_start_identity_sha256"],
+      "properties": {
+        "pid": {"type": "integer", "minimum": 1},
+        "process_group_id": {"type": "integer", "minimum": 1},
+        "launched_at": {"$ref": "#/$defs/timestamp"},
+        "executable_sha256": {"$ref": "#/$defs/digest"},
+        "process_start_identity_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "oracle_sha256": {"$ref": "#/$defs/digest"},
+    "result_sha256": {"$ref": "#/$defs/digest"},
+    "log_sha256": {"$ref": "#/$defs/digest"},
+    "burned_identities_sha256": {"$ref": "#/$defs/digest"},
+    "burn_ledger_revision": {"type": "integer", "minimum": 1},
+    "burn_receipt_sha256": {"$ref": "#/$defs/digest"},
+    "burned_at": {"$ref": "#/$defs/timestamp"},
+    "ledger_readback_sha256": {"$ref": "#/$defs/digest"},
+    "effect_started": {"type": "boolean"},
+    "delivery_state": {"enum": ["not_started", "verified", "uncertain"]},
+    "terminal_state": {"enum": ["VERIFIED", "SAFE_HALT", "RECONCILIATION_REQUIRED", "QUARANTINED"]},
+    "exit_code": {"type": ["integer", "null"]},
+    "uncertainty_sha256": {"oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+    "quarantine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["active", "reason_code", "evidence_sha256"],
+      "properties": {
+        "active": {"type": "boolean"},
+        "reason_code": {"type": ["string", "null"], "pattern": "^[A-Z][A-Z0-9_]{2,63}$"},
+        "evidence_sha256": {"oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]}
+      }
+    },
+    "completed_at": {"$ref": "#/$defs/timestamp"},
+    "issuer": {"$ref": "#/$defs/issuer"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"delivery_state": {"const": "uncertain"}}},
+      "then": {
+        "properties": {
+          "effect_started": {"const": true},
+          "terminal_state": {"enum": ["RECONCILIATION_REQUIRED", "QUARANTINED"]},
+          "uncertainty_sha256": {"$ref": "#/$defs/digest"},
+          "quarantine": {"properties": {"active": {"const": true}}}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"terminal_state": {"const": "VERIFIED"}}},
+      "then": {"properties": {"delivery_state": {"const": "verified"}, "uncertainty_sha256": {"type": "null"}}}
+    },
+    {
+      "if": {"properties": {"terminal_state": {"const": "SAFE_HALT"}}},
+      "then": {"properties": {"effect_started": {"const": false}, "delivery_state": {"const": "not_started"}, "uncertainty_sha256": {"type": "null"}}}
+    }
+  ],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "decimal_id": {"type": "string", "pattern": "^[1-9][0-9]*$"},
+    "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "timestamp": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+    "issuer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "repository_id", "repository_owner_id", "workflow", "ref", "source_commit", "environment"],
+      "properties": {
+        "repository": {"const": "OpenAdaptAI/.github"},
+        "repository_id": {"const": "858454062"},
+        "repository_owner_id": {"const": "132681217"},
+        "workflow": {"const": ".github/workflows/issue-qualification-worker-terminal-receipt.yml"},
+        "ref": {"const": "refs/heads/main"},
+        "source_commit": {"$ref": "#/$defs/commit"},
+        "environment": {"const": "qualification-worker-terminal-receipt"}
+      }
+    }
+  }
+}

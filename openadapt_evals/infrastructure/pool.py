@@ -37,7 +37,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Mapping
 
 from openadapt_evals.infrastructure.azure_vm import (
     SSH_OPTS,
@@ -88,6 +88,117 @@ class PoolRunResult:
     elapsed_seconds: float
     worker_results: list[tuple[str, int, int, str | None]]
     """List of (worker_name, completed, failed, error_or_none)."""
+
+    terminal_receipts: tuple[Mapping[str, Any], ...] = ()
+    """One centrally issued terminal receipt for each requested task."""
+
+
+def validate_terminal_pool_result(
+    result: PoolRunResult,
+    *,
+    expected_dispatches: Mapping[str, str],
+) -> PoolRunResult:
+    """Require closed task counts and one central receipt per dispatch."""
+
+    task_count = len(expected_dispatches)
+    expected_workers = set(expected_dispatches)
+    expected_dispatch_ids = set(expected_dispatches.values())
+    if (
+        result.total_tasks != task_count
+        or len(expected_dispatch_ids) != task_count
+        or any(
+            not isinstance(worker, str)
+            or not worker
+            or not isinstance(dispatch, str)
+            or not dispatch
+            for worker, dispatch in expected_dispatches.items()
+        )
+    ):
+        raise RuntimeError("Qualified terminal expectations are not exact and unique.")
+    if len(result.worker_results) != task_count:
+        raise RuntimeError("A requested task has no worker terminal result.")
+    rows: dict[str, tuple[str, int, int, str | None]] = {}
+    for row in result.worker_results:
+        if (
+            not isinstance(row, tuple)
+            or len(row) != 4
+            or row[0] not in expected_workers
+            or row[0] in rows
+            or isinstance(row[1], bool)
+            or not isinstance(row[1], int)
+            or isinstance(row[2], bool)
+            or not isinstance(row[2], int)
+            or row[1] not in {0, 1}
+            or row[2] not in {0, 1}
+            or row[1] + row[2] != 1
+        ):
+            raise RuntimeError("A worker terminal result is not one closed task result.")
+        if row[1] == 1 and row[3] is not None:
+            raise RuntimeError("A completed worker terminal result carries an error.")
+        rows[row[0]] = row
+    if set(rows) != expected_workers:
+        raise RuntimeError("Worker terminal results differ from the requested workers.")
+
+    if len(result.terminal_receipts) != task_count:
+        raise RuntimeError("A requested task has no central terminal receipt.")
+    receipts_by_dispatch: dict[str, Mapping[str, Any]] = {}
+    receipt_ids: set[str] = set()
+    task_ids: set[str] = set()
+    for receipt in result.terminal_receipts:
+        if not isinstance(receipt, Mapping):
+            raise RuntimeError("A central terminal receipt is invalid.")
+        dispatch_id = receipt.get("dispatch_id_sha256")
+        receipt_id = receipt.get("receipt_id_sha256")
+        task_id = receipt.get("task_id_sha256")
+        terminal_state = receipt.get("terminal_state")
+        if (
+            dispatch_id not in expected_dispatch_ids
+            or dispatch_id in receipts_by_dispatch
+            or not isinstance(receipt_id, str)
+            or receipt_id in receipt_ids
+            or not isinstance(task_id, str)
+            or task_id in task_ids
+            or terminal_state
+            not in {
+                "VERIFIED",
+                "SAFE_HALT",
+                "RECONCILIATION_REQUIRED",
+                "QUARANTINED",
+            }
+        ):
+            raise RuntimeError("Central terminal receipt identities are not exact and unique.")
+        receipts_by_dispatch[dispatch_id] = receipt
+        receipt_ids.add(receipt_id)
+        task_ids.add(task_id)
+    if set(receipts_by_dispatch) != expected_dispatch_ids:
+        raise RuntimeError("Central terminal receipts differ from the requested dispatches.")
+
+    for worker, dispatch_id in expected_dispatches.items():
+        receipt_completed = (
+            receipts_by_dispatch[dispatch_id]["terminal_state"] == "VERIFIED"
+        )
+        row_completed = rows[worker][1] == 1
+        if row_completed != receipt_completed:
+            raise RuntimeError(
+                "A worker task count differs from its central terminal receipt."
+            )
+
+    completed = sum(
+        receipt["terminal_state"] == "VERIFIED"
+        for receipt in result.terminal_receipts
+    )
+    failed = task_count - completed
+    row_completed = sum(row[1] for row in result.worker_results)
+    row_failed = sum(row[2] for row in result.worker_results)
+    if (
+        result.completed != completed
+        or result.failed != failed
+        or row_completed != completed
+        or row_failed != failed
+        or result.completed + result.failed != result.total_tasks
+    ):
+        raise RuntimeError("Qualified terminal task counts do not close.")
+    return result
 
 
 # Docker setup script template for WAA workers.
