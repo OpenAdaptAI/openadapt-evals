@@ -6,6 +6,12 @@ from datetime import datetime, timezone
 
 import pytest
 
+from openadapt_evals.infrastructure.windows_worker_dispatch import (
+    QualifiedPrelaunchEvidence,
+    WorkerDispatchError,
+    _parse_prelaunch,
+    build_terminal_evidence,
+)
 from openadapt_evals.infrastructure.windows_worker_trust import (
     BURN_RECEIPT_DOMAIN,
     BURNED_IDENTITIES_DOMAIN,
@@ -356,6 +362,97 @@ def test_central_worker_admission_dispatch_and_terminal_contracts() -> None:
         )["terminal_state"]
         == "VERIFIED"
     )
+
+
+def _prelaunch_evidence(
+    admission: dict[str, object],
+    dispatch: dict[str, object],
+) -> dict[str, object]:
+    receipt, _ = _terminal(admission, dispatch)
+    launch_attempt = {
+        **receipt["launch_attempt"],
+        "child_created": False,
+        "failure_classification": "PROCESS_START_REFUSED",
+    }
+    launch_projection = {
+        "worker_admission_sha256": admission["admission_object_sha256"],
+        "dispatch_id_sha256": dispatch["dispatch_id_sha256"],
+        "provider_identity_sha256": dispatch["provider_identity_sha256"],
+        "worker_identity_sha256": dispatch["worker_identity_sha256"],
+        "live_provider_observation_sha256": dispatch[
+            "live_provider_observation_sha256"
+        ],
+        "admitted_runtime_sha256": dispatch["admitted_runtime_sha256"],
+        "run_id": dispatch["run_id"],
+        "run_attempt": "1",
+        "start_id_sha256": dispatch["start_id_sha256"],
+        "capability_handle_sha256": dispatch["capability_handle_sha256"],
+        "launch_attempt": launch_attempt,
+    }
+    value = {
+        key: item
+        for key, item in receipt.items()
+        if key not in {"receipt_id_sha256", "issuer"}
+    }
+    value.update(
+        schema_version="openadapt.qualification-worker-terminal-evidence/v1",
+        launch_attempt=launch_attempt,
+        launch_attempt_sha256=_domain_sha(
+            LAUNCH_ATTEMPT_IDENTITY_DOMAIN,
+            launch_projection,
+        ),
+        process=None,
+        effect_started=False,
+        delivery_state="not_started",
+        terminal_state="PRELAUNCH_QUARANTINED",
+        exit_code=None,
+        uncertainty_sha256=None,
+        quarantine={
+            "active": True,
+            "reason_code": "PROCESS_START_REFUSED",
+            "evidence_sha256": launch_attempt["evidence_sha256"],
+        },
+        terminal_readback={
+            "state": "PRELAUNCH_QUARANTINED",
+            "classification": "PROCESS_START_REFUSED",
+        },
+        interrupt_evidence=None,
+    )
+    return value
+
+
+def test_bounded_prelaunch_evidence_requires_no_child_and_exact_burn() -> None:
+    observation = _observation()
+    admission = _admission(observation)
+    capability = b"c" * 32
+    dispatch = _dispatch(admission, capability)
+    opaque_admission = VerifiedWorkerAdmission._from_authority(admission)
+    from openadapt_evals.infrastructure.windows_worker_trust import (
+        AuthorizedWorkerDispatch,
+    )
+
+    opaque_dispatch = AuthorizedWorkerDispatch._from_authority(dispatch, capability)
+    value = _prelaunch_evidence(admission, dispatch)
+    parsed = _parse_prelaunch(
+        value,
+        admission=opaque_admission,
+        dispatch=opaque_dispatch,
+    )
+    assert isinstance(parsed, QualifiedPrelaunchEvidence)
+    assert build_terminal_evidence(
+        admission=opaque_admission,
+        dispatch=opaque_dispatch,
+        process=parsed,
+    ) == value
+
+    changed = deepcopy(value)
+    changed["launch_attempt"]["child_created"] = True
+    with pytest.raises(WorkerDispatchError, match="launch attempt differs"):
+        _parse_prelaunch(
+            changed,
+            admission=opaque_admission,
+            dispatch=opaque_dispatch,
+        )
 
 
 @pytest.mark.parametrize(

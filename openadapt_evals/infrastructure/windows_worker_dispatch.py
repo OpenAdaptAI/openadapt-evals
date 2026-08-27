@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from openadapt_evals.infrastructure.windows_pool_isolation import (
+    WindowsPoolIsolationError,
     egress_policy_sha256,
     egress_proxy_authorization_sha256,
     validate_egress_policy,
@@ -69,6 +70,183 @@ class QualifiedProcessEvidence:
     burn_ledger_revision: int
     burned_at: str
     ledger_readback_sha256: str
+
+
+@dataclass(frozen=True)
+class QualifiedPrelaunchEvidence:
+    """A burned capability with proof that process launch was not invoked."""
+
+    terminal_evidence: Mapping[str, Any]
+
+
+_TERMINAL_EVIDENCE_KEYS = {
+    "schema_version",
+    "worker_admission_sha256",
+    "dispatch_id_sha256",
+    "provider_identity_sha256",
+    "worker_identity_sha256",
+    "live_provider_observation_sha256",
+    "admitted_runtime_sha256",
+    "run_id",
+    "run_attempt",
+    "start_id_sha256",
+    "task_id_sha256",
+    "task_condition_sha256",
+    "capability_handle_sha256",
+    "launch_attempt",
+    "launch_attempt_sha256",
+    "process",
+    "oracle_sha256",
+    "result_sha256",
+    "log_sha256",
+    "burned_identities_sha256",
+    "burn_ledger_revision",
+    "burn_receipt_sha256",
+    "burned_at",
+    "ledger_readback_sha256",
+    "effect_started",
+    "delivery_state",
+    "terminal_state",
+    "exit_code",
+    "uncertainty_sha256",
+    "quarantine",
+    "completed_at",
+    "terminal_readback",
+    "interrupt_evidence",
+}
+
+
+def _parse_prelaunch(
+    value: object,
+    *,
+    admission: VerifiedWorkerAdmission,
+    dispatch: AuthorizedWorkerDispatch,
+) -> QualifiedPrelaunchEvidence:
+    if not isinstance(value, Mapping) or set(value) != _TERMINAL_EVIDENCE_KEYS:
+        raise WorkerDispatchError("prelaunch terminal evidence is not closed")
+    expected = {
+        "schema_version": "openadapt.qualification-worker-terminal-evidence/v1",
+        "worker_admission_sha256": admission.object["admission_object_sha256"],
+        "dispatch_id_sha256": dispatch.object["dispatch_id_sha256"],
+        "provider_identity_sha256": dispatch.object["provider_identity_sha256"],
+        "worker_identity_sha256": dispatch.object["worker_identity_sha256"],
+        "live_provider_observation_sha256": dispatch.object[
+            "live_provider_observation_sha256"
+        ],
+        "admitted_runtime_sha256": dispatch.object["admitted_runtime_sha256"],
+        "run_id": dispatch.object["run_id"],
+        "run_attempt": "1",
+        "start_id_sha256": dispatch.object["start_id_sha256"],
+        "task_id_sha256": dispatch.object["task_id_sha256"],
+        "task_condition_sha256": dispatch.object["task_condition_sha256"],
+        "capability_handle_sha256": dispatch.object["capability_handle_sha256"],
+        "process": None,
+        "effect_started": False,
+        "delivery_state": "not_started",
+        "terminal_state": "PRELAUNCH_QUARANTINED",
+        "exit_code": None,
+        "uncertainty_sha256": None,
+        "interrupt_evidence": None,
+    }
+    if any(value[key] != expected_value for key, expected_value in expected.items()):
+        raise WorkerDispatchError("prelaunch terminal binding differs")
+    launch_attempt = value["launch_attempt"]
+    if (
+        not isinstance(launch_attempt, Mapping)
+        or set(launch_attempt)
+        != {
+            "attempted_at",
+            "host_identity_sha256",
+            "executable_sha256",
+            "capability_handle_sha256",
+            "evidence_sha256",
+            "child_created",
+            "failure_classification",
+        }
+        or (
+        launch_attempt.get("child_created") is not False
+        or launch_attempt.get("failure_classification") != "PROCESS_START_REFUSED"
+        or launch_attempt.get("host_identity_sha256")
+        != admission.object["host_identity_sha256"]
+        )
+    ):
+        raise WorkerDispatchError("prelaunch launch attempt differs")
+    quarantine = value["quarantine"]
+    if not isinstance(quarantine, Mapping) or quarantine != {
+        "active": True,
+        "reason_code": "PROCESS_START_REFUSED",
+        "evidence_sha256": launch_attempt.get("evidence_sha256"),
+    }:
+        raise WorkerDispatchError("prelaunch quarantine differs")
+    for key in (
+        "launch_attempt_sha256",
+        "oracle_sha256",
+        "result_sha256",
+        "log_sha256",
+        "burned_identities_sha256",
+        "burn_receipt_sha256",
+        "ledger_readback_sha256",
+    ):
+        if not isinstance(value[key], str) or SHA256.fullmatch(value[key]) is None:
+            raise WorkerDispatchError(f"prelaunch {key} is invalid")
+    launch_projection = {
+        "worker_admission_sha256": dispatch.object["worker_admission_sha256"],
+        "dispatch_id_sha256": dispatch.object["dispatch_id_sha256"],
+        "provider_identity_sha256": dispatch.object["provider_identity_sha256"],
+        "worker_identity_sha256": dispatch.object["worker_identity_sha256"],
+        "live_provider_observation_sha256": dispatch.object[
+            "live_provider_observation_sha256"
+        ],
+        "admitted_runtime_sha256": dispatch.object["admitted_runtime_sha256"],
+        "run_id": dispatch.object["run_id"],
+        "run_attempt": "1",
+        "start_id_sha256": dispatch.object["start_id_sha256"],
+        "capability_handle_sha256": dispatch.object["capability_handle_sha256"],
+        "launch_attempt": launch_attempt,
+    }
+    expected_launch = "sha256:" + hashlib.sha256(
+        LAUNCH_ATTEMPT_IDENTITY_DOMAIN + canonical_json(launch_projection)
+    ).hexdigest()
+    if value["launch_attempt_sha256"] != expected_launch:
+        raise WorkerDispatchError("prelaunch launch attempt identity differs")
+    revision = value["burn_ledger_revision"]
+    if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+        raise WorkerDispatchError("prelaunch burn revision is invalid")
+    for key in ("burned_at", "completed_at"):
+        if not isinstance(value[key], str) or TIMESTAMP.fullmatch(value[key]) is None:
+            raise WorkerDispatchError(f"prelaunch {key} is invalid")
+    if launch_attempt["attempted_at"] != value["burned_at"]:
+        raise WorkerDispatchError("prelaunch attempt and burn ordering differs")
+    if value["completed_at"] < value["burned_at"]:
+        raise WorkerDispatchError("prelaunch completed before dispatch burn")
+    burned_projection = {
+        "worker_identity_sha256": dispatch.object["worker_identity_sha256"],
+        "run_id": dispatch.object["run_id"],
+        "run_attempt": "1",
+        "start_id_sha256": dispatch.object["start_id_sha256"],
+        "dispatch_id_sha256": dispatch.object["dispatch_id_sha256"],
+        "task_id_sha256": dispatch.object["task_id_sha256"],
+        "capability_handle_sha256": dispatch.object["capability_handle_sha256"],
+        "burn_ledger_revision": revision,
+        "burned_at": value["burned_at"],
+    }
+    expected_burned = "sha256:" + hashlib.sha256(
+        BURNED_IDENTITIES_DOMAIN + canonical_json(burned_projection)
+    ).hexdigest()
+    if value["burned_identities_sha256"] != expected_burned:
+        raise WorkerDispatchError("prelaunch burned identities differ")
+    burn_projection = {
+        "burned_identities_sha256": expected_burned,
+        "burn_ledger_revision": revision,
+        "burned_at": value["burned_at"],
+        "ledger_readback_sha256": value["ledger_readback_sha256"],
+    }
+    expected_burn_receipt = "sha256:" + hashlib.sha256(
+        BURN_RECEIPT_DOMAIN + canonical_json(burn_projection)
+    ).hexdigest()
+    if value["burn_receipt_sha256"] != expected_burn_receipt:
+        raise WorkerDispatchError("prelaunch burn receipt differs")
+    return QualifiedPrelaunchEvidence(terminal_evidence=dict(value))
 
 
 def _validate_program_value(value: str, label: str) -> str:
@@ -384,6 +562,25 @@ actual_subset = subprocess.run(
 ).stdout.split()[0]
 if actual_subset != subset_digest[7:]:
     raise SystemExit('guest subset readback differs')
+launch_invoked_path = root / 'launch-invoked.json'
+launch_invoked = {
+    'schema_version': 'openadapt.qualification-worker-launch-invocation/v1',
+    'dispatch_id_sha256': dispatch['dispatch_id_sha256'],
+    'capability_handle_sha256': dispatch['capability_handle_sha256'],
+    'invoked_at': datetime.datetime.now(datetime.timezone.utc).isoformat(
+        timespec='seconds'
+    ).replace('+00:00', 'Z'),
+}
+launch_invoked_bytes = json.dumps(
+    launch_invoked, sort_keys=True, separators=(',', ':')
+).encode('utf-8') + b'\n'
+fd = os.open(
+    launch_invoked_path,
+    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+    0o400,
+)
+with os.fdopen(fd, 'wb') as stream:
+    stream.write(launch_invoked_bytes); stream.flush(); os.fsync(stream.fileno())
 launch_script = r'''set -euo pipefail
 IFS= read -r OPENAI_API_KEY
 IFS= read -r OPENADAPT_PROXY_PASSWORD
@@ -522,6 +719,218 @@ print(json.dumps(evidence, sort_keys=True, separators=(',', ':')))
 """
 
 
+_RECOVER_PRELAUNCH_PROGRAM = r"""
+import datetime
+import fcntl
+import hashlib
+import json
+import os
+import pathlib
+import subprocess
+import sys
+
+worker, container, run_id, expected_dispatch_sha256 = sys.argv[1:]
+payload = json.loads(sys.stdin.buffer.read())
+if set(payload) != {'admission', 'dispatch'}:
+    raise SystemExit('recovery payload is not closed')
+admission = payload['admission']
+dispatch = payload['dispatch']
+root = pathlib.Path('/var/lib/openadapt/windows-burned-runs') / run_id
+lock_fd = os.open(
+    pathlib.Path('/var/lock') / f'openadapt-windows-{worker}.lock',
+    os.O_WRONLY | os.O_CREAT,
+    0o600,
+)
+fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+terminal_path = root / 'prelaunch-terminal-evidence.json'
+if terminal_path.is_file() and not terminal_path.is_symlink():
+    print(terminal_path.read_text(encoding='utf-8').strip())
+    raise SystemExit(0)
+dispatch_path = root / 'dispatch.json'
+if not dispatch_path.is_file() or dispatch_path.is_symlink():
+    raise SystemExit('dispatch burn evidence is absent')
+dispatch_bytes = dispatch_path.read_bytes()
+if hashlib.sha256(dispatch_bytes).hexdigest() != expected_dispatch_sha256:
+    raise SystemExit('dispatch burn evidence differs')
+if dispatch_bytes != json.dumps(
+    dispatch, sort_keys=True, separators=(',', ':')
+).encode('utf-8') + b'\n':
+    raise SystemExit('dispatch object differs')
+for forbidden in ('launch-invoked.json', 'process.json', 'launch-attempt.json'):
+    if (root / forbidden).exists():
+        raise SystemExit('process launch may have been invoked')
+burn_path = root / 'burn.json'
+if not burn_path.is_file() or burn_path.is_symlink():
+    raise SystemExit('dispatch burn receipt is absent')
+burn = json.loads(burn_path.read_bytes())
+if set(burn) != {
+    'dispatch_id_sha256', 'capability_handle_sha256',
+    'burn_ledger_revision', 'burned_at'
+}:
+    raise SystemExit('dispatch burn receipt is not closed')
+if (
+    burn['dispatch_id_sha256'] != dispatch['dispatch_id_sha256'] or
+    burn['capability_handle_sha256'] != dispatch['capability_handle_sha256']
+):
+    raise SystemExit('dispatch burn receipt differs')
+revision_path = pathlib.Path('/var/lib/openadapt/windows-burn-ledger/revision')
+ledger_readback = 'sha256:' + hashlib.sha256(
+    revision_path.read_bytes() + dispatch_path.read_bytes() + burn_path.read_bytes()
+).hexdigest()
+executable = subprocess.run(
+    ['docker', 'exec', container, 'bash', '-c',
+     'sha256sum "$(command -v bash)" | cut -d" " -f1'],
+    check=True, capture_output=True, text=True,
+).stdout.strip()
+executable_sha256 = 'sha256:' + executable
+attempted_at = burn['burned_at']
+
+def artifact(kind, body):
+    value = {'schema_version': f'openadapt.qualification-worker-{kind}/v1', **body}
+    raw = json.dumps(value, sort_keys=True, separators=(',', ':')).encode('utf-8') + b'\n'
+    path = root / f'prelaunch-{kind}.json'
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
+    with os.fdopen(fd, 'wb') as stream:
+        stream.write(raw); stream.flush(); os.fsync(stream.fileno())
+    return 'sha256:' + hashlib.sha256(raw).hexdigest()
+
+common = {
+    'dispatch_id_sha256': dispatch['dispatch_id_sha256'],
+    'classification': 'PROCESS_START_REFUSED',
+}
+oracle_sha256 = artifact('prelaunch-oracle-absence', common)
+result_sha256 = artifact('prelaunch-result', common)
+log_sha256 = artifact('prelaunch-log', common)
+launch_source = {
+    'schema_version': 'openadapt.qualification-worker-local-launch-evidence/v1',
+    'worker_admission_sha256': dispatch['worker_admission_sha256'],
+    'dispatch_id_sha256': dispatch['dispatch_id_sha256'],
+    'attempted_at': attempted_at,
+    'host_identity_sha256': admission['host_identity_sha256'],
+    'executable_sha256': executable_sha256,
+    'capability_handle_sha256': dispatch['capability_handle_sha256'],
+    'child_created': False,
+    'failure_classification': 'PROCESS_START_REFUSED',
+    'process_start_identity_sha256': None,
+    'burn_ledger_revision': burn['burn_ledger_revision'],
+    'ledger_readback_sha256': ledger_readback,
+}
+launch_source_bytes = json.dumps(
+    launch_source, sort_keys=True, separators=(',', ':')
+).encode('utf-8') + b'\n'
+launch_source_path = root / 'prelaunch-launch-evidence.json'
+fd = os.open(launch_source_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
+with os.fdopen(fd, 'wb') as stream:
+    stream.write(launch_source_bytes); stream.flush(); os.fsync(stream.fileno())
+launch_attempt = {
+    'attempted_at': attempted_at,
+    'host_identity_sha256': admission['host_identity_sha256'],
+    'executable_sha256': executable_sha256,
+    'capability_handle_sha256': dispatch['capability_handle_sha256'],
+    'evidence_sha256': 'sha256:' + hashlib.sha256(launch_source_bytes).hexdigest(),
+    'child_created': False,
+    'failure_classification': 'PROCESS_START_REFUSED',
+}
+launch_projection = {
+    'worker_admission_sha256': dispatch['worker_admission_sha256'],
+    'dispatch_id_sha256': dispatch['dispatch_id_sha256'],
+    'provider_identity_sha256': dispatch['provider_identity_sha256'],
+    'worker_identity_sha256': dispatch['worker_identity_sha256'],
+    'live_provider_observation_sha256': dispatch['live_provider_observation_sha256'],
+    'admitted_runtime_sha256': dispatch['admitted_runtime_sha256'],
+    'run_id': run_id,
+    'run_attempt': '1',
+    'start_id_sha256': dispatch['start_id_sha256'],
+    'capability_handle_sha256': dispatch['capability_handle_sha256'],
+    'launch_attempt': launch_attempt,
+}
+launch_attempt_sha256 = 'sha256:' + hashlib.sha256(
+    b'OpenAdapt qualification worker launch attempt v1\0' +
+    json.dumps(launch_projection, sort_keys=True, separators=(',', ':')).encode('utf-8')
+).hexdigest()
+burned_projection = {
+    'worker_identity_sha256': dispatch['worker_identity_sha256'],
+    'run_id': run_id,
+    'run_attempt': '1',
+    'start_id_sha256': dispatch['start_id_sha256'],
+    'dispatch_id_sha256': dispatch['dispatch_id_sha256'],
+    'task_id_sha256': dispatch['task_id_sha256'],
+    'capability_handle_sha256': dispatch['capability_handle_sha256'],
+    'burn_ledger_revision': burn['burn_ledger_revision'],
+    'burned_at': burn['burned_at'],
+}
+burned_identities_sha256 = 'sha256:' + hashlib.sha256(
+    b'OpenAdapt qualification worker burned identities v1\0' +
+    json.dumps(burned_projection, sort_keys=True, separators=(',', ':')).encode('utf-8')
+).hexdigest()
+burn_receipt_projection = {
+    'burned_identities_sha256': burned_identities_sha256,
+    'burn_ledger_revision': burn['burn_ledger_revision'],
+    'burned_at': burn['burned_at'],
+    'ledger_readback_sha256': ledger_readback,
+}
+burn_receipt_sha256 = 'sha256:' + hashlib.sha256(
+    b'OpenAdapt qualification worker burn receipt v1\0' +
+    json.dumps(burn_receipt_projection, sort_keys=True, separators=(',', ':')).encode('utf-8')
+).hexdigest()
+completed_at = datetime.datetime.now(datetime.timezone.utc).isoformat(
+    timespec='seconds'
+).replace('+00:00', 'Z')
+terminal = {
+    'schema_version': 'openadapt.qualification-worker-terminal-evidence/v1',
+    'worker_admission_sha256': dispatch['worker_admission_sha256'],
+    'dispatch_id_sha256': dispatch['dispatch_id_sha256'],
+    'provider_identity_sha256': dispatch['provider_identity_sha256'],
+    'worker_identity_sha256': dispatch['worker_identity_sha256'],
+    'live_provider_observation_sha256': dispatch['live_provider_observation_sha256'],
+    'admitted_runtime_sha256': dispatch['admitted_runtime_sha256'],
+    'run_id': run_id,
+    'run_attempt': '1',
+    'start_id_sha256': dispatch['start_id_sha256'],
+    'task_id_sha256': dispatch['task_id_sha256'],
+    'task_condition_sha256': dispatch['task_condition_sha256'],
+    'capability_handle_sha256': dispatch['capability_handle_sha256'],
+    'launch_attempt': launch_attempt,
+    'launch_attempt_sha256': launch_attempt_sha256,
+    'process': None,
+    'oracle_sha256': oracle_sha256,
+    'result_sha256': result_sha256,
+    'log_sha256': log_sha256,
+    'burned_identities_sha256': burned_identities_sha256,
+    'burn_ledger_revision': burn['burn_ledger_revision'],
+    'burn_receipt_sha256': burn_receipt_sha256,
+    'burned_at': burn['burned_at'],
+    'ledger_readback_sha256': ledger_readback,
+    'effect_started': False,
+    'delivery_state': 'not_started',
+    'terminal_state': 'PRELAUNCH_QUARANTINED',
+    'exit_code': None,
+    'uncertainty_sha256': None,
+    'quarantine': {
+        'active': True,
+        'reason_code': 'PROCESS_START_REFUSED',
+        'evidence_sha256': launch_attempt['evidence_sha256'],
+    },
+    'completed_at': completed_at,
+    'terminal_readback': {
+        'state': 'PRELAUNCH_QUARANTINED',
+        'classification': 'PROCESS_START_REFUSED',
+    },
+    'interrupt_evidence': None,
+}
+terminal_bytes = json.dumps(
+    terminal, sort_keys=True, separators=(',', ':')
+).encode('utf-8') + b'\n'
+fd = os.open(terminal_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
+with os.fdopen(fd, 'wb') as stream:
+    stream.write(terminal_bytes); stream.flush(); os.fsync(stream.fileno())
+directory_fd = os.open(root, os.O_RDONLY)
+try: os.fsync(directory_fd)
+finally: os.close(directory_fd)
+print(terminal_bytes.decode('utf-8').strip())
+"""
+
+
 def launch_authorized_process(
     manager: Any,
     *,
@@ -537,7 +946,7 @@ def launch_authorized_process(
     experiment: str,
     subset: bytes,
     api_key: str,
-) -> QualifiedProcessEvidence:
+) -> QualifiedProcessEvidence | QualifiedPrelaunchEvidence:
     """Consume one capability and start its exact process in one host lock."""
 
     for value, label in ((agent, "agent"), (model, "model"), (experiment, "experiment")):
@@ -574,21 +983,58 @@ def launch_authorized_process(
             proxy_authorization.encode("utf-8")
         ).decode("ascii"),
     }
-    result: subprocess.CompletedProcess[bytes] = manager._ssh(
-        [
-            "sudo",
-            "python3",
-            "-c",
-            _ATOMIC_LAUNCH_PROGRAM,
-            manager.worker,
-            manager.container,
-            policy_sha256,
-            container_state_sha256,
-            live_nft_sha256,
-        ],
-        input_bytes=canonical_json(payload),
-        timeout_seconds=300,
-    )
+    try:
+        result: subprocess.CompletedProcess[bytes] = manager._ssh(
+            [
+                "sudo",
+                "python3",
+                "-c",
+                _ATOMIC_LAUNCH_PROGRAM,
+                manager.worker,
+                manager.container,
+                policy_sha256,
+                container_state_sha256,
+                live_nft_sha256,
+            ],
+            input_bytes=canonical_json(payload),
+            timeout_seconds=300,
+        )
+    except WindowsPoolIsolationError:
+        dispatch_bytes = canonical_json(dispatch.object) + b"\n"
+        try:
+            recovered = manager._ssh(
+                [
+                    "sudo",
+                    "python3",
+                    "-c",
+                    _RECOVER_PRELAUNCH_PROGRAM,
+                    manager.worker,
+                    manager.container,
+                    dispatch.object["run_id"],
+                    hashlib.sha256(dispatch_bytes).hexdigest(),
+                ],
+                input_bytes=canonical_json(
+                    {
+                        "admission": dict(admission.object),
+                        "dispatch": dict(dispatch.object),
+                    }
+                ),
+                timeout_seconds=60,
+            )
+        except WindowsPoolIsolationError as recovery_error:
+            raise WorkerDispatchError(
+                "qualified launch failed without bounded prelaunch proof"
+            ) from recovery_error
+        try:
+            recovery_value = json.loads(recovered.stdout.splitlines()[-1])
+        except (IndexError, json.JSONDecodeError) as exc:
+            raise WorkerDispatchError("prelaunch recovery evidence is invalid") from exc
+        prelaunch = _parse_prelaunch(
+            recovery_value,
+            admission=admission,
+            dispatch=dispatch,
+        )
+        return prelaunch
     try:
         process = _parse_process(json.loads(result.stdout.splitlines()[-1]))
     except (IndexError, json.JSONDecodeError) as exc:
@@ -1052,13 +1498,19 @@ def build_terminal_evidence(
     *,
     admission: VerifiedWorkerAdmission,
     dispatch: AuthorizedWorkerDispatch,
-    process: QualifiedProcessEvidence,
-    terminal_readback: Mapping[str, Any],
+    process: QualifiedProcessEvidence | QualifiedPrelaunchEvidence,
+    terminal_readback: Mapping[str, Any] | None = None,
     interrupt_evidence: Mapping[str, Any] | None = None,
     completed_at: datetime | None = None,
 ) -> Mapping[str, Any]:
     """Build one closed local fact set for the central terminal issuer."""
 
+    if isinstance(process, QualifiedPrelaunchEvidence):
+        if terminal_readback is not None or interrupt_evidence is not None:
+            raise WorkerDispatchError("prelaunch evidence cannot have process readback")
+        return process.terminal_evidence
+    if terminal_readback is None:
+        raise WorkerDispatchError("postlaunch terminal readback is absent")
     if terminal_readback.get("state") == "RUNNING":
         raise WorkerDispatchError("a running process has no terminal evidence")
     if terminal_readback.get("process") != asdict(process):
