@@ -394,6 +394,7 @@ class PoolWorker:
     qualified_worker_identity_sha256: str | None = None
     qualified_local_worker_identity_sha256: str | None = None
     qualified_egress_policy_sha256: str | None = None
+    qualified_live_nft_sha256: str | None = None
     qualified_start_proof_sha256: str | None = None
     qualified_container_state_sha256: str | None = None
     qualified_dispatch_expires_at: str | None = None

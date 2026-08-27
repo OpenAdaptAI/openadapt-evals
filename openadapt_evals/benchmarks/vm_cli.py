@@ -103,6 +103,30 @@ def _get_pool_ssh_username(pool: dict) -> str:
     return pool.get("ssh_username", "azureuser")
 
 
+def _has_active_qualified_run(worker: dict) -> bool:
+    """Return true when a legacy control could bypass a qualified run gate."""
+
+    status = worker.get("status")
+    return bool(
+        (isinstance(status, str) and status.startswith("qualified-"))
+        or worker.get("qualified_run_id")
+        or worker.get("qualified_start_proof_sha256")
+        or worker.get("qualified_task_binding_sha256")
+    )
+
+
+def _refuse_legacy_mutation(command: str, workers: list[dict]) -> bool:
+    active = [worker.get("name", "unknown") for worker in workers if _has_active_qualified_run(worker)]
+    if not active:
+        return False
+    log(
+        command,
+        "ERROR: The legacy control is disabled for active qualified workers: "
+        + ", ".join(active),
+    )
+    return True
+
+
 def _create_vm_manager(cloud: str | None = None, resource_group: str | None = None):
     """Factory to create the appropriate VM manager based on cloud provider.
 
@@ -748,7 +772,7 @@ def cmd_pool_run(args):
     num_tasks = getattr(args, "tasks", 10)
     agent = getattr(args, "agent", "navi")
     model = getattr(args, "model", "gpt-4o-mini")
-    api_key = getattr(args, "api_key", None)
+    api_key = None
 
     vm_manager = _create_vm_manager(getattr(args, "cloud", None))
     manager = PoolManager(vm_manager=vm_manager, log_fn=log)
@@ -801,7 +825,7 @@ def cmd_pool_auto(args):
     num_tasks = getattr(args, "tasks", None) or num_workers
     agent = getattr(args, "agent", "navi")
     model = getattr(args, "model", "gpt-4o-mini")
-    api_key = getattr(args, "api_key", None)
+    api_key = None
     qualification_dir = args.qualification_dir
     if qualification_dir.is_symlink() or not qualification_dir.is_dir():
         log("POOL-AUTO", "ERROR: qualification directory is not a regular directory")
@@ -1019,6 +1043,34 @@ def cmd_pool_start(args):
     return 0
 
 
+def cmd_pool_acr_install(args):
+    """Pull one exact ACR image through an admitted worker identity."""
+
+    init_logging()
+    from openadapt_evals.infrastructure.pool import PoolManager
+
+    password = os.environ.get("OPENADAPT_ACR_PASSWORD")
+    if not password:
+        log("POOL-ACR", "ERROR: OPENADAPT_ACR_PASSWORD is absent")
+        return 1
+    vm_manager = _create_vm_manager(getattr(args, "cloud", None))
+    manager = PoolManager(vm_manager=vm_manager, log_fn=log)
+    try:
+        manager.provision_worker_from_acr(
+            args.worker,
+            identity_path=args.worker_identity,
+            login_server=args.login_server,
+            username=args.username,
+            image_ref=args.image,
+            password=password,
+        )
+    except (RuntimeError, ValueError) as exc:
+        log("POOL-ACR", f"ERROR: {exc}")
+        return 1
+    log("POOL-ACR", "The admitted ACR image is installed.")
+    return 0
+
+
 def cmd_pool_vnc(args):
     """Open VNC to a specific pool worker via SSH tunnel.
 
@@ -1048,6 +1100,8 @@ def cmd_pool_vnc(args):
     ssh_user = _get_pool_ssh_username(pool)
 
     if all_workers:
+        if _refuse_legacy_mutation("POOL-VNC", workers):
+            return 1
         # Set up tunnels for all workers
         log("POOL-VNC", f"Setting up VNC tunnels for {len(workers)} workers...")
         tunnel_procs = []
@@ -1131,6 +1185,9 @@ def cmd_pool_vnc(args):
 
         if not target_worker:
             log("POOL-VNC", f"ERROR: Worker '{worker_name}' not found")
+            return 1
+
+        if _refuse_legacy_mutation("POOL-VNC", [target_worker]):
             return 1
 
         ip = target_worker.get("ip")
@@ -1311,6 +1368,9 @@ def cmd_pool_exec(args):
         if not workers:
             log("POOL-EXEC", f"ERROR: Worker '{worker_filter}' not found")
             return 1
+
+    if _refuse_legacy_mutation("POOL-EXEC", workers):
+        return 1
 
     # Run command on each worker
     for worker in workers:
@@ -2167,15 +2227,15 @@ def cmd_test_api_key(args):
     """
     init_logging()
 
-    # Get API key from args or environment
-    api_key = args.api_key
-    if not api_key:
-        try:
-            from openadapt_evals.config import settings
+    # Read the key from configured secret ingress. CLI values would enter shell
+    # history and the local process argv.
+    api_key = None
+    try:
+        from openadapt_evals.config import settings
 
-            api_key = settings.openai_api_key
-        except Exception:
-            pass
+        api_key = settings.openai_api_key
+    except Exception:
+        pass
 
     if not api_key:
         import os
@@ -2184,7 +2244,7 @@ def cmd_test_api_key(args):
 
     if not api_key:
         log("TEST-API", "❌ No API key found")
-        log("TEST-API", "   Set OPENAI_API_KEY in .env or pass --api-key")
+        log("TEST-API", "   Set OPENAI_API_KEY in the process environment or secret store")
         return 1
 
     # Mask key for display
@@ -2327,7 +2387,7 @@ def cmd_test_all(args):
     log("TEST-ALL", "-" * 30)
 
     class FakeArgs:
-        api_key = getattr(args, "api_key", None)
+        api_key = None
 
     results["api_key"] = cmd_test_api_key(FakeArgs()) == 0
 
@@ -2664,18 +2724,17 @@ def cmd_run(args):
     log("RUN", "WAA server is ready")
 
     # Get API key (navi uses GPT-4o for reasoning)
-    api_key = args.api_key
-    if not api_key:
-        try:
-            from openadapt_evals.config import settings
+    api_key = None
+    try:
+        from openadapt_evals.config import settings
 
-            api_key = settings.openai_api_key or ""
-        except ImportError:
-            api_key = ""
+        api_key = settings.openai_api_key or ""
+    except ImportError:
+        api_key = ""
 
     if not api_key:
         log("RUN", "ERROR: OpenAI API key required (navi uses GPT-4o)")
-        log("RUN", "  Set OPENAI_API_KEY in .env file or pass --api-key")
+        log("RUN", "  Set OPENAI_API_KEY in the process environment or secret store")
         return 1
 
     # Build task selection
@@ -8208,11 +8267,6 @@ Examples:
         help="Auto-shutdown VMs after N hours (0 to disable, default: 4)",
     )
     p_pool_create.add_argument(
-        "--use-acr",
-        action="store_true",
-        help="Pull waa-auto from ACR instead of building on VM (faster)",
-    )
-    p_pool_create.add_argument(
         "--image",
         help="Azure Managed Image ID to create VMs from (skips Docker setup)",
     )
@@ -8245,7 +8299,6 @@ Examples:
     p_pool_run.add_argument(
         "--model", default="gpt-4o-mini", help="Model name (default: gpt-4o-mini)"
     )
-    p_pool_run.add_argument("--api-key", help="OpenAI API key (default: from .env)")
     p_pool_run.add_argument("--qualification-dir", required=True, type=Path)
     p_pool_run.set_defaults(func=cmd_pool_run)
 
@@ -8274,7 +8327,6 @@ Examples:
     p_pool_auto.add_argument(
         "--model", default="gpt-4o-mini", help="Model name (default: gpt-4o-mini)"
     )
-    p_pool_auto.add_argument("--api-key", help="OpenAI API key (default: from .env)")
     p_pool_auto.add_argument(
         "--timeout", "-t", type=int, default=45,
         help="Timeout in minutes for WAA readiness (default: 45)",
@@ -8350,6 +8402,19 @@ Examples:
     p_pool_start.add_argument("--reset-proof", required=True, type=Path)
     p_pool_start.add_argument("--egress-proof", required=True, type=Path)
     p_pool_start.set_defaults(func=cmd_pool_start)
+
+    # pool-acr-install
+    p_pool_acr = subparsers.add_parser(
+        "pool-acr-install",
+        help="Pull an exact ACR image through an admitted pinned worker boundary",
+    )
+    p_pool_acr.add_argument("--cloud", **_cloud_kwargs)
+    p_pool_acr.add_argument("--worker", required=True)
+    p_pool_acr.add_argument("--worker-identity", required=True, type=Path)
+    p_pool_acr.add_argument("--login-server", required=True)
+    p_pool_acr.add_argument("--username", required=True)
+    p_pool_acr.add_argument("--image", required=True)
+    p_pool_acr.set_defaults(func=cmd_pool_acr_install)
 
     # pool-logs
     p_pool_logs = subparsers.add_parser(
@@ -8492,7 +8557,6 @@ Examples:
 
     # test-api-key
     p_test_api = subparsers.add_parser("test-api-key", help="Test that OpenAI API key is valid")
-    p_test_api.add_argument("--api-key", help="OpenAI API key (or set OPENAI_API_KEY in .env)")
     p_test_api.set_defaults(func=cmd_test_api_key)
 
     # test-waa-tasks
@@ -8503,7 +8567,6 @@ Examples:
     p_test_all = subparsers.add_parser(
         "test-all", help="Run all pre-flight tests before Azure ML benchmark"
     )
-    p_test_all.add_argument("--api-key", help="OpenAI API key (or set OPENAI_API_KEY in .env)")
     p_test_all.set_defaults(func=cmd_test_all)
 
     # smoke-test-aws
@@ -8543,7 +8606,6 @@ Examples:
         help="Domain filter (e.g., 'notepad', 'chrome', 'all')",
     )
     p_run.add_argument("--model", default="gpt-4o", help="Model for navi agent (default: gpt-4o)")
-    p_run.add_argument("--api-key", help="OpenAI API key (or set OPENAI_API_KEY in .env)")
     p_run.add_argument("--no-download", action="store_true", help="Skip downloading results")
     p_run.add_argument(
         "--worker-id",

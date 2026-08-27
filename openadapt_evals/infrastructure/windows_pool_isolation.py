@@ -14,21 +14,24 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-EGRESS_SCHEMA = "openadapt.windows-host-egress/v1"
+EGRESS_SCHEMA = "openadapt.windows-host-egress/v2"
 RESET_SCHEMA = "openadapt.windows-pool-reset/v1"
-EGRESS_PROOF_SCHEMA = "openadapt.windows-host-egress-proof/v1"
-START_PROOF_SCHEMA = "openadapt.windows-qualified-start-proof/v1"
+EGRESS_PROOF_SCHEMA = "openadapt.windows-host-egress-proof/v2"
+START_PROOF_SCHEMA = "openadapt.windows-qualified-start-proof/v2"
 WORKER_IDENTITY_SCHEMA = "openadapt.windows-worker-instance-identity/v1"
-EGRESS_DOMAIN = b"openadapt-windows-host-egress-v1\0"
+EGRESS_DOMAIN = b"openadapt-windows-host-egress-v2\0"
+PROXY_AUTHORIZATION_DOMAIN = b"OpenAdapt Windows egress proxy authorization v1\0"
+LIVE_NFT_DOMAIN = b"OpenAdapt Windows live nftables ruleset v1\0"
 WORKER_IDENTITY_DOMAIN = b"OpenAdapt Windows worker instance identity v1\0"
 RESET_PROOF_DOMAIN = b"OpenAdapt Windows pool reset proof v1\0"
-START_PROOF_DOMAIN = b"OpenAdapt Windows qualified start proof v1\0"
+START_PROOF_DOMAIN = b"OpenAdapt Windows qualified start proof v2\0"
 DISPATCH_BINDING_DOMAIN = b"OpenAdapt Windows qualified dispatch binding v1\0"
 CONTAINER_STATE_DOMAIN = b"OpenAdapt Windows qualified container state v1\0"
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 HEX64 = re.compile(r"^[a-f0-9]{64}$")
 SHA256 = re.compile(r"^sha256:[a-f0-9]{64}$")
 SSH_PUBLIC_KEY = re.compile(r"^(ssh-ed25519|ecdsa-sha2-nistp256|ssh-rsa) ([A-Za-z0-9+/]+={0,2})$")
+DNS_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 MAX_GATE_AGE = timedelta(minutes=5)
 METADATA_IPS = frozenset(
     {
@@ -58,12 +61,36 @@ def egress_policy_sha256(value: object) -> str:
     return hashlib.sha256(EGRESS_DOMAIN + canonical_json(policy)).hexdigest()
 
 
+def egress_proxy_authorization_sha256(
+    policy: Mapping[str, Any],
+    secret: str,
+) -> str:
+    """Bind one proxy credential to the exact run and endpoint policy."""
+
+    parsed = validate_egress_policy(policy)
+    if not isinstance(secret, str) or not secret or "\n" in secret or "\x00" in secret:
+        raise WindowsPoolIsolationError("egress proxy authorization secret is invalid")
+    proxy = parsed["proxy"]
+    projection = {
+        "run_id": parsed["run_id"],
+        "host_bindings_sha256": parsed["host_bindings_sha256"],
+        "allowed_endpoints": parsed["allowed_endpoints"],
+        "proxy": {key: value for key, value in proxy.items() if key != "authorization_sha256"},
+    }
+    return "sha256:" + hashlib.sha256(
+        PROXY_AUTHORIZATION_DOMAIN
+        + canonical_json(projection)
+        + b"\0"
+        + secret.encode("utf-8")
+    ).hexdigest()
+
+
 def validate_egress_policy(value: object) -> Mapping[str, Any]:
     keys = {
         "schema_version",
         "run_id",
-        "allowed_ipv4",
-        "allowed_ipv6",
+        "proxy",
+        "allowed_endpoints",
         "host_bindings_sha256",
     }
     if not isinstance(value, Mapping) or set(value) != keys:
@@ -76,8 +103,32 @@ def validate_egress_policy(value: object) -> Mapping[str, Any]:
     host_bindings = value["host_bindings_sha256"]
     if not isinstance(host_bindings, str) or HEX64.fullmatch(host_bindings) is None:
         raise WindowsPoolIsolationError("egress host binding digest is invalid")
-    for key, family in (("allowed_ipv4", 4), ("allowed_ipv6", 6)):
-        addresses = value[key]
+    proxy_keys = {
+        "hostname",
+        "protocol",
+        "port",
+        "resolved_ipv4",
+        "resolved_ipv6",
+        "tls_spki_sha256",
+        "authorization_username",
+        "authorization_sha256",
+    }
+    proxy = value["proxy"]
+    if not isinstance(proxy, Mapping) or set(proxy) != proxy_keys:
+        raise WindowsPoolIsolationError("egress proxy is not a closed object")
+    _validate_hostname(proxy["hostname"], "egress proxy hostname")
+    if proxy["protocol"] != "https":
+        raise WindowsPoolIsolationError("egress proxy protocol must be https")
+    _validate_port(proxy["port"], "egress proxy port")
+    for field in ("tls_spki_sha256", "authorization_sha256"):
+        if not isinstance(proxy[field], str) or SHA256.fullmatch(proxy[field]) is None:
+            raise WindowsPoolIsolationError(f"egress proxy {field} is invalid")
+    username = proxy["authorization_username"]
+    if not isinstance(username, str) or SAFE_NAME.fullmatch(username) is None:
+        raise WindowsPoolIsolationError("egress proxy authorization username is invalid")
+    address_count = 0
+    for key, family in (("resolved_ipv4", 4), ("resolved_ipv6", 6)):
+        addresses = proxy[key]
         if (
             not isinstance(addresses, list)
             or addresses != sorted(addresses)
@@ -88,7 +139,9 @@ def validate_egress_policy(value: object) -> Mapping[str, Any]:
             try:
                 address = ipaddress.ip_address(raw)
             except ValueError as exc:
-                raise WindowsPoolIsolationError(f"{key} contains an invalid address") from exc
+                raise WindowsPoolIsolationError(
+                    f"egress proxy {key} contains an invalid address"
+                ) from exc
             if (
                 address.version != family
                 or address.is_unspecified
@@ -97,7 +150,51 @@ def validate_egress_policy(value: object) -> Mapping[str, Any]:
                 or address.is_link_local
                 or str(address) in METADATA_IPS
             ):
-                raise WindowsPoolIsolationError(f"{key} contains an unsafe address")
+                raise WindowsPoolIsolationError(f"egress proxy {key} contains an unsafe address")
+        address_count += len(addresses)
+    if address_count == 0:
+        raise WindowsPoolIsolationError("egress proxy has no resolved address")
+
+    endpoints = value["allowed_endpoints"]
+    if not isinstance(endpoints, list) or not endpoints:
+        raise WindowsPoolIsolationError("egress endpoint inventory is empty")
+    endpoint_keys = {"hostname", "protocol", "port"}
+    normalized_endpoints = []
+    for endpoint in endpoints:
+        if not isinstance(endpoint, Mapping) or set(endpoint) != endpoint_keys:
+            raise WindowsPoolIsolationError("egress endpoint is not a closed object")
+        _validate_hostname(endpoint["hostname"], "egress endpoint hostname")
+        if endpoint["protocol"] not in {"https", "wss"}:
+            raise WindowsPoolIsolationError("egress endpoint protocol is invalid")
+        _validate_port(endpoint["port"], "egress endpoint port")
+        normalized_endpoints.append(
+            (endpoint["hostname"], endpoint["protocol"], endpoint["port"])
+        )
+    if normalized_endpoints != sorted(normalized_endpoints) or len(normalized_endpoints) != len(
+        set(normalized_endpoints)
+    ):
+        raise WindowsPoolIsolationError("egress endpoints must be unique and sorted")
+    return value
+
+
+def _validate_hostname(value: object, label: str) -> str:
+    if not isinstance(value, str) or len(value) > 253 or value != value.lower():
+        raise WindowsPoolIsolationError(f"{label} is invalid")
+    try:
+        ipaddress.ip_address(value)
+    except ValueError:
+        pass
+    else:
+        raise WindowsPoolIsolationError(f"{label} must be a DNS hostname")
+    labels = value.rstrip(".").split(".")
+    if value.endswith(".") or len(labels) < 2 or any(DNS_LABEL.fullmatch(item) is None for item in labels):
+        raise WindowsPoolIsolationError(f"{label} is invalid")
+    return value
+
+
+def _validate_port(value: object, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 65535:
+        raise WindowsPoolIsolationError(f"{label} is invalid")
     return value
 
 
@@ -237,24 +334,34 @@ def build_nft_batch(
     _safe_name(bridge_interface, "bridge interface")
     parsed = validate_egress_policy(policy)
     table = _nft_table(worker)
+    proxy = parsed["proxy"]
+    proxy_port = proxy["port"]
     lines = [
-        f"flush chain inet {table} forward",
+        f"delete table inet {table}",
+        f"add table inet {table}",
+        f"add chain inet {table} input {{ type filter hook input priority -50; policy accept; }}",
+        f"add chain inet {table} forward {{ type filter hook forward priority -50; policy drop; }}",
+        f'add rule inet {table} input iifname "{bridge_interface}" '
+        "ct state established,related accept",
+        f'add rule inet {table} input iifname "{bridge_interface}" counter drop',
     ]
-    for address in parsed["allowed_ipv4"]:
+    for address in proxy["resolved_ipv4"]:
         lines.append(
-            f'add rule inet {table} forward iifname "{bridge_interface}" ip daddr {address} accept'
+            f'add rule inet {table} forward iifname "{bridge_interface}" '
+            f"ip daddr {address} tcp dport {proxy_port} accept"
         )
         lines.append(
             f'add rule inet {table} forward oifname "{bridge_interface}" '
-            f"ip saddr {address} ct state established,related accept"
+            f"ip saddr {address} tcp sport {proxy_port} ct state established,related accept"
         )
-    for address in parsed["allowed_ipv6"]:
+    for address in proxy["resolved_ipv6"]:
         lines.append(
-            f'add rule inet {table} forward iifname "{bridge_interface}" ip6 daddr {address} accept'
+            f'add rule inet {table} forward iifname "{bridge_interface}" '
+            f"ip6 daddr {address} tcp dport {proxy_port} accept"
         )
         lines.append(
             f'add rule inet {table} forward oifname "{bridge_interface}" '
-            f"ip6 saddr {address} ct state established,related accept"
+            f"ip6 saddr {address} tcp sport {proxy_port} ct state established,related accept"
         )
     # Return rules bind the remote source to the current allow-list. A generic
     # established/related rule would keep a connection from an earlier run.
@@ -269,17 +376,26 @@ def build_block_all_batch(
     host_bindings_sha256: str = "0" * 64,
     bridge_interface: str = "docker0",
 ) -> str:
-    return build_nft_batch(
-        worker,
-        {
-            "schema_version": EGRESS_SCHEMA,
-            "run_id": run_id,
-            "allowed_ipv4": [],
-            "allowed_ipv6": [],
-            "host_bindings_sha256": host_bindings_sha256,
-        },
-        bridge_interface=bridge_interface,
-    )
+    _safe_name(worker, "worker name")
+    _safe_name(run_id, "run id")
+    _safe_name(bridge_interface, "bridge interface")
+    if HEX64.fullmatch(host_bindings_sha256) is None:
+        raise WindowsPoolIsolationError("egress host binding digest is invalid")
+    table = _nft_table(worker)
+    return "\n".join(
+        [
+            f"delete table inet {table}",
+            f"add table inet {table}",
+            f"add chain inet {table} input "
+            "{ type filter hook input priority -50; policy accept; }",
+            f"add chain inet {table} forward "
+            "{ type filter hook forward priority -50; policy drop; }",
+            f'add rule inet {table} input iifname "{bridge_interface}" '
+            "ct state established,related accept",
+            f'add rule inet {table} input iifname "{bridge_interface}" counter drop',
+            f'add rule inet {table} forward iifname "{bridge_interface}" counter drop',
+        ]
+    ) + "\n"
 
 
 RESET_SCRIPT = r"""
@@ -422,6 +538,7 @@ class EgressProof:
     worker_identity_sha256: str
     host_bindings_sha256: str
     tls_bindings_sha256: str
+    live_nft_sha256: str
     conntrack_drained: bool
     issued_at: str
     expires_at: str
@@ -440,6 +557,7 @@ class StartProof:
     reset_proof_sha256: str
     egress_policy_sha256: str
     container_state_sha256: str
+    live_nft_sha256: str
     one_use_consumed: bool
     started_at: str
     expires_at: str
@@ -540,6 +658,10 @@ def validate_egress_proof(
     for field, value in expected.items():
         if getattr(proof, field) != value:
             raise WindowsPoolIsolationError(f"egress proof {field} differs")
+    if not isinstance(proof.live_nft_sha256, str) or SHA256.fullmatch(
+        proof.live_nft_sha256
+    ) is None:
+        raise WindowsPoolIsolationError("egress proof live nft digest is invalid")
 
 
 class WindowsPoolIsolationManager:
@@ -556,7 +678,7 @@ class WindowsPoolIsolationManager:
         storage_dir: str = "/home/azureuser/waa-storage",
         baseline_dir: str = "/home/azureuser/openadapt-windows-baseline",
         bridge_interface: str = "docker0",
-        ssh_private_key_path: str | Path | None = None,
+        ssh_key_path: str | Path | None = None,
     ) -> None:
         self.ssh_host = ssh_host
         self.ssh_user = _safe_name(ssh_user, "SSH user")
@@ -565,11 +687,10 @@ class WindowsPoolIsolationManager:
         self.storage_dir = storage_dir
         self.baseline_dir = baseline_dir
         self.bridge_interface = _safe_name(bridge_interface, "bridge interface")
-        self.ssh_private_key_path = Path(
-            ssh_private_key_path or Path.home() / ".ssh" / "id_rsa"
-        ).expanduser()
-        if not self.ssh_private_key_path.is_absolute():
-            raise WindowsPoolIsolationError("SSH private key path must be absolute")
+        configured_key = Path(ssh_key_path or Path.home() / ".ssh" / "id_rsa")
+        if not configured_key.is_absolute() or "\x00" in str(configured_key):
+            raise WindowsPoolIsolationError("SSH private key path is invalid")
+        self.ssh_key_path = configured_key
         self.identity = validate_worker_identity(identity.__dict__)
         if self.identity.ssh_host != ssh_host:
             raise WindowsPoolIsolationError("worker identity SSH host differs")
@@ -602,11 +723,13 @@ class WindowsPoolIsolationManager:
                     "-F",
                     "/dev/null",
                     "-i",
-                    str(self.ssh_private_key_path),
+                    str(self.ssh_key_path),
                     "-o",
                     "StrictHostKeyChecking=yes",
                     "-o",
                     f"UserKnownHostsFile={known_hosts.name}",
+                    "-o",
+                    "GlobalKnownHostsFile=/dev/null",
                     "-o",
                     f"HostKeyAlias={self.identity.instance_id}",
                     "-o",
@@ -633,6 +756,16 @@ class WindowsPoolIsolationManager:
                     "SendEnv=",
                     "-o",
                     "ConnectTimeout=10",
+                    "-o",
+                    "IdentitiesOnly=yes",
+                    "-o",
+                    "IdentityAgent=none",
+                    "-o",
+                    "ProxyCommand=none",
+                    "-o",
+                    "PermitLocalCommand=no",
+                    "-o",
+                    "ClearAllForwardings=yes",
                     f"{self.ssh_user}@{self.ssh_host}",
                     serialized_command,
                 ],
@@ -661,6 +794,16 @@ class WindowsPoolIsolationManager:
                 input_bytes=(
                     f"add chain inet {table} forward "
                     "{ type filter hook forward priority -50; policy drop; }\n"
+                ).encode("ascii"),
+            )
+        try:
+            self._ssh(["sudo", "nft", "list", "chain", "inet", table, "input"])
+        except WindowsPoolIsolationError:
+            self._ssh(
+                ["sudo", "nft", "-f", "-"],
+                input_bytes=(
+                    f"add chain inet {table} input "
+                    "{ type filter hook input priority -50; policy accept; }\n"
                 ).encode("ascii"),
             )
         self._ssh(
@@ -749,6 +892,63 @@ done
         arguments = [item for pair in expected.items() for item in pair]
         self._ssh(["sudo", "bash", "-c", program, "--", *arguments])
 
+    def verify_proxy_tls(self, policy: Mapping[str, Any]) -> None:
+        """Verify the admitted proxy name, system trust, and exact SPKI."""
+
+        parsed = validate_egress_policy(policy)
+        proxy = parsed["proxy"]
+        program = r"""
+import hashlib
+import subprocess
+import sys
+
+hostname, port, expected_spki, *addresses = sys.argv[1:]
+if not addresses:
+    raise SystemExit('proxy address inventory is empty')
+for address in addresses:
+    endpoint = f'[{address}]:{port}' if ':' in address else f'{address}:{port}'
+    tls = subprocess.run(
+        [
+            'openssl', 's_client', '-connect', endpoint, '-servername', hostname,
+            '-verify_hostname', hostname, '-verify_return_error', '-showcerts',
+        ],
+        input=b'',
+        check=True,
+        capture_output=True,
+        timeout=15,
+    )
+    public_key = subprocess.run(
+        ['openssl', 'x509', '-pubkey', '-noout'],
+        input=tls.stdout,
+        check=True,
+        capture_output=True,
+        timeout=5,
+    ).stdout
+    public_key_der = subprocess.run(
+        ['openssl', 'pkey', '-pubin', '-outform', 'DER'],
+        input=public_key,
+        check=True,
+        capture_output=True,
+        timeout=5,
+    ).stdout
+    actual_spki = 'sha256:' + hashlib.sha256(public_key_der).hexdigest()
+    if actual_spki != expected_spki:
+        raise SystemExit('proxy TLS SPKI differs from the egress policy')
+""".strip()
+        self._ssh(
+            [
+                "python3",
+                "-c",
+                program,
+                proxy["hostname"],
+                str(proxy["port"]),
+                proxy["tls_spki_sha256"],
+                *proxy["resolved_ipv4"],
+                *proxy["resolved_ipv6"],
+            ],
+            timeout_seconds=60,
+        )
+
     def _persist_and_apply(
         self,
         batch: str,
@@ -756,7 +956,7 @@ done
         *,
         run_id: str | None = None,
         reset_sha256: str | None = None,
-    ) -> None:
+    ) -> str:
         """Apply the checked policy and retain its exact active bytes for readback."""
 
         program = """
@@ -767,9 +967,11 @@ import pathlib
 import subprocess
 import sys
 import tempfile
+import hashlib
 
 target = pathlib.Path('/run/openadapt/windows-egress-active.nft')
 digest_target = pathlib.Path('/run/openadapt/windows-egress.sha256')
+live_digest_target = pathlib.Path('/run/openadapt/windows-egress-live-nft.sha256')
 target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
 payload = sys.stdin.buffer.read()
 if not payload or len(payload) > 1048576:
@@ -843,6 +1045,16 @@ try:
                 raise SystemExit('guest conntrack state remains after drain')
     os.replace(temporary, target)
     temporary = None
+    live_ruleset = subprocess.run(
+        ['nft', '--stateless', 'list', 'table', 'inet', 'oa_windows'],
+        check=True,
+        capture_output=True,
+    ).stdout
+    if not live_ruleset:
+        raise SystemExit('live nft ruleset is empty')
+    live_digest = 'sha256:' + hashlib.sha256(
+        b'OpenAdapt Windows live nftables ruleset v1\0' + live_ruleset
+    ).hexdigest()
     digest_temporary = digest_target.with_name('.windows-egress.sha256.tmp')
     try:
         digest_temporary.unlink()
@@ -858,6 +1070,21 @@ try:
         digest_stream.flush()
         os.fsync(digest_stream.fileno())
     os.replace(digest_temporary, digest_target)
+    live_digest_temporary = live_digest_target.with_name('.windows-egress-live-nft.sha256.tmp')
+    try:
+        live_digest_temporary.unlink()
+    except FileNotFoundError:
+        pass
+    live_digest_fd = os.open(
+        live_digest_temporary,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+        0o600,
+    )
+    with os.fdopen(live_digest_fd, 'w', encoding='ascii') as live_digest_stream:
+        live_digest_stream.write(live_digest + '\n')
+        live_digest_stream.flush()
+        os.fsync(live_digest_stream.fileno())
+    os.replace(live_digest_temporary, live_digest_target)
     directory = os.open(target.parent, os.O_RDONLY)
     try:
         os.fsync(directory)
@@ -865,6 +1092,7 @@ try:
         os.close(directory)
     if create_gate:
         os.replace(reset_gate, reset_consumed_gate)
+    print(live_digest)
     applied = True
 finally:
     if temporary is not None:
@@ -880,7 +1108,7 @@ finally:
     os.close(lock_fd)
 """.strip()
         self._ensure_boundary()
-        self._ssh(
+        result = self._ssh(
             [
                 "sudo",
                 "python3",
@@ -894,6 +1122,10 @@ finally:
             ],
             input_bytes=batch.encode(),
         )
+        live_digest = result.stdout.decode("ascii", errors="strict").strip()
+        if SHA256.fullmatch(live_digest) is None:
+            raise WindowsPoolIsolationError("live nft readback digest is invalid")
+        return live_digest
 
     def block_all(self, run_id: str) -> str:
         """Install the fail-closed boundary before reset or guest startup."""
@@ -905,14 +1137,7 @@ finally:
             host_bindings_sha256=self.identity.host_bindings_sha256.removeprefix("sha256:"),
             bridge_interface=self.bridge_interface,
         )
-        policy = {
-            "schema_version": EGRESS_SCHEMA,
-            "run_id": run_id,
-            "allowed_ipv4": [],
-            "allowed_ipv6": [],
-            "host_bindings_sha256": self.identity.host_bindings_sha256.removeprefix("sha256:"),
-        }
-        digest = egress_policy_sha256(policy)
+        digest = hashlib.sha256(LIVE_NFT_DOMAIN + batch.encode("ascii")).hexdigest()
         self._persist_and_apply(batch, digest)
         return digest
 
@@ -1015,7 +1240,7 @@ trap - EXIT
         *,
         reset_proof: ResetProof,
     ) -> EgressProof:
-        """Atomically replace block-all with one exact IP allow-list."""
+        """Atomically replace block-all with one exact authenticated proxy path."""
 
         parsed = validate_egress_policy(policy)
         run_id = parsed["run_id"]
@@ -1030,13 +1255,14 @@ trap - EXIT
         ):
             raise WindowsPoolIsolationError("egress host bindings differ from worker identity")
         self._verify_remote_identity()
+        self.verify_proxy_tls(parsed)
         batch = build_nft_batch(
             self.worker,
             parsed,
             bridge_interface=self.bridge_interface,
         )
         digest = egress_policy_sha256(parsed)
-        self._persist_and_apply(
+        live_nft_sha256 = self._persist_and_apply(
             batch,
             digest,
             run_id=run_id,
@@ -1052,6 +1278,7 @@ trap - EXIT
             worker_identity_sha256=worker_identity_sha256(self.identity),
             host_bindings_sha256=self.identity.host_bindings_sha256,
             tls_bindings_sha256=self.identity.tls_bindings_sha256,
+            live_nft_sha256=live_nft_sha256,
             conntrack_drained=True,
             issued_at=_format_timestamp(issued),
             expires_at=_format_timestamp(issued + MAX_GATE_AGE),
@@ -1117,6 +1344,7 @@ trap - EXIT
             for key, expected_value in expected_bindings.items()
         ):
             raise WindowsPoolIsolationError("worker admission binding differs")
+        self.verify_proxy_tls(parsed)
         gate_script = r"""
 set -euo pipefail
 run_id="$1"
@@ -1129,6 +1357,7 @@ admission_sha256="$7"
 provider_sha256="$8"
 observation_sha256="$9"
 central_worker_sha256="${10}"
+live_nft_sha256="${11}"
 gate_root=/var/lib/openadapt/windows-run-gates
 install -d -m 0700 "$gate_root"
 exec 9>"/var/lock/openadapt-windows-${worker}.lock"
@@ -1138,7 +1367,19 @@ expected_gate="$(printf '%s\n%s\n%s' "$policy_sha256" "$reset_sha256" "$identity
 test "$(cat "$gate_root/${run_id}.egress")" = "$expected_gate"
 mkdir -m 0700 "$gate_root/${run_id}.consumed"
 rm "$gate_root/${run_id}.egress"
+for path in /run/openadapt/windows-egress.sha256 /run/openadapt/windows-egress-live-nft.sha256 /run/openadapt/windows-egress-active.nft; do
+  test -f "$path"
+  test ! -L "$path"
+  test "$(stat -c '%u:%a' "$path")" = 0:600
+done
 test "$(tr -d '\n' < /run/openadapt/windows-egress.sha256)" = "$policy_sha256"
+test "$(tr -d '\n' < /run/openadapt/windows-egress-live-nft.sha256)" = "$live_nft_sha256"
+actual_live_nft_sha256="$(nft --stateless list table inet oa_windows | python3 -c '
+import hashlib, sys
+payload = sys.stdin.buffer.read()
+print("sha256:" + hashlib.sha256(b"OpenAdapt Windows live nftables ruleset v1\\0" + payload).hexdigest())
+')"
+test "$actual_live_nft_sha256" = "$live_nft_sha256"
 test "$(docker image inspect "$image_sha256" --format '{{.Id}}')" = "$image_sha256"
 test -z "$(docker ps -aq --filter name='^winarena$')"
 printf '%s\n%s\n%s\n%s\n' "$admission_sha256" "$provider_sha256" "$observation_sha256" "$central_worker_sha256" \
@@ -1216,6 +1457,7 @@ PY
                 worker_admission["provider_identity_sha256"],
                 worker_admission["live_provider_observation_sha256"],
                 worker_admission["worker_identity_sha256"],
+                egress_proof.live_nft_sha256,
             ],
             input_bytes=(gate_script + "\n" + start_script + "\n" + capture_script + "\n").encode(),
             timeout_seconds=15 * 60,
@@ -1245,6 +1487,7 @@ PY
             reset_proof_sha256=reset_proof_sha256(reset_proof),
             egress_policy_sha256=egress_proof.policy_sha256,
             container_state_sha256=container_result["container_state_sha256"],
+            live_nft_sha256=egress_proof.live_nft_sha256,
             one_use_consumed=True,
             started_at=_format_timestamp(now),
             expires_at=_format_timestamp(now + MAX_GATE_AGE),
@@ -1257,6 +1500,7 @@ PY
         policy_sha256: str,
         container_state_sha256: str,
         expires_at: str,
+        live_nft_sha256: str,
     ) -> None:
         """Revalidate one admitted guest and its consumed start gate."""
 
@@ -1267,6 +1511,10 @@ PY
             container_state_sha256
         ) is None:
             raise WindowsPoolIsolationError("container state digest is invalid")
+        if not isinstance(live_nft_sha256, str) or SHA256.fullmatch(
+            live_nft_sha256
+        ) is None:
+            raise WindowsPoolIsolationError("live nft digest is invalid")
         if _now() >= _timestamp(expires_at, "qualified start expires_at"):
             raise WindowsPoolIsolationError("qualified start is stale")
         self._verify_remote_identity()
@@ -1277,7 +1525,7 @@ import pathlib
 import subprocess
 import sys
 
-run_id, policy_sha256, container, image_sha256, expected_state = sys.argv[1:]
+run_id, policy_sha256, container, image_sha256, expected_state, expected_live_nft = sys.argv[1:]
 gate_root = pathlib.Path('/var/lib/openadapt/windows-run-gates')
 if not (gate_root / f'{run_id}.consumed').is_dir():
     raise SystemExit('start gate is absent')
@@ -1285,13 +1533,27 @@ if not (gate_root / f'{run_id}.reset-consumed').is_dir():
     raise SystemExit('reset gate is absent')
 if (gate_root / f'{run_id}.reset').exists() or (gate_root / f'{run_id}.egress').exists():
     raise SystemExit('unconsumed run gate remains')
-active_digest = pathlib.Path('/run/openadapt/windows-egress.sha256')
-active_rules = pathlib.Path('/run/openadapt/windows-egress-active.nft')
-if not active_digest.is_file() or active_digest.is_symlink() or not active_rules.is_file():
-    raise SystemExit('live egress evidence is absent')
-if active_digest.read_text(encoding='ascii').strip() != policy_sha256:
+paths = [
+    pathlib.Path('/run/openadapt/windows-egress.sha256'),
+    pathlib.Path('/run/openadapt/windows-egress-live-nft.sha256'),
+    pathlib.Path('/run/openadapt/windows-egress-active.nft'),
+]
+for path in paths:
+    if not path.is_file() or path.is_symlink() or path.stat().st_uid != 0 or (path.stat().st_mode & 0o777) != 0o600:
+        raise SystemExit('live egress evidence is invalid')
+if paths[0].read_text(encoding='ascii').strip() != policy_sha256:
     raise SystemExit('live egress digest differs')
-subprocess.run(['nft', '-c', '-f', str(active_rules)], check=True)
+if paths[1].read_text(encoding='ascii').strip() != expected_live_nft:
+    raise SystemExit('stored live nft digest differs')
+live_nft = subprocess.run(
+    ['nft', '--stateless', 'list', 'table', 'inet', 'oa_windows'],
+    check=True, capture_output=True,
+).stdout
+actual_live_nft = 'sha256:' + hashlib.sha256(
+    b'OpenAdapt Windows live nftables ruleset v1\0' + live_nft
+).hexdigest()
+if actual_live_nft != expected_live_nft:
+    raise SystemExit('live nft ruleset differs')
 raw = json.loads(subprocess.run(
     ['docker', 'inspect', container], check=True, capture_output=True, text=True
 ).stdout)
@@ -1331,6 +1593,7 @@ if not stored.is_file() or stored.is_symlink() or stored.read_bytes() != payload
                 self.container,
                 self.identity.admitted_image_sha256,
                 container_state_sha256,
+                live_nft_sha256,
             ],
         )
 
@@ -1342,6 +1605,7 @@ if not stored.is_file() or stored.is_symlink() or stored.read_bytes() != payload
         container_state_sha256: str,
         expires_at: str,
         task_binding_sha256: str,
+        live_nft_sha256: str,
     ) -> None:
         """Consume one remote dispatch gate after a fresh start revalidation."""
 
@@ -1355,6 +1619,7 @@ if not stored.is_file() or stored.is_symlink() or stored.read_bytes() != payload
             policy_sha256=policy_sha256,
             container_state_sha256=container_state_sha256,
             expires_at=expires_at,
+            live_nft_sha256=live_nft_sha256,
         )
         program = r"""
 set -euo pipefail
@@ -1401,6 +1666,7 @@ sync -f "$dispatch_gate"
         policy_sha256: str,
         container_state_sha256: str,
         expires_at: str,
+        live_nft_sha256: str,
         input_bytes: bytes | None = None,
         timeout_seconds: int = 300,
     ) -> subprocess.CompletedProcess[bytes]:
@@ -1411,6 +1677,7 @@ sync -f "$dispatch_gate"
             policy_sha256=policy_sha256,
             container_state_sha256=container_state_sha256,
             expires_at=expires_at,
+            live_nft_sha256=live_nft_sha256,
         )
         return self._ssh(
             remote_command,
@@ -1425,6 +1692,7 @@ sync -f "$dispatch_gate"
         policy_sha256: str,
         container_state_sha256: str,
         expires_at: str,
+        live_nft_sha256: str,
     ) -> tuple[bool, bool]:
         """Probe WAA and the evaluator after an exact live gate check."""
 
@@ -1433,6 +1701,7 @@ sync -f "$dispatch_gate"
             policy_sha256=policy_sha256,
             container_state_sha256=container_state_sha256,
             expires_at=expires_at,
+            live_nft_sha256=live_nft_sha256,
         )
         waa = self.run_qualified_command(
             ["curl", "-fsS", "--max-time", "5", "http://localhost:5000/probe"],
@@ -1440,6 +1709,7 @@ sync -f "$dispatch_gate"
             policy_sha256=policy_sha256,
             container_state_sha256=container_state_sha256,
             expires_at=expires_at,
+            live_nft_sha256=live_nft_sha256,
             timeout_seconds=15,
         )
         try:
@@ -1449,6 +1719,7 @@ sync -f "$dispatch_gate"
                 policy_sha256=policy_sha256,
                 container_state_sha256=container_state_sha256,
                 expires_at=expires_at,
+                live_nft_sha256=live_nft_sha256,
                 timeout_seconds=15,
             )
             evaluator_ready = True
