@@ -37,6 +37,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from threading import Event
 from typing import TYPE_CHECKING, Any, Callable, Mapping
 
 from openadapt_evals.infrastructure.azure_vm import (
@@ -197,6 +198,46 @@ def validate_terminal_pool_result(
     ):
         raise RuntimeError("Qualified terminal task counts do not close.")
     return result
+
+
+def _build_postlaunch_terminal_evidence(
+    *,
+    manager: Any,
+    admission: Any,
+    dispatch: Any,
+    process: Any,
+    interrupt_requested: Event,
+    poll_seconds: float = 5.0,
+) -> Mapping[str, Any]:
+    """Read one process to terminal state and quarantine an interrupted run."""
+
+    from openadapt_evals.infrastructure.windows_worker_dispatch import (
+        build_terminal_evidence,
+        interrupt_process,
+        read_process_terminal,
+    )
+
+    interrupt_evidence: Mapping[str, Any] | None = None
+    while True:
+        if interrupt_requested.is_set():
+            interrupt_evidence = interrupt_process(manager, process)
+            terminal_readback = read_process_terminal(manager, process)
+            break
+        try:
+            terminal_readback = read_process_terminal(manager, process)
+        except KeyboardInterrupt:
+            interrupt_requested.set()
+            continue
+        if terminal_readback["state"] != "RUNNING":
+            break
+        interrupt_requested.wait(poll_seconds)
+    return build_terminal_evidence(
+        admission=admission,
+        dispatch=dispatch,
+        process=process,
+        terminal_readback=terminal_readback,
+        interrupt_evidence=interrupt_evidence,
+    )
 
 
 # Docker setup script template for WAA workers.
@@ -895,6 +936,7 @@ class PoolManager:
         # Create experiment name
         exp_name = datetime.now().strftime("pool_%Y%m%d_%H%M%S")
         num_workers = len(ready_workers)
+        interrupt_requested = Event()
 
         if agent_factory is not None:
             assert task_ids is not None
@@ -933,10 +975,13 @@ class PoolManager:
             worker: PoolWorker,
             worker_idx: int,
             total_workers: int,
-        ) -> tuple[str, int, int, str | None]:
+        ) -> tuple[
+            tuple[str, int, int, str | None],
+            Mapping[str, Any],
+            str,
+        ]:
             from openadapt_evals.infrastructure.windows_worker_dispatch import (
                 launch_authorized_process,
-                read_process_terminal,
             )
 
             manager = qualified_managers[worker.name]
@@ -1029,40 +1074,32 @@ class PoolManager:
                 current_task=exact_task_id,
                 qualified_task_binding_sha256=authorized.object["dispatch_id_sha256"],
             )
-            while True:
-                try:
-                    terminal_evidence = read_process_terminal(manager, process)
-                    if terminal_evidence["state"] != "RUNNING":
-                        break
-                    time.sleep(5)
-                except KeyboardInterrupt:
-                    terminal_evidence = {
-                        "state": "UNCERTAIN",
-                        "reason": "operator_interrupt_before_termination_proof",
-                        "process": json.loads(
-                            json.dumps(process.__dict__, sort_keys=True)
-                        ),
-                    }
-                    break
+            terminal_evidence = _build_postlaunch_terminal_evidence(
+                manager=manager,
+                admission=admission,
+                dispatch=authorized,
+                process=process,
+                interrupt_requested=interrupt_requested,
+            )
             terminal = self.worker_trust_authority.issue_terminal(
                 admission=admission,
                 dispatch=authorized,
-                terminal_evidence={
-                    "schema_version": "openadapt.qualification-worker-terminal-evidence/v1",
-                    "worker": worker.name,
-                    "selected_task": {"domain": domain, "task_id": exact_task},
-                    "process": process.__dict__,
-                    "terminal_readback": terminal_evidence,
-                },
+                terminal_evidence=terminal_evidence,
             )
             terminal_state = terminal.object["terminal_state"]
             if terminal_state == "VERIFIED":
-                return (worker.name, 1, 0, None)
+                worker_result = (worker.name, 1, 0, None)
+            else:
+                worker_result = (
+                    worker.name,
+                    0,
+                    1,
+                    f"central terminal state {terminal_state}",
+                )
             return (
-                worker.name,
-                0,
-                1,
-                f"central terminal state {terminal_state}",
+                worker_result,
+                terminal.object,
+                authorized.object["dispatch_id_sha256"],
             )
 
         self._log("POOL-RUN", "")
@@ -1070,19 +1107,35 @@ class PoolManager:
         start_time = time.time()
 
         results: list[tuple[str, int, int, str | None]] = []
+        terminal_receipts: list[Mapping[str, Any]] = []
+        expected_dispatches: dict[str, str] = {}
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
             futures = {}
             for worker_idx, worker in enumerate(ready_workers):
                 future = executor.submit(run_on_worker, worker, worker_idx, num_workers)
                 futures[future] = worker.name
 
-            for future in as_completed(futures):
-                name, completed, failed, error = future.result()
+            pending = set(futures)
+            while pending:
+                try:
+                    future = next(as_completed(pending))
+                    worker_result, terminal_receipt, dispatch_id = future.result()
+                except KeyboardInterrupt:
+                    interrupt_requested.set()
+                    self._log(
+                        "POOL-RUN",
+                        "Operator interrupt received; quarantining active worker processes.",
+                    )
+                    continue
+                pending.remove(future)
+                name, completed, failed, error = worker_result
                 if error:
                     self._log("POOL-RUN", f"  {name}: FAILED - {error}")
                 else:
                     self._log("POOL-RUN", f"  {name}: completed {completed} tasks")
-                results.append((name, completed, failed, error))
+                results.append(worker_result)
+                terminal_receipts.append(terminal_receipt)
+                expected_dispatches[name] = dispatch_id
                 self.registry.update_pool_progress(completed=completed, failed=failed)
 
         elapsed = time.time() - start_time
@@ -1097,12 +1150,17 @@ class PoolManager:
         self._log("POOL-RUN", f"  Failed: {total_failed}")
         self._log("POOL-RUN", "=" * 60)
 
-        return PoolRunResult(
+        result = PoolRunResult(
             total_tasks=tasks,
             completed=total_completed,
             failed=total_failed,
             elapsed_seconds=elapsed,
             worker_results=results,
+            terminal_receipts=tuple(terminal_receipts),
+        )
+        return validate_terminal_pool_result(
+            result,
+            expected_dispatches=expected_dispatches,
         )
 
     def _run_external_agent(
