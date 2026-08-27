@@ -7,8 +7,10 @@
   "required": [
     "schema_version", "receipt_id_sha256", "worker_admission_sha256",
     "dispatch_id_sha256", "provider_identity_sha256", "worker_identity_sha256",
+    "live_provider_observation_sha256", "admitted_runtime_sha256",
     "run_id", "run_attempt", "start_id_sha256", "task_id_sha256",
-    "task_condition_sha256", "capability_handle_sha256", "process",
+    "task_condition_sha256", "capability_handle_sha256", "launch_attempt",
+    "launch_attempt_sha256", "process",
     "oracle_sha256", "result_sha256", "log_sha256", "burned_identities_sha256",
     "burn_ledger_revision", "burn_receipt_sha256", "burned_at",
     "ledger_readback_sha256", "effect_started", "delivery_state",
@@ -22,23 +24,51 @@
     "dispatch_id_sha256": {"$ref": "#/$defs/digest"},
     "provider_identity_sha256": {"$ref": "#/$defs/digest"},
     "worker_identity_sha256": {"$ref": "#/$defs/digest"},
+    "live_provider_observation_sha256": {"$ref": "#/$defs/digest"},
+    "admitted_runtime_sha256": {"$ref": "#/$defs/digest"},
     "run_id": {"$ref": "#/$defs/decimal_id"},
     "run_attempt": {"const": "1"},
     "start_id_sha256": {"$ref": "#/$defs/digest"},
     "task_id_sha256": {"$ref": "#/$defs/digest"},
     "task_condition_sha256": {"$ref": "#/$defs/digest"},
     "capability_handle_sha256": {"$ref": "#/$defs/digest"},
-    "process": {
+    "launch_attempt": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["pid", "process_group_id", "launched_at", "executable_sha256", "process_start_identity_sha256"],
+      "required": ["attempted_at", "host_identity_sha256", "executable_sha256", "capability_handle_sha256", "evidence_sha256", "child_created", "failure_classification"],
       "properties": {
-        "pid": {"type": "integer", "minimum": 1},
-        "process_group_id": {"type": "integer", "minimum": 1},
-        "launched_at": {"$ref": "#/$defs/timestamp"},
+        "attempted_at": {"$ref": "#/$defs/timestamp"},
+        "host_identity_sha256": {"$ref": "#/$defs/digest"},
         "executable_sha256": {"$ref": "#/$defs/digest"},
-        "process_start_identity_sha256": {"$ref": "#/$defs/digest"}
+        "capability_handle_sha256": {"$ref": "#/$defs/digest"},
+        "evidence_sha256": {"$ref": "#/$defs/digest"},
+        "child_created": {"type": "boolean"},
+        "failure_classification": {
+          "oneOf": [
+            {"enum": ["PROCESS_START_REFUSED", "PROCESS_START_FAILED"]},
+            {"type": "null"}
+          ]
+        }
       }
+    },
+    "launch_attempt_sha256": {"$ref": "#/$defs/digest"},
+    "process": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["pid", "process_group_id", "process_start_ticks", "launched_at", "executable_sha256", "process_start_identity_sha256"],
+          "properties": {
+            "pid": {"type": "integer", "minimum": 1},
+            "process_group_id": {"type": "integer", "minimum": 1},
+            "process_start_ticks": {"type": "string", "pattern": "^[1-9][0-9]*$"},
+            "launched_at": {"$ref": "#/$defs/timestamp"},
+            "executable_sha256": {"$ref": "#/$defs/digest"},
+            "process_start_identity_sha256": {"$ref": "#/$defs/digest"}
+          }
+        },
+        {"type": "null"}
+      ]
     },
     "oracle_sha256": {"$ref": "#/$defs/digest"},
     "result_sha256": {"$ref": "#/$defs/digest"},
@@ -50,7 +80,7 @@
     "ledger_readback_sha256": {"$ref": "#/$defs/digest"},
     "effect_started": {"type": "boolean"},
     "delivery_state": {"enum": ["not_started", "verified", "uncertain"]},
-    "terminal_state": {"enum": ["VERIFIED", "SAFE_HALT", "RECONCILIATION_REQUIRED", "QUARANTINED"]},
+    "terminal_state": {"enum": ["VERIFIED", "SAFE_HALT", "RECONCILIATION_REQUIRED", "QUARANTINED", "PRELAUNCH_QUARANTINED"]},
     "exit_code": {"type": ["integer", "null"]},
     "uncertainty_sha256": {"oneOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
     "quarantine": {
@@ -67,6 +97,43 @@
     "issuer": {"$ref": "#/$defs/issuer"}
   },
   "allOf": [
+    {
+      "if": {"properties": {"process": {"type": "null"}}},
+      "then": {
+        "properties": {
+          "effect_started": {"const": false},
+          "delivery_state": {"const": "not_started"},
+          "terminal_state": {"const": "PRELAUNCH_QUARANTINED"},
+          "uncertainty_sha256": {"type": "null"},
+          "launch_attempt": {
+            "properties": {
+              "child_created": {"const": false},
+              "failure_classification": {"enum": ["PROCESS_START_REFUSED", "PROCESS_START_FAILED"]}
+            }
+          },
+          "quarantine": {
+            "properties": {
+              "active": {"const": true},
+              "reason_code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{2,63}$"},
+              "evidence_sha256": {"$ref": "#/$defs/digest"}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"terminal_state": {"const": "PRELAUNCH_QUARANTINED"}}},
+      "then": {"properties": {"process": {"type": "null"}}}
+    },
+    {
+      "if": {"properties": {"terminal_state": {"not": {"const": "PRELAUNCH_QUARANTINED"}}}},
+      "then": {
+        "properties": {
+          "process": {"type": "object"},
+          "launch_attempt": {"properties": {"child_created": {"const": true}}}
+        }
+      }
+    },
     {
       "if": {"properties": {"delivery_state": {"const": "uncertain"}}},
       "then": {
