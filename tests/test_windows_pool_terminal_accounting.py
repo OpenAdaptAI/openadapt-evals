@@ -138,7 +138,7 @@ def test_prelaunch_quarantine_is_one_closed_failed_task() -> None:
     assert validated.failed == 1
 
 
-def test_duplicate_dispatch_or_task_receipt_is_refused() -> None:
+def test_duplicate_dispatch_receipt_is_refused() -> None:
     result = _result()
     duplicate = dict(result.terminal_receipts[1])
     duplicate["dispatch_id_sha256"] = result.terminal_receipts[0][
@@ -147,3 +147,20 @@ def test_duplicate_dispatch_or_task_receipt_is_refused() -> None:
     result.terminal_receipts = (result.terminal_receipts[0], duplicate)
     with pytest.raises(RuntimeError, match="not exact and unique"):
         _validate(result)
+
+
+def test_duplicate_central_receipt_identity_is_refused() -> None:
+    result = _result()
+    second = dict(result.terminal_receipts[1])
+    second["receipt_id_sha256"] = result.terminal_receipts[0]["receipt_id_sha256"]
+    result.terminal_receipts = (result.terminal_receipts[0], second)
+    with pytest.raises(RuntimeError, match="not exact and unique"):
+        _validate(result)
+
+
+def test_repeated_task_identity_is_valid_for_independent_trials() -> None:
+    result = _result()
+    second = dict(result.terminal_receipts[1])
+    second["task_id_sha256"] = result.terminal_receipts[0]["task_id_sha256"]
+    result.terminal_receipts = (result.terminal_receipts[0], second)
+    assert _validate(result) is result

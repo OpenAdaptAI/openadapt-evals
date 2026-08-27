@@ -143,7 +143,6 @@ def validate_terminal_pool_result(
         raise RuntimeError("A requested task has no central terminal receipt.")
     receipts_by_dispatch: dict[str, Mapping[str, Any]] = {}
     receipt_ids: set[str] = set()
-    task_ids: set[str] = set()
     for receipt in result.terminal_receipts:
         if not isinstance(receipt, Mapping):
             raise RuntimeError("A central terminal receipt is invalid.")
@@ -157,7 +156,6 @@ def validate_terminal_pool_result(
             or not isinstance(receipt_id, str)
             or receipt_id in receipt_ids
             or not isinstance(task_id, str)
-            or task_id in task_ids
             or terminal_state
             not in {
                 "VERIFIED",
@@ -170,7 +168,6 @@ def validate_terminal_pool_result(
             raise RuntimeError("Central terminal receipt identities are not exact and unique.")
         receipts_by_dispatch[dispatch_id] = receipt
         receipt_ids.add(receipt_id)
-        task_ids.add(task_id)
     if set(receipts_by_dispatch) != expected_dispatch_ids:
         raise RuntimeError("Central terminal receipts differ from the requested dispatches.")
 
