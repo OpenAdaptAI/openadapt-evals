@@ -966,11 +966,27 @@ def test_rejects_expired_object_lock_retention() -> None:
         _derive(now=expired)
 
 
-def test_rejects_noncanonical_or_inconsistent_retention() -> None:
+def test_rejects_retention_dated_before_acceptance() -> None:
     certificate = _certificate()
-    certificate["retention"]["retention_until"] = "2026-08-19T12:01:00.000Z"
+    certificate["retention"]["retained_at"] = "2026-08-18T11:59:59.000Z"
 
-    with pytest.raises(MODULE.AcceptanceError, match="outside policy"):
+    with pytest.raises(MODULE.AcceptanceError, match="chronology is invalid"):
+        _derive(certificate)
+
+
+def test_rejects_retention_dated_in_the_future() -> None:
+    certificate = _certificate()
+    certificate["retention"]["retained_at"] = "2099-01-01T00:00:00.000Z"
+
+    with pytest.raises(MODULE.AcceptanceError, match="dated in the future"):
+        _derive(certificate)
+
+
+def test_rejects_an_inexact_retention_commit() -> None:
+    certificate = _certificate()
+    certificate["retention"]["retention_commit"] = "f" * 39
+
+    with pytest.raises(MODULE.AcceptanceError, match="retention commit is not exact"):
         _derive(certificate)
 
 
@@ -2465,7 +2481,7 @@ def test_production_acceptance_target_scope_map_is_closed() -> None:
         "openadapt": "qualified_workflow_launcher_release",
     }
     assert MODULE.production_acceptance_policy_sha256() == (
-        "sha256:bc013d6533b13288ae996b413519ac4b185da94ee0b1cc9727b662e04b989b31"
+        "sha256:77130f494453c2443ed824a863069bd055a831da483880386e95b092eabaf5bb"
     )
 
 
@@ -2942,29 +2958,17 @@ def test_private_source_reliability_schema_is_closed() -> None:
     "field,replacement,expected",
     [
         ("receipt_id", "retention:not-a-receipt", "receipt ID"),
-        ("retention_mode", "GOVERNANCE", "not COMPLIANCE"),
         ("provenance_attestation", "unreviewed-v1", "provenance"),
-        ("head_verified", False, "head_verified is false"),
+        ("commit_verified", False, "commit_verified is false"),
+        ("push_verified", False, "push_verified is false"),
+        ("transparency_logged", False, "transparency_logged is false"),
+        ("retention_commit", "not-a-commit", "retention commit is not exact"),
         (
             "acceptance_verified_at",
             "2026-08-18T12:00:00Z",
             "canonical millisecond UTC form",
         ),
-        (
-            "retained_at",
-            "2026-08-18T11:59:59.000Z",
-            "chronology",
-        ),
-        (
-            "retention_until",
-            "2026-08-19T12:01:00.000Z",
-            "period is outside policy",
-        ),
-        (
-            "retention_until",
-            "2037-08-18T12:01:00.000Z",
-            "period is outside policy",
-        ),
+        ("retained_at", "2026-08-18T11:59:59.000Z", "chronology"),
     ],
 )
 def test_private_source_retention_mutation_refuses(

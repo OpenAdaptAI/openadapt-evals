@@ -28,13 +28,13 @@ def _contract() -> dict[str, Any]:
         "destination": {
             "account_id": "123456789012",
             "region": "us-east-1",
-            "bucket": "openadapt-retained-evidence",
-            "object_prefix": "production-acceptance",
+            "repository": "OpenAdaptAI/openadapt-retained-evidence",
+            "ref": "refs/heads/main",
+            "path_prefix": "production-acceptance",
             "kms_key_arn": (
                 "arn:aws:kms:us-east-1:123456789012:key/1111-2222"
             ),
-            "retention_mode": "COMPLIANCE",
-            "retention_days": 2555,
+            "retention_commitment_days": 2555,
         },
         "uploader_arn": "arn:aws:iam::123456789012:role/openadapt-retention-writer",
         "importer_workflow_ref": WORKFLOW_REF,
@@ -60,7 +60,7 @@ def test_every_digest_matches_the_cloud_retention_writer() -> None:
         return "sha256:" + hashlib.sha256(payload).hexdigest()
 
     assert facts["storage_identity_sha256"] == cloud(
-        "retention store", destination["bucket"]
+        "retention store", destination["repository"]
     )
     assert facts["kms_key_identity_sha256"] == cloud(
         "retention KMS key", destination["kms_key_arn"]
@@ -82,10 +82,10 @@ def test_the_retention_separator_is_not_the_acceptance_separator() -> None:
     exactly the defect this file exists to prevent recurring.
     """
 
-    bucket = _contract()["destination"]["bucket"]
+    repository = _contract()["destination"]["repository"]
 
-    assert MODULE.retention_binding_sha256("retention store", bucket) != (
-        MODULE.opaque_binding_sha256("retention store", bucket)
+    assert MODULE.retention_binding_sha256("retention store", repository) != (
+        MODULE.opaque_binding_sha256("retention store", repository)
     )
 
 
@@ -118,10 +118,11 @@ def test_the_contract_carries_values_not_digests() -> None:
         (lambda c: c["destination"].pop("region"), "retention destination keys differ"),
         (lambda c: c["destination"].__setitem__("account_id", "12345"), "AWS account ID"),
         (lambda c: c["destination"].__setitem__("region", "nowhere"), "region is invalid"),
-        (lambda c: c["destination"].__setitem__("bucket", "Bad_Bucket"), "bucket is invalid"),
-        (lambda c: c["destination"].__setitem__("object_prefix", "/x"), "object prefix"),
-        (lambda c: c["destination"].__setitem__("object_prefix", "a//b"), "object prefix"),
-        (lambda c: c["destination"].__setitem__("object_prefix", "a/../b"), "object prefix"),
+        (lambda c: c["destination"].__setitem__("repository", "nope"), "repository is invalid"),
+        (lambda c: c["destination"].__setitem__("ref", "refs/tags/v1"), "ref is invalid"),
+        (lambda c: c["destination"].__setitem__("path_prefix", "/x"), "path prefix"),
+        (lambda c: c["destination"].__setitem__("path_prefix", "a//b"), "path prefix"),
+        (lambda c: c["destination"].__setitem__("path_prefix", "a/../b"), "path prefix"),
         (lambda c: c["destination"].__setitem__("kms_key_arn", "arn:aws:kms:x"), "KMS key ARN"),
         # The key must live in the approved account and region, the same rule
         # the Cloud writer enforces before it retains anything.
@@ -137,10 +138,9 @@ def test_the_contract_carries_values_not_digests() -> None:
             ),
             "outside the approved account or region",
         ),
-        (lambda c: c["destination"].__setitem__("retention_mode", "GOVERNANCE"), "COMPLIANCE"),
-        (lambda c: c["destination"].__setitem__("retention_days", 30), "outside policy"),
-        (lambda c: c["destination"].__setitem__("retention_days", 4000), "outside policy"),
-        (lambda c: c["destination"].__setitem__("retention_days", "2555"), "must be an integer"),
+        (lambda c: c["destination"].__setitem__("retention_commitment_days", 30), "outside policy"),
+        (lambda c: c["destination"].__setitem__("retention_commitment_days", 4000), "outside policy"),
+        (lambda c: c["destination"].__setitem__("retention_commitment_days", "2555"), "must be an integer"),
         (lambda c: c.__setitem__("uploader_arn", "not-an-arn"), "uploader ARN is invalid"),
         (
             lambda c: c.__setitem__(
@@ -163,8 +163,8 @@ def test_retention_days_must_sit_inside_the_fixed_policy() -> None:
     policy = MODULE.production_acceptance_policy()
     facts = MODULE.validate_private_export_contract(_contract())
 
-    assert policy["minimum_retention_days"] <= facts["retention_days"]
-    assert facts["retention_days"] <= policy["maximum_retention_days"]
+    assert policy["minimum_retention_days"] <= facts["retention_commitment_days"]
+    assert facts["retention_commitment_days"] <= policy["maximum_retention_days"]
 
 
 def test_importer_identity_must_be_the_approved_workflow_and_ref() -> None:
@@ -230,7 +230,7 @@ def test_retention_must_match_the_approved_destination_key_and_uploader() -> Non
 def test_a_certificate_cannot_choose_its_own_destination() -> None:
     facts = MODULE.validate_private_export_contract(_contract())
     elsewhere = copy.deepcopy(_contract())
-    elsewhere["destination"]["bucket"] = "attacker-bucket"
+    elsewhere["destination"]["repository"] = "attacker/evidence"
     forged = MODULE.validate_private_export_contract(elsewhere)
 
     retention = _retention(facts)
@@ -240,23 +240,27 @@ def test_a_certificate_cannot_choose_its_own_destination() -> None:
         MODULE.verify_retention_against_contract(retention, facts)
 
 
-def test_a_shorter_retention_period_than_approved_is_refused() -> None:
-    facts = MODULE.validate_private_export_contract(_contract())
-    retention = _retention(facts)
-    retention["retention_until"] = "2026-09-18T12:00:00.000Z"
+def test_the_commitment_is_recorded_and_not_enforced() -> None:
+    """A git commit has no expiry, so the period is a commitment, not a lock.
 
-    with pytest.raises(MODULE.AcceptanceError, match="shorter than the approved"):
-        MODULE.verify_retention_against_contract(retention, facts)
-
-
-def test_a_longer_retention_period_than_approved_is_allowed() -> None:
-    """An approval sets a floor. Locking evidence for longer is never a fault."""
+    Enforcing a number nothing can hold would be theatre. The contract records
+    retention_commitment_days and the verifier does not police it; what it does
+    police is that the evidence went to the approved repository, key and
+    uploader.
+    """
 
     facts = MODULE.validate_private_export_contract(_contract())
-    retention = _retention(facts)
-    retention["retention_until"] = "2044-08-18T12:00:00.000Z"
 
-    MODULE.verify_retention_against_contract(retention, facts)
+    assert facts["retention_commitment_days"] == 2555
+    # No period is compared, so no retained_at or retention_until is needed.
+    MODULE.verify_retention_against_contract(
+        {
+            "storage_identity_sha256": facts["storage_identity_sha256"],
+            "kms_key_identity_sha256": facts["kms_key_identity_sha256"],
+            "uploader_identity_sha256": facts["uploader_identity_sha256"],
+        },
+        facts,
+    )
 
 
 def test_cli_refuses_a_contract_it_is_not_authorised_to_use(

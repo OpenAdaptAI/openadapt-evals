@@ -85,6 +85,7 @@ CLOUD_CERTIFICATE_IDENTITY = (
 )
 GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 RETENTION_PROVENANCE_ROUTE = "sigstore-public-good-slsa-provenance-v1"
+RETENTION_MEDIUM = "signed-git-commit-v1"
 PRIVATE_EXPORT_CONTRACT_SCHEMA = "openadapt.private-export-contract/v1"
 GITHUB_HOSTNAME = "github.com"
 PUBLIC_TRANSPARENCY_LOG = "https://rekor.sigstore.dev"
@@ -234,16 +235,15 @@ _RETENTION_KEYS = {
     "private_envelope_sha256",
     "store_attestation_sha256",
     "storage_identity_sha256",
-    "object_version_sha256",
+    "retention_commit",
     "private_locator_version_sha256",
     "kms_key_identity_sha256",
     "uploader_identity_sha256",
-    "retention_mode",
-    "retention_until",
+    "transparency_log_entry_sha256",
     "retained_at",
-    "upload_verified",
-    "head_verified",
-    "object_lock_verified",
+    "push_verified",
+    "commit_verified",
+    "transparency_logged",
     "private_locator_recorded",
     "acceptance_verified_at",
     "provenance_attestation",
@@ -826,7 +826,7 @@ def production_acceptance_policy() -> dict[str, Any]:
         "minimum_trials_per_condition": 3,
         "excluded_trial_count": 0,
         "zero_failure_counts_required": sorted(_PRODUCTION_FAILURES),
-        "required_retention_mode": "COMPLIANCE",
+        "required_retention_medium": RETENTION_MEDIUM,
         "required_retention_provenance": RETENTION_PROVENANCE_ROUTE,
         "minimum_retention_days": 365,
         "maximum_retention_days": 3650,
@@ -874,11 +874,11 @@ def file_sha256(path: Path) -> str:
 _RETENTION_DESTINATION_KEYS = {
     "account_id",
     "region",
-    "bucket",
-    "object_prefix",
+    "repository",
+    "ref",
+    "path_prefix",
     "kms_key_arn",
-    "retention_mode",
-    "retention_days",
+    "retention_commitment_days",
 }
 _PRIVATE_EXPORT_CONTRACT_KEYS = {
     "schema_version",
@@ -893,8 +893,9 @@ _IMPORTER_WORKFLOW_REF = re.compile(
 )
 _AWS_ACCOUNT_ID = re.compile(r"^[0-9]{12}$")
 _AWS_REGION = re.compile(r"^[a-z]{2}(-gov)?-[a-z]+-[0-9]$")
-_S3_BUCKET = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
-_S3_PREFIX = re.compile(r"^[A-Za-z0-9._/-]{1,256}$")
+_REPOSITORY = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
+_GIT_REF = re.compile(r"^refs/heads/[A-Za-z0-9._/-]+$")
+_PATH_PREFIX = re.compile(r"^[A-Za-z0-9._/-]{1,256}$")
 _KMS_KEY_ARN = re.compile(
     r"^arn:aws:kms:([a-z0-9-]+):([0-9]{12}):key/[A-Za-z0-9-]+$"
 )
@@ -938,23 +939,26 @@ def _validate_retention_destination(value: Any) -> dict[str, Any]:
     destination = _closed(value, _RETENTION_DESTINATION_KEYS, "retention destination")
     account_id = _nonempty(destination["account_id"], "retention destination account_id")
     region = _nonempty(destination["region"], "retention destination region")
-    bucket = _nonempty(destination["bucket"], "retention destination bucket")
-    prefix = _nonempty(destination["object_prefix"], "retention destination object_prefix")
+    repository = _nonempty(destination["repository"], "retention destination repository")
+    ref = _nonempty(destination["ref"], "retention destination ref")
+    prefix = _nonempty(destination["path_prefix"], "retention destination path_prefix")
     key_arn = _nonempty(destination["kms_key_arn"], "retention destination kms_key_arn")
     if _AWS_ACCOUNT_ID.fullmatch(account_id) is None:
         raise AcceptanceError("retention destination account is not an AWS account ID")
     if _AWS_REGION.fullmatch(region) is None:
         raise AcceptanceError("retention destination region is invalid")
-    if _S3_BUCKET.fullmatch(bucket) is None:
-        raise AcceptanceError("retention destination bucket is invalid")
+    if _REPOSITORY.fullmatch(repository) is None:
+        raise AcceptanceError("retention destination repository is invalid")
+    if _GIT_REF.fullmatch(ref) is None:
+        raise AcceptanceError("retention destination ref is invalid")
     if (
-        _S3_PREFIX.fullmatch(prefix) is None
+        _PATH_PREFIX.fullmatch(prefix) is None
         or prefix.startswith("/")
         or prefix.endswith("/")
         or ".." in prefix
         or "//" in prefix
     ):
-        raise AcceptanceError("retention destination object prefix is invalid")
+        raise AcceptanceError("retention destination path prefix is invalid")
     key_match = _KMS_KEY_ARN.fullmatch(key_arn)
     if key_match is None:
         raise AcceptanceError("retention destination KMS key ARN is invalid")
@@ -962,14 +966,14 @@ def _validate_retention_destination(value: Any) -> dict[str, Any]:
         raise AcceptanceError(
             "retention destination KMS key is outside the approved account or region"
         )
-    if destination["retention_mode"] != "COMPLIANCE":
-        raise AcceptanceError("retention destination mode is not Object Lock COMPLIANCE")
-    days = destination["retention_days"]
+    days = destination["retention_commitment_days"]
     if not isinstance(days, int) or isinstance(days, bool):
-        raise AcceptanceError("retention destination retention_days must be an integer")
+        raise AcceptanceError(
+            "retention destination retention_commitment_days must be an integer"
+        )
     policy = production_acceptance_policy()
     if not policy["minimum_retention_days"] <= days <= policy["maximum_retention_days"]:
-        raise AcceptanceError("retention destination retention period is outside policy")
+        raise AcceptanceError("retention destination retention commitment is outside policy")
     return dict(destination)
 
 
@@ -1002,7 +1006,7 @@ def validate_private_export_contract(contract: Any) -> dict[str, Any]:
         "destination_approval_sha256": retention_destination_approval_sha256(destination),
         "storage_identity_sha256": retention_binding_sha256(
             "retention store",
-            destination["bucket"],
+            destination["repository"],
         ),
         "kms_key_identity_sha256": retention_binding_sha256(
             "retention KMS key",
@@ -1013,7 +1017,7 @@ def validate_private_export_contract(contract: Any) -> dict[str, Any]:
             uploader_arn,
         ),
         "importer_workflow_ref": workflow_ref,
-        "retention_days": destination["retention_days"],
+        "retention_commitment_days": destination["retention_commitment_days"],
         "approval_authority": document["approval_authority"],
         "approved_at": approved_at,
         "contract_sha256": canonical_sha256(document),
@@ -1044,8 +1048,13 @@ def verify_retention_against_contract(
 ) -> None:
     """Refuse unless the retained evidence went where the approval says.
 
-    Without this the certificate names its own destination, its own key, and its
+    Without this the certificate names its own repository, its own key, and its
     own uploader, and the importer only checks that those look like digests.
+
+    There is no period check here, and that is deliberate rather than an
+    omission.  A git commit carries no expiry, so retention_commitment_days is a
+    commitment this mechanism records and does not enforce.  Enforcing a number
+    nothing can hold would be theatre.
     """
 
     for key in (
@@ -1055,13 +1064,8 @@ def verify_retention_against_contract(
     ):
         if retention.get(key) != contract[key]:
             raise AcceptanceError(f"retained evidence {key} is not the approved identity")
-    retained_at = _timestamp(retention["retained_at"], "certificate retention retained_at")
-    expires_at = _timestamp(
-        retention["retention_until"],
-        "certificate retention retention_until",
-    )
-    if expires_at - retained_at < timedelta(days=contract["retention_days"]):
-        raise AcceptanceError("retained evidence period is shorter than the approved contract")
+
+
 def opaque_binding_sha256(domain: str, value: str) -> str:
     payload = f"OpenAdapt acceptance {domain} v1\0".encode("utf-8") + value.encode(
         "utf-8"
@@ -1938,22 +1942,25 @@ def _validate_certificate(
         "private_envelope_sha256",
         "store_attestation_sha256",
         "storage_identity_sha256",
-        "object_version_sha256",
         "private_locator_version_sha256",
         "kms_key_identity_sha256",
         "uploader_identity_sha256",
+        "transparency_log_entry_sha256",
     ):
         _digest(retention[key], f"certificate retention {key}")
     if not isinstance(retention["receipt_id"], str) or re.fullmatch(
         r"retention:[a-f0-9]{32}", retention["receipt_id"]
     ) is None:
         raise AcceptanceError("certificate retention receipt ID is invalid")
-    if retention["retention_mode"] != "COMPLIANCE":
-        raise AcceptanceError("certificate retention mode is not Object Lock COMPLIANCE")
+    if (
+        not isinstance(retention["retention_commit"], str)
+        or _HEX_40.fullmatch(retention["retention_commit"]) is None
+    ):
+        raise AcceptanceError("certificate retention commit is not exact")
     for key in (
-        "upload_verified",
-        "head_verified",
-        "object_lock_verified",
+        "push_verified",
+        "commit_verified",
+        "transparency_logged",
         "private_locator_recorded",
     ):
         if retention[key] is not True:
@@ -1965,21 +1972,12 @@ def _validate_certificate(
         "certificate retention acceptance_verified_at",
     )
     retained_at = _timestamp(retention["retained_at"], "certificate retention retained_at")
-    expires_at = _timestamp(
-        retention["retention_until"],
-        "certificate retention retention_until",
-    )
-    retention_period = expires_at - retained_at
-    if not timedelta(days=365) <= retention_period <= timedelta(days=3650):
-        raise AcceptanceError("certificate Object Lock retention period is outside policy")
-    if not acceptance_verified_at <= retained_at < expires_at:
+    if not acceptance_verified_at <= retained_at:
         raise AcceptanceError("certificate retention chronology is invalid")
     if now.tzinfo is None:
         raise AcceptanceError("import time must include a timezone")
-    if now.astimezone(timezone.utc) >= expires_at:
-        raise AcceptanceError(
-            "certificate Object Lock retention has expired"
-        )
+    if retained_at > now.astimezone(timezone.utc):
+        raise AcceptanceError("certificate retention is dated in the future")
 
     return {
         "product": {"cloud": dict(cloud), "flow": dict(flow), "managed_runtime": dict(runtime)},
@@ -3624,22 +3622,25 @@ def _validated_manifest_source(value: Mapping[str, Any]) -> dict[str, Any]:
         "private_envelope_sha256",
         "store_attestation_sha256",
         "storage_identity_sha256",
-        "object_version_sha256",
         "private_locator_version_sha256",
         "kms_key_identity_sha256",
         "uploader_identity_sha256",
+        "transparency_log_entry_sha256",
     ):
         _digest(retention[key], f"production acceptance source retention {key}")
     for key in (
-        "upload_verified",
-        "head_verified",
-        "object_lock_verified",
+        "push_verified",
+        "commit_verified",
+        "transparency_logged",
         "private_locator_recorded",
     ):
         if retention[key] is not True:
             raise AcceptanceError(f"production acceptance source retention {key} is false")
-    if retention["retention_mode"] != "COMPLIANCE":
-        raise AcceptanceError("production acceptance source retention is not COMPLIANCE")
+    if (
+        not isinstance(retention["retention_commit"], str)
+        or _HEX_40.fullmatch(retention["retention_commit"]) is None
+    ):
+        raise AcceptanceError("production acceptance source retention commit is not exact")
     if not isinstance(retention["receipt_id"], str) or re.fullmatch(
         r"retention:[a-f0-9]{32}", retention["receipt_id"]
     ) is None:
@@ -3656,16 +3657,7 @@ def _validated_manifest_source(value: Mapping[str, Any]) -> dict[str, Any]:
         retention["retained_at"],
         "production acceptance source retention retained_at",
     )
-    retention_until = _timestamp(
-        retention["retention_until"],
-        "production acceptance source retention retention_until",
-    )
-    retention_period = retention_until - retained_at
-    if not timedelta(days=365) <= retention_period <= timedelta(days=3650):
-        raise AcceptanceError(
-            "production acceptance source retention period is outside policy"
-        )
-    if not acceptance_verified_at <= retained_at < retention_until:
+    if not acceptance_verified_at <= retained_at:
         raise AcceptanceError("production acceptance source retention chronology is invalid")
     return source
 
