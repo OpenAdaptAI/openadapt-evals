@@ -728,6 +728,7 @@ def cmd_pool_wait(args):
         workers_ready = manager.wait(
             timeout_minutes=timeout_minutes,
             start_containers=False,
+            qualification_dir=args.qualification_dir,
         )
         return 0 if workers_ready else 1
     except RuntimeError as e:
@@ -758,6 +759,7 @@ def cmd_pool_run(args):
             agent=agent,
             model=model,
             api_key=api_key,
+            qualification_dir=args.qualification_dir,
         )
         return 0 if result.failed == 0 else 1
     except RuntimeError as e:
@@ -796,11 +798,10 @@ def cmd_pool_auto(args):
     num_workers = getattr(args, "workers", 1)
     auto_shutdown_hours = getattr(args, "auto_shutdown_hours", 4)
     timeout_minutes = getattr(args, "timeout", 45)
-    num_tasks = getattr(args, "tasks", 10)
+    num_tasks = getattr(args, "tasks", None) or num_workers
     agent = getattr(args, "agent", "navi")
     model = getattr(args, "model", "gpt-4o-mini")
     api_key = getattr(args, "api_key", None)
-    baseline_sha256 = args.baseline_sha256
     qualification_dir = args.qualification_dir
     if qualification_dir.is_symlink() or not qualification_dir.is_dir():
         log("POOL-AUTO", "ERROR: qualification directory is not a regular directory")
@@ -841,7 +842,6 @@ def cmd_pool_auto(args):
                 worker.name,
                 identity_path=qualification_dir / f"{worker.name}.identity.json",
                 policy_path=qualification_dir / f"{worker.name}.egress.json",
-                baseline_sha256=baseline_sha256,
             )
             for kind, proof in zip(
                 ("reset", "egress", "start"),
@@ -870,6 +870,7 @@ def cmd_pool_auto(args):
         workers_ready = manager.wait(
             timeout_minutes=timeout_minutes,
             start_containers=False,
+            qualification_dir=qualification_dir,
         )
 
         if not workers_ready:
@@ -883,6 +884,7 @@ def cmd_pool_auto(args):
             agent=agent,
             model=model,
             api_key=api_key,
+            qualification_dir=qualification_dir,
         )
 
         log("POOL-AUTO", "")
@@ -955,7 +957,6 @@ def cmd_pool_reset(args):
         proof = manager.reset_worker(
             args.worker,
             run_id=args.run_id,
-            baseline_sha256=args.baseline_sha256,
             identity_path=args.worker_identity,
         )
     except (RuntimeError, ValueError) as exc:
@@ -8225,6 +8226,7 @@ Examples:
     p_pool_wait.add_argument(
         "--timeout", "-t", type=int, default=30, help="Timeout in minutes (default: 30)"
     )
+    p_pool_wait.add_argument("--qualification-dir", required=True, type=Path)
     p_pool_wait.set_defaults(func=cmd_pool_wait)
 
     # pool-run
@@ -8244,6 +8246,7 @@ Examples:
         "--model", default="gpt-4o-mini", help="Model name (default: gpt-4o-mini)"
     )
     p_pool_run.add_argument("--api-key", help="OpenAI API key (default: from .env)")
+    p_pool_run.add_argument("--qualification-dir", required=True, type=Path)
     p_pool_run.set_defaults(func=cmd_pool_run)
 
     # pool-cleanup
@@ -8264,8 +8267,8 @@ Examples:
         "--workers", "-w", type=int, default=1, help="Number of worker VMs (default: 1)"
     )
     p_pool_auto.add_argument(
-        "--tasks", "-n", type=int, default=10,
-        help="Number of tasks to run (default: 10, use 154 for full benchmark)",
+        "--tasks", "-n", type=int,
+        help="Number of tasks to run (default: one per worker)",
     )
     p_pool_auto.add_argument("--agent", default="navi", help="Agent type (default: navi)")
     p_pool_auto.add_argument(
@@ -8287,7 +8290,6 @@ Examples:
         help="Directory with <worker>.identity.json and <worker>.egress.json",
     )
     p_pool_auto.add_argument("--run-evidence-dir", required=True, type=Path)
-    p_pool_auto.add_argument("--baseline-sha256", required=True)
     p_pool_auto.set_defaults(func=cmd_pool_auto)
 
     # pool-pause
@@ -8321,7 +8323,6 @@ Examples:
     p_pool_reset.add_argument("--cloud", **_cloud_kwargs)
     p_pool_reset.add_argument("--worker", required=True)
     p_pool_reset.add_argument("--run-id", required=True)
-    p_pool_reset.add_argument("--baseline-sha256", required=True)
     p_pool_reset.add_argument("--worker-identity", required=True, type=Path)
     p_pool_reset.set_defaults(func=cmd_pool_reset)
 

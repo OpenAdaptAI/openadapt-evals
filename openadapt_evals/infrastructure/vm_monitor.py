@@ -391,6 +391,7 @@ class PoolWorker:
     qualified_worker_identity_sha256: str | None = None
     qualified_egress_policy_sha256: str | None = None
     qualified_start_proof_sha256: str | None = None
+    qualified_task_binding_sha256: str | None = None
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
 

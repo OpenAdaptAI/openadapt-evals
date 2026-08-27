@@ -50,6 +50,7 @@ import os
 import signal
 import socket
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -113,6 +114,8 @@ class SSHTunnelManager:
         ssh_key_path: str | Path | None = None,
         tunnels: list[TunnelConfig] | None = None,
         auto_reconnect: bool = True,
+        host_key_alias: str | None = None,
+        host_public_key: str | None = None,
     ):
         """Initialize tunnel manager.
 
@@ -120,13 +123,30 @@ class SSHTunnelManager:
             ssh_key_path: Path to SSH private key. Defaults to ~/.ssh/id_rsa.
             tunnels: List of tunnel configurations. Defaults to VNC + WAA.
             auto_reconnect: If True, automatically restart dead tunnels.
+            host_key_alias: Admitted SSH instance identity for strict checking.
+            host_public_key: Admitted SSH public host key.
         """
+        if (host_key_alias is None) != (host_public_key is None):
+            raise ValueError("SSH host alias and public key must be supplied together")
+        if host_key_alias is not None and (
+            not host_key_alias or "\n" in host_key_alias or "\x00" in host_key_alias
+        ):
+            raise ValueError("SSH host key alias is invalid")
+        if host_public_key is not None and (
+            not host_public_key.startswith("ssh-")
+            or "\n" in host_public_key
+            or "\x00" in host_public_key
+        ):
+            raise ValueError("SSH host public key is invalid")
         self.ssh_key_path = Path(ssh_key_path or Path.home() / ".ssh" / "id_rsa")
         self.tunnel_configs = tunnels or self.DEFAULT_TUNNELS
         self._active_tunnels: dict[str, tuple[TunnelConfig, subprocess.Popen]] = {}
         self._current_vm_ip: str | None = None
         self._current_ssh_user: str | None = None
         self._auto_reconnect = auto_reconnect
+        self._host_key_alias = host_key_alias
+        self._host_public_key = host_public_key
+        self._known_hosts_path: Path | None = None
         self._reconnect_attempts: dict[
             str, int
         ] = {}  # Track reconnect attempts per tunnel
@@ -190,6 +210,14 @@ class SSHTunnelManager:
 
         # Check if local port is already in use
         if self._is_port_in_use(config.local_port):
+            if self._host_key_alias is not None:
+                return TunnelStatus(
+                    name=config.name,
+                    active=False,
+                    local_port=config.local_port,
+                    remote_endpoint=f"{vm_ip}:{config.remote_port}",
+                    error=f"Port {config.local_port} is already in use",
+                )
             # Port in use - check if it's an existing SSH tunnel (likely created manually)
             # If we can reach the service through it, consider it active
             if self._check_tunnel_works(config.local_port, config.remote_port):
@@ -217,12 +245,40 @@ class SSHTunnelManager:
         # ServerAliveInterval=60: Send keepalive every 60 seconds
         # ServerAliveCountMax=10: Disconnect after 10 missed keepalives (10 min tolerance)
         # TCPKeepAlive=yes: Enable TCP-level keepalive as additional safeguard
+        host_key_options: list[str]
+        if self._host_key_alias is not None and self._host_public_key is not None:
+            if self._known_hosts_path is None:
+                known_hosts = tempfile.NamedTemporaryFile(
+                    mode="w",
+                    encoding="utf-8",
+                    prefix="openadapt-known-hosts-",
+                    delete=False,
+                )
+                try:
+                    known_hosts.write(f"{self._host_key_alias} {self._host_public_key}\n")
+                    known_hosts.flush()
+                    os.fchmod(known_hosts.fileno(), 0o600)
+                    self._known_hosts_path = Path(known_hosts.name)
+                finally:
+                    known_hosts.close()
+            host_key_options = [
+                "-o",
+                "StrictHostKeyChecking=yes",
+                "-o",
+                f"UserKnownHostsFile={self._known_hosts_path}",
+                "-o",
+                f"HostKeyAlias={self._host_key_alias}",
+            ]
+        else:
+            host_key_options = [
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+            ]
         ssh_cmd = [
             "ssh",
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "UserKnownHostsFile=/dev/null",
+            *host_key_options,
             "-o",
             "LogLevel=ERROR",
             "-o",
@@ -327,6 +383,12 @@ class SSHTunnelManager:
             self.stop_tunnel(name)
         self._current_vm_ip = None
         self._current_ssh_user = None
+        if self._known_hosts_path is not None:
+            try:
+                self._known_hosts_path.unlink()
+            except FileNotFoundError:
+                pass
+            self._known_hosts_path = None
 
     def get_tunnel_status(self, auto_restart: bool = True) -> dict[str, TunnelStatus]:
         """Get status of all configured tunnels.
@@ -366,7 +428,7 @@ class SSHTunnelManager:
                     # Process died - but check if port is still working
                     # (could be another tunnel on the same port)
                     del self._active_tunnels[config.name]
-                    if self._is_port_in_use(
+                    if self._host_key_alias is None and self._is_port_in_use(
                         config.local_port
                     ) and self._check_tunnel_works(
                         config.local_port, config.remote_port
@@ -398,7 +460,9 @@ class SSHTunnelManager:
             else:
                 # Not tracked internally - but check if an external tunnel exists
                 # This handles tunnels started by other processes or after manager restart
-                if self._is_port_in_use(config.local_port) and self._check_tunnel_works(
+                if self._host_key_alias is None and self._is_port_in_use(
+                    config.local_port
+                ) and self._check_tunnel_works(
                     config.local_port, config.remote_port
                 ):
                     logger.debug(

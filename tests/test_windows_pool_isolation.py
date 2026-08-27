@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -16,6 +17,7 @@ from openadapt_evals.infrastructure.pool import (
     WINDOWS_EGRESS_BOOTSTRAP_SCRIPT,
     PoolManager,
 )
+from openadapt_evals.infrastructure.ssh_tunnel import SSHTunnelManager, TunnelConfig
 from openadapt_evals.infrastructure.windows_pool_isolation import (
     EGRESS_PROOF_SCHEMA,
     EGRESS_SCHEMA,
@@ -28,6 +30,7 @@ from openadapt_evals.infrastructure.windows_pool_isolation import (
     WindowsPoolIsolationManager,
     build_block_all_batch,
     build_nft_batch,
+    dispatch_binding_sha256,
     egress_policy_sha256,
     reset_proof_sha256,
     validate_egress_policy,
@@ -50,6 +53,7 @@ def _identity(**overrides):
         "ssh_host": "192.0.2.10",
         "ssh_host_public_key": public_key,
         "ssh_host_key_sha256": "sha256:" + hashlib.sha256(public_key.encode()).hexdigest(),
+        "baseline_manifest_sha256": "sha256:" + "b" * 64,
         "admitted_image_sha256": "sha256:" + "b" * 64,
         "admitted_runtime_sha256": "sha256:" + "c" * 64,
         "host_bindings_sha256": "sha256:" + "a" * 64,
@@ -206,7 +210,7 @@ def test_reset_blocks_egress_first_and_returns_identity_bound_fresh_proof():
         patch("openadapt_evals.infrastructure.windows_pool_isolation._now", return_value=NOW),
         patch("subprocess.run", side_effect=_run),
     ):
-        proof = _manager().reset(run_id="run-123", baseline_sha256="b" * 64)
+        proof = _manager().reset(run_id="run-123")
     validate_reset_proof(
         proof,
         worker="waa-pool-00",
@@ -250,6 +254,14 @@ def test_reset_proof_refuses_expiry_identity_drift_and_run_reuse():
             run_id="run-123",
             identity=_identity(),
             now=NOW + MAX_GATE_AGE,
+        )
+    with pytest.raises(WindowsPoolIsolationError, match="baseline_sha256 differs"):
+        validate_reset_proof(
+            _reset_proof(baseline_sha256="0" * 64),
+            worker="waa-pool-00",
+            run_id="run-123",
+            identity=_identity(),
+            now=NOW,
         )
     with pytest.raises(WindowsPoolIsolationError, match="run_id differs"):
         validate_reset_proof(
@@ -366,6 +378,202 @@ def test_benchmark_dispatch_refuses_a_responsive_legacy_worker():
         manager.run(api_key="test-only")
 
 
+def test_benchmark_dispatch_refuses_start_proof_reuse_for_a_task_batch():
+    worker = SimpleNamespace(
+        name="waa-pool-00",
+        waa_ready=True,
+        status="qualified-ready",
+        qualified_run_id="run-123",
+        qualified_worker_identity_sha256="sha256:" + "1" * 64,
+        qualified_egress_policy_sha256="2" * 64,
+        qualified_start_proof_sha256="sha256:" + "3" * 64,
+    )
+    manager = object.__new__(PoolManager)
+    manager.registry = SimpleNamespace(get_pool=lambda: SimpleNamespace(workers=[worker]))
+    with pytest.raises(RuntimeError, match="exactly one task"):
+        manager.run(tasks=2, api_key="test-only", qualification_dir=Path("."))
+
+
+def test_live_start_and_dispatch_rechecks_use_the_pinned_boundary():
+    calls = []
+    dispatches = 0
+
+    def _run(argv, **kwargs):
+        nonlocal dispatches
+        calls.append((argv, kwargs))
+        if kwargs.get("input") and b"dispatch_gate=" in kwargs["input"]:
+            dispatches += 1
+            if dispatches > 1:
+                return subprocess.CompletedProcess(
+                    argv,
+                    1,
+                    stdout=b"",
+                    stderr=b"dispatch gate already consumed",
+                )
+        return subprocess.CompletedProcess(argv, 0, stdout=b"ok\n", stderr=b"")
+
+    binding = dispatch_binding_sha256(
+        {
+            "schema_version": "openadapt.windows-qualified-dispatch/v1",
+            "worker": "waa-pool-00",
+            "qualified_run_id": "run-123",
+            "qualified_start_proof_sha256": "sha256:" + "3" * 64,
+            "task_id": "domain:task-1",
+            "agent": "navi",
+            "model": "model-1",
+        }
+    )
+    with patch("subprocess.run", side_effect=_run):
+        manager = _manager()
+        manager.verify_started(
+            run_id="run-123",
+            policy_sha256="e" * 64,
+        )
+        manager.consume_dispatch(
+            run_id="run-123",
+            policy_sha256="e" * 64,
+            task_binding_sha256=binding,
+        )
+        with pytest.raises(WindowsPoolIsolationError, match="already consumed"):
+            manager.consume_dispatch(
+                run_id="run-123",
+                policy_sha256="e" * 64,
+                task_binding_sha256=binding,
+            )
+        manager.run_command(["docker", "exec", "winarena", "true"])
+
+    assert calls
+    assert all("StrictHostKeyChecking=yes" in argv for argv, _ in calls)
+    programs = [
+        kwargs["input"].decode()
+        for _, kwargs in calls
+        if kwargs.get("input") is not None
+    ]
+    assert any("docker inspect" in program and "reset-consumed" in program for program in programs)
+    assert any("task-binding.sha256" in program and "flock -n" in program for program in programs)
+
+
+def test_qualified_tunnel_rejects_unknown_ports_and_pins_the_admitted_host_key():
+    popen_calls = []
+    process = SimpleNamespace(pid=4321, poll=lambda: None)
+
+    def _popen(argv, **kwargs):
+        popen_calls.append((argv, kwargs))
+        return process
+
+    tunnel = SSHTunnelManager(
+        tunnels=[TunnelConfig(name="waa", local_port=15001, remote_port=5000)],
+        host_key_alias="waa-pool-00-instance",
+        host_public_key=_identity().ssh_host_public_key,
+    )
+    with (
+        patch.object(tunnel, "_is_port_in_use", return_value=False),
+        patch("subprocess.Popen", side_effect=_popen),
+        patch("time.sleep"),
+    ):
+        status = tunnel.start_tunnels_for_vm("192.0.2.10")
+    assert status["waa"].active is True
+    command = popen_calls[0][0]
+    assert "StrictHostKeyChecking=yes" in command
+    assert "StrictHostKeyChecking=no" not in command
+    assert "HostKeyAlias=waa-pool-00-instance" in command
+    tunnel._active_tunnels.clear()
+    tunnel.stop_all_tunnels()
+
+    occupied = SSHTunnelManager(
+        tunnels=[TunnelConfig(name="waa", local_port=15001, remote_port=5000)],
+        host_key_alias="waa-pool-00-instance",
+        host_public_key=_identity().ssh_host_public_key,
+    )
+    with patch.object(occupied, "_is_port_in_use", return_value=True):
+        refused = occupied.start_tunnels_for_vm("192.0.2.10")
+    assert refused["waa"].active is False
+    assert "already in use" in refused["waa"].error
+
+
+def test_builtin_dispatch_binds_one_exact_task_and_never_places_the_api_key_in_argv():
+    worker = SimpleNamespace(
+        name="waa-pool-00",
+        ip="192.0.2.10",
+        waa_ready=True,
+        status="qualified-ready",
+        qualified_run_id="run-123",
+        qualified_worker_identity_sha256="sha256:" + "1" * 64,
+        qualified_egress_policy_sha256="2" * 64,
+        qualified_start_proof_sha256="sha256:" + "3" * 64,
+        qualified_task_binding_sha256=None,
+        current_task=None,
+    )
+    pool = SimpleNamespace(workers=[worker], total_tasks=0)
+
+    class Registry:
+        def get_pool(self):
+            return pool
+
+        def save(self):
+            return None
+
+        def update_worker(self, _name, **values):
+            for key, value in values.items():
+                setattr(worker, key, value)
+
+        def update_pool_progress(self, **_values):
+            return None
+
+    commands = []
+    secret_inputs = []
+    consumed = []
+
+    class Isolation:
+        def consume_dispatch(self, **values):
+            consumed.append(values)
+
+        def run_qualified_command(self, argv, **kwargs):
+            assert kwargs["run_id"] == "run-123"
+            assert kwargs["policy_sha256"] == "2" * 64
+            commands.append(argv)
+            if kwargs.get("input_bytes") is not None:
+                secret_inputs.append(kwargs["input_bytes"])
+            joined = " ".join(argv)
+            if "evaluation_examples_windows/test_all.json" in joined:
+                return subprocess.CompletedProcess(
+                    argv,
+                    0,
+                    stdout=b'{"domain":"chrome","task_id":"task-123"}\n',
+                    stderr=b"",
+                )
+            if "if pgrep" in joined:
+                return subprocess.CompletedProcess(argv, 0, stdout=b"DONE\n", stderr=b"")
+            if "benchmark.exit" in joined:
+                return subprocess.CompletedProcess(argv, 0, stdout=b"0\n", stderr=b"")
+            return subprocess.CompletedProcess(argv, 0, stdout=b"", stderr=b"")
+
+    manager = PoolManager(
+        vm_manager=SimpleNamespace(ssh_username="azureuser"),
+        registry=Registry(),
+        log_fn=lambda *_args, **_kwargs: None,
+    )
+    with (
+        patch.object(manager, "_qualified_isolation_manager", return_value=(Isolation(), {})),
+        patch("time.sleep"),
+    ):
+        result = manager.run(
+            tasks=1,
+            agent="navi",
+            model="model-1",
+            api_key="secret-test-key",
+            qualification_dir=Path("."),
+        )
+
+    assert result.completed == 1
+    assert consumed[0]["run_id"] == "run-123"
+    assert consumed[0]["task_binding_sha256"] == worker.qualified_task_binding_sha256
+    assert worker.current_task == "chrome:task-123"
+    assert worker.status == "qualified-dispatched"
+    assert secret_inputs == [b"secret-test-key\n"]
+    assert all("secret-test-key" not in argument for command in commands for argument in command)
+
+
 def test_oa_vm_cli_exposes_the_three_step_qualified_start():
     result = subprocess.run(
         [sys.executable, "-m", "openadapt_evals.benchmarks.vm_cli", "--help"],
@@ -387,4 +595,4 @@ def test_oa_vm_cli_exposes_the_three_step_qualified_start():
     assert auto_help.returncode == 0, auto_help.stderr
     assert "--qualification-dir" in auto_help.stdout
     assert "--run-evidence-dir" in auto_help.stdout
-    assert "--baseline-sha256" in auto_help.stdout
+    assert "--baseline-sha256" not in auto_help.stdout

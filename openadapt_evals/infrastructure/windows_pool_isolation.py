@@ -22,6 +22,7 @@ EGRESS_DOMAIN = b"openadapt-windows-host-egress-v1\0"
 WORKER_IDENTITY_DOMAIN = b"OpenAdapt Windows worker instance identity v1\0"
 RESET_PROOF_DOMAIN = b"OpenAdapt Windows pool reset proof v1\0"
 START_PROOF_DOMAIN = b"OpenAdapt Windows qualified start proof v1\0"
+DISPATCH_BINDING_DOMAIN = b"OpenAdapt Windows qualified dispatch binding v1\0"
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 HEX64 = re.compile(r"^[a-f0-9]{64}$")
 SHA256 = re.compile(r"^sha256:[a-f0-9]{64}$")
@@ -118,6 +119,7 @@ class WorkerIdentity:
     ssh_host: str
     ssh_host_public_key: str
     ssh_host_key_sha256: str
+    baseline_manifest_sha256: str
     admitted_image_sha256: str
     admitted_runtime_sha256: str
     host_bindings_sha256: str
@@ -158,6 +160,7 @@ def validate_worker_identity(value: object) -> WorkerIdentity:
     for field in (
         "admitted_image_sha256",
         "admitted_runtime_sha256",
+        "baseline_manifest_sha256",
         "host_bindings_sha256",
         "tls_bindings_sha256",
     ):
@@ -483,6 +486,7 @@ def validate_reset_proof(
         "schema_version": RESET_SCHEMA,
         "worker": worker,
         "run_id": run_id,
+        "baseline_sha256": identity.baseline_manifest_sha256.removeprefix("sha256:"),
         "container_state": "stopped",
         "worker_identity_sha256": worker_identity_sha256(identity),
         "admitted_image_sha256": identity.admitted_image_sha256,
@@ -619,6 +623,7 @@ class WindowsPoolIsolationManager:
             "/etc/openadapt/worker-instance-identity.sha256": worker_identity_sha256(self.identity),
             "/etc/openadapt/admitted-image.sha256": self.identity.admitted_image_sha256,
             "/etc/openadapt/admitted-runtime.sha256": self.identity.admitted_runtime_sha256,
+            "/etc/openadapt/baseline-manifest.sha256": self.identity.baseline_manifest_sha256,
             "/etc/openadapt/host-bindings.sha256": self.identity.host_bindings_sha256,
             "/etc/openadapt/tls-bindings.sha256": self.identity.tls_bindings_sha256,
         }
@@ -844,12 +849,11 @@ trap - EXIT
             input_bytes=(program + "\n").encode(),
         )
 
-    def reset(self, *, run_id: str, baseline_sha256: str) -> ResetProof:
+    def reset(self, *, run_id: str) -> ResetProof:
         """Restore the exact baseline and leave the guest container stopped."""
 
         run_id = _safe_name(run_id, "run id")
-        if HEX64.fullmatch(baseline_sha256) is None:
-            raise WindowsPoolIsolationError("baseline digest is invalid")
+        baseline_sha256 = self.identity.baseline_manifest_sha256.removeprefix("sha256:")
         self._verify_remote_identity()
         self.block_all(run_id)
         process = self._ssh(
@@ -1020,3 +1024,161 @@ test -z "$(docker ps -aq --filter name='^winarena$')"
             one_use_consumed=True,
             started_at=_format_timestamp(now),
         )
+
+    def verify_started(self, *, run_id: str, policy_sha256: str) -> None:
+        """Revalidate one admitted guest and its consumed start gate."""
+
+        run_id = _safe_name(run_id, "run id")
+        if not isinstance(policy_sha256, str) or HEX64.fullmatch(policy_sha256) is None:
+            raise WindowsPoolIsolationError("egress policy digest is invalid")
+        self._verify_remote_identity()
+        program = r"""
+set -euo pipefail
+run_id="$1"
+policy_sha256="$2"
+container="$3"
+image_sha256="$4"
+gate_root=/var/lib/openadapt/windows-run-gates
+test -d "$gate_root/${run_id}.consumed"
+test ! -L "$gate_root/${run_id}.consumed"
+test -d "$gate_root/${run_id}.reset-consumed"
+test ! -e "$gate_root/${run_id}.reset"
+test ! -e "$gate_root/${run_id}.egress"
+test -f /run/openadapt/windows-egress.sha256
+test ! -L /run/openadapt/windows-egress.sha256
+test "$(tr -d '\n' < /run/openadapt/windows-egress.sha256)" = "$policy_sha256"
+test "$(docker inspect "$container" --format '{{.State.Running}}')" = true
+test "$(docker inspect "$container" --format '{{.Image}}')" = "$image_sha256"
+""".strip()
+        self._ssh(
+            [
+                "sudo",
+                "bash",
+                "-s",
+                "--",
+                run_id,
+                policy_sha256,
+                self.container,
+                self.identity.admitted_image_sha256,
+            ],
+            input_bytes=(program + "\n").encode(),
+        )
+
+    def consume_dispatch(
+        self,
+        *,
+        run_id: str,
+        policy_sha256: str,
+        task_binding_sha256: str,
+    ) -> None:
+        """Consume one remote dispatch gate after a fresh start revalidation."""
+
+        if (
+            not isinstance(task_binding_sha256, str)
+            or SHA256.fullmatch(task_binding_sha256) is None
+        ):
+            raise WindowsPoolIsolationError("task binding digest is invalid")
+        self.verify_started(run_id=run_id, policy_sha256=policy_sha256)
+        program = r"""
+set -euo pipefail
+run_id="$1"
+task_binding_sha256="$2"
+worker="$3"
+gate_root=/var/lib/openadapt/windows-run-gates
+exec 9>"/var/lock/openadapt-windows-${worker}.lock"
+flock -n 9
+test -d "$gate_root/${run_id}.consumed"
+dispatch_gate="$gate_root/${run_id}.dispatch"
+mkdir -m 0700 "$dispatch_gate"
+printf '%s\n' "$task_binding_sha256" > "$dispatch_gate/task-binding.sha256"
+chmod 0400 "$dispatch_gate/task-binding.sha256"
+sync -f "$dispatch_gate/task-binding.sha256"
+sync -f "$dispatch_gate"
+""".strip()
+        self._ssh(
+            ["sudo", "bash", "-s", "--", run_id, task_binding_sha256, self.worker],
+            input_bytes=(program + "\n").encode(),
+        )
+
+    def run_command(
+        self,
+        remote_command: Sequence[str],
+        *,
+        input_bytes: bytes | None = None,
+        timeout_seconds: int = 300,
+    ) -> subprocess.CompletedProcess[bytes]:
+        """Run a command through the pinned identity boundary."""
+
+        self._verify_remote_identity()
+        return self._ssh(
+            remote_command,
+            input_bytes=input_bytes,
+            timeout_seconds=timeout_seconds,
+        )
+
+    def run_qualified_command(
+        self,
+        remote_command: Sequence[str],
+        *,
+        run_id: str,
+        policy_sha256: str,
+        input_bytes: bytes | None = None,
+        timeout_seconds: int = 300,
+    ) -> subprocess.CompletedProcess[bytes]:
+        """Run a command only after a fresh live start-gate check."""
+
+        self.verify_started(run_id=run_id, policy_sha256=policy_sha256)
+        return self._ssh(
+            remote_command,
+            input_bytes=input_bytes,
+            timeout_seconds=timeout_seconds,
+        )
+
+    def probe_services(self, *, run_id: str, policy_sha256: str) -> tuple[bool, bool]:
+        """Probe WAA and the evaluator after an exact live gate check."""
+
+        self.verify_started(run_id=run_id, policy_sha256=policy_sha256)
+        waa = self.run_qualified_command(
+            ["curl", "-fsS", "--max-time", "5", "http://localhost:5000/probe"],
+            run_id=run_id,
+            policy_sha256=policy_sha256,
+            timeout_seconds=15,
+        )
+        try:
+            self.run_qualified_command(
+                ["curl", "-fsS", "--max-time", "5", "http://localhost:5051/probe"],
+                run_id=run_id,
+                policy_sha256=policy_sha256,
+                timeout_seconds=15,
+            )
+            evaluator_ready = True
+        except WindowsPoolIsolationError:
+            evaluator_ready = False
+        return bool(waa.stdout.strip()), evaluator_ready
+
+
+def dispatch_binding_sha256(value: Mapping[str, Any]) -> str:
+    """Hash one closed task dispatch projection."""
+
+    expected = {
+        "schema_version",
+        "worker",
+        "qualified_run_id",
+        "qualified_start_proof_sha256",
+        "task_id",
+        "agent",
+        "model",
+    }
+    if not isinstance(value, Mapping) or set(value) != expected:
+        raise WindowsPoolIsolationError("dispatch binding is not a closed object")
+    for field in expected:
+        item = value[field]
+        if not isinstance(item, str) or not item or len(item) > 512 or "\x00" in item:
+            raise WindowsPoolIsolationError(f"dispatch binding {field} is invalid")
+    if value["schema_version"] != "openadapt.windows-qualified-dispatch/v1":
+        raise WindowsPoolIsolationError("dispatch binding schema is invalid")
+    if SHA256.fullmatch(value["qualified_start_proof_sha256"]) is None:
+        raise WindowsPoolIsolationError("dispatch start proof digest is invalid")
+    return "sha256:" + hashlib.sha256(
+        DISPATCH_BINDING_DOMAIN + canonical_json(dict(value))
+    ).hexdigest()
