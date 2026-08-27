@@ -141,6 +141,43 @@ def test_shared_interrupt_proves_termination_before_terminal_build() -> None:
     )
 
 
+def test_uncertain_interrupt_retains_running_readback_for_quarantine() -> None:
+    interrupt_requested = Event()
+    interrupt_requested.set()
+    interrupt_evidence = {"state": "INTERRUPT_UNCERTAIN"}
+    terminal_readback = {"state": "RUNNING"}
+    with (
+        patch(
+            "openadapt_evals.infrastructure.windows_worker_dispatch.interrupt_process",
+            return_value=interrupt_evidence,
+        ),
+        patch(
+            "openadapt_evals.infrastructure.windows_worker_dispatch.read_process_terminal",
+            return_value=terminal_readback,
+        ),
+        patch(
+            "openadapt_evals.infrastructure.windows_worker_dispatch.build_terminal_evidence",
+            return_value={"terminal_state": "QUARANTINED"},
+        ) as build,
+    ):
+        _build_postlaunch_terminal_evidence(
+            manager="manager",
+            admission="admission",
+            dispatch="dispatch",
+            process="process",
+            interrupt_requested=interrupt_requested,
+            poll_seconds=0,
+        )
+
+    build.assert_called_once_with(
+        admission="admission",
+        dispatch="dispatch",
+        process="process",
+        terminal_readback=terminal_readback,
+        interrupt_evidence=interrupt_evidence,
+    )
+
+
 def test_worker_interrupt_enters_the_same_termination_proof_path() -> None:
     interrupt_requested = Event()
     interrupt_evidence = {"state": "INTERRUPTED_PROVEN"}

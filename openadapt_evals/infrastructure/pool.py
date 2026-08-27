@@ -1072,6 +1072,10 @@ class PoolManager:
                 ).encode("utf-8")
                 + b"\n"
             )
+            if interrupt_requested.is_set():
+                raise RuntimeError(
+                    "Operator interrupt stopped the task before dispatch authorization."
+                )
             authorized = self.worker_trust_authority.authorize_dispatch(
                 admission=admission,
                 run_id=worker.qualified_run_id,
@@ -1093,6 +1097,7 @@ class PoolManager:
                 experiment=f"{exp_name}_{worker.name}",
                 subset=subset,
                 api_key=api_key,
+                cancel_before_launch=interrupt_requested.is_set(),
             )
             self.registry.update_worker(
                 worker.name,
