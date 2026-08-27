@@ -262,12 +262,36 @@ class SSHTunnelManager:
                 finally:
                     known_hosts.close()
             host_key_options = [
+                "-F",
+                "/dev/null",
+                "-i",
+                str(self.ssh_key_path),
                 "-o",
                 "StrictHostKeyChecking=yes",
                 "-o",
                 f"UserKnownHostsFile={self._known_hosts_path}",
                 "-o",
                 f"HostKeyAlias={self._host_key_alias}",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "IdentitiesOnly=yes",
+                "-o",
+                "IdentityAgent=none",
+                "-o",
+                "ControlMaster=no",
+                "-o",
+                "ControlPath=none",
+                "-o",
+                "ForwardAgent=no",
+                "-o",
+                "ForwardX11=no",
+                "-o",
+                "PermitLocalCommand=no",
+                "-o",
+                "ProxyCommand=none",
+                "-o",
+                "SendEnv=",
             ]
         else:
             host_key_options = [

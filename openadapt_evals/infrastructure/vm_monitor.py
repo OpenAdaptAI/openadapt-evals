@@ -388,9 +388,15 @@ class PoolWorker:
     current_task: str | None = None
     error: str | None = None
     qualified_run_id: str | None = None
+    qualified_worker_admission_sha256: str | None = None
+    qualified_provider_identity_sha256: str | None = None
+    qualified_live_provider_observation_sha256: str | None = None
     qualified_worker_identity_sha256: str | None = None
+    qualified_local_worker_identity_sha256: str | None = None
     qualified_egress_policy_sha256: str | None = None
     qualified_start_proof_sha256: str | None = None
+    qualified_container_state_sha256: str | None = None
+    qualified_dispatch_expires_at: str | None = None
     qualified_task_binding_sha256: str | None = None
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())

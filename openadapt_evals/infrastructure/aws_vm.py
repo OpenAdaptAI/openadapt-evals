@@ -364,6 +364,48 @@ class AWSVMManager:
             return state_map.get(state, state)
         return None
 
+    def observe_worker(self, name: str) -> dict[str, Any]:
+        """Read one exact EC2 generation and network identity from AWS."""
+
+        from datetime import datetime, timezone
+
+        import boto3
+
+        from openadapt_evals.infrastructure.windows_worker_trust import (
+            PROVIDER_OBSERVATION_SCHEMA,
+            canonical_json,
+        )
+
+        instance = self._find_instance_by_name(name)
+        if not isinstance(instance, dict):
+            raise RuntimeError("AWS worker does not exist")
+        caller = boto3.client("sts", region_name=self.region).get_caller_identity()
+        account_id = caller.get("Account")
+        arn = caller.get("Arn")
+        instance_id = instance.get("InstanceId")
+        public_ip = instance.get("PublicIpAddress")
+        if not all(
+            isinstance(item, str) and item
+            for item in (account_id, arn, instance_id, public_ip)
+        ):
+            raise RuntimeError("AWS live worker observation is incomplete")
+        resource_identity = f"arn:aws:ec2:{self.region}:{account_id}:instance/{instance_id}"
+        observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace(
+            "+00:00", "Z"
+        )
+        return {
+            "schema_version": PROVIDER_OBSERVATION_SCHEMA,
+            "provider": "aws",
+            "provider_account": canonical_json(caller).decode("utf-8"),
+            "region": self.region,
+            "resource_identity": resource_identity,
+            "instance_identity": instance_id,
+            "network_identity": public_ip,
+            "attestation_identity": arn,
+            "attestation": canonical_json(instance).decode("utf-8"),
+            "observed_at": observed_at,
+        }
+
     def create_vm(
         self,
         name: str,

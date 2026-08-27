@@ -46,6 +46,10 @@ class VMProvider(Protocol):
         """Get VM power state."""
         ...
 
+    def observe_worker(self, name: str) -> dict[str, Any]:
+        """Return one live provider observation for central worker admission."""
+        ...
+
     def create_vm(
         self,
         name: str,

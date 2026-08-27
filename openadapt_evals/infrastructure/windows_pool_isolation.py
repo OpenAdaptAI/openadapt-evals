@@ -6,6 +6,7 @@ import hashlib
 import ipaddress
 import json
 import re
+import shlex
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -23,6 +24,7 @@ WORKER_IDENTITY_DOMAIN = b"OpenAdapt Windows worker instance identity v1\0"
 RESET_PROOF_DOMAIN = b"OpenAdapt Windows pool reset proof v1\0"
 START_PROOF_DOMAIN = b"OpenAdapt Windows qualified start proof v1\0"
 DISPATCH_BINDING_DOMAIN = b"OpenAdapt Windows qualified dispatch binding v1\0"
+CONTAINER_STATE_DOMAIN = b"OpenAdapt Windows qualified container state v1\0"
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 HEX64 = re.compile(r"^[a-f0-9]{64}$")
 SHA256 = re.compile(r"^sha256:[a-f0-9]{64}$")
@@ -293,6 +295,9 @@ exec 9>"$lock"
 flock -n 9
 gate_root=/var/lib/openadapt/windows-run-gates
 install -d -m 0700 "$gate_root"
+burned_root=/var/lib/openadapt/windows-burned-runs
+test -f "$burned_root/${run_id}/reservation.json"
+test ! -L "$burned_root/${run_id}/reservation.json"
 test ! -e "$gate_root/${run_id}.reset"
 test ! -e "$gate_root/${run_id}.reset-consumed"
 test ! -e "$gate_root/${run_id}.egress"
@@ -427,11 +432,17 @@ class StartProof:
     schema_version: str
     worker: str
     run_id: str
+    worker_admission_sha256: str
+    provider_identity_sha256: str
+    live_provider_observation_sha256: str
     worker_identity_sha256: str
+    local_worker_identity_sha256: str
     reset_proof_sha256: str
     egress_policy_sha256: str
+    container_state_sha256: str
     one_use_consumed: bool
     started_at: str
+    expires_at: str
 
 
 def _load_proof(path: Path, proof_type: type[ResetProof] | type[EgressProof]):
@@ -545,6 +556,7 @@ class WindowsPoolIsolationManager:
         storage_dir: str = "/home/azureuser/waa-storage",
         baseline_dir: str = "/home/azureuser/openadapt-windows-baseline",
         bridge_interface: str = "docker0",
+        ssh_private_key_path: str | Path | None = None,
     ) -> None:
         self.ssh_host = ssh_host
         self.ssh_user = _safe_name(ssh_user, "SSH user")
@@ -553,6 +565,11 @@ class WindowsPoolIsolationManager:
         self.storage_dir = storage_dir
         self.baseline_dir = baseline_dir
         self.bridge_interface = _safe_name(bridge_interface, "bridge interface")
+        self.ssh_private_key_path = Path(
+            ssh_private_key_path or Path.home() / ".ssh" / "id_rsa"
+        ).expanduser()
+        if not self.ssh_private_key_path.is_absolute():
+            raise WindowsPoolIsolationError("SSH private key path must be absolute")
         self.identity = validate_worker_identity(identity.__dict__)
         if self.identity.ssh_host != ssh_host:
             raise WindowsPoolIsolationError("worker identity SSH host differs")
@@ -567,12 +584,25 @@ class WindowsPoolIsolationManager:
         input_bytes: bytes | None = None,
         timeout_seconds: int = 300,
     ) -> subprocess.CompletedProcess[bytes]:
+        if not remote_command or any(
+            not isinstance(item, str) or "\x00" in item for item in remote_command
+        ):
+            raise WindowsPoolIsolationError("remote command is invalid")
+        # OpenSSH does not preserve argv after the destination.  It joins those
+        # values and gives one string to the login shell.  Serialize one closed
+        # argv explicitly so that task, model, and multiline program values
+        # cannot become shell syntax.
+        serialized_command = shlex.join(list(remote_command))
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as known_hosts:
             known_hosts.write(f"{self.identity.instance_id} {self.identity.ssh_host_public_key}\n")
             known_hosts.flush()
             process = subprocess.run(
                 [
                     "ssh",
+                    "-F",
+                    "/dev/null",
+                    "-i",
+                    str(self.ssh_private_key_path),
                     "-o",
                     "StrictHostKeyChecking=yes",
                     "-o",
@@ -582,9 +612,29 @@ class WindowsPoolIsolationManager:
                     "-o",
                     "BatchMode=yes",
                     "-o",
+                    "IdentitiesOnly=yes",
+                    "-o",
+                    "IdentityAgent=none",
+                    "-o",
+                    "ControlMaster=no",
+                    "-o",
+                    "ControlPath=none",
+                    "-o",
+                    "ForwardAgent=no",
+                    "-o",
+                    "ForwardX11=no",
+                    "-o",
+                    "PermitLocalCommand=no",
+                    "-o",
+                    "ProxyCommand=none",
+                    "-o",
+                    "ClearAllForwardings=yes",
+                    "-o",
+                    "SendEnv=",
+                    "-o",
                     "ConnectTimeout=10",
                     f"{self.ssh_user}@{self.ssh_host}",
-                    *remote_command,
+                    serialized_command,
                 ],
                 input=input_bytes,
                 capture_output=True,
@@ -616,6 +666,60 @@ class WindowsPoolIsolationManager:
         self._ssh(
             ["sudo", "nft", "-f", "-"],
             input_bytes=f"chain inet {table} forward {{ policy drop; }}\n".encode("ascii"),
+        )
+
+    def _reserve_run_identity(self, run_id: str) -> None:
+        """Burn one run identity durably before reset changes worker state."""
+
+        program = r"""
+import fcntl
+import json
+import os
+import pathlib
+import sys
+
+worker, run_id, identity_sha256 = sys.argv[1:]
+root = pathlib.Path('/var/lib/openadapt/windows-burned-runs')
+root.mkdir(mode=0o700, parents=True, exist_ok=True)
+lock_fd = os.open(
+    pathlib.Path('/var/lock') / f'openadapt-windows-{worker}.lock',
+    os.O_WRONLY | os.O_CREAT,
+    0o600,
+)
+fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+target = root / run_id
+target.mkdir(mode=0o700)
+payload = {
+    'schema_version': 'openadapt.windows-burned-run/v1',
+    'run_id': run_id,
+    'worker_identity_sha256': identity_sha256,
+    'state': 'reserved',
+}
+temporary = target / '.reservation.json.tmp'
+fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+    json.dump(payload, stream, sort_keys=True, separators=(',', ':'))
+    stream.write('\n')
+    stream.flush()
+    os.fsync(stream.fileno())
+os.replace(temporary, target / 'reservation.json')
+directory_fd = os.open(target, os.O_RDONLY)
+try:
+    os.fsync(directory_fd)
+finally:
+    os.close(directory_fd)
+os.close(lock_fd)
+""".strip()
+        self._ssh(
+            [
+                "sudo",
+                "python3",
+                "-c",
+                program,
+                self.worker,
+                run_id,
+                worker_identity_sha256(self.identity),
+            ]
         )
 
     def _verify_remote_identity(self) -> None:
@@ -676,6 +780,10 @@ lock_fd = os.open(lock_path, os.O_WRONLY | os.O_CREAT, 0o600)
 fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
 gate_root = pathlib.Path('/var/lib/openadapt/windows-run-gates')
 gate_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+burned_root = pathlib.Path('/var/lib/openadapt/windows-burned-runs')
+reservation = burned_root / run_id / 'reservation.json'
+if not reservation.is_file() or reservation.is_symlink():
+    raise SystemExit('durable run reservation is absent')
 egress_gate = gate_root / f'{run_id}.egress'
 consumed_gate = gate_root / f'{run_id}.consumed'
 reset_gate = gate_root / f'{run_id}.reset'
@@ -819,6 +927,7 @@ container="$3"
 proof_sha256="$4"
 gate_root=/var/lib/openadapt/windows-run-gates
 install -d -m 0700 "$gate_root"
+test -f "/var/lib/openadapt/windows-burned-runs/${run_id}/reservation.json"
 exec 9>"/var/lock/openadapt-windows-${worker}.lock"
 flock -n 9
 test ! -e "$gate_root/${run_id}.reset"
@@ -855,6 +964,7 @@ trap - EXIT
         run_id = _safe_name(run_id, "run id")
         baseline_sha256 = self.identity.baseline_manifest_sha256.removeprefix("sha256:")
         self._verify_remote_identity()
+        self._reserve_run_identity(run_id)
         self.block_all(run_id)
         process = self._ssh(
             [
@@ -954,6 +1064,7 @@ trap - EXIT
         reset_proof: ResetProof,
         egress_proof: EgressProof,
         start_script: str,
+        worker_admission: Mapping[str, Any],
     ) -> StartProof:
         """Consume one fresh reset/egress chain before guest startup."""
 
@@ -977,6 +1088,35 @@ trap - EXIT
             now=now,
         )
         self._verify_remote_identity()
+        admission_expected = {
+            "admission_object_sha256",
+            "provider_identity_sha256",
+            "live_provider_observation_sha256",
+            "worker_identity_sha256",
+            "admitted_runtime_sha256",
+            "worker_image_sha256",
+            "baseline_sha256",
+            "host_identity_sha256",
+            "tls_identity_sha256",
+            "egress_policy_sha256",
+        }
+        if not isinstance(worker_admission, Mapping) or not admission_expected.issubset(
+            worker_admission
+        ):
+            raise WindowsPoolIsolationError("worker admission is incomplete")
+        expected_bindings = {
+            "admitted_runtime_sha256": self.identity.admitted_runtime_sha256,
+            "worker_image_sha256": self.identity.admitted_image_sha256,
+            "baseline_sha256": self.identity.baseline_manifest_sha256,
+            "host_identity_sha256": self.identity.host_bindings_sha256,
+            "tls_identity_sha256": self.identity.tls_bindings_sha256,
+            "egress_policy_sha256": egress_proof.policy_sha256,
+        }
+        if any(
+            worker_admission[key] != expected_value
+            for key, expected_value in expected_bindings.items()
+        ):
+            raise WindowsPoolIsolationError("worker admission binding differs")
         gate_script = r"""
 set -euo pipefail
 run_id="$1"
@@ -985,6 +1125,10 @@ reset_sha256="$3"
 identity_sha256="$4"
 image_sha256="$5"
 worker="$6"
+admission_sha256="$7"
+provider_sha256="$8"
+observation_sha256="$9"
+central_worker_sha256="${10}"
 gate_root=/var/lib/openadapt/windows-run-gates
 install -d -m 0700 "$gate_root"
 exec 9>"/var/lock/openadapt-windows-${worker}.lock"
@@ -997,8 +1141,66 @@ rm "$gate_root/${run_id}.egress"
 test "$(tr -d '\n' < /run/openadapt/windows-egress.sha256)" = "$policy_sha256"
 test "$(docker image inspect "$image_sha256" --format '{{.Id}}')" = "$image_sha256"
 test -z "$(docker ps -aq --filter name='^winarena$')"
+printf '%s\n%s\n%s\n%s\n' "$admission_sha256" "$provider_sha256" "$observation_sha256" "$central_worker_sha256" \
+  > "/var/lib/openadapt/windows-burned-runs/${run_id}/start-authority"
+chmod 0400 "/var/lib/openadapt/windows-burned-runs/${run_id}/start-authority"
+sync -f "/var/lib/openadapt/windows-burned-runs/${run_id}/start-authority"
 """.strip()
-        self._ssh(
+        capture_script = r"""
+python3 - "$run_id" "$image_sha256" <<'PY'
+import hashlib
+import json
+import os
+import pathlib
+import subprocess
+import sys
+
+run_id, image_sha256 = sys.argv[1:]
+raw = json.loads(subprocess.run(
+    ['docker', 'inspect', 'winarena'],
+    check=True,
+    capture_output=True,
+    text=True,
+).stdout)
+if not isinstance(raw, list) or len(raw) != 1:
+    raise SystemExit('container inspection is not singular')
+item = raw[0]
+if item.get('Image') != image_sha256 or item.get('State', {}).get('Running') is not True:
+    raise SystemExit('container generation differs')
+projection = {
+    'schema_version': 'openadapt.windows-container-state/v1',
+    'container_id': item.get('Id'),
+    'name': item.get('Name'),
+    'image': item.get('Image'),
+    'config': item.get('Config'),
+    'host_config': item.get('HostConfig'),
+    'mounts': item.get('Mounts'),
+    'network_settings': item.get('NetworkSettings', {}).get('Networks'),
+    'graph_driver': item.get('GraphDriver'),
+    'restart_count': item.get('RestartCount'),
+    'host_pid': item.get('State', {}).get('Pid'),
+    'started_at': item.get('State', {}).get('StartedAt'),
+}
+payload = json.dumps(projection, sort_keys=True, separators=(',', ':')).encode('utf-8')
+digest = hashlib.sha256(b'OpenAdapt Windows qualified container state v1\0' + payload).hexdigest()
+target = pathlib.Path('/var/lib/openadapt/windows-burned-runs') / run_id
+temporary = target / '.container-state.json.tmp'
+fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(fd, 'wb') as stream:
+    stream.write(payload + b'\n')
+    stream.flush()
+    os.fsync(stream.fileno())
+os.replace(temporary, target / 'container-state.json')
+digest_path = target / 'container-state.sha256'
+fd = os.open(digest_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
+with os.fdopen(fd, 'w', encoding='ascii') as stream:
+    stream.write(digest + '\n')
+    stream.flush()
+    os.fsync(stream.fileno())
+print(json.dumps({'container_state_sha256': 'sha256:' + digest}, sort_keys=True, separators=(',', ':')))
+PY
+""".strip()
+        process = self._ssh(
             [
                 "sudo",
                 "bash",
@@ -1010,58 +1212,126 @@ test -z "$(docker ps -aq --filter name='^winarena$')"
                 worker_identity_sha256(self.identity),
                 self.identity.admitted_image_sha256,
                 self.worker,
+                worker_admission["admission_object_sha256"],
+                worker_admission["provider_identity_sha256"],
+                worker_admission["live_provider_observation_sha256"],
+                worker_admission["worker_identity_sha256"],
             ],
-            input_bytes=(gate_script + "\n" + start_script + "\n").encode(),
+            input_bytes=(gate_script + "\n" + start_script + "\n" + capture_script + "\n").encode(),
             timeout_seconds=15 * 60,
         )
+        try:
+            container_result = json.loads(process.stdout.splitlines()[-1])
+        except (IndexError, json.JSONDecodeError) as exc:
+            raise WindowsPoolIsolationError("container start evidence is invalid") from exc
+        if (
+            not isinstance(container_result, Mapping)
+            or set(container_result) != {"container_state_sha256"}
+            or not isinstance(container_result["container_state_sha256"], str)
+            or SHA256.fullmatch(container_result["container_state_sha256"]) is None
+        ):
+            raise WindowsPoolIsolationError("container start evidence is invalid")
         return StartProof(
             schema_version=START_PROOF_SCHEMA,
             worker=self.worker,
             run_id=run_id,
-            worker_identity_sha256=worker_identity_sha256(self.identity),
+            worker_admission_sha256=worker_admission["admission_object_sha256"],
+            provider_identity_sha256=worker_admission["provider_identity_sha256"],
+            live_provider_observation_sha256=worker_admission[
+                "live_provider_observation_sha256"
+            ],
+            worker_identity_sha256=worker_admission["worker_identity_sha256"],
+            local_worker_identity_sha256=worker_identity_sha256(self.identity),
             reset_proof_sha256=reset_proof_sha256(reset_proof),
             egress_policy_sha256=egress_proof.policy_sha256,
+            container_state_sha256=container_result["container_state_sha256"],
             one_use_consumed=True,
             started_at=_format_timestamp(now),
+            expires_at=_format_timestamp(now + MAX_GATE_AGE),
         )
 
-    def verify_started(self, *, run_id: str, policy_sha256: str) -> None:
+    def verify_started(
+        self,
+        *,
+        run_id: str,
+        policy_sha256: str,
+        container_state_sha256: str,
+        expires_at: str,
+    ) -> None:
         """Revalidate one admitted guest and its consumed start gate."""
 
         run_id = _safe_name(run_id, "run id")
         if not isinstance(policy_sha256, str) or HEX64.fullmatch(policy_sha256) is None:
             raise WindowsPoolIsolationError("egress policy digest is invalid")
+        if not isinstance(container_state_sha256, str) or SHA256.fullmatch(
+            container_state_sha256
+        ) is None:
+            raise WindowsPoolIsolationError("container state digest is invalid")
+        if _now() >= _timestamp(expires_at, "qualified start expires_at"):
+            raise WindowsPoolIsolationError("qualified start is stale")
         self._verify_remote_identity()
         program = r"""
-set -euo pipefail
-run_id="$1"
-policy_sha256="$2"
-container="$3"
-image_sha256="$4"
-gate_root=/var/lib/openadapt/windows-run-gates
-test -d "$gate_root/${run_id}.consumed"
-test ! -L "$gate_root/${run_id}.consumed"
-test -d "$gate_root/${run_id}.reset-consumed"
-test ! -e "$gate_root/${run_id}.reset"
-test ! -e "$gate_root/${run_id}.egress"
-test -f /run/openadapt/windows-egress.sha256
-test ! -L /run/openadapt/windows-egress.sha256
-test "$(tr -d '\n' < /run/openadapt/windows-egress.sha256)" = "$policy_sha256"
-test "$(docker inspect "$container" --format '{{.State.Running}}')" = true
-test "$(docker inspect "$container" --format '{{.Image}}')" = "$image_sha256"
+import hashlib
+import json
+import pathlib
+import subprocess
+import sys
+
+run_id, policy_sha256, container, image_sha256, expected_state = sys.argv[1:]
+gate_root = pathlib.Path('/var/lib/openadapt/windows-run-gates')
+if not (gate_root / f'{run_id}.consumed').is_dir():
+    raise SystemExit('start gate is absent')
+if not (gate_root / f'{run_id}.reset-consumed').is_dir():
+    raise SystemExit('reset gate is absent')
+if (gate_root / f'{run_id}.reset').exists() or (gate_root / f'{run_id}.egress').exists():
+    raise SystemExit('unconsumed run gate remains')
+active_digest = pathlib.Path('/run/openadapt/windows-egress.sha256')
+active_rules = pathlib.Path('/run/openadapt/windows-egress-active.nft')
+if not active_digest.is_file() or active_digest.is_symlink() or not active_rules.is_file():
+    raise SystemExit('live egress evidence is absent')
+if active_digest.read_text(encoding='ascii').strip() != policy_sha256:
+    raise SystemExit('live egress digest differs')
+subprocess.run(['nft', '-c', '-f', str(active_rules)], check=True)
+raw = json.loads(subprocess.run(
+    ['docker', 'inspect', container], check=True, capture_output=True, text=True
+).stdout)
+if not isinstance(raw, list) or len(raw) != 1:
+    raise SystemExit('container inspection is not singular')
+item = raw[0]
+if item.get('Image') != image_sha256 or item.get('State', {}).get('Running') is not True:
+    raise SystemExit('container generation differs')
+projection = {
+    'schema_version': 'openadapt.windows-container-state/v1',
+    'container_id': item.get('Id'), 'name': item.get('Name'), 'image': item.get('Image'),
+    'config': item.get('Config'), 'host_config': item.get('HostConfig'),
+    'mounts': item.get('Mounts'),
+    'network_settings': item.get('NetworkSettings', {}).get('Networks'),
+    'graph_driver': item.get('GraphDriver'), 'restart_count': item.get('RestartCount'),
+    'host_pid': item.get('State', {}).get('Pid'),
+    'started_at': item.get('State', {}).get('StartedAt'),
+}
+payload = json.dumps(projection, sort_keys=True, separators=(',', ':')).encode('utf-8')
+actual = 'sha256:' + hashlib.sha256(
+    b'OpenAdapt Windows qualified container state v1\0' + payload
+).hexdigest()
+if actual != expected_state:
+    raise SystemExit('container state differs')
+stored = pathlib.Path('/var/lib/openadapt/windows-burned-runs') / run_id / 'container-state.json'
+if not stored.is_file() or stored.is_symlink() or stored.read_bytes() != payload + b'\n':
+    raise SystemExit('stored container state differs')
 """.strip()
         self._ssh(
             [
                 "sudo",
-                "bash",
-                "-s",
-                "--",
+                "python3",
+                "-c",
+                program,
                 run_id,
                 policy_sha256,
                 self.container,
                 self.identity.admitted_image_sha256,
+                container_state_sha256,
             ],
-            input_bytes=(program + "\n").encode(),
         )
 
     def consume_dispatch(
@@ -1069,6 +1339,8 @@ test "$(docker inspect "$container" --format '{{.Image}}')" = "$image_sha256"
         *,
         run_id: str,
         policy_sha256: str,
+        container_state_sha256: str,
+        expires_at: str,
         task_binding_sha256: str,
     ) -> None:
         """Consume one remote dispatch gate after a fresh start revalidation."""
@@ -1078,7 +1350,12 @@ test "$(docker inspect "$container" --format '{{.Image}}')" = "$image_sha256"
             or SHA256.fullmatch(task_binding_sha256) is None
         ):
             raise WindowsPoolIsolationError("task binding digest is invalid")
-        self.verify_started(run_id=run_id, policy_sha256=policy_sha256)
+        self.verify_started(
+            run_id=run_id,
+            policy_sha256=policy_sha256,
+            container_state_sha256=container_state_sha256,
+            expires_at=expires_at,
+        )
         program = r"""
 set -euo pipefail
 run_id="$1"
@@ -1122,26 +1399,47 @@ sync -f "$dispatch_gate"
         *,
         run_id: str,
         policy_sha256: str,
+        container_state_sha256: str,
+        expires_at: str,
         input_bytes: bytes | None = None,
         timeout_seconds: int = 300,
     ) -> subprocess.CompletedProcess[bytes]:
         """Run a command only after a fresh live start-gate check."""
 
-        self.verify_started(run_id=run_id, policy_sha256=policy_sha256)
+        self.verify_started(
+            run_id=run_id,
+            policy_sha256=policy_sha256,
+            container_state_sha256=container_state_sha256,
+            expires_at=expires_at,
+        )
         return self._ssh(
             remote_command,
             input_bytes=input_bytes,
             timeout_seconds=timeout_seconds,
         )
 
-    def probe_services(self, *, run_id: str, policy_sha256: str) -> tuple[bool, bool]:
+    def probe_services(
+        self,
+        *,
+        run_id: str,
+        policy_sha256: str,
+        container_state_sha256: str,
+        expires_at: str,
+    ) -> tuple[bool, bool]:
         """Probe WAA and the evaluator after an exact live gate check."""
 
-        self.verify_started(run_id=run_id, policy_sha256=policy_sha256)
+        self.verify_started(
+            run_id=run_id,
+            policy_sha256=policy_sha256,
+            container_state_sha256=container_state_sha256,
+            expires_at=expires_at,
+        )
         waa = self.run_qualified_command(
             ["curl", "-fsS", "--max-time", "5", "http://localhost:5000/probe"],
             run_id=run_id,
             policy_sha256=policy_sha256,
+            container_state_sha256=container_state_sha256,
+            expires_at=expires_at,
             timeout_seconds=15,
         )
         try:
@@ -1149,6 +1447,8 @@ sync -f "$dispatch_gate"
                 ["curl", "-fsS", "--max-time", "5", "http://localhost:5051/probe"],
                 run_id=run_id,
                 policy_sha256=policy_sha256,
+                container_state_sha256=container_state_sha256,
+                expires_at=expires_at,
                 timeout_seconds=15,
             )
             evaluator_ready = True

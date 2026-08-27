@@ -252,6 +252,74 @@ class AzureVMManager:
             return self._sdk_get_vm_state(name)
         return self._cli_get_vm_state(name)
 
+    def observe_worker(self, name: str) -> dict[str, Any]:
+        """Read one exact VM generation and network identity from Azure."""
+
+        from datetime import datetime, timezone
+
+        from openadapt_evals.infrastructure.windows_worker_trust import (
+            PROVIDER_OBSERVATION_SCHEMA,
+            canonical_json,
+        )
+
+        account = self._az_run(
+            ["account", "show", "--query", "{id:id,tenantId:tenantId}", "-o", "json"]
+        )
+        vm = self._az_run(
+            [
+                "vm",
+                "show",
+                "-d",
+                "-g",
+                self.resource_group,
+                "-n",
+                name,
+                "--query",
+                "{id:id,vmId:vmId,location:location,powerState:powerState,"
+                "publicIps:publicIps,networkProfile:networkProfile,"
+                "storageProfile:storageProfile,identity:identity}",
+                "-o",
+                "json",
+            ]
+        )
+        if account.returncode != 0 or vm.returncode != 0:
+            raise RuntimeError("Azure live worker observation failed")
+        try:
+            account_value = json.loads(account.stdout)
+            vm_value = json.loads(vm.stdout)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("Azure live worker observation is invalid") from exc
+        if not isinstance(account_value, dict) or not isinstance(vm_value, dict):
+            raise RuntimeError("Azure live worker observation is invalid")
+        subscription_id = account_value.get("id")
+        tenant_id = account_value.get("tenantId")
+        if not all(isinstance(item, str) and item for item in (subscription_id, tenant_id)):
+            raise RuntimeError("Azure account identity is incomplete")
+        resource_id = vm_value.get("id")
+        instance_id = vm_value.get("vmId")
+        location = vm_value.get("location")
+        public_ip = vm_value.get("publicIps")
+        if not all(
+            isinstance(item, str) and item
+            for item in (resource_id, instance_id, location, public_ip)
+        ):
+            raise RuntimeError("Azure worker identity is incomplete")
+        observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace(
+            "+00:00", "Z"
+        )
+        return {
+            "schema_version": PROVIDER_OBSERVATION_SCHEMA,
+            "provider": "azure",
+            "provider_account": canonical_json(account_value).decode("utf-8"),
+            "region": location,
+            "resource_identity": resource_id,
+            "instance_identity": instance_id,
+            "network_identity": public_ip,
+            "attestation_identity": tenant_id,
+            "attestation": canonical_json(vm_value).decode("utf-8"),
+            "observed_at": observed_at,
+        }
+
     def create_vm(
         self,
         name: str,

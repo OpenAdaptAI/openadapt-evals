@@ -294,6 +294,8 @@ class PoolManager:
     vm_manager: VMProvider = field(default_factory=AzureVMManager)
     registry: VMPoolRegistry = field(default_factory=VMPoolRegistry)
     log_fn: Any = None
+    worker_trust_authority: Any = None
+    external_task_session_authority: Any = None
 
     def _log(self, step: str, message: str, end: str = "\n") -> None:
         """Log a message using the configured log function or print."""
@@ -621,13 +623,15 @@ class PoolManager:
         while workers_pending and (time.time() - start_time) < timeout_seconds:
             for name, worker in list(workers_pending.items()):
                 try:
-                    manager, _policy = self._qualified_isolation_manager(
+                    manager, _policy, _admission = self._qualified_isolation_manager(
                         worker,
                         qualification_dir,
                     )
                     ready, eval_ok = manager.probe_services(
                         run_id=worker.qualified_run_id,
                         policy_sha256=worker.qualified_egress_policy_sha256,
+                        container_state_sha256=worker.qualified_container_state_sha256,
+                        expires_at=worker.qualified_dispatch_expires_at,
                     )
 
                     if ready:
@@ -738,9 +742,15 @@ class PoolManager:
             if worker.waa_ready
             and worker.status == "qualified-ready"
             and worker.qualified_run_id
+            and worker.qualified_worker_admission_sha256
+            and worker.qualified_provider_identity_sha256
+            and worker.qualified_live_provider_observation_sha256
             and worker.qualified_worker_identity_sha256
+            and worker.qualified_local_worker_identity_sha256
             and worker.qualified_egress_policy_sha256
             and worker.qualified_start_proof_sha256
+            and worker.qualified_container_state_sha256
+            and worker.qualified_dispatch_expires_at
         ]
         if not ready_workers:
             raise RuntimeError(
@@ -762,9 +772,15 @@ class PoolManager:
         if agent_factory is not None and task_ids is None:
             raise RuntimeError("An external agent requires exact task identities.")
 
-        qualified_managers = {
-            worker.name: self._qualified_isolation_manager(worker, qualification_dir)[0]
+        qualified_boundaries = {
+            worker.name: self._qualified_isolation_manager(worker, qualification_dir)
             for worker in ready_workers
+        }
+        qualified_managers = {
+            name: boundary[0] for name, boundary in qualified_boundaries.items()
+        }
+        qualified_admissions = {
+            name: boundary[2] for name, boundary in qualified_boundaries.items()
         }
 
         self._log("POOL-RUN", "=" * 60)
@@ -789,307 +805,165 @@ class PoolManager:
         num_workers = len(ready_workers)
 
         if agent_factory is not None:
-            from openadapt_evals.infrastructure.windows_pool_isolation import (
-                dispatch_binding_sha256,
-            )
-
             assert task_ids is not None
-            for worker, task_id in zip(ready_workers, task_ids, strict=True):
-                binding = dispatch_binding_sha256(
-                    {
-                        "schema_version": "openadapt.windows-qualified-dispatch/v1",
-                        "worker": worker.name,
-                        "qualified_run_id": worker.qualified_run_id,
-                        "qualified_start_proof_sha256": worker.qualified_start_proof_sha256,
-                        "task_id": task_id,
-                        "agent": "external",
-                        "model": "external",
-                    }
+            if self.external_task_session_authority is None:
+                raise RuntimeError(
+                    "The protected external task session authority is not configured."
                 )
-                qualified_managers[worker.name].consume_dispatch(
-                    run_id=worker.qualified_run_id,
-                    policy_sha256=worker.qualified_egress_policy_sha256,
-                    task_binding_sha256=binding,
-                )
-                self.registry.update_worker(
-                    worker.name,
-                    status="qualified-dispatched",
-                    waa_ready=False,
-                    current_task=task_id,
-                    qualified_task_binding_sha256=binding,
-                )
-            return self._run_external_agent(
-                ready_workers,
-                tasks,
-                agent_factory,
-                exp_name,
+            result = self.external_task_session_authority.run_qualified_tasks(
+                workers=ready_workers,
                 task_ids=task_ids,
-                qualified_managers=qualified_managers,
+                agent_factory=agent_factory,
+                experiment=exp_name,
+                managers=qualified_managers,
+                admissions=qualified_admissions,
+                worker_trust_authority=self.worker_trust_authority,
             )
-
-        # Default path: run WAA's built-in agent via docker exec
-        # Uses docker exec -d (detached) + tail -f for streaming.
-        # Process survives SSH drops; tail -f reconnects automatically.
-        stale_timeout = 15 * 60  # Kill if no log activity for 15 minutes
-        _username = self._ssh_username
+            if not isinstance(result, PoolRunResult):
+                raise RuntimeError("The external task authority returned an invalid result.")
+            accounted = result.completed + result.failed
+            names = [item[0] for item in result.worker_results]
+            expected_names = [worker.name for worker in ready_workers]
+            if (
+                result.total_tasks != tasks
+                or accounted != tasks
+                or len(result.worker_results) != tasks
+                or sorted(names) != sorted(expected_names)
+            ):
+                raise RuntimeError(
+                    "The external task authority did not return one terminal receipt per task."
+                )
+            return result
 
         def run_on_worker(
             worker: PoolWorker,
             worker_idx: int,
             total_workers: int,
         ) -> tuple[str, int, int, str | None]:
-            from openadapt_evals.infrastructure.windows_pool_isolation import (
-                dispatch_binding_sha256,
+            from openadapt_evals.infrastructure.windows_worker_dispatch import (
+                launch_authorized_process,
+                read_process_terminal,
             )
 
             manager = qualified_managers[worker.name]
-            qualified_run_id = worker.qualified_run_id
-            qualified_policy_sha256 = worker.qualified_egress_policy_sha256
+            admission = qualified_admissions[worker.name]
 
             def qualified_command(remote_command, **kwargs):
                 return manager.run_qualified_command(
                     remote_command,
-                    run_id=qualified_run_id,
-                    policy_sha256=qualified_policy_sha256,
+                    run_id=worker.qualified_run_id,
+                    policy_sha256=worker.qualified_egress_policy_sha256,
+                    container_state_sha256=worker.qualified_container_state_sha256,
+                    expires_at=worker.qualified_dispatch_expires_at,
                     **kwargs,
                 )
 
-            log_file = "/tmp/benchmark.log"
-            exit_file = "/tmp/benchmark.exit"
-            subset_json = "/tmp/test_subset.json"
-            requested_task = task_ids[worker_idx] if task_ids is not None else "-"
-            selection_program = r"""
-import json
-import sys
-
-source = "/client/evaluation_examples_windows/test_all.json"
-target = "/tmp/test_subset.json"
-requested = sys.argv[1]
-index = int(sys.argv[2])
-with open(source, encoding="utf-8") as source_file:
-    data = json.load(source_file)
-pairs = [(domain, task) for domain in data for task in data[domain]]
-if requested == "-":
-    selected = pairs[index]
-else:
-    matches = [pair for pair in pairs if pair[1] == requested]
-    if len(matches) != 1:
-        raise SystemExit("requested task identity is not unique")
-    selected = matches[0]
-domain, task_id = selected
-with open(target, "w", encoding="utf-8") as target_file:
-    json.dump({domain: [task_id]}, target_file, sort_keys=True, separators=(",", ":"))
-    target_file.write("\n")
-print(json.dumps({"domain": domain, "task_id": task_id}, sort_keys=True, separators=(",", ":")))
-""".strip()
-            selected = qualified_command(
+            # Read task metadata before the capability is consumed.  The only
+            # guest operation here is a read.  The exact subset bytes are
+            # written only inside the atomic dispatch transaction.
+            metadata_result = qualified_command(
                 [
                     "docker",
                     "exec",
                     "winarena",
-                    "python",
-                    "-c",
-                    selection_program,
-                    requested_task,
-                    str(worker_idx),
+                    "cat",
+                    "/client/evaluation_examples_windows/test_all.json",
                 ]
             )
             try:
-                selected_task = json.loads(selected.stdout)
+                metadata = json.loads(metadata_result.stdout)
             except json.JSONDecodeError as exc:
-                raise RuntimeError("Qualified task selection returned invalid JSON.") from exc
-            if (
-                not isinstance(selected_task, dict)
-                or set(selected_task) != {"domain", "task_id"}
-                or not all(
-                    isinstance(selected_task[key], str) and selected_task[key]
-                    for key in selected_task
-                )
-            ):
-                raise RuntimeError("Qualified task selection returned an invalid identity.")
-            exact_task_id = f"{selected_task['domain']}:{selected_task['task_id']}"
-            binding = dispatch_binding_sha256(
-                {
-                    "schema_version": "openadapt.windows-qualified-dispatch/v1",
-                    "worker": worker.name,
-                    "qualified_run_id": worker.qualified_run_id,
-                    "qualified_start_proof_sha256": worker.qualified_start_proof_sha256,
-                    "task_id": exact_task_id,
-                    "agent": agent,
-                    "model": model,
-                }
+                raise RuntimeError("Qualified task metadata is invalid.") from exc
+            if not isinstance(metadata, dict) or not metadata:
+                raise RuntimeError("Qualified task metadata is invalid.")
+            pairs = [
+                (domain, task_id)
+                for domain, task_list in metadata.items()
+                if isinstance(domain, str) and isinstance(task_list, list)
+                for task_id in task_list
+                if isinstance(task_id, str)
+            ]
+            requested_task = task_ids[worker_idx] if task_ids is not None else "-"
+            if requested_task == "-":
+                if worker_idx >= len(pairs):
+                    raise RuntimeError("Qualified task index is outside the admitted metadata.")
+                domain, exact_task = pairs[worker_idx]
+            else:
+                matches = [pair for pair in pairs if pair[1] == requested_task]
+                if len(matches) != 1:
+                    raise RuntimeError("Requested task identity is not unique.")
+                domain, exact_task = matches[0]
+            exact_task_id = f"{domain}:{exact_task}"
+            subset = (
+                json.dumps(
+                    {domain: [exact_task]},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ).encode("utf-8")
+                + b"\n"
             )
-            manager.consume_dispatch(
+            authorized = self.worker_trust_authority.authorize_dispatch(
+                admission=admission,
                 run_id=worker.qualified_run_id,
+                task_selector={"domain": domain, "task_id": exact_task},
+            )
+            if api_key is None:
+                raise RuntimeError("The protected API credential is absent.")
+            process = launch_authorized_process(
+                manager,
+                admission=admission,
+                dispatch=authorized,
                 policy_sha256=worker.qualified_egress_policy_sha256,
-                task_binding_sha256=binding,
+                container_state_sha256=worker.qualified_container_state_sha256,
+                agent=agent,
+                model=model,
+                experiment=f"{exp_name}_{worker.name}",
+                subset=subset,
+                api_key=api_key,
             )
             self.registry.update_worker(
                 worker.name,
                 status="qualified-dispatched",
                 waa_ready=False,
                 current_task=exact_task_id,
-                qualified_task_binding_sha256=binding,
+                qualified_task_binding_sha256=authorized.object["dispatch_id_sha256"],
             )
-
-            if api_key is None or "\n" in api_key or "\x00" in api_key:
-                raise RuntimeError("The API key is invalid.")
-            launch_program = r"""
-set -euo pipefail
-IFS= read -r OPENAI_API_KEY
-export OPENAI_API_KEY
-export OPENADAPT_QUALIFIED_RUN_ID="$5"
-rm -f -- "$6" "$7"
-OPENAI_API_KEY="$OPENAI_API_KEY" OPENADAPT_QUALIFIED_RUN_ID="$5" \
-  nohup bash -c '
-    set +e
-    cd /client
-    python -u run.py --agent "$1" --model "$2" --exp_name "$3" \
-      --worker_id 0 --num_workers 1 --emulator_ip 172.30.0.2 \
-      --test_all_meta_path "$4" > "$5" 2>&1
-    code=$?
-    printf "%s\n" "$code" > "$6"
-  ' -- "$1" "$2" "$3" "$4" "$6" "$7" >/dev/null 2>&1 &
-printf '%s\n' "$!"
-""".strip()
-            qualified_command(
-                [
-                    "docker",
-                    "exec",
-                    "-i",
-                    "winarena",
-                    "bash",
-                    "-c",
-                    launch_program,
-                    "--",
-                    agent,
-                    model,
-                    f"{exp_name}_{worker.name}",
-                    subset_json,
-                    worker.qualified_run_id,
-                    log_file,
-                    exit_file,
-                ],
-                input_bytes=(api_key + "\n").encode(),
-            )
-            self._log("RUN", f"  {worker.name}: started (detached), log: {log_file}")
-
-            # Wait for process to start and get its PID
-            time.sleep(3)
-            pid_result = qualified_command(
-                [
-                    "docker",
-                    "exec",
-                    "winarena",
-                    "bash",
-                    "-c",
-                    "pgrep -f 'python.*run.py' || true",
-                ]
-            )
-            pid_output = pid_result.stdout.decode(errors="replace").strip()
-            pid = pid_output.splitlines()[0] if pid_output else ""
-            if pid:
-                self._log("RUN", f"  {worker.name}: benchmark PID {pid}")
-            else:
-                self._log("RUN", f"  {worker.name}: benchmark PID is not available yet")
-
-            # Poll through a new pinned connection. Every poll rechecks the
-            # root-owned runtime, host, TLS, and baseline bindings.
             while True:
                 try:
-                    check = qualified_command(
-                        [
-                            "docker",
-                            "exec",
-                            "winarena",
-                            "bash",
-                            "-c",
-                            "if pgrep -f 'python.*run.py' >/dev/null; then echo RUNNING; else echo DONE; fi",
-                        ]
-                    )
-                    state = check.stdout.decode(errors="replace").strip()
-                    logs = qualified_command(
-                        [
-                            "docker",
-                            "exec",
-                            "winarena",
-                            "bash",
-                            "-c",
-                            "tail -n 20 /tmp/benchmark.log 2>/dev/null || true",
-                        ]
-                    ).stdout.decode(errors="replace").strip()
-                    if logs:
-                        self._log("RUN", f"  {worker.name}:\n{logs}")
-                    if state == "DONE":
+                    terminal_evidence = read_process_terminal(manager, process)
+                    if terminal_evidence["state"] != "RUNNING":
                         break
                     time.sleep(5)
                 except KeyboardInterrupt:
-                    self._log("RUN", f"  {worker.name}: interrupted (process continues on VM)")
-                    return (worker.name, 0, 1, "interrupted by user")
-                except Exception as e:
-                    self._log("RUN", f"  {worker.name}: SSH reconnecting ({e})")
-                    time.sleep(5)
-                    try:
-                        mtime_result = qualified_command(
-                            [
-                                "docker",
-                                "exec",
-                                "winarena",
-                                "bash",
-                                "-c",
-                                "stat -c %Y /tmp/benchmark.log 2>/dev/null || echo 0",
-                            ]
-                        )
-                        now_result = qualified_command(["date", "+%s"])
-                        mtime_raw = mtime_result.stdout.decode().strip()
-                        now_raw = now_result.stdout.decode().strip()
-                        mtime = int(mtime_raw) if mtime_raw.isdigit() else 0
-                        now = int(now_raw) if now_raw.isdigit() else 0
-                        if mtime > 0 and now - mtime > stale_timeout:
-                            self._log(
-                                "RUN",
-                                f"  {worker.name}: no log activity for "
-                                f"{stale_timeout // 60}m — killing",
-                            )
-                            qualified_command(
-                                [
-                                    "docker",
-                                    "exec",
-                                    "winarena",
-                                    "bash",
-                                    "-c",
-                                    "pids=$(pgrep -f run.py || true); test -z \"$pids\" || kill -9 $pids",
-                                ]
-                            )
-                            return (
-                                worker.name, 0, 1,
-                                f"killed: no activity for {stale_timeout // 60} minutes",
-                            )
-                    except Exception:
-                        # Can't even check — retry
-                        continue
-
-            # Get exit code
-            try:
-                exit_result = qualified_command(
-                    [
-                        "docker",
-                        "exec",
-                        "winarena",
-                        "bash",
-                        "-c",
-                        "cat /tmp/benchmark.exit 2>/dev/null || echo 1",
-                    ]
-                )
-                exit_raw = exit_result.stdout.decode().strip()
-                exit_code = int(exit_raw) if exit_raw.isdigit() else 1
-            except Exception:
-                exit_code = 1
-
-            if exit_code == 0:
+                    terminal_evidence = {
+                        "state": "UNCERTAIN",
+                        "reason": "operator_interrupt_before_termination_proof",
+                        "process": json.loads(
+                            json.dumps(process.__dict__, sort_keys=True)
+                        ),
+                    }
+                    break
+            terminal = self.worker_trust_authority.issue_terminal(
+                admission=admission,
+                dispatch=authorized,
+                terminal_evidence={
+                    "schema_version": "openadapt.qualification-worker-terminal-evidence/v1",
+                    "worker": worker.name,
+                    "selected_task": {"domain": domain, "task_id": exact_task},
+                    "process": process.__dict__,
+                    "terminal_readback": terminal_evidence,
+                },
+            )
+            terminal_state = terminal.object["terminal_state"]
+            if terminal_state == "VERIFIED":
                 return (worker.name, 1, 0, None)
-            else:
-                return (worker.name, 0, 1, f"exit code {exit_code}")
+            return (
+                worker.name,
+                0,
+                1,
+                f"central terminal state {terminal_state}",
+            )
 
         self._log("POOL-RUN", "")
         self._log("POOL-RUN", "Starting benchmark on all workers...")
@@ -1157,6 +1031,10 @@ printf '%s\n' "$!"
         Returns:
             PoolRunResult.
         """
+        raise RuntimeError(
+            "Generic SSH tunnels are not a qualified task session. "
+            "Use the protected external task session authority."
+        )
         from openadapt_evals.adapters.waa.live import WAALiveAdapter, WAALiveConfig
         from openadapt_evals.benchmarks.runner import (
             EvaluationConfig,
@@ -1187,6 +1065,8 @@ printf '%s\n' "$!"
             qualified_managers[worker.name].verify_started(
                 run_id=worker.qualified_run_id,
                 policy_sha256=worker.qualified_egress_policy_sha256,
+                container_state_sha256=worker.qualified_container_state_sha256,
+                expires_at=worker.qualified_dispatch_expires_at,
             )
 
             tunnel_mgr = SSHTunnelManager(
@@ -1279,6 +1159,8 @@ printf '%s\n' "$!"
                 qualified_managers[worker.name].verify_started(
                     run_id=worker.qualified_run_id,
                     policy_sha256=worker.qualified_egress_policy_sha256,
+                    container_state_sha256=worker.qualified_container_state_sha256,
+                    expires_at=worker.qualified_dispatch_expires_at,
                 )
 
                 completed = sum(1 for r in eval_results if r.success)
@@ -1381,6 +1263,54 @@ printf '%s\n' "$!"
             baseline_dir=f"{self._home_dir}/openadapt-windows-baseline",
         )
 
+    def _verify_worker_admission(self, manager, policy):
+        """Resolve a fresh central admission from live provider evidence."""
+
+        from openadapt_evals.infrastructure.windows_pool_isolation import (
+            egress_policy_sha256,
+            worker_identity_sha256,
+        )
+        from openadapt_evals.infrastructure.windows_worker_trust import (
+            qualification_worker_identity_sha256,
+            validate_provider_observation,
+        )
+
+        if self.worker_trust_authority is None:
+            raise RuntimeError(
+                "The protected central worker trust connector is not configured."
+            )
+        observe = getattr(self.vm_manager, "observe_worker", None)
+        if not callable(observe):
+            raise RuntimeError("The VM provider has no live worker identity resolver.")
+        observation = validate_provider_observation(observe(manager.worker))
+        if observation.provider != manager.identity.provider:
+            raise RuntimeError("The live worker provider differs from the admitted identity.")
+        if observation.network_identity != manager.ssh_host:
+            raise RuntimeError("The live provider network identity differs from the SSH target.")
+        if observation.resource_identity != manager.identity.resource_id:
+            raise RuntimeError("The live provider resource identity differs.")
+        if observation.instance_identity != manager.identity.instance_id:
+            raise RuntimeError("The live provider instance generation differs.")
+        local_worker_identity_sha256 = worker_identity_sha256(manager.identity)
+        central_worker_identity_sha256 = qualification_worker_identity_sha256(
+            observation=observation,
+            worker_instance_sha256=local_worker_identity_sha256,
+            worker_image_sha256=manager.identity.admitted_image_sha256,
+            host_identity_sha256=manager.identity.host_bindings_sha256,
+            admitted_runtime_sha256=manager.identity.admitted_runtime_sha256,
+        )
+        admission = self.worker_trust_authority.verify_worker(
+            observation=observation,
+            worker_identity_sha256=central_worker_identity_sha256,
+            admitted_runtime_sha256=manager.identity.admitted_runtime_sha256,
+            worker_image_sha256=manager.identity.admitted_image_sha256,
+            baseline_sha256=manager.identity.baseline_manifest_sha256,
+            host_identity_sha256=manager.identity.host_bindings_sha256,
+            tls_identity_sha256=manager.identity.tls_bindings_sha256,
+            egress_policy_sha256=egress_policy_sha256(policy),
+        )
+        return admission, observation
+
     def _qualified_isolation_manager(
         self,
         worker: PoolWorker,
@@ -1399,9 +1329,15 @@ printf '%s\n' "$!"
         required = (
             worker.status in {"qualified-starting", "qualified-ready"}
             and worker.qualified_run_id
+            and worker.qualified_worker_admission_sha256
+            and worker.qualified_provider_identity_sha256
+            and worker.qualified_live_provider_observation_sha256
             and worker.qualified_worker_identity_sha256
+            and worker.qualified_local_worker_identity_sha256
             and worker.qualified_egress_policy_sha256
             and worker.qualified_start_proof_sha256
+            and worker.qualified_container_state_sha256
+            and worker.qualified_dispatch_expires_at
         )
         if not required:
             raise RuntimeError(f"Worker {worker.name} has no complete qualification state.")
@@ -1412,17 +1348,36 @@ printf '%s\n' "$!"
         policy = load_egress_policy(
             qualification_dir / f"{worker.name}.egress.json"
         )
-        if worker_identity_sha256(manager.identity) != worker.qualified_worker_identity_sha256:
+        if (
+            worker_identity_sha256(manager.identity)
+            != worker.qualified_local_worker_identity_sha256
+        ):
             raise RuntimeError(f"Worker {worker.name} identity differs from the start proof.")
         if policy["run_id"] != worker.qualified_run_id:
             raise RuntimeError(f"Worker {worker.name} run identity differs from the policy.")
         if egress_policy_sha256(policy) != worker.qualified_egress_policy_sha256:
             raise RuntimeError(f"Worker {worker.name} egress policy differs from the start proof.")
+        admission, _observation = self._verify_worker_admission(manager, policy)
+        expected_admission = {
+            "admission_object_sha256": worker.qualified_worker_admission_sha256,
+            "provider_identity_sha256": worker.qualified_provider_identity_sha256,
+            "live_provider_observation_sha256": (
+                worker.qualified_live_provider_observation_sha256
+            ),
+            "worker_identity_sha256": worker.qualified_worker_identity_sha256,
+        }
+        if any(
+            admission.object[key] != expected_value
+            for key, expected_value in expected_admission.items()
+        ):
+            raise RuntimeError(f"Worker {worker.name} central admission differs.")
         manager.verify_started(
             run_id=worker.qualified_run_id,
             policy_sha256=worker.qualified_egress_policy_sha256,
+            container_state_sha256=worker.qualified_container_state_sha256,
+            expires_at=worker.qualified_dispatch_expires_at,
         )
-        return manager, policy
+        return manager, policy, admission
 
     def reset_worker(
         self,
@@ -1440,9 +1395,15 @@ printf '%s\n' "$!"
             status="reset",
             waa_ready=False,
             qualified_run_id=None,
+            qualified_worker_admission_sha256=None,
+            qualified_provider_identity_sha256=None,
+            qualified_live_provider_observation_sha256=None,
             qualified_worker_identity_sha256=None,
+            qualified_local_worker_identity_sha256=None,
             qualified_egress_policy_sha256=None,
             qualified_start_proof_sha256=None,
+            qualified_container_state_sha256=None,
+            qualified_dispatch_expires_at=None,
             qualified_task_binding_sha256=None,
         )
         return proof
@@ -1487,25 +1448,38 @@ printf '%s\n' "$!"
         )
 
         manager = self._isolation_manager(worker_name, identity_path)
+        policy = load_egress_policy(policy_path)
+        admission, _observation = self._verify_worker_admission(manager, policy)
         start_script = WAA_START_SCRIPT_TEMPLATE.format(
             home_dir=self._home_dir,
             ssh_username=self._ssh_username,
             admitted_image=manager.identity.admitted_image_sha256,
         )
         proof = manager.start(
-            policy=load_egress_policy(policy_path),
+            policy=policy,
             reset_proof=load_reset_proof(reset_proof_path),
             egress_proof=load_egress_proof(egress_proof_path),
             start_script=start_script,
+            worker_admission=admission.object,
         )
         self.registry.update_worker(
             worker_name,
             status="qualified-starting",
             waa_ready=False,
             qualified_run_id=proof.run_id,
+            qualified_worker_admission_sha256=proof.worker_admission_sha256,
+            qualified_provider_identity_sha256=proof.provider_identity_sha256,
+            qualified_live_provider_observation_sha256=(
+                proof.live_provider_observation_sha256
+            ),
             qualified_worker_identity_sha256=proof.worker_identity_sha256,
+            qualified_local_worker_identity_sha256=(
+                proof.local_worker_identity_sha256
+            ),
             qualified_egress_policy_sha256=proof.egress_policy_sha256,
             qualified_start_proof_sha256=start_proof_sha256(proof),
+            qualified_container_state_sha256=proof.container_state_sha256,
+            qualified_dispatch_expires_at=proof.expires_at,
             qualified_task_binding_sha256=None,
         )
         return proof
@@ -1526,15 +1500,22 @@ printf '%s\n' "$!"
 
         manager = self._isolation_manager(worker_name, identity_path)
         policy = load_egress_policy(policy_path)
+        admission, _observation = self._verify_worker_admission(manager, policy)
         reset_proof = manager.reset(run_id=policy["run_id"])
         self.registry.update_worker(
             worker_name,
             status="reset",
             waa_ready=False,
             qualified_run_id=None,
+            qualified_worker_admission_sha256=None,
+            qualified_provider_identity_sha256=None,
+            qualified_live_provider_observation_sha256=None,
             qualified_worker_identity_sha256=None,
+            qualified_local_worker_identity_sha256=None,
             qualified_egress_policy_sha256=None,
             qualified_start_proof_sha256=None,
+            qualified_container_state_sha256=None,
+            qualified_dispatch_expires_at=None,
             qualified_task_binding_sha256=None,
         )
         egress_proof = manager.apply_egress(policy, reset_proof=reset_proof)
@@ -1548,15 +1529,26 @@ printf '%s\n' "$!"
             reset_proof=reset_proof,
             egress_proof=egress_proof,
             start_script=start_script,
+            worker_admission=admission.object,
         )
         self.registry.update_worker(
             worker_name,
             status="qualified-starting",
             waa_ready=False,
             qualified_run_id=start_proof.run_id,
+            qualified_worker_admission_sha256=start_proof.worker_admission_sha256,
+            qualified_provider_identity_sha256=start_proof.provider_identity_sha256,
+            qualified_live_provider_observation_sha256=(
+                start_proof.live_provider_observation_sha256
+            ),
             qualified_worker_identity_sha256=start_proof.worker_identity_sha256,
+            qualified_local_worker_identity_sha256=(
+                start_proof.local_worker_identity_sha256
+            ),
             qualified_egress_policy_sha256=start_proof.egress_policy_sha256,
             qualified_start_proof_sha256=start_proof_sha256(start_proof),
+            qualified_container_state_sha256=start_proof.container_state_sha256,
+            qualified_dispatch_expires_at=start_proof.expires_at,
             qualified_task_binding_sha256=None,
         )
         return reset_proof, egress_proof, start_proof
@@ -1596,7 +1588,11 @@ printf '%s\n' "$!"
                     status="deallocated",
                     waa_ready=False,
                     qualified_run_id=None,
+                    qualified_worker_admission_sha256=None,
+                    qualified_provider_identity_sha256=None,
+                    qualified_live_provider_observation_sha256=None,
                     qualified_worker_identity_sha256=None,
+                    qualified_local_worker_identity_sha256=None,
                     qualified_egress_policy_sha256=None,
                     qualified_start_proof_sha256=None,
                     qualified_task_binding_sha256=None,
@@ -1692,7 +1688,11 @@ printf '%s\n' "$!"
                 status="ready",
                 waa_ready=False,
                 qualified_run_id=None,
+                qualified_worker_admission_sha256=None,
+                qualified_provider_identity_sha256=None,
+                qualified_live_provider_observation_sha256=None,
                 qualified_worker_identity_sha256=None,
+                qualified_local_worker_identity_sha256=None,
                 qualified_egress_policy_sha256=None,
                 qualified_start_proof_sha256=None,
                 qualified_task_binding_sha256=None,
