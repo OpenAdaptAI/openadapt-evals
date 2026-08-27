@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "qualification-worker-task-condition.schema.json",
+  "title": "OpenAdapt qualification worker task condition v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "task_id_sha256",
+    "condition_source_sha256",
+    "condition_ordinal",
+    "task_condition_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "openadapt.qualification-worker-task-condition/v1"
+    },
+    "task_id_sha256": {"$ref": "#/$defs/digest"},
+    "condition_source_sha256": {"$ref": "#/$defs/digest"},
+    "condition_ordinal": {"type": "integer", "minimum": 1},
+    "task_condition_sha256": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}
