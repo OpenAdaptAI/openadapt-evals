@@ -1,13 +1,13 @@
 # OpenAdapt Evals
 
 > [!IMPORTANT]
-> **Status: Research infrastructure, not a required part of the product.** This
-> package is evaluation and benchmarking tooling for GUI agents and for the
-> OpenAdapt demonstration compiler. It is evidence-generating research work. It
-> is not required to record, compile, or replay a workflow, and no end user
-> needs it installed.
+> **Lifecycle: Support.** This maintained public repository produces
+> qualification and release evidence for OpenAdapt. The seven product targets
+> use signed admissions to determine their Production state. Evals supplies
+> evidence for those decisions and remains a separate operational tool.
 >
-> The OpenAdapt product is the governed demonstration compiler,
+> End users don't install Evals to run a workflow. The OpenAdapt product is the
+> governed demonstration compiler,
 > [`openadapt-flow`](https://github.com/OpenAdaptAI/openadapt-flow), installed
 > via the [`OpenAdapt`](https://github.com/OpenAdaptAI/openadapt) launcher
 > (`pip install openadapt`). It compiles a demonstrated GUI workflow into a
@@ -43,10 +43,45 @@ dimensions that matter to a governed compiler:
 - **Cost and model-call accounting**: model calls, latency, and dollar cost per
   successful task, including the ~0-model-call healthy replay path.
 
-This is internal research tooling. It is not a packaged end-user product and it
-is not needed to use OpenAdapt. If you want to record, compile, and replay a
-workflow, use the [`OpenAdapt`](https://github.com/OpenAdaptAI/openadapt)
-launcher, not this repository.
+Operators use this package to run qualification and publication gates. If you
+want to record, compile, and replay a workflow, use the
+[`OpenAdapt`](https://github.com/OpenAdaptAI/openadapt) launcher.
+
+### Qualification and release evidence
+
+The v3 campaign producer records six required classes for each task: healthy,
+safe halt, idempotency replay, uncertain delivery, declared attended, and
+governed repair. Each task and condition needs at least three signed trials.
+Evals derives silent incorrect success and over-halt from the signed runner,
+observer, and delivery facts. It doesn't trust author-supplied failure counts.
+
+Campaign payloads and trial receipts stay inside the approved private evidence
+boundary. A public lifecycle summary uses the remote-safe decision receipt,
+the public qualification admission, and the production acceptance manifest. It
+contains aggregate class counts and commitments, without task names,
+application or environment values, or live identities.
+
+`scripts/build_production_evidence.py` builds that summary and the paired
+content-addressed v2 references. The pair command preserves the raw Sigstore
+bundle bytes. Run it only after the referenced objects exist in an exact merged
+registry commit. The summary uses a later registry append, which avoids a
+commit-hash cycle.
+
+```bash
+python scripts/build_production_evidence.py summary \
+  --input public-summary-input.json \
+  --output production-acceptance-summary.json
+
+python scripts/build_production_evidence.py pair \
+  --kind production-acceptance-summary \
+  --object production-acceptance-summary.json \
+  --sigstore-bundle production-acceptance-summary.sigstore.json \
+  --registry-source-commit "$MERGED_REGISTRY_COMMIT" \
+  --registry-revision "$REGISTRY_REVISION" \
+  --registry-head-sha256 "$REGISTRY_HEAD_SHA256" \
+  --output-root public-registry-candidate \
+  --references-output production-acceptance-summary.references.json
+```
 
 ### Relationship to the rest of OpenAdapt
 
@@ -79,7 +114,7 @@ does not claim maturity it has not measured.
 
 ## What is inside
 
-- **openadapt-flow evaluation** (`openadapt_evals/flow/`): the paradigm-correct
+- **openadapt-flow evaluation** (`openadapt_evals/flow/`): the release-path
   eval for a demonstration compiler. A `replay` runner compiles one demonstration
   into an openadapt-flow bundle and replays it against the WAA in-guest server
   with roughly zero model calls, and a `hybrid` agent runs compiled replay first
