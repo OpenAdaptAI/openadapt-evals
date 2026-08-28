@@ -30,7 +30,9 @@ _SUMMARY_INPUT_KEYS = frozenset(
         "expected_publication_assets",
         "qualification_evidence_decision_receipt",
         "qualification_evidence_decision_receipt_references",
+        "qualification_admission",
         "qualification_admission_references",
+        "production_acceptance_manifest",
         "production_acceptance_manifest_references",
         "authority_state_sha256",
         "revocation_state_sha256",
@@ -38,6 +40,7 @@ _SUMMARY_INPUT_KEYS = frozenset(
         "issued_at",
         "not_before",
         "expires_at",
+        "issuer",
     }
 )
 
@@ -87,7 +90,7 @@ def _write_atomic(path: Path, payload: bytes) -> None:
 
 
 def build_summary(input_path: Path, output_path: Path) -> dict[str, Any]:
-    """Build one public v2 lifecycle summary from public inputs only."""
+    """Build one public v3 lifecycle summary from public inputs only."""
 
     payload = _read_json_object(input_path, "production summary input")
     if set(payload) != _SUMMARY_INPUT_KEYS:
@@ -97,7 +100,7 @@ def build_summary(input_path: Path, output_path: Path) -> dict[str, Any]:
             f"production summary input keys differ: missing={missing}, extra={extra}"
         )
     summary = build_production_acceptance_summary(**payload)
-    _write_atomic(output_path, canonical_json_bytes(summary))
+    _write_atomic(output_path, canonical_json_bytes(summary) + b"\n")
     return summary
 
 

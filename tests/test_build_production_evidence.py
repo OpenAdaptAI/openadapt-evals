@@ -28,8 +28,8 @@ def test_pair_command_writes_exact_content_addressed_paths(tmp_path: Path) -> No
     regular.write_text(
         json.dumps(
             {
-                "schema_version": "openadapt.qualification-admission/v3",
-                "verdict": "ADMIT",
+                "schema_version": "openadapt.qualification-admission/v4",
+                "verdict": "accepted",
             }
         ),
         encoding="utf-8",
@@ -49,7 +49,7 @@ def test_pair_command_writes_exact_content_addressed_paths(tmp_path: Path) -> No
     )
 
     assert (output_root / regular_reference["object_path"]).read_bytes() == (
-        evidence.canonical_json_bytes(json.loads(regular.read_text(encoding="utf-8")))
+        evidence.canonical_json_bytes(json.loads(regular.read_text(encoding="utf-8"))) + b"\n"
     )
     assert (output_root / bundle_reference["object_path"]).read_bytes() == bundle_bytes
     assert json.loads(references_output.read_text(encoding="utf-8")) == [

@@ -17,7 +17,9 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from fnmatch import fnmatchcase
 from pathlib import PurePosixPath
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Protocol, Sequence
+
+CENTRAL_TRUST_CONTRACT_COMMIT = "989681f6f475616b7e2cb72360c716db0927f7ad"
 
 OBJECT_REFERENCE_SCHEMA = "openadapt.production-evidence-object-reference/v2"
 EVIDENCE_REPOSITORY = "OpenAdaptAI/.github"
@@ -32,18 +34,56 @@ BUNDLE_SEMANTIC_IDENTITY_DOMAIN = b"OpenAdapt production evidence Sigstore bundl
 
 SIGNER_REGISTRY_POINTER_SCHEMA = "openadapt.qualification-signer-registry-pointer/v1"
 SIGNER_REGISTRY_IDENTITY_DOMAIN = b"OpenAdapt qualification signer registry v2\0"
-PRODUCTION_ACCEPTANCE_SUMMARY_SCHEMA = "openadapt.production-lifecycle-evidence-summary/v2"
-PRODUCTION_EVIDENCE_IDENTITY_DOMAIN = b"OpenAdapt production acceptance evidence identity v2\0"
+PRODUCTION_ACCEPTANCE_MANIFEST_SCHEMA = "openadapt.production-acceptance/v3"
+PRODUCTION_ACCEPTANCE_SUMMARY_SCHEMA = "openadapt.production-lifecycle-evidence-summary/v3"
+PRODUCTION_EVIDENCE_IDENTITY_DOMAIN = b"OpenAdapt production acceptance evidence identity v3\0"
 PUBLICATION_STAGING_SCHEMA = "openadapt.production-release-staging-evidence/v1"
 PUBLICATION_STAGING_DIGEST_DOMAIN = b"OpenAdapt production release staging evidence v1\0"
 TAG_RULESET_SCHEMA = "openadapt.production-release-tag-ruleset/v1"
 TAG_RULESETS_DIGEST_DOMAIN = b"OpenAdapt production release tag rulesets v1\0"
-DECISION_RECEIPT_SCHEMA = "openadapt.qualification-evidence-decision-receipt/v1"
+IMMUTABLE_RELEASES_DIGEST_DOMAIN = b"OpenAdapt production immutable releases response v1\0"
+TAG_REF_STATE_DIGEST_DOMAIN = b"OpenAdapt production release tag ref state v1\0"
+RELEASE_CANDIDATE_DIGEST_DOMAIN = b"OpenAdapt production release candidate v1\0"
+ARTIFACT_INVENTORY_DIGEST_DOMAIN = b"OpenAdapt production release artifact inventory v1\0"
+DECISION_RECEIPT_SCHEMA = "openadapt.qualification-evidence-decision-receipt/v2"
+DECISION_RECEIPT_SIGNATURE_DOMAIN = b"OpenAdapt qualification evidence decision receipt v2\0"
+DECISION_RECEIPT_IDENTITY_DOMAIN = b"OpenAdapt qualification decision receipt series identity v1\0"
 DECISION_CAMPAIGN_SUMMARY_SCHEMA = "openadapt.qualification-evidence-decision-campaign-summary/v1"
+QUALIFICATION_ADMISSION_SCHEMA = "openadapt.qualification-admission/v4"
+QUALIFICATION_ADMISSION_DIGEST_DOMAIN = b"OpenAdapt qualification admission v4\0"
+QUALIFICATION_RELEASE_SCHEMA = "openadapt.qualification-release/v2"
+RELEASE_VERIFICATION_RECEIPT_SCHEMA = "openadapt.qualification-release-verification-receipt/v1"
+RELEASE_VERIFICATION_RECEIPT_DOMAIN = b"OpenAdapt qualification release verification receipt v1\0"
 
 _SHA256 = re.compile(r"^sha256:[a-f0-9]{64}$")
 _HEX40 = re.compile(r"^[a-f0-9]{40}$")
 _KIND = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+_KEY_ID = re.compile(r"^qa-ed25519-[0-9a-f]{16}$")
+_ENTITY_CLASS = re.compile(r"^[a-z][a-z0-9 -]{0,63}$")
+_SEMVER = re.compile(
+    r"^(0|[1-9][0-9]{0,9})\.(0|[1-9][0-9]{0,9})\."
+    r"(0|[1-9][0-9]{0,9})(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$"
+)
+
+_TARGET_RELEASE_CONTRACTS: Mapping[str, tuple[str, str, str, str]] = {
+    "agent": ("production_agent", "OpenAdaptAI/openadapt-agent", "1136136670", "package"),
+    "capture": (
+        "production_capture",
+        "OpenAdaptAI/openadapt-capture",
+        "1115283835",
+        "package",
+    ),
+    "cloud": ("production_cloud", "OpenAdaptAI/openadapt-cloud", "1300570990", "deployment"),
+    "desktop": (
+        "production_desktop",
+        "OpenAdaptAI/openadapt-desktop",
+        "1171291730",
+        "package",
+    ),
+    "docs": ("production_docs", "OpenAdaptAI/openadapt-ops", "1172011294", "deployment"),
+    "flow": ("production_flow", "OpenAdaptAI/openadapt-flow", "1291376938", "package"),
+    "openadapt": ("production_openadapt", "OpenAdaptAI/OpenAdapt", "627024850", "package"),
+}
 
 
 @dataclass(frozen=True)
@@ -62,18 +102,31 @@ class EvidenceObjectPair:
     references: tuple[dict[str, Any], dict[str, Any]]
 
 
+class DecisionReceiptVerifier(Protocol):
+    """Verify a v2 receipt against issuer-owned current trust material."""
+
+    def verify(
+        self,
+        receipt: Mapping[str, Any],
+        *,
+        object_sha256: str,
+        signer_registry_sha256: str,
+        revocation_state_sha256: str,
+    ) -> None: ...
+
+
 REGULAR_EVIDENCE_KINDS: Mapping[str, EvidenceKind] = {
     "qualification-release": EvidenceKind(
-        "openadapt.qualification-release/v1",
-        "application/vnd.openadapt.qualification-release+json;version=1",
+        QUALIFICATION_RELEASE_SCHEMA,
+        "application/vnd.openadapt.qualification-release+json;version=2",
     ),
     "production-acceptance-manifest": EvidenceKind(
-        "openadapt.production-acceptance/v2",
-        "application/vnd.openadapt.production-acceptance+json;version=2",
+        PRODUCTION_ACCEPTANCE_MANIFEST_SCHEMA,
+        "application/vnd.openadapt.production-acceptance+json;version=3",
     ),
     "production-acceptance-summary": EvidenceKind(
-        "openadapt.production-lifecycle-evidence-summary/v2",
-        "application/vnd.openadapt.production-lifecycle-evidence-summary+json;version=2",
+        PRODUCTION_ACCEPTANCE_SUMMARY_SCHEMA,
+        "application/vnd.openadapt.production-lifecycle-evidence-summary+json;version=3",
     ),
     "qualification-authority-state-receipt": EvidenceKind(
         "openadapt.qualification-authority-state-receipt/v2",
@@ -92,8 +145,8 @@ REGULAR_EVIDENCE_KINDS: Mapping[str, EvidenceKind] = {
         "application/vnd.openadapt.production-deployment-observation+json;version=1",
     ),
     "production-lifecycle-checkpoint": EvidenceKind(
-        "openadapt.production-lifecycle-checkpoint/v1",
-        "application/vnd.openadapt.production-lifecycle-checkpoint+json;version=1",
+        "openadapt.production-lifecycle-checkpoint/v2",
+        "application/vnd.openadapt.production-lifecycle-checkpoint+json;version=2",
     ),
     "production-cloud-deploy-authorization": EvidenceKind(
         "openadapt.production-cloud-deploy-authorization/v1",
@@ -120,12 +173,16 @@ REGULAR_EVIDENCE_KINDS: Mapping[str, EvidenceKind] = {
         "application/vnd.openadapt.qualification-campaign-permit-receipt+json;version=3",
     ),
     "qualification-evidence-decision-receipt": EvidenceKind(
-        "openadapt.qualification-evidence-decision-receipt/v1",
-        "application/vnd.openadapt.qualification-evidence-decision-receipt+json;version=1",
+        DECISION_RECEIPT_SCHEMA,
+        "application/vnd.openadapt.qualification-evidence-decision-receipt+json;version=2",
     ),
     "qualification-admission": EvidenceKind(
-        "openadapt.qualification-admission/v3",
-        "application/vnd.openadapt.qualification-admission+json;version=3",
+        QUALIFICATION_ADMISSION_SCHEMA,
+        "application/vnd.openadapt.qualification-admission+json;version=4",
+    ),
+    "support-release-admission": EvidenceKind(
+        "openadapt.support-release-admission/v1",
+        "application/vnd.openadapt.support-release-admission+json;version=1",
     ),
 }
 
@@ -188,6 +245,7 @@ _SUMMARY_KEYS = frozenset(
         "issued_at",
         "not_before",
         "expires_at",
+        "issuer",
     }
 )
 _RELEASE_IDENTITY_KEYS = frozenset(
@@ -243,16 +301,31 @@ _PUBLICATION_STAGING_KEYS = frozenset(
         "release_app_bot_user_id",
         "release_author_login",
         "assets",
-        "immutable_releases_enabled",
+        "immutable_releases",
+        "immutable_releases_sha256",
         "tag_rulesets",
         "tag_rulesets_sha256",
+        "tag_ref_state",
+        "tag_ref_state_sha256",
         "observed_at",
     }
 )
 _ASSET_KEYS = frozenset(
-    {"asset_id", "name", "sha256", "size_bytes", "uploader_id", "uploader_login"}
+    {
+        "asset_id",
+        "name",
+        "kind",
+        "sha256",
+        "size_bytes",
+        "media_type",
+        "publish_destinations",
+        "uploader_id",
+        "uploader_login",
+    }
 )
-_EXPECTED_ASSET_KEYS = frozenset({"name", "sha256", "size_bytes"})
+_EXPECTED_ASSET_KEYS = frozenset(
+    {"name", "kind", "sha256", "size_bytes", "media_type", "publish_destinations"}
+)
 _TAG_RULESET_KEYS = frozenset(
     {
         "schema_version",
@@ -272,11 +345,17 @@ _BYPASS_ACTOR_KEYS = frozenset({"actor_id", "actor_type", "bypass_mode"})
 _CONDITION_KEYS = frozenset({"ref_name"})
 _REF_NAME_KEYS = frozenset({"include", "exclude"})
 _RULE_KEYS = frozenset({"type"})
+_UPDATE_RULE_KEYS = frozenset({"type", "parameters"})
+_UPDATE_PARAMETERS_KEYS = frozenset({"update_allows_fetch_and_merge"})
 _DECISION_RECEIPT_KEYS = frozenset(
     {
         "schema_version",
+        "evidence_class",
+        "decision_identity_sha256",
+        "decision_revision",
         "decision_commitment_sha256",
         "evidence_manifest_sha256",
+        "evidence_manifest_readback_sha256",
         "campaign_artifact_sha256",
         "organization_id_sha256",
         "workflow_id_sha256",
@@ -303,12 +382,154 @@ _DECISION_RECEIPT_KEYS = frozenset(
         "expires_at",
         "issuer_key_id",
         "algorithm",
+        "signing_statement",
         "signature",
+        "issuer",
     }
 )
 _DECISION_CAMPAIGN_SUMMARY_KEYS = frozenset(
     {"schema_version", "minimum_trials_per_task_condition", "task_count", "classes"}
 )
+_SIGNING_STATEMENT_KEYS = frozenset(
+    {
+        "schema_version",
+        "object_schema_version",
+        "signature_domain",
+        "unsigned_object_sha256",
+        "unsigned_size_bytes",
+        "commitment_scheme",
+    }
+)
+_ISSUER_KEYS = frozenset(
+    {
+        "repository",
+        "repository_id",
+        "repository_owner_id",
+        "workflow",
+        "ref",
+        "source_commit",
+        "environment",
+    }
+)
+_RELEASE_VERIFICATION_RECEIPT_KEYS = frozenset(
+    {
+        "schema_version",
+        "verification_id_sha256",
+        "verdict",
+        "evidence_class",
+        "target",
+        "claim_scope",
+        "admission_object_sha256",
+        "admission_bundle_object_sha256",
+        "admission_id_sha256",
+        "release_sha256",
+        "artifact_inventory_sha256",
+        "release_identity",
+        "source_repository",
+        "source_repository_id",
+        "source_commit",
+        "version",
+        "tag",
+        "draft_release_id",
+        "publication_staging_sha256",
+        "authority_state_sha256",
+        "revocation_state_sha256",
+        "signer_registry_sha256",
+        "acceptance_summary_object_sha256",
+        "acceptance_manifest_object_sha256",
+        "decision_receipt_object_sha256",
+        "qualification_admission_object_sha256",
+        "qualification_admission_id_sha256",
+        "workflow_version_id_sha256",
+        "workflow_bundle_sha256",
+        "admitted_runtime_sha256",
+        "verified_at",
+        "expires_at",
+        "registry_source_commit",
+        "registry_revision",
+        "registry_head_sha256",
+        "trust_state_source_commit",
+    }
+)
+_QUALIFICATION_ADMISSION_KEYS = frozenset(
+    {
+        "schema_version",
+        "admission_id_sha256",
+        "evidence_class",
+        "organization_id_sha256",
+        "workflow_id_sha256",
+        "workflow_version_id_sha256",
+        "bundle_version",
+        "bundle_sha256",
+        "admitted_runtime_sha256",
+        "application_contract_sha256",
+        "environment_contract_sha256",
+        "input_contract_sha256",
+        "action_contract_sha256",
+        "identity_contract_sha256",
+        "effect_contract_sha256",
+        "policy_contract_sha256",
+        "evidence_authority_sha256",
+        "campaign_artifact_sha256",
+        "campaign_permit_sha256",
+        "decision_receipt_reference",
+        "decision_receipt_bundle_reference",
+        "signer_registry_sha256",
+        "revocation_state_sha256",
+        "entity_class",
+        "campaign_summary",
+        "local_identity_opening",
+        "verdict",
+        "issued_at",
+        "not_before",
+        "expires_at",
+        "issuer",
+    }
+)
+_PRODUCTION_ACCEPTANCE_MANIFEST_KEYS = frozenset(
+    {
+        "schema_version",
+        "target",
+        "verdict",
+        "claim_scope",
+        "acceptance_policy_sha256",
+        "lifecycle_policy_sha256",
+        "release_identity",
+        "release",
+        "release_sha256",
+        "artifact_inventory",
+        "artifact_inventory_sha256",
+        "publication_staging",
+        "publication_staging_sha256",
+        "qualification_evidence_decision_receipt_reference",
+        "qualification_evidence_decision_receipt_bundle_reference",
+        "qualification_admission_reference",
+        "qualification_admission_bundle_reference",
+        "campaign_summary",
+        "authority_state_sha256",
+        "revocation_state_sha256",
+        "signer_registry_sha256",
+        "issued_at",
+        "not_before",
+        "expires_at",
+        "issuer",
+    }
+)
+_RELEASE_CANDIDATE_KEYS = frozenset(
+    {
+        "schema_version",
+        "kind",
+        "source_repository",
+        "source_repository_id",
+        "source_commit",
+        "version",
+        "tag",
+        "deployment_id",
+        "deployment_sha256",
+        "artifacts",
+    }
+)
+_ARTIFACT_INVENTORY_KEYS = frozenset({"schema_version", "target", "claim_scope", "artifacts"})
 
 
 class ProductionEvidenceError(ValueError):
@@ -338,6 +559,35 @@ def signer_registry_identity(registry: Mapping[str, Any]) -> str:
     """Commit to a signer registry with the approved v2 identity domain."""
 
     return sha256_digest(SIGNER_REGISTRY_IDENTITY_DOMAIN + canonical_json_bytes(dict(registry)))
+
+
+def _regular_semantic_identity(
+    *, kind: str, object_schema_version: str, object_value: Mapping[str, Any]
+) -> str:
+    if kind == "qualification-evidence-decision-receipt":
+        evidence_class = object_value.get("evidence_class")
+        decision_identity = object_value.get("decision_identity_sha256")
+        decision_revision = object_value.get("decision_revision")
+        if evidence_class not in {"private-customer", "remote-safe-synthetic"}:
+            raise ProductionEvidenceError("decision receipt evidence_class is invalid")
+        _require_digest(decision_identity, "decision_identity_sha256")
+        _require_positive_int(decision_revision, "decision_revision")
+        payload = {
+            "decision_identity_sha256": decision_identity,
+            "decision_revision": decision_revision,
+            "evidence_class": evidence_class,
+        }
+        return sha256_digest(DECISION_RECEIPT_IDENTITY_DOMAIN + canonical_json_bytes(payload))
+    return sha256_digest(
+        REGULAR_SEMANTIC_IDENTITY_DOMAIN
+        + canonical_json_bytes(
+            {
+                "kind": kind,
+                "object_schema_version": object_schema_version,
+                "object": dict(object_value),
+            }
+        )
+    )
 
 
 def build_signer_registry_pointer(
@@ -379,18 +629,13 @@ def build_evidence_object_pair(
     if object_value.get("schema_version") != profile.schema_version:
         raise ProductionEvidenceError(f"{kind} schema_version must be {profile.schema_version!r}")
 
-    regular_bytes = canonical_json_bytes(dict(object_value))
+    regular_bytes = canonical_json_bytes(dict(object_value)) + b"\n"
     bundle_bytes = _validate_raw_json_object(sigstore_bundle, "sigstore_bundle")
     regular_sha256 = sha256_digest(regular_bytes)
-    regular_identity = sha256_digest(
-        REGULAR_SEMANTIC_IDENTITY_DOMAIN
-        + canonical_json_bytes(
-            {
-                "kind": kind,
-                "object_schema_version": profile.schema_version,
-                "object": dict(object_value),
-            }
-        )
+    regular_identity = _regular_semantic_identity(
+        kind=kind,
+        object_schema_version=profile.schema_version,
+        object_value=object_value,
     )
     regular = _build_reference(
         kind=kind,
@@ -448,7 +693,9 @@ def build_production_acceptance_summary(
     expected_publication_assets: Sequence[Mapping[str, Any]],
     qualification_evidence_decision_receipt: Mapping[str, Any],
     qualification_evidence_decision_receipt_references: Sequence[Mapping[str, Any]],
+    qualification_admission: Mapping[str, Any],
     qualification_admission_references: Sequence[Mapping[str, Any]],
+    production_acceptance_manifest: Mapping[str, Any],
     production_acceptance_manifest_references: Sequence[Mapping[str, Any]],
     authority_state_sha256: str,
     revocation_state_sha256: str,
@@ -456,8 +703,10 @@ def build_production_acceptance_summary(
     issued_at: str,
     not_before: str,
     expires_at: str,
+    issuer: Mapping[str, Any],
+    decision_receipt_verifier: DecisionReceiptVerifier | None = None,
 ) -> dict[str, Any]:
-    """Build the remote-safe v2 summary after all three input pairs exist."""
+    """Build the remote-safe v3 summary after all three input pairs exist."""
 
     decision_pair = _validated_pair(
         qualification_evidence_decision_receipt_references,
@@ -474,6 +723,7 @@ def build_production_acceptance_summary(
         reference=decision_pair[0],
         expected_signer_registry_sha256=signer_registry_sha256,
         expected_revocation_state_sha256=revocation_state_sha256,
+        verifier=decision_receipt_verifier,
     )
     staging = dict(publication_staging)
     staging_sha256 = _validate_publication_staging(
@@ -505,12 +755,16 @@ def build_production_acceptance_summary(
         "issued_at": issued_at,
         "not_before": not_before,
         "expires_at": expires_at,
+        "issuer": dict(issuer),
     }
     summary["evidence_identity_sha256"] = _production_evidence_identity(summary)
     validate_production_acceptance_summary(
         summary,
         qualification_evidence_decision_receipt=receipt,
+        qualification_admission=qualification_admission,
+        production_acceptance_manifest=production_acceptance_manifest,
         expected_publication_assets=expected_publication_assets,
+        decision_receipt_verifier=decision_receipt_verifier,
     )
     return summary
 
@@ -519,9 +773,12 @@ def validate_production_acceptance_summary(
     summary: Mapping[str, Any],
     *,
     qualification_evidence_decision_receipt: Mapping[str, Any],
+    qualification_admission: Mapping[str, Any],
+    production_acceptance_manifest: Mapping[str, Any],
     expected_publication_assets: Sequence[Mapping[str, Any]],
+    decision_receipt_verifier: DecisionReceiptVerifier | None = None,
 ) -> None:
-    """Validate a v2 summary without reading any private campaign payload."""
+    """Validate a v3 summary without reading any private campaign payload."""
 
     value = dict(summary)
     if set(value) != _SUMMARY_KEYS:
@@ -535,6 +792,9 @@ def validate_production_acceptance_summary(
     for field in ("target", "claim_scope"):
         if not isinstance(value[field], str) or not value[field]:
             raise ProductionEvidenceError(f"production summary {field} is invalid")
+    target_contract = _TARGET_RELEASE_CONTRACTS.get(value["target"])
+    if target_contract is None or value["claim_scope"] != target_contract[0]:
+        raise ProductionEvidenceError("production summary target or claim_scope is invalid")
     if value["verdict"] != "accepted":
         raise ProductionEvidenceError("production summary verdict must be accepted")
     for field in (
@@ -550,6 +810,7 @@ def validate_production_acceptance_summary(
     ):
         _require_digest(value[field], field)
     _validate_release_identity(value["release_identity"])
+    _validate_acceptance_issuer(value["issuer"])
     _validate_summary_reference_fields(value)
     staging_sha256 = _validate_publication_staging(
         value["publication_staging"], expected_assets=expected_publication_assets
@@ -561,14 +822,32 @@ def validate_production_acceptance_summary(
         reference=value["qualification_evidence_decision_receipt_reference"],
         expected_signer_registry_sha256=value["signer_registry_sha256"],
         expected_revocation_state_sha256=value["revocation_state_sha256"],
+        verifier=decision_receipt_verifier,
     )
     _validate_campaign_summary(value["campaign_summary"])
+    _validate_qualification_admission_binding(
+        qualification_admission,
+        receipt=qualification_evidence_decision_receipt,
+        receipt_reference=value["qualification_evidence_decision_receipt_reference"],
+        receipt_bundle_reference=value["qualification_evidence_decision_receipt_bundle_reference"],
+        admission_reference=value["qualification_admission_reference"],
+    )
+    _validate_acceptance_manifest_binding(
+        production_acceptance_manifest,
+        summary=value,
+        receipt=qualification_evidence_decision_receipt,
+        qualification_admission=qualification_admission,
+        expected_publication_assets=expected_publication_assets,
+    )
     if value["campaign_summary"] != receipt_summary:
         raise ProductionEvidenceError("campaign_summary differs from the public decision receipt")
     issued = _validate_timestamp(value["issued_at"], "issued_at")
     not_before = _validate_timestamp(value["not_before"], "not_before")
     expires = _validate_timestamp(value["expires_at"], "expires_at")
-    if not (not_before <= issued < expires):
+    if not (
+        not_before <= issued < expires
+        and (expires - not_before).total_seconds() <= 7 * 24 * 60 * 60
+    ):
         raise ProductionEvidenceError(
             "production summary validity must satisfy not_before <= issued_at < expires_at"
         )
@@ -592,8 +871,75 @@ def validate_production_acceptance_summary(
         raise ProductionEvidenceError(
             "production summary validity exceeds the public decision receipt"
         )
+    manifest_issued = _validate_timestamp(
+        production_acceptance_manifest["issued_at"], "manifest issued_at"
+    )
+    manifest_not_before = _validate_timestamp(
+        production_acceptance_manifest["not_before"], "manifest not_before"
+    )
+    manifest_expires = _validate_timestamp(
+        production_acceptance_manifest["expires_at"], "manifest expires_at"
+    )
+    if not (
+        not_before >= manifest_not_before
+        and issued >= manifest_issued
+        and expires <= manifest_expires
+    ):
+        raise ProductionEvidenceError("production summary validity exceeds the manifest")
     if value["evidence_identity_sha256"] != _production_evidence_identity(value):
         raise ProductionEvidenceError("evidence_identity_sha256 is invalid")
+
+
+def validate_release_verification_receipt(receipt: Mapping[str, Any]) -> None:
+    """Validate the final Flow-only release verification receipt v1."""
+
+    value = dict(receipt)
+    if set(value) != _RELEASE_VERIFICATION_RECEIPT_KEYS:
+        missing = sorted(_RELEASE_VERIFICATION_RECEIPT_KEYS - set(value))
+        extra = sorted(set(value) - _RELEASE_VERIFICATION_RECEIPT_KEYS)
+        raise ProductionEvidenceError(
+            f"release verification receipt keys differ: missing={missing}, extra={extra}"
+        )
+    expected = {
+        "schema_version": RELEASE_VERIFICATION_RECEIPT_SCHEMA,
+        "verdict": "verified",
+        "evidence_class": "remote-safe-synthetic",
+        "target": "flow",
+        "claim_scope": "production_flow",
+        "source_repository": "OpenAdaptAI/openadapt-flow",
+        "source_repository_id": "1291376938",
+    }
+    for field, expected_value in expected.items():
+        if value[field] != expected_value:
+            raise ProductionEvidenceError(f"release verification receipt {field} is invalid")
+    for field in _RELEASE_VERIFICATION_RECEIPT_KEYS:
+        if field.endswith("_sha256"):
+            _require_digest(value[field], f"release verification receipt {field}")
+    _validate_release_identity(value["release_identity"])
+    for field in (
+        "source_commit",
+        "registry_source_commit",
+        "trust_state_source_commit",
+    ):
+        if not isinstance(value[field], str) or _HEX40.fullmatch(value[field]) is None:
+            raise ProductionEvidenceError(f"release verification receipt {field} is invalid")
+    if not isinstance(value["version"], str) or _SEMVER.fullmatch(value["version"]) is None:
+        raise ProductionEvidenceError("release verification receipt version is invalid")
+    if value["tag"] != f"v{value['version']}":
+        raise ProductionEvidenceError("release verification receipt tag differs from version")
+    _require_decimal_id(value["draft_release_id"], "release verification draft_release_id")
+    _require_positive_int(value["registry_revision"], "release verification registry_revision")
+    verified_at = _validate_timestamp(value["verified_at"], "release verification verified_at")
+    expires_at = _validate_timestamp(value["expires_at"], "release verification expires_at")
+    if verified_at >= expires_at:
+        raise ProductionEvidenceError("release verification receipt is expired at verification")
+    projection = dict(value)
+    verification_id = projection.pop("verification_id_sha256")
+    expected_id = sha256_digest(
+        RELEASE_VERIFICATION_RECEIPT_DOMAIN + canonical_json_bytes(projection)
+    )
+    if verification_id != expected_id:
+        raise ProductionEvidenceError("release verification receipt id is invalid")
 
 
 def validate_reference_pair(
@@ -786,11 +1132,15 @@ def _validate_release_identity(value: Any) -> None:
         raise ProductionEvidenceError("release_identity schema_version is invalid")
     if value["channel"] != "production":
         raise ProductionEvidenceError("release_identity channel must be production")
-    _require_positive_int(value["sequence"], "release_identity.sequence")
-    _require_digest(
-        value["previous_admission_sha256"],
-        "release_identity.previous_admission_sha256",
-    )
+    sequence = _require_positive_int(value["sequence"], "release_identity.sequence")
+    previous = value["previous_admission_sha256"]
+    if sequence == 1:
+        if previous is not None:
+            raise ProductionEvidenceError(
+                "the first release_identity previous_admission_sha256 must be null"
+            )
+    else:
+        _require_digest(previous, "release_identity.previous_admission_sha256")
 
 
 def _validate_decision_receipt(
@@ -799,6 +1149,7 @@ def _validate_decision_receipt(
     reference: Mapping[str, Any],
     expected_signer_registry_sha256: str,
     expected_revocation_state_sha256: str,
+    verifier: DecisionReceiptVerifier | None = None,
 ) -> dict[str, Any]:
     receipt = dict(value)
     if set(receipt) != _DECISION_RECEIPT_KEYS:
@@ -809,14 +1160,32 @@ def _validate_decision_receipt(
         )
     if receipt["schema_version"] != DECISION_RECEIPT_SCHEMA:
         raise ProductionEvidenceError("decision receipt schema_version is invalid")
+    if receipt["evidence_class"] not in {"private-customer", "remote-safe-synthetic"}:
+        raise ProductionEvidenceError("decision receipt evidence_class is invalid")
     for field in _DECISION_RECEIPT_KEYS:
         if field.endswith("_sha256"):
             _require_digest(receipt[field], f"decision receipt {field}")
+    _require_positive_int(receipt["decision_revision"], "decision receipt decision_revision")
+    if (
+        len(
+            {
+                receipt["decision_commitment_sha256"],
+                receipt["evidence_manifest_sha256"],
+                receipt["evidence_manifest_readback_sha256"],
+                receipt["campaign_artifact_sha256"],
+            }
+        )
+        != 4
+    ):
+        raise ProductionEvidenceError("decision receipt commitments must be distinct")
     if receipt["signer_registry_sha256"] != expected_signer_registry_sha256:
         raise ProductionEvidenceError("decision receipt signer registry differs")
     if receipt["revocation_state_sha256"] != expected_revocation_state_sha256:
         raise ProductionEvidenceError("decision receipt revocation state differs")
-    if not isinstance(receipt["bundle_version"], str) or not receipt["bundle_version"]:
+    if (
+        not isinstance(receipt["bundle_version"], str)
+        or _SEMVER.fullmatch(receipt["bundle_version"]) is None
+    ):
         raise ProductionEvidenceError("decision receipt bundle_version is invalid")
     if receipt["entity_class"] not in {
         "insurance claim",
@@ -830,7 +1199,10 @@ def _validate_decision_receipt(
         raise ProductionEvidenceError("decision receipt verdict must be ADMIT")
     if receipt["algorithm"] != "ed25519":
         raise ProductionEvidenceError("decision receipt algorithm must be ed25519")
-    if not isinstance(receipt["issuer_key_id"], str) or not receipt["issuer_key_id"]:
+    if (
+        not isinstance(receipt["issuer_key_id"], str)
+        or _KEY_ID.fullmatch(receipt["issuer_key_id"]) is None
+    ):
         raise ProductionEvidenceError("decision receipt issuer_key_id is invalid")
     try:
         signature = base64.b64decode(receipt["signature"], validate=True)
@@ -838,18 +1210,30 @@ def _validate_decision_receipt(
         raise ProductionEvidenceError("decision receipt signature is invalid base64") from exc
     if len(signature) != 64:
         raise ProductionEvidenceError("decision receipt signature is not 64-byte Ed25519")
+    _validate_decision_signing_statement(receipt)
+    _validate_decision_issuer(receipt["issuer"], evidence_class=receipt["evidence_class"])
     issued = _validate_timestamp(receipt["issued_at"], "decision receipt issued_at")
     not_before = _validate_timestamp(receipt["not_before"], "decision receipt not_before")
     expires = _validate_timestamp(receipt["expires_at"], "decision receipt expires_at")
     if not (not_before <= issued < expires):
         raise ProductionEvidenceError("decision receipt validity is invalid")
+    if (expires - not_before).total_seconds() > 7 * 24 * 60 * 60:
+        raise ProductionEvidenceError("decision receipt validity exceeds seven days")
     if not isinstance(reference, Mapping):
         raise ProductionEvidenceError("decision receipt reference must be an object")
     validate_object_reference(reference)
     if reference["kind"] != "qualification-evidence-decision-receipt":
         raise ProductionEvidenceError("decision receipt reference kind is invalid")
-    if reference["object_sha256"] != sha256_digest(canonical_json_bytes(receipt)):
+    object_sha256 = sha256_digest(canonical_json_bytes(receipt) + b"\n")
+    if reference["object_sha256"] != object_sha256:
         raise ProductionEvidenceError("decision receipt does not match its public reference")
+    if verifier is not None:
+        verifier.verify(
+            receipt,
+            object_sha256=object_sha256,
+            signer_registry_sha256=expected_signer_registry_sha256,
+            revocation_state_sha256=expected_revocation_state_sha256,
+        )
 
     campaign_summary = receipt["campaign_summary"]
     if not isinstance(campaign_summary, Mapping) or set(campaign_summary) != (
@@ -874,6 +1258,315 @@ def _validate_decision_receipt(
     if any(counts["task_condition_cell_count"] < task_count for counts in classes.values()):
         raise ProductionEvidenceError("decision receipt omits a task/class cell")
     return {qualification_class: dict(counts) for qualification_class, counts in classes.items()}
+
+
+def _validate_decision_signing_statement(receipt: Mapping[str, Any]) -> None:
+    statement = receipt["signing_statement"]
+    if not isinstance(statement, Mapping) or set(statement) != _SIGNING_STATEMENT_KEYS:
+        raise ProductionEvidenceError("decision receipt signing_statement keys are invalid")
+    unsigned = dict(receipt)
+    unsigned.pop("signature")
+    unsigned.pop("signing_statement")
+    unsigned_bytes = canonical_json_bytes(unsigned) + b"\n"
+    expected = {
+        "schema_version": "openadapt.qualification-evidence-signing-statement/v1",
+        "object_schema_version": DECISION_RECEIPT_SCHEMA,
+        "signature_domain": DECISION_RECEIPT_SIGNATURE_DOMAIN.decode("utf-8"),
+        "unsigned_object_sha256": sha256_digest(unsigned_bytes),
+        "unsigned_size_bytes": len(unsigned_bytes),
+        "commitment_scheme": "sha256-canonical-json-lf",
+    }
+    if dict(statement) != expected:
+        raise ProductionEvidenceError("decision receipt signing_statement is invalid")
+
+
+def _validate_decision_issuer(value: Any, *, evidence_class: str) -> None:
+    if not isinstance(value, Mapping) or set(value) != _ISSUER_KEYS:
+        raise ProductionEvidenceError("decision receipt issuer keys are invalid")
+    expected = (
+        {
+            "repository": "OpenAdaptAI/openadapt-internal",
+            "repository_id": "1170060695",
+            "repository_owner_id": "132681217",
+            "workflow": ".github/workflows/issue-private-qualification-evidence-decision.yml",
+            "ref": "refs/heads/main",
+            "environment": "private-qualification-evidence-decision",
+        }
+        if evidence_class == "private-customer"
+        else {
+            "repository": "OpenAdaptAI/.github",
+            "repository_id": "858454062",
+            "repository_owner_id": "132681217",
+            "workflow": ".github/workflows/issue-synthetic-qualification-evidence-decision.yml",
+            "ref": "refs/heads/main",
+            "environment": "synthetic-qualification-evidence-decision",
+        }
+    )
+    actual = dict(value)
+    source_commit = actual.pop("source_commit")
+    if (
+        actual != expected
+        or not isinstance(source_commit, str)
+        or _HEX40.fullmatch(source_commit) is None
+    ):
+        raise ProductionEvidenceError("decision receipt issuer is invalid")
+
+
+def _validate_acceptance_issuer(value: Any) -> None:
+    if not isinstance(value, Mapping) or set(value) != _ISSUER_KEYS:
+        raise ProductionEvidenceError("production acceptance issuer keys are invalid")
+    expected = {
+        "repository": "OpenAdaptAI/openadapt-evals",
+        "repository_id": "1135998197",
+        "repository_owner_id": "132681217",
+        "workflow": ".github/workflows/issue-production-acceptance.yml",
+        "ref": "refs/heads/main",
+        "environment": "production-acceptance",
+    }
+    actual = dict(value)
+    source_commit = actual.pop("source_commit")
+    if (
+        actual != expected
+        or not isinstance(source_commit, str)
+        or _HEX40.fullmatch(source_commit) is None
+    ):
+        raise ProductionEvidenceError("production acceptance issuer is invalid")
+
+
+def _validate_qualification_admission_binding(
+    value: Mapping[str, Any],
+    *,
+    receipt: Mapping[str, Any],
+    receipt_reference: Mapping[str, Any],
+    receipt_bundle_reference: Mapping[str, Any],
+    admission_reference: Mapping[str, Any],
+) -> None:
+    admission = dict(value)
+    if set(admission) != _QUALIFICATION_ADMISSION_KEYS:
+        raise ProductionEvidenceError("qualification admission keys are invalid")
+    if (
+        admission["schema_version"] != QUALIFICATION_ADMISSION_SCHEMA
+        or admission["verdict"] != "accepted"
+        or admission["evidence_class"] != receipt["evidence_class"]
+    ):
+        raise ProductionEvidenceError("qualification admission identity is invalid")
+    for field in _QUALIFICATION_ADMISSION_KEYS:
+        if field.endswith("_sha256"):
+            _require_digest(admission[field], f"qualification admission {field}")
+    if (
+        not isinstance(admission["bundle_version"], str)
+        or _SEMVER.fullmatch(admission["bundle_version"]) is None
+        or len(admission["bundle_version"]) > 64
+    ):
+        raise ProductionEvidenceError("qualification admission bundle_version is invalid")
+    if (
+        not isinstance(admission["entity_class"], str)
+        or _ENTITY_CLASS.fullmatch(admission["entity_class"]) is None
+    ):
+        raise ProductionEvidenceError("qualification admission entity_class is invalid")
+    bindings = {
+        "organization_id_sha256": "organization_id_sha256",
+        "workflow_id_sha256": "workflow_id_sha256",
+        "workflow_version_id_sha256": "workflow_version_id_sha256",
+        "bundle_version": "bundle_version",
+        "bundle_sha256": "bundle_sha256",
+        "admitted_runtime_sha256": "admitted_runtime_sha256",
+        "application_contract_sha256": "application_contract_sha256",
+        "environment_contract_sha256": "environment_contract_sha256",
+        "input_contract_sha256": "input_contract_sha256",
+        "action_contract_sha256": "action_contract_sha256",
+        "identity_contract_sha256": "identity_contract_sha256",
+        "effect_contract_sha256": "effect_contract_sha256",
+        "policy_contract_sha256": "policy_contract_sha256",
+        "evidence_authority_sha256": "evidence_authority_contract_sha256",
+        "campaign_artifact_sha256": "campaign_artifact_sha256",
+        "campaign_permit_sha256": "campaign_permit_sha256",
+        "signer_registry_sha256": "signer_registry_sha256",
+        "revocation_state_sha256": "revocation_state_sha256",
+        "entity_class": "entity_class",
+    }
+    if any(admission[left] != receipt[right] for left, right in bindings.items()):
+        raise ProductionEvidenceError("qualification admission differs from decision receipt")
+    if admission["campaign_summary"] != receipt["campaign_summary"]["classes"]:
+        raise ProductionEvidenceError("qualification admission campaign summary differs")
+    if admission["decision_receipt_reference"] != dict(receipt_reference) or admission[
+        "decision_receipt_bundle_reference"
+    ] != dict(receipt_bundle_reference):
+        raise ProductionEvidenceError("qualification admission receipt references differ")
+    local_identity = admission["local_identity_opening"]
+    normalized_local_identity = (
+        dict(local_identity) if isinstance(local_identity, Mapping) else None
+    )
+    if normalized_local_identity != {
+        "schema_version": "openadapt.qualification-local-identity-opening/v1",
+        "algorithm": "hmac-sha256",
+        "required": True,
+        "customer_controlled_secret_required": True,
+        "exact_contract_match_required": True,
+        "revalidation_before_actuation": True,
+        "maximum_age_seconds": 60,
+    }:
+        raise ProductionEvidenceError("qualification admission local identity opening differs")
+    _validate_qualification_admission_issuer(admission["issuer"])
+    admission_issued = _validate_timestamp(admission["issued_at"], "admission issued_at")
+    admission_not_before = _validate_timestamp(admission["not_before"], "admission not_before")
+    admission_expires = _validate_timestamp(admission["expires_at"], "admission expires_at")
+    receipt_issued = _validate_timestamp(receipt["issued_at"], "receipt issued_at")
+    receipt_not_before = _validate_timestamp(receipt["not_before"], "receipt not_before")
+    receipt_expires = _validate_timestamp(receipt["expires_at"], "receipt expires_at")
+    if not (
+        receipt_not_before <= receipt_issued <= admission_issued < admission_expires
+        and admission_not_before >= receipt_not_before
+        and admission_expires <= receipt_expires
+        and (admission_expires - admission_not_before).total_seconds() <= 7 * 24 * 60 * 60
+    ):
+        raise ProductionEvidenceError("qualification admission validity exceeds receipt")
+    projection = dict(admission)
+    admission_id = projection.pop("admission_id_sha256")
+    if admission_id != sha256_digest(
+        QUALIFICATION_ADMISSION_DIGEST_DOMAIN + canonical_json_bytes(projection)
+    ):
+        raise ProductionEvidenceError("qualification admission id is invalid")
+    if admission_reference["object_sha256"] != sha256_digest(
+        canonical_json_bytes(admission) + b"\n"
+    ):
+        raise ProductionEvidenceError("qualification admission reference differs")
+
+
+def _validate_qualification_admission_issuer(value: Any) -> None:
+    if not isinstance(value, Mapping) or set(value) != _ISSUER_KEYS:
+        raise ProductionEvidenceError("qualification admission issuer keys are invalid")
+    expected = {
+        "repository": "OpenAdaptAI/.github",
+        "repository_id": "858454062",
+        "repository_owner_id": "132681217",
+        "workflow": ".github/workflows/issue-qualification-admission.yml",
+        "ref": "refs/heads/main",
+        "environment": "qualification-admission",
+    }
+    actual = dict(value)
+    source_commit = actual.pop("source_commit")
+    if (
+        actual != expected
+        or not isinstance(source_commit, str)
+        or _HEX40.fullmatch(source_commit) is None
+    ):
+        raise ProductionEvidenceError("qualification admission issuer is invalid")
+
+
+def _validate_acceptance_manifest_binding(
+    value: Mapping[str, Any],
+    *,
+    summary: Mapping[str, Any],
+    receipt: Mapping[str, Any],
+    qualification_admission: Mapping[str, Any],
+    expected_publication_assets: Sequence[Mapping[str, Any]],
+) -> None:
+    manifest = dict(value)
+    if set(manifest) != _PRODUCTION_ACCEPTANCE_MANIFEST_KEYS:
+        raise ProductionEvidenceError("production acceptance manifest keys are invalid")
+    if manifest["schema_version"] != PRODUCTION_ACCEPTANCE_MANIFEST_SCHEMA:
+        raise ProductionEvidenceError("production acceptance manifest schema is invalid")
+    _validate_acceptance_issuer(manifest["issuer"])
+    common_fields = (
+        "target",
+        "verdict",
+        "claim_scope",
+        "acceptance_policy_sha256",
+        "lifecycle_policy_sha256",
+        "release_identity",
+        "release_sha256",
+        "artifact_inventory_sha256",
+        "publication_staging",
+        "publication_staging_sha256",
+        "qualification_evidence_decision_receipt_reference",
+        "qualification_evidence_decision_receipt_bundle_reference",
+        "qualification_admission_reference",
+        "qualification_admission_bundle_reference",
+        "campaign_summary",
+        "authority_state_sha256",
+        "revocation_state_sha256",
+        "signer_registry_sha256",
+        "issuer",
+    )
+    if any(manifest[field] != summary[field] for field in common_fields):
+        raise ProductionEvidenceError("production acceptance summary differs from manifest")
+    if manifest["campaign_summary"] != qualification_admission["campaign_summary"]:
+        raise ProductionEvidenceError("production acceptance manifest campaign differs")
+    release = manifest["release"]
+    if not isinstance(release, Mapping) or set(release) != _RELEASE_CANDIDATE_KEYS:
+        raise ProductionEvidenceError("production release candidate keys are invalid")
+    target_contract = _TARGET_RELEASE_CONTRACTS[manifest["target"]]
+    if (
+        release["schema_version"] != "openadapt.production-release-candidate/v1"
+        or release["kind"] != target_contract[3]
+        or release["source_repository"] != target_contract[1]
+        or release["source_repository_id"] != target_contract[2]
+    ):
+        raise ProductionEvidenceError("production release candidate identity is invalid")
+    if release["artifacts"] != list(expected_publication_assets):
+        raise ProductionEvidenceError("production release candidate artifacts differ")
+    if (
+        not isinstance(release["source_commit"], str)
+        or _HEX40.fullmatch(release["source_commit"]) is None
+    ):
+        raise ProductionEvidenceError("production release candidate source_commit is invalid")
+    release_projection = {
+        "target": manifest["target"],
+        "claim_scope": manifest["claim_scope"],
+        "release": dict(release),
+    }
+    if manifest["release_sha256"] != sha256_digest(
+        RELEASE_CANDIDATE_DIGEST_DOMAIN + canonical_json_bytes(release_projection)
+    ):
+        raise ProductionEvidenceError("production release candidate digest is invalid")
+    inventory = manifest["artifact_inventory"]
+    if not isinstance(inventory, Mapping) or set(inventory) != _ARTIFACT_INVENTORY_KEYS:
+        raise ProductionEvidenceError("production artifact inventory keys are invalid")
+    if dict(inventory) != {
+        "schema_version": "openadapt.production-release-artifact-inventory/v1",
+        "target": manifest["target"],
+        "claim_scope": manifest["claim_scope"],
+        "artifacts": list(expected_publication_assets),
+    }:
+        raise ProductionEvidenceError("production artifact inventory differs")
+    inventory_projection = {
+        "target": manifest["target"],
+        "claim_scope": manifest["claim_scope"],
+        "artifacts": list(expected_publication_assets),
+    }
+    if manifest["artifact_inventory_sha256"] != sha256_digest(
+        ARTIFACT_INVENTORY_DIGEST_DOMAIN + canonical_json_bytes(inventory_projection)
+    ):
+        raise ProductionEvidenceError("production artifact inventory digest is invalid")
+    staging = manifest["publication_staging"]
+    if (
+        staging["repository"] != release["source_repository"]
+        or staging["repository_id"] != release["source_repository_id"]
+        or staging["target_commitish"] != release["source_commit"]
+        or (release["tag"] is not None and staging["tag"] != release["tag"])
+    ):
+        raise ProductionEvidenceError("production publication staging differs from release")
+    manifest_issued = _validate_timestamp(manifest["issued_at"], "manifest issued_at")
+    manifest_not_before = _validate_timestamp(manifest["not_before"], "manifest not_before")
+    manifest_expires = _validate_timestamp(manifest["expires_at"], "manifest expires_at")
+    if not (
+        manifest_not_before <= manifest_issued < manifest_expires
+        and (manifest_expires - manifest_not_before).total_seconds() <= 7 * 24 * 60 * 60
+    ):
+        raise ProductionEvidenceError("production manifest validity is invalid")
+    if _validate_timestamp(staging["observed_at"], "staging observed_at") > manifest_issued:
+        raise ProductionEvidenceError("publication staging was observed after manifest issuance")
+    for child, label in ((receipt, "receipt"), (qualification_admission, "admission")):
+        if (
+            manifest_not_before < _validate_timestamp(child["not_before"], f"{label} not_before")
+            or manifest_issued < _validate_timestamp(child["issued_at"], f"{label} issued_at")
+            or manifest_expires > _validate_timestamp(child["expires_at"], f"{label} expires_at")
+        ):
+            raise ProductionEvidenceError(f"production manifest validity exceeds {label}")
+    manifest_reference = summary["production_acceptance_manifest_reference"]
+    if manifest_reference["object_sha256"] != sha256_digest(canonical_json_bytes(manifest) + b"\n"):
+        raise ProductionEvidenceError("production acceptance manifest reference differs")
 
 
 def _validate_publication_staging(
@@ -906,8 +1599,19 @@ def _validate_publication_staging(
         raise ProductionEvidenceError("publication_staging release App identity is invalid")
     if staging["draft"] is not True or staging["prerelease"] is not False:
         raise ProductionEvidenceError("publication_staging must be a non-prerelease draft")
-    if staging["immutable_releases_enabled"] is not True:
-        raise ProductionEvidenceError("immutable GitHub releases are not enabled")
+    immutable_releases = staging["immutable_releases"]
+    if (
+        not isinstance(immutable_releases, Mapping)
+        or set(immutable_releases) != {"enabled", "enforced_by_owner"}
+        or immutable_releases["enabled"] is not True
+        or not isinstance(immutable_releases["enforced_by_owner"], bool)
+    ):
+        raise ProductionEvidenceError("immutable GitHub releases evidence is invalid")
+    immutable_releases_sha256 = sha256_digest(
+        IMMUTABLE_RELEASES_DIGEST_DOMAIN + canonical_json_bytes(dict(immutable_releases))
+    )
+    if staging["immutable_releases_sha256"] != immutable_releases_sha256:
+        raise ProductionEvidenceError("immutable GitHub releases digest is invalid")
     if not isinstance(staging["tag"], str) or _TAG.fullmatch(staging["tag"]) is None:
         raise ProductionEvidenceError("publication_staging tag is invalid")
     if (
@@ -915,6 +1619,17 @@ def _validate_publication_staging(
         or _HEX40.fullmatch(staging["target_commitish"]) is None
     ):
         raise ProductionEvidenceError("publication_staging target_commitish is invalid")
+    tag_ref_state = staging["tag_ref_state"]
+    if not isinstance(tag_ref_state, Mapping) or dict(tag_ref_state) != {
+        "ref": f"refs/tags/{staging['tag']}",
+        "exists": False,
+    }:
+        raise ProductionEvidenceError("publication_staging tag_ref_state is invalid")
+    tag_ref_state_sha256 = sha256_digest(
+        TAG_REF_STATE_DIGEST_DOMAIN + canonical_json_bytes(dict(tag_ref_state))
+    )
+    if staging["tag_ref_state_sha256"] != tag_ref_state_sha256:
+        raise ProductionEvidenceError("publication_staging tag_ref_state_sha256 is invalid")
     _validate_timestamp(staging["observed_at"], "publication_staging observed_at")
     _validate_publication_assets(staging["assets"], expected_assets=expected_assets)
     tag_rulesets_sha256 = _validate_tag_rulesets(
@@ -935,6 +1650,7 @@ def _validate_publication_assets(
         raise ProductionEvidenceError("publication_staging assets must be a non-empty array")
     normalized: list[dict[str, Any]] = []
     names: set[str] = set()
+    folded_names: set[str] = set()
     asset_ids: set[str] = set()
     for index, raw_asset in enumerate(value):
         if not isinstance(raw_asset, Mapping) or set(raw_asset) != _ASSET_KEYS:
@@ -949,11 +1665,34 @@ def _validate_publication_assets(
             raise ProductionEvidenceError(f"publication asset {index} uploader is invalid")
         if not isinstance(asset["name"], str) or _ASSET_NAME.fullmatch(asset["name"]) is None:
             raise ProductionEvidenceError(f"publication asset {index} name is invalid")
+        if not isinstance(asset["kind"], str) or _KIND.fullmatch(asset["kind"]) is None:
+            raise ProductionEvidenceError(f"publication asset {index} kind is invalid")
         _require_digest(asset["sha256"], f"publication asset {index} sha256")
         _require_positive_int(asset["size_bytes"], f"publication asset {index} size_bytes")
-        if asset["name"] in names or asset["asset_id"] in asset_ids:
+        if (
+            not isinstance(asset["media_type"], str)
+            or "/" not in asset["media_type"]
+            or len(asset["media_type"]) > 200
+        ):
+            raise ProductionEvidenceError(f"publication asset {index} media_type is invalid")
+        destinations = asset["publish_destinations"]
+        if (
+            not isinstance(destinations, list)
+            or not destinations
+            or destinations != sorted(set(destinations))
+            or any(item not in {"deployment", "github-release", "pypi"} for item in destinations)
+        ):
+            raise ProductionEvidenceError(
+                f"publication asset {index} publish_destinations are invalid"
+            )
+        if (
+            asset["name"] in names
+            or asset["name"].casefold() in folded_names
+            or asset["asset_id"] in asset_ids
+        ):
             raise ProductionEvidenceError("publication assets contain a duplicate")
         names.add(asset["name"])
+        folded_names.add(asset["name"].casefold())
         asset_ids.add(asset["asset_id"])
         normalized.append(asset)
     if normalized != sorted(normalized, key=lambda item: (item["name"], item["asset_id"])):
@@ -966,13 +1705,33 @@ def _validate_publication_assets(
         asset = dict(raw_asset)
         if not isinstance(asset["name"], str) or _ASSET_NAME.fullmatch(asset["name"]) is None:
             raise ProductionEvidenceError(f"expected publication asset {index} name is invalid")
+        if not isinstance(asset["kind"], str) or _KIND.fullmatch(asset["kind"]) is None:
+            raise ProductionEvidenceError(f"expected publication asset {index} kind is invalid")
         _require_digest(asset["sha256"], f"expected publication asset {index} sha256")
         _require_positive_int(asset["size_bytes"], f"expected publication asset {index} size_bytes")
+        if not isinstance(asset["media_type"], str) or "/" not in asset["media_type"]:
+            raise ProductionEvidenceError(
+                f"expected publication asset {index} media_type is invalid"
+            )
+        destinations = asset["publish_destinations"]
+        if (
+            not isinstance(destinations, list)
+            or not destinations
+            or destinations != sorted(set(destinations))
+            or any(item not in {"deployment", "github-release", "pypi"} for item in destinations)
+        ):
+            raise ProductionEvidenceError(
+                f"expected publication asset {index} publish_destinations are invalid"
+            )
         expected.append(asset)
     actual_projection = [
-        {field: asset[field] for field in ("name", "sha256", "size_bytes")} for asset in normalized
+        {field: asset[field] for field in _EXPECTED_ASSET_KEYS} for asset in normalized
     ]
-    if actual_projection != sorted(expected, key=lambda item: item["name"]):
+
+    def asset_key(item: Mapping[str, Any]) -> tuple[Any, Any, Any]:
+        return item["kind"], item["name"], item["sha256"]
+
+    if sorted(actual_projection, key=asset_key) != sorted(expected, key=asset_key):
         raise ProductionEvidenceError("publication assets differ from the release candidate")
 
 
@@ -990,7 +1749,12 @@ def _validate_tag_rulesets(value: Any, *, repository: str, repository_id: str, t
         if ruleset["repository"] != repository or ruleset["repository_id"] != repository_id:
             raise ProductionEvidenceError(f"publication tag ruleset {index} repository differs")
         _require_decimal_id(ruleset["ruleset_id"], f"tag ruleset {index} ruleset_id")
-        if not isinstance(ruleset["name"], str) or not ruleset["name"]:
+        expected_name = (
+            "OpenAdapt policy: release tag creation"
+            if ruleset["role"] == "creation_authority"
+            else "OpenAdapt policy: immutable release tags"
+        )
+        if ruleset["name"] != expected_name:
             raise ProductionEvidenceError(f"publication tag ruleset {index} name is invalid")
         if ruleset["target"] != "tag" or ruleset["enforcement"] != "active":
             raise ProductionEvidenceError(f"publication tag ruleset {index} is not active")
@@ -1016,17 +1780,32 @@ def _validate_tag_rulesets(value: Any, *, repository: str, repository_id: str, t
             raise ProductionEvidenceError(f"publication tag ruleset {index} bypass differs")
 
         rules = ruleset["rules"]
-        expected_rule_types = (
-            ["creation"]
+        expected_rules = (
+            [{"type": "creation"}]
             if ruleset["role"] == "creation_authority"
-            else ["deletion", "non_fast_forward", "update"]
+            else [
+                {"type": "deletion"},
+                {"type": "non_fast_forward"},
+                {
+                    "type": "update",
+                    "parameters": {"update_allows_fetch_and_merge": False},
+                },
+            ]
         )
-        if not isinstance(rules, list) or rules != [
-            {"type": rule_type} for rule_type in expected_rule_types
-        ]:
+        if not isinstance(rules, list) or rules != expected_rules:
             raise ProductionEvidenceError(f"publication tag ruleset {index} rules differ")
-        if any(not isinstance(item, Mapping) or set(item) != _RULE_KEYS for item in rules):
-            raise ProductionEvidenceError(f"publication tag ruleset {index} rules are invalid")
+        for rule in rules:
+            expected_keys = _UPDATE_RULE_KEYS if rule["type"] == "update" else _RULE_KEYS
+            if not isinstance(rule, Mapping) or set(rule) != expected_keys:
+                raise ProductionEvidenceError(f"publication tag ruleset {index} rules are invalid")
+            if rule["type"] == "update":
+                parameters = rule["parameters"]
+                if not isinstance(parameters, Mapping) or set(parameters) != (
+                    _UPDATE_PARAMETERS_KEYS
+                ):
+                    raise ProductionEvidenceError(
+                        f"publication tag ruleset {index} update parameters are invalid"
+                    )
     return sha256_digest(TAG_RULESETS_DIGEST_DOMAIN + canonical_json_bytes(rulesets))
 
 
@@ -1047,13 +1826,15 @@ def _validate_tag_conditions(value: Any, *, tag: str, index: int) -> None:
             raise ProductionEvidenceError(
                 f"publication tag ruleset {index} {label} patterns are invalid"
             )
-    candidates = (tag, f"refs/tags/{tag}")
-    if not include or not any(
-        fnmatchcase(candidate, pattern) for pattern in include for candidate in candidates
-    ):
+    if {"include": include, "exclude": exclude} != {
+        "include": ["refs/tags/v*"],
+        "exclude": [],
+    }:
+        raise ProductionEvidenceError(
+            f"publication tag ruleset {index} must match exactly refs/tags/v*"
+        )
+    if not fnmatchcase(f"refs/tags/{tag}", include[0]):
         raise ProductionEvidenceError(f"publication tag ruleset {index} does not match the tag")
-    if any(fnmatchcase(candidate, pattern) for pattern in exclude for candidate in candidates):
-        raise ProductionEvidenceError(f"publication tag ruleset {index} excludes the tag")
 
 
 def _require_decimal_id(value: Any, field: str) -> str:
@@ -1152,6 +1933,7 @@ def _production_evidence_identity(value: Mapping[str, Any]) -> str:
             "authority_state_sha256",
             "revocation_state_sha256",
             "signer_registry_sha256",
+            "issuer",
         )
     }
     return sha256_digest(PRODUCTION_EVIDENCE_IDENTITY_DOMAIN + canonical_json_bytes(projection))
