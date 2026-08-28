@@ -48,7 +48,7 @@ Avg score:    1.000 (outcomes only)
 Avg steps:    1.0 (all attempts)
 ```
 
-Real output from 0.94.0. The mock adapter and its deterministic agent both
+Abridged output from 0.94.0. The mock adapter and its deterministic agent both
 always succeed, so 100% here means the harness is wired up, and nothing else.
 Every other command in this repository can cost money.
 
@@ -98,14 +98,18 @@ print(f"Success rate: {compute_metrics(results)['success_rate']:.1%}")
 
 ```bash
 oa-vm pool-create --workers 1        # or --cloud aws
-oa-vm pool-wait
+oa-vm pool-wait --qualification-dir ./proofs
 openadapt-evals run --agent api-claude --task notepad_1
 openadapt-evals view --run-name live_eval
 oa-vm pool-cleanup -y                # stops billing
 ```
 
-Forget the last line and the VM bills until you remember. Every pool command
-takes `--cloud azure` (default) or `--cloud aws`. The rest of the 59 `oa-vm`
+Forget the last line and the VM bills until you remember. `pool-wait`,
+`pool-run`, and `pool-auto` require `--qualification-dir`, a directory holding
+a fresh `<worker>.identity.json` and `<worker>.egress.json` for each worker;
+they refuse to run without it. Most pool commands take `--cloud azure`
+(the default) or `--cloud aws`, though `pool-logs`, `pool-vnc`, and `pool-exec`
+do not. The rest of the `oa-vm`
 subcommands, the `oa` and `openadapt-evals` command tables, and the
 configuration and AWS SSO setup are in [docs/CLI.md](docs/CLI.md).
 
@@ -132,7 +136,7 @@ The `rename` row is the one worth reading. It changes `Open` to `View` and
 `Save Encounter` to `Submit Encounter`, and both Playwright selector controls
 failed loudly at the first renamed locator before mutating anything. Those are
 unsupported-drift halts, not silent wrong writes. Compiled replay is also
-roughly thirty times slower per step than a working selector, 6.9s against
+roughly thirty times slower per run than a working selector, 6.9s against
 0.21s, which is the honest reminder that structural actuation should stay the
 preferred tier wherever an application gives you one.
 
@@ -157,9 +161,9 @@ deleted.
 - **The evidence is local and synthetic.** Bundled MockMed, one workflow, one
   macOS host. No hosted lifecycle, no Windows UIA, no RDP, no Citrix, and no
   real customer application is represented anywhere in it.
-- **Only two adapters exist.** `BenchmarkAdapter` is built to extend to OSWorld
-  or WebArena. Today there is WAA and there is `LocalAdapter` for native
-  desktop runs, and that's all.
+- **Only two benchmark families exist.** `BenchmarkAdapter` is built to extend
+  to OSWorld or WebArena. Today there is WAA, live and mock, and there is
+  `LocalAdapter` for native desktop runs.
 - **Some of it is deliberately absent.** Deployment-derived thresholds, tuned
   adversary parameters, per-system-of-record oracle recipes, and real customer
   datasets stay out of this open repository.
@@ -171,7 +175,7 @@ in [docs/eval_results/PRODUCTION_READINESS.md](docs/eval_results/PRODUCTION_READ
 
 A meta-benchmark harness runs record, compile, replay, heal, verify across any
 registered `Environment` and emits one metrics row per `(env, task, mode)`, and
-exports to [Inspect AI](https://inspect.aisi.org.uk/). Seven agents ship,
+exports to [Inspect AI](https://inspect.aisi.org.uk/). Thirteen agents ship,
 including a dual-model `PlannerGrounderAgent` that separates what to do from
 where to click, and a `ScrubMiddleware` strips PII before any agent sees a
 screenshot. There's also a standalone GRPO trainer with no openadapt-ml

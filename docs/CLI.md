@@ -1,10 +1,10 @@
 # CLI reference and configuration
 
-Verified against openadapt-evals 0.94.0 installed from PyPI.
+Verified against openadapt-evals 0.94.1, this branch's source.
 
 ## Console entry points
 
-The package installs eight: `openadapt-evals`, `oa`, `oa-vm`,
+The package installs nine: `openadapt-evals`, `oa`, `oa-vm`,
 `openadapt-eval-flow`, `openadapt-eval`, `openadapt-train-grpo`,
 `openadapt-collect`, `openadapt-analyze`, and `openadapt-gpu` for GPU instance
 lifecycle.
@@ -42,7 +42,7 @@ for the current list.
 
 ## Pool CLI (`oa-vm`)
 
-59 subcommands. The ones you need most:
+The ones you need most:
 
 | Command | Description |
 |---|---|
@@ -55,12 +55,14 @@ for the current list.
 | `pool-cleanup` | Delete all pool VMs and resources |
 | `pool-exec`, `pool-logs`, `pool-vnc`, `pool-auto` | Run commands, read logs, open VNC, automate a pool run |
 | `image-create` | Create a golden image from a pool VM |
-| `vm setup-waa` | Deploy the WAA container on a VM |
 | `smoke-test-aws` | Verify AWS credentials, AMI, VPC, and lifecycle |
 | `gpu-setup`, `gpu-train` | Provision a GPU VM and launch verl-agent RL training |
 | `azure-ml-*` | Azure ML job monitoring, logs, cost, teardown |
 
-All pool commands accept `--cloud azure` (the default) or `--cloud aws`. Run
+Most pool commands accept `--cloud azure` (the default) or `--cloud aws`;
+`pool-logs`, `pool-vnc`, and `pool-exec` do not. `pool-wait`, `pool-run`, and
+`pool-auto` also require `--qualification-dir`, a directory holding a fresh
+`<worker>.identity.json` and `<worker>.egress.json` for each worker. Run
 `oa-vm --help` for the full list.
 
 ## Flow evaluation CLI (`openadapt-eval-flow`)
