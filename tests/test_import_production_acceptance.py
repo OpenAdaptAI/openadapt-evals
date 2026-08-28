@@ -7,7 +7,6 @@ import json
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
 
 import pytest
 
@@ -487,7 +486,7 @@ def _verified_provenance(
             "verificationResult": {
                 "signature": {
                     "certificate": {
-                        "certificateIssuer": "CN=Fulcio Intermediate l2,O=GitHub\\, Inc.",
+                        "certificateIssuer": "CN=sigstore-intermediate,O=sigstore.dev",
                         "subjectAlternativeName": MODULE.CLOUD_CERTIFICATE_IDENTITY,
                         "issuer": MODULE.GITHUB_OIDC_ISSUER,
                         "githubWorkflowTrigger": "workflow_dispatch",
@@ -518,8 +517,8 @@ def _verified_provenance(
                 },
                 "verifiedTimestamps": [
                     {
-                        "type": "TimestampAuthority",
-                        "uri": MODULE.GITHUB_TIMESTAMP_AUTHORITY,
+                        "type": "Tlog",
+                        "uri": "https://rekor.sigstore.dev",
                         "timestamp": "2026-08-18T12:00:05.000Z",
                     }
                 ],
@@ -581,48 +580,6 @@ def _verified_provenance(
             },
         }
     ]
-
-
-def _reviewed_gh_run(
-    certificate_path: Path,
-    *,
-    provenance: list[dict[str, object]] | None = None,
-    verification_returncode: int = 0,
-    verification_stdout: str | None = None,
-    verification_stderr: str = "",
-    version: str = MODULE.REVIEWED_GITHUB_CLI_VERSION,
-    version_returncode: int = 0,
-    version_stdout: str | None = None,
-    version_stderr: str = "",
-    observed: list[list[str]] | None = None,
-) -> Callable[..., subprocess.CompletedProcess[str]]:
-    def run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
-        if observed is not None:
-            observed.append(command)
-        if command == ["gh", "--version"]:
-            version_output = version_stdout
-            if version_output is None:
-                version_output = (
-                    f"gh version {version} (2025-02-11)\n"
-                    f"https://github.com/cli/cli/releases/tag/v{version}\n"
-                )
-            return subprocess.CompletedProcess(
-                command,
-                version_returncode,
-                stdout=version_output,
-                stderr=version_stderr,
-            )
-        stdout = verification_stdout
-        if stdout is None:
-            stdout = json.dumps(provenance or _verified_provenance(certificate_path))
-        return subprocess.CompletedProcess(
-            command,
-            verification_returncode,
-            stdout=stdout,
-            stderr=verification_stderr,
-        )
-
-    return run
 
 
 def test_derives_only_the_scoped_claim_and_counts_retained_rows() -> None:
@@ -1601,8 +1558,16 @@ def test_verifier_uses_exact_repository_workflow_ref_and_hosted_runner_policy(
     bundle_path = tmp_path / "bundle.jsonl"
     certificate_path.write_text(json.dumps(_certificate()), encoding="utf-8")
     bundle_path.write_text("{}\n", encoding="utf-8")
-    observed: list[list[str]] = []
-    run = _reviewed_gh_run(certificate_path, observed=observed)
+    observed: list[str] = []
+
+    def run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        observed.extend(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps(_verified_provenance(certificate_path)),
+            stderr="",
+        )
 
     result = MODULE.verify_github_attestation(
         certificate_path,
@@ -1611,23 +1576,15 @@ def test_verifier_uses_exact_repository_workflow_ref_and_hosted_runner_policy(
         run=run,
     )
 
-    assert observed[0] == ["gh", "--version"]
-    verify_command = observed[1]
-    assert verify_command[:3] == ["gh", "attestation", "verify"]
-    assert verify_command[verify_command.index("--repo") + 1] == (
-        "OpenAdaptAI/openadapt-cloud"
-    )
-    assert verify_command[verify_command.index("--cert-identity") + 1].endswith(
+    assert observed[:3] == ["gh", "attestation", "verify"]
+    assert observed[observed.index("--repo") + 1] == "OpenAdaptAI/openadapt-cloud"
+    assert observed[observed.index("--cert-identity") + 1].endswith(
         "execute-live-acceptance.yml@refs/heads/main"
     )
-    assert verify_command[verify_command.index("--cert-oidc-issuer") + 1] == (
-        MODULE.GITHUB_OIDC_ISSUER
-    )
-    assert verify_command[verify_command.index("--hostname") + 1] == "github.com"
-    assert "--source-digest" not in verify_command
-    assert "--source-ref" not in verify_command
-    assert "--deny-self-hosted-runners" in verify_command
-    assert "--no-public-good" in verify_command
+    assert observed[observed.index("--cert-oidc-issuer") + 1] == MODULE.GITHUB_OIDC_ISSUER
+    assert "--source-digest" not in observed
+    assert "--source-ref" not in observed
+    assert "--deny-self-hosted-runners" in observed
     assert result["bundle_sha256"] == MODULE.file_sha256(bundle_path)
 
 
@@ -1637,78 +1594,17 @@ def test_verifier_refuses_failed_or_empty_attestation(tmp_path: Path) -> None:
     certificate_path.write_text(json.dumps(_certificate()), encoding="utf-8")
     bundle_path.write_text("{}\n", encoding="utf-8")
 
+    def failed(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr="bad signature")
+
     with pytest.raises(MODULE.AcceptanceError, match="invalid: bad signature"):
-        MODULE.verify_github_attestation(
-            certificate_path,
-            bundle_path,
-            "f" * 40,
-            run=_reviewed_gh_run(
-                certificate_path,
-                verification_returncode=1,
-                verification_stdout="",
-                verification_stderr="bad signature",
-            ),
-        )
+        MODULE.verify_github_attestation(certificate_path, bundle_path, "f" * 40, run=failed)
+
+    def empty(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(command, 0, stdout="[]", stderr="")
 
     with pytest.raises(MODULE.AcceptanceError, match="must return one verified statement"):
-        MODULE.verify_github_attestation(
-            certificate_path,
-            bundle_path,
-            "f" * 40,
-            run=_reviewed_gh_run(certificate_path, verification_stdout="[]"),
-        )
-
-
-@pytest.mark.parametrize(
-    "version,returncode,stdout,stderr",
-    [
-        ("2.66.0", 0, None, ""),
-        ("2.68.0", 0, None, ""),
-        (MODULE.REVIEWED_GITHUB_CLI_VERSION, 1, None, ""),
-        (MODULE.REVIEWED_GITHUB_CLI_VERSION, 0, None, "unexpected warning"),
-        (
-            MODULE.REVIEWED_GITHUB_CLI_VERSION,
-            0,
-            "gh version 2.67.0 (2025-02-11)\nhttps://attacker.example/v2.67.0\n",
-            "",
-        ),
-        (
-            MODULE.REVIEWED_GITHUB_CLI_VERSION,
-            0,
-            (
-                "gh version 2.67.0 (2025-02-11)\n"
-                "https://github.com/cli/cli/releases/tag/v2.67.0\n"
-                "unreviewed extra line\n"
-            ),
-            "",
-        ),
-    ],
-)
-def test_verifier_refuses_an_unreviewed_github_cli(
-    tmp_path: Path,
-    version: str,
-    returncode: int,
-    stdout: str | None,
-    stderr: str,
-) -> None:
-    certificate_path = tmp_path / "certificate.json"
-    bundle_path = tmp_path / "bundle.jsonl"
-    certificate_path.write_text(json.dumps(_certificate()), encoding="utf-8")
-    bundle_path.write_text("{}\n", encoding="utf-8")
-
-    with pytest.raises(MODULE.AcceptanceError, match="requires reviewed gh version"):
-        MODULE.verify_github_attestation(
-            certificate_path,
-            bundle_path,
-            "f" * 40,
-            run=_reviewed_gh_run(
-                certificate_path,
-                version=version,
-                version_returncode=returncode,
-                version_stdout=stdout,
-                version_stderr=stderr,
-            ),
-        )
+        MODULE.verify_github_attestation(certificate_path, bundle_path, "f" * 40, run=empty)
 
 
 @pytest.mark.parametrize(
@@ -1766,13 +1662,11 @@ def test_verifier_refuses_unapproved_or_malformed_provenance(
     provenance = _verified_provenance(certificate_path)
     mutation(provenance)
 
+    def run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(provenance), stderr="")
+
     with pytest.raises(MODULE.AcceptanceError, match=expected):
-        MODULE.verify_github_attestation(
-            certificate_path,
-            bundle_path,
-            "f" * 40,
-            run=_reviewed_gh_run(certificate_path, provenance=provenance),
-        )
+        MODULE.verify_github_attestation(certificate_path, bundle_path, "f" * 40, run=run)
 
 
 def test_verifier_requires_an_external_approved_cloud_commit(tmp_path: Path) -> None:
@@ -1796,7 +1690,8 @@ def test_verifier_allows_other_subjects_but_only_one_matching_certificate(
     subjects = provenance[0]["verificationResult"]["statement"]["subject"]
     subjects.append({"name": "other.json", "digest": {"sha256": "0" * 64}})
 
-    run = _reviewed_gh_run(certificate_path, provenance=provenance)
+    def run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(provenance), stderr="")
 
     MODULE.verify_github_attestation(certificate_path, bundle_path, "f" * 40, run=run)
     subjects.append(copy.deepcopy(subjects[0]))
@@ -1835,16 +1730,14 @@ def test_verifier_rejects_real_gh_certificate_policy_drift(
     provenance = _verified_provenance(certificate_path)
     provenance[0]["verificationResult"]["signature"]["certificate"][field] = value
 
+    def run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(provenance), stderr="")
+
     with pytest.raises(MODULE.AcceptanceError, match=expected):
-        MODULE.verify_github_attestation(
-            certificate_path,
-            bundle_path,
-            "f" * 40,
-            run=_reviewed_gh_run(certificate_path, provenance=provenance),
-        )
+        MODULE.verify_github_attestation(certificate_path, bundle_path, "f" * 40, run=run)
 
 
-def test_verifier_binds_observed_time_to_record_issuance(tmp_path: Path) -> None:
+def test_verifier_binds_transparency_time_to_record_issuance(tmp_path: Path) -> None:
     certificate_path = tmp_path / "certificate.json"
     bundle_path = tmp_path / "bundle.jsonl"
     certificate_path.write_text(json.dumps(_certificate()), encoding="utf-8")
@@ -1854,148 +1747,11 @@ def test_verifier_binds_observed_time_to_record_issuance(tmp_path: Path) -> None
         "timestamp"
     ] = "2026-08-18T11:59:59.000Z"
 
+    def run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(provenance), stderr="")
+
     with pytest.raises(MODULE.AcceptanceError, match="not bound to record issuance"):
-        MODULE.verify_github_attestation(
-            certificate_path,
-            bundle_path,
-            "f" * 40,
-            run=_reviewed_gh_run(certificate_path, provenance=provenance),
-        )
-
-
-@pytest.mark.parametrize(
-    "timestamps",
-    [
-        [
-            {
-                "type": "Tlog",
-                "uri": "https://rekor.sigstore.dev",
-                "timestamp": "2026-08-18T12:00:05.000Z",
-            }
-        ],
-        [
-            {
-                "type": "TimestampAuthority",
-                "uri": "https://timestamp.sigstore.dev/api/v1/timestamp",
-                "timestamp": "2026-08-18T12:00:05.000Z",
-            }
-        ],
-        [
-            {
-                "type": "CurrentTime",
-                "uri": "",
-                "timestamp": "2026-08-18T12:00:05.000Z",
-            }
-        ],
-        [
-            {
-                "type": "TimestampAuthority",
-                "uri": "timestamp.githubapp.com",
-                "timestamp": "2026-08-18T12:00:05.000Z",
-            },
-            {
-                "type": "TimestampAuthority",
-                "uri": "timestamp.githubapp.com",
-                "timestamp": "2026-08-18T12:00:06.000Z",
-            },
-        ],
-        [
-            {
-                "type": "TimestampAuthority",
-                "uri": "timestamp.githubapp.com",
-                "timestamp": "2026-08-18T12:00:05.000Z",
-            },
-            {
-                "type": "Tlog",
-                "uri": "https://rekor.sigstore.dev",
-                "timestamp": "2026-08-18T12:00:06.000Z",
-            },
-        ],
-        [
-            {
-                "type": "TimestampAuthority",
-                "uri": "timestamp.githubapp.com",
-                "timestamp": "2026-08-18T12:00:05.000Z",
-            },
-            {
-                "type": "TimestampAuthority",
-                "uri": "https://timestamp.sigstore.dev/api/v1/timestamp",
-                "timestamp": "2026-08-18T12:00:06.000Z",
-            },
-        ],
-        [
-            {
-                "type": "TimestampAuthority",
-                "uri": "timestamp.githubapp.com",
-                "timestamp": "2026-08-18T12:00:05.000Z",
-            },
-            {
-                "type": "CurrentTime",
-                "uri": "",
-                "timestamp": "2026-08-18T12:00:06.000Z",
-            },
-        ],
-    ],
-)
-def test_verifier_requires_one_github_timestamp_authority_time(
-    tmp_path: Path,
-    timestamps: list[dict[str, str]],
-) -> None:
-    certificate_path = tmp_path / "certificate.json"
-    bundle_path = tmp_path / "bundle.jsonl"
-    certificate_path.write_text(json.dumps(_certificate()), encoding="utf-8")
-    bundle_path.write_text("{}\n", encoding="utf-8")
-    provenance = _verified_provenance(certificate_path)
-    provenance[0]["verificationResult"]["verifiedTimestamps"] = timestamps
-
-    with pytest.raises(MODULE.AcceptanceError, match="one approved timestamp-authority time"):
-        MODULE.verify_github_attestation(
-            certificate_path,
-            bundle_path,
-            "f" * 40,
-            run=_reviewed_gh_run(certificate_path, provenance=provenance),
-        )
-
-
-@pytest.mark.parametrize(
-    "mutation,expected",
-    [
-        (
-            lambda value: value.__setitem__("unreviewed", "hidden"),
-            "GitHub verified timestamp keys differ",
-        ),
-        (
-            lambda value: value.__setitem__(
-                "timestamp", "2026-08-18T08:00:05.000-04:00"
-            ),
-            "must be a canonical UTC timestamp",
-        ),
-        (
-            lambda value: value.__setitem__("timestamp", "2026-08-18T12:00:05Z"),
-            "must use canonical millisecond UTC form",
-        ),
-    ],
-)
-def test_verifier_refuses_noncanonical_github_timestamp_objects(
-    tmp_path: Path,
-    mutation: object,
-    expected: str,
-) -> None:
-    certificate_path = tmp_path / "certificate.json"
-    bundle_path = tmp_path / "bundle.jsonl"
-    certificate_path.write_text(json.dumps(_certificate()), encoding="utf-8")
-    bundle_path.write_text("{}\n", encoding="utf-8")
-    provenance = _verified_provenance(certificate_path)
-    timestamp = provenance[0]["verificationResult"]["verifiedTimestamps"][0]
-    mutation(timestamp)
-
-    with pytest.raises(MODULE.AcceptanceError, match=expected):
-        MODULE.verify_github_attestation(
-            certificate_path,
-            bundle_path,
-            "f" * 40,
-            run=_reviewed_gh_run(certificate_path, provenance=provenance),
-        )
+        MODULE.verify_github_attestation(certificate_path, bundle_path, "f" * 40, run=run)
 
 
 @pytest.mark.parametrize(

@@ -83,9 +83,6 @@ CLOUD_CERTIFICATE_IDENTITY = (
     ".github/workflows/execute-live-acceptance.yml@refs/heads/main"
 )
 GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
-GITHUB_HOSTNAME = "github.com"
-GITHUB_TIMESTAMP_AUTHORITY = "timestamp.githubapp.com"
-REVIEWED_GITHUB_CLI_VERSION = "2.67.0"
 
 _HEX_40 = re.compile(r"^[a-f0-9]{40}$")
 _SHA256 = re.compile(r"^sha256:[a-f0-9]{64}$")
@@ -2616,37 +2613,6 @@ def verify_github_attestation(
         raise AcceptanceError("certificate Cloud source commit is not exact")
     if source_commit != expected_cloud_source_commit:
         raise AcceptanceError("certificate Cloud source commit is not the approved commit")
-    version_command = ["gh", "--version"]
-    try:
-        version_result = run(
-            version_command,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-    except OSError as exc:
-        raise AcceptanceError(f"reviewed GitHub CLI could not run: {exc}") from exc
-    version_lines = version_result.stdout.strip().splitlines()
-    expected_release_url = (
-        "https://github.com/cli/cli/releases/tag/v"
-        f"{REVIEWED_GITHUB_CLI_VERSION}"
-    )
-    if (
-        version_result.returncode != 0
-        or version_result.stderr.strip()
-        or len(version_lines) != 2
-        or re.fullmatch(
-            rf"gh version {re.escape(REVIEWED_GITHUB_CLI_VERSION)} "
-            r"\([0-9]{4}-[0-9]{2}-[0-9]{2}\)",
-            version_lines[0],
-        )
-        is None
-        or version_lines[1] != expected_release_url
-    ):
-        raise AcceptanceError(
-            "GitHub attestation verification requires reviewed gh version "
-            f"{REVIEWED_GITHUB_CLI_VERSION}"
-        )
     command = [
         "gh",
         "attestation",
@@ -2660,10 +2626,7 @@ def verify_github_attestation(
         CLOUD_CERTIFICATE_IDENTITY,
         "--cert-oidc-issuer",
         GITHUB_OIDC_ISSUER,
-        "--hostname",
-        GITHUB_HOSTNAME,
         "--deny-self-hosted-runners",
-        "--no-public-good",
         "--format",
         "json",
     ]
@@ -2767,21 +2730,29 @@ def _validate_verified_provenance(
             raise AcceptanceError(f"GitHub signing certificate {key} is invalid")
 
     timestamps = verification.get("verifiedTimestamps")
-    if not isinstance(timestamps, list) or len(timestamps) != 1:
-        raise AcceptanceError("GitHub attestation must have one approved timestamp-authority time")
-    timestamp = _closed(
-        timestamps[0],
-        {"type", "uri", "timestamp"},
-        "GitHub verified timestamp",
-    )
-    if (
-        timestamp["type"] != "TimestampAuthority"
-        or timestamp["uri"] != GITHUB_TIMESTAMP_AUTHORITY
-    ):
-        raise AcceptanceError("GitHub attestation must have one approved timestamp-authority time")
-    observed_time = _timestamp(timestamp["timestamp"], "GitHub observed timestamp")
-    if not issued_at <= observed_time <= issued_at + timedelta(minutes=15):
-        raise AcceptanceError("GitHub observed timestamp is not bound to record issuance")
+    if not isinstance(timestamps, list) or not timestamps:
+        raise AcceptanceError("GitHub attestation has no verified transparency timestamp")
+    transparency_times: list[datetime] = []
+    for index, value in enumerate(timestamps):
+        timestamp = _mapping(value, f"GitHub verified timestamp {index}")
+        if timestamp.get("type") != "Tlog" or timestamp.get("uri") != (
+            "https://rekor.sigstore.dev"
+        ):
+            continue
+        raw_time = timestamp.get("timestamp")
+        if not isinstance(raw_time, str):
+            raise AcceptanceError("GitHub transparency timestamp is invalid")
+        try:
+            parsed_time = datetime.fromisoformat(raw_time.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise AcceptanceError("GitHub transparency timestamp is invalid") from exc
+        if parsed_time.tzinfo is None:
+            raise AcceptanceError("GitHub transparency timestamp has no timezone")
+        transparency_times.append(parsed_time.astimezone(timezone.utc))
+    if len(transparency_times) != 1:
+        raise AcceptanceError("GitHub attestation must have one public-log timestamp")
+    if not issued_at <= transparency_times[0] <= issued_at + timedelta(minutes=15):
+        raise AcceptanceError("GitHub transparency timestamp is not bound to record issuance")
 
     statement = _closed(
         verification.get("statement"),

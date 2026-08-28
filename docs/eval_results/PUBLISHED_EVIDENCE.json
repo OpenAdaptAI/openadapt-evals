@@ -77,7 +77,7 @@
     },
     {
       "path": "docs/eval_results/current_flow_v1_32_0_local_20260821",
-      "status": "superseded",
+      "status": "current",
       "flow_version": "1.32.0",
       "flow_source_commit": "d1b054c718d60465fb8a2e1853e6a84c7f26dec2",
       "flow_release_tag": "v1.32.0",
@@ -85,20 +85,6 @@
       "sdist_sha256": "c3125f16c1b12420dff4a3af4c3d676e1d267cd961cb9e5f4825beb372b7f97e",
       "evidence_manifest": "docs/eval_results/current_flow_v1_32_0_local_20260821/EVIDENCE_MANIFEST.json",
       "measured_on": "2026-08-21",
-      "production_acceptance": false,
-      "superseded_by": "docs/eval_results/current_flow_v1_33_0_local_20260826",
-      "stale_reason": "These retained results measured Flow 1.32.0. They were not relabeled. A complete Flow 1.33.0 rerun replaced them after the published release changed."
-    },
-    {
-      "path": "docs/eval_results/current_flow_v1_33_0_local_20260826",
-      "status": "current",
-      "flow_version": "1.33.0",
-      "flow_source_commit": "80dc49b7296e5e6999b04124f26a647047a14b95",
-      "flow_release_tag": "v1.33.0",
-      "wheel_sha256": "1d54ccffe3a554ecff82f69917f63f55233bd54ac1cb737058e096e4582aa494",
-      "sdist_sha256": "8f85bc5a9e3a8eb1c1d69178e7cfd03fc9de4d0d31832f117eacc0cc2052fd1c",
-      "evidence_manifest": "docs/eval_results/current_flow_v1_33_0_local_20260826/EVIDENCE_MANIFEST.json",
-      "measured_on": "2026-08-26",
       "production_acceptance": false
     }
   ]
