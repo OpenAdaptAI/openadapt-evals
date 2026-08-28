@@ -5,7 +5,7 @@
 
 ### Features
 
-- **evidence**: Build signed six-class campaigns and content-addressed public lifecycle summaries.
+- **evidence**: Build signed six-class decision requests, public acceptance manifests, and content-addressed lifecycle summaries.
 
 ### Bug Fixes
 

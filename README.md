@@ -56,18 +56,46 @@ Evals derives silent incorrect success and over-halt from the signed runner,
 observer, and delivery facts. It doesn't trust author-supplied failure counts.
 
 Campaign payloads and trial receipts stay inside the approved private evidence
-boundary. A public lifecycle summary uses the remote-safe decision receipt,
-the public qualification admission, and the production acceptance manifest. It
-contains aggregate class counts and commitments, without task names,
-application or environment values, or live identities.
+boundary. Evals signs a private decision request with the evidence authority.
+The protected Internal issuer verifies that request and produces a remote-safe
+decision receipt. Evals does not issue the private decision or the public
+qualification admission.
 
-`scripts/build_production_evidence.py` builds that summary and the paired
+The public release path uses that receipt, the public qualification admission,
+the exact release artifact inventory, and a Release App-owned draft. It first
+builds a public production acceptance manifest. After the manifest and its
+Sigstore bundle enter the merged registry, Evals builds the public lifecycle
+summary. These public objects contain aggregate class counts and commitments.
+They don't contain task names, application or environment values, or live
+identities.
+
+`scripts/build_production_evidence.py` builds both public objects and their
 content-addressed v2 references. The pair command preserves the raw Sigstore
-bundle bytes. Run it only after the referenced objects exist in an exact merged
-registry commit. The summary uses a later registry append, which avoids a
-commit-hash cycle.
+bundle bytes. Run it only with the exact merged registry commit that contains
+the referenced objects. The summary must use a later registry append. This
+order prevents a commit-hash cycle.
+
+The manifest command fetches the central `.github` main branch and reads the
+v2 lifecycle policy from the requested commit. It refuses a commit that isn't
+on that branch. Evals derives the policy digest from the exact raw file bytes.
 
 ```bash
+python scripts/build_production_evidence.py manifest \
+  --input public-manifest-input.json \
+  --output production-acceptance-manifest.json \
+  --lifecycle-policy-repository ../.github \
+  --lifecycle-policy-source-commit "$CENTRAL_POLICY_COMMIT"
+
+python scripts/build_production_evidence.py pair \
+  --kind production-acceptance-manifest \
+  --object production-acceptance-manifest.json \
+  --sigstore-bundle production-acceptance-manifest.sigstore.json \
+  --registry-source-commit "$MERGED_MANIFEST_REGISTRY_COMMIT" \
+  --registry-revision "$MANIFEST_REGISTRY_REVISION" \
+  --registry-head-sha256 "$MANIFEST_REGISTRY_HEAD_SHA256" \
+  --output-root public-registry-candidate \
+  --references-output production-acceptance-manifest.references.json
+
 python scripts/build_production_evidence.py summary \
   --input public-summary-input.json \
   --output production-acceptance-summary.json
@@ -76,9 +104,9 @@ python scripts/build_production_evidence.py pair \
   --kind production-acceptance-summary \
   --object production-acceptance-summary.json \
   --sigstore-bundle production-acceptance-summary.sigstore.json \
-  --registry-source-commit "$MERGED_REGISTRY_COMMIT" \
-  --registry-revision "$REGISTRY_REVISION" \
-  --registry-head-sha256 "$REGISTRY_HEAD_SHA256" \
+  --registry-source-commit "$MERGED_SUMMARY_REGISTRY_COMMIT" \
+  --registry-revision "$SUMMARY_REGISTRY_REVISION" \
+  --registry-head-sha256 "$SUMMARY_REGISTRY_HEAD_SHA256" \
   --output-root public-registry-candidate \
   --references-output production-acceptance-summary.references.json
 ```

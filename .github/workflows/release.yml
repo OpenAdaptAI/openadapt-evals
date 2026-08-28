@@ -19,7 +19,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  group: release-openadapt-evals
   cancel-in-progress: false
 
 jobs:
@@ -33,6 +33,7 @@ jobs:
           ACTOR: ${{ github.actor }}
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
         run: |
+          set -euo pipefail
           test "$ACTOR" != 'openadapt-lifecycle[bot]'
           test "$TRIGGERING_ACTOR" != 'openadapt-lifecycle[bot]'
 
@@ -48,7 +49,7 @@ jobs:
           set -euo pipefail
           test "$ACTOR" = 'openadapt-release[bot]'
 
-  create-release-tag:
+  stage-release-and-create-tag:
     needs: reject-lifecycle-app
     if: >-
       github.event_name == 'workflow_dispatch' &&
@@ -65,7 +66,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Bind the request to the reviewed release state
+      - name: Bind the request to protected main
         id: release
         env:
           REQUESTED_SOURCE_COMMIT: ${{ inputs.source_commit }}
@@ -106,19 +107,26 @@ jobs:
             grep -Eq "^## v${REQUESTED_VERSION} \([0-9]{4}-[0-9]{2}-[0-9]{2}\)$"
 
           release_tag="v${REQUESTED_VERSION}"
-          if git ls-remote --exit-code --tags origin \
-            "refs/tags/${release_tag}" >/dev/null 2>&1; then
-            git fetch --force origin \
-              "refs/tags/${release_tag}:refs/tags/${release_tag}"
-            test "$(git cat-file -t "refs/tags/${release_tag}")" = 'tag'
-            test "$(git rev-parse "refs/tags/${release_tag}^{commit}")" = \
-              "$REQUESTED_SOURCE_COMMIT"
-            tag_exists=true
-          else
-            latest=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' \
-              --sort=-version:refname | head -1)
-            if [ -n "$latest" ]; then
-              python - "$REQUESTED_VERSION" "${latest#v}" <<'PY'
+          set +e
+          git ls-remote --exit-code --tags origin \
+            "refs/tags/${release_tag}" > "$RUNNER_TEMP/tag-ref.txt"
+          tag_status=$?
+          set -e
+          case "$tag_status" in
+            0)
+              echo '::error::The release tag already exists. Rerun its tag workflow instead.'
+              exit 1
+              ;;
+            2) test ! -s "$RUNNER_TEMP/tag-ref.txt" ;;
+            *)
+              echo '::error::The release tag lookup failed.'
+              exit 1
+              ;;
+          esac
+          latest=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' \
+            --sort=-version:refname | head -1)
+          if [ -n "$latest" ]; then
+            python - "$REQUESTED_VERSION" "${latest#v}" <<'PY'
           import re
           import sys
 
@@ -136,63 +144,372 @@ jobs:
                   f"REFUSED: requested version {sys.argv[1]} does not follow {sys.argv[2]}"
               )
           PY
-            fi
-            tag_exists=false
           fi
           {
-            echo "exists=${tag_exists}"
             echo "source_commit=${REQUESTED_SOURCE_COMMIT}"
             echo "tag=${release_tag}"
             echo "version=${REQUESTED_VERSION}"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.29"
+
       - name: Create the release App token
-        if: steps.release.outputs.exists != 'true'
         id: release-app
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ vars.OPENADAPT_RELEASE_APP_ID }}
+          app-id: 4730708
           private-key: ${{ secrets.OPENADAPT_RELEASE_APP_PRIVATE_KEY }}
           owner: OpenAdaptAI
           repositories: openadapt-evals
+          permission-administration: read
           permission-contents: write
 
       - name: Verify the release App identity
-        if: steps.release.outputs.exists != 'true'
         env:
+          APP_INSTALLATION_ID: ${{ steps.release-app.outputs.installation-id }}
           APP_SLUG: ${{ steps.release-app.outputs.app-slug }}
           APP_TOKEN: ${{ steps.release-app.outputs.token }}
-          EXPECTED_APP_ID: ${{ vars.OPENADAPT_RELEASE_APP_ID }}
         run: |
           set -euo pipefail
           test "$APP_SLUG" = 'openadapt-release'
+          test "$APP_INSTALLATION_ID" = '156835568'
           test -n "$APP_TOKEN"
-          case "$EXPECTED_APP_ID" in
-            ''|*[!0-9]*)
-              echo '::error::OPENADAPT_RELEASE_APP_ID must be a positive integer.'
-              exit 1
-              ;;
-          esac
-          test "$EXPECTED_APP_ID" -gt 0
 
-      - name: Create and push only the annotated release tag
-        if: steps.release.outputs.exists != 'true'
+      - name: Capture the exact pre-draft release protections
         env:
-          APP_TOKEN: ${{ steps.release-app.outputs.token }}
+          GH_TOKEN: ${{ steps.release-app.outputs.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/immutable-releases" \
+            > "$RUNNER_TEMP/immutable-releases-pre.raw.json"
+          python scripts/verify_release_staging.py normalize-settings \
+            --input "$RUNNER_TEMP/immutable-releases-pre.raw.json" \
+            --output "$RUNNER_TEMP/immutable-releases.json"
+          gh api --paginate --slurp \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/rulesets?includes_parents=true&per_page=100" \
+            > "$RUNNER_TEMP/tag-ruleset-pages-pre.json"
+          jq -r \
+            '[.[][] | select(.target == "tag") | .id] | unique | .[]' \
+            "$RUNNER_TEMP/tag-ruleset-pages-pre.json" \
+            > "$RUNNER_TEMP/tag-ruleset-ids-pre.txt"
+          : > "$RUNNER_TEMP/tag-ruleset-details-pre.ndjson"
+          while IFS= read -r ruleset_id; do
+            case "$ruleset_id" in
+              ''|*[!0-9]*)
+                echo '::error::A release tag ruleset ID is invalid.'
+                exit 1
+                ;;
+            esac
+            gh api \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/${GITHUB_REPOSITORY}/rulesets/${ruleset_id}?includes_parents=true" \
+              >> "$RUNNER_TEMP/tag-ruleset-details-pre.ndjson"
+          done < "$RUNNER_TEMP/tag-ruleset-ids-pre.txt"
+          jq -s '.' "$RUNNER_TEMP/tag-ruleset-details-pre.ndjson" \
+            > "$RUNNER_TEMP/tag-rulesets-pre.raw.json"
+          python scripts/verify_release_staging.py normalize-rulesets \
+            --input "$RUNNER_TEMP/tag-rulesets-pre.raw.json" \
+            --tag "$RELEASE_TAG" \
+            --output "$RUNNER_TEMP/tag-rulesets.json"
+
+      - name: Recover a complete exact draft without rebuilding
+        id: recovery
+        env:
+          GH_TOKEN: ${{ steps.release-app.outputs.token }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
           SOURCE_COMMIT: ${{ steps.release.outputs.source_commit }}
         run: |
           set -euo pipefail
+          set +e
+          git ls-remote --exit-code --tags origin \
+            "refs/tags/${RELEASE_TAG}" > "$RUNNER_TEMP/tag-ref-before-recovery.txt"
+          tag_status=$?
+          set -e
+          case "$tag_status" in
+            0)
+              echo '::error::The release tag appeared before draft recovery.'
+              exit 1
+              ;;
+            2) test ! -s "$RUNNER_TEMP/tag-ref-before-recovery.txt" ;;
+            *)
+              echo '::error::The release tag lookup failed before draft recovery.'
+              exit 1
+              ;;
+          esac
+          gh api --paginate --slurp \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            > "$RUNNER_TEMP/release-pages.json"
+          jq --arg tag "$RELEASE_TAG" \
+            '[.[][] | select(.tag_name == $tag)]' \
+            "$RUNNER_TEMP/release-pages.json" \
+            > "$RUNNER_TEMP/release-matches.json"
+          match_count=$(jq 'length' "$RUNNER_TEMP/release-matches.json")
+          if [ "$match_count" -gt 1 ]; then
+            echo '::error::More than one GitHub release uses the requested tag.'
+            exit 1
+          fi
+          if [ "$match_count" -eq 0 ]; then
+            echo 'complete=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          jq '.[0]' "$RUNNER_TEMP/release-matches.json" \
+            > "$RUNNER_TEMP/release.json"
+          python scripts/verify_release_staging.py inspect \
+            --version "$RELEASE_VERSION" \
+            --tag "$RELEASE_TAG" \
+            --source-commit "$SOURCE_COMMIT" \
+            --immutable-releases "$RUNNER_TEMP/immutable-releases.json" \
+            --tag-rulesets "$RUNNER_TEMP/tag-rulesets.json" \
+            --release "$RUNNER_TEMP/release.json" \
+            --allow-missing-assets
+          if [ "$(jq '.assets | length' "$RUNNER_TEMP/release.json")" -ne 2 ]; then
+            echo 'complete=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          mkdir dist
+          while IFS=$'\t' read -r asset_id asset_name; do
+            gh api \
+              -H 'Accept: application/octet-stream' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" \
+              > "dist/${asset_name}"
+          done < <(jq -r '.assets[] | [.id, .name] | @tsv' "$RUNNER_TEMP/release.json")
+          python scripts/verify_release_staging.py verify \
+            --directory dist \
+            --version "$RELEASE_VERSION" \
+            --tag "$RELEASE_TAG" \
+            --source-commit "$SOURCE_COMMIT" \
+            --immutable-releases "$RUNNER_TEMP/immutable-releases.json" \
+            --tag-rulesets "$RUNNER_TEMP/tag-rulesets.json" \
+            --release "$RUNNER_TEMP/release.json"
+          python scripts/check_source_boundary.py --require-dist
+          echo 'complete=true' >> "$GITHUB_OUTPUT"
+
+      - name: Build the exact protected-main source once
+        if: steps.recovery.outputs.complete != 'true'
+        run: uv build
+
+      - name: Verify the new public distribution boundary
+        if: steps.recovery.outputs.complete != 'true'
+        run: python scripts/check_source_boundary.py --require-dist
+
+      - name: Create or recover the exact App-owned draft
+        env:
+          APP_TOKEN: ${{ steps.release-app.outputs.token }}
+          GH_TOKEN: ${{ steps.release-app.outputs.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          SOURCE_COMMIT: ${{ steps.release.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          set +e
+          git ls-remote --exit-code --tags origin \
+            "refs/tags/${RELEASE_TAG}" > "$RUNNER_TEMP/tag-ref-before-draft.txt"
+          tag_status=$?
+          set -e
+          case "$tag_status" in
+            0)
+              echo '::error::The release tag appeared before draft creation.'
+              exit 1
+              ;;
+            2) test ! -s "$RUNNER_TEMP/tag-ref-before-draft.txt" ;;
+            *)
+              echo '::error::The release tag lookup failed before draft creation.'
+              exit 1
+              ;;
+          esac
+          python scripts/verify_release_staging.py prepare \
+            --directory dist \
+            --version "$RELEASE_VERSION" \
+            --tag "$RELEASE_TAG" \
+            --source-commit "$SOURCE_COMMIT" \
+            --immutable-releases "$RUNNER_TEMP/immutable-releases.json" \
+            --tag-rulesets "$RUNNER_TEMP/tag-rulesets.json" \
+            --manifest-output "$RUNNER_TEMP/release-manifest.json" \
+            --body-output "$RUNNER_TEMP/release-body.md" \
+            --request-output "$RUNNER_TEMP/release-request.json"
+
+          gh api --paginate --slurp \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            > "$RUNNER_TEMP/release-pages.json"
+          jq --arg tag "$RELEASE_TAG" \
+            '[.[][] | select(.tag_name == $tag)]' \
+            "$RUNNER_TEMP/release-pages.json" \
+            > "$RUNNER_TEMP/release-matches.json"
+          match_count=$(jq 'length' "$RUNNER_TEMP/release-matches.json")
+          if [ "$match_count" -gt 1 ]; then
+            echo '::error::More than one GitHub release uses the requested tag.'
+            exit 1
+          fi
+          if [ "$match_count" -eq 0 ]; then
+            gh api --method POST \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/${GITHUB_REPOSITORY}/releases" \
+              --input "$RUNNER_TEMP/release-request.json" \
+              > "$RUNNER_TEMP/release.json"
+          else
+            jq '.[0]' "$RUNNER_TEMP/release-matches.json" \
+              > "$RUNNER_TEMP/release.json"
+          fi
+
+          release_id=$(jq -r '.id' "$RUNNER_TEMP/release.json")
+          case "$release_id" in
+            ''|null|*[!0-9]*)
+              echo '::error::The draft release ID is invalid.'
+              exit 1
+              ;;
+          esac
+          gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+            > "$RUNNER_TEMP/release.json"
+
+          python scripts/verify_release_staging.py inspect \
+            --version "$RELEASE_VERSION" \
+            --tag "$RELEASE_TAG" \
+            --source-commit "$SOURCE_COMMIT" \
+            --immutable-releases "$RUNNER_TEMP/immutable-releases.json" \
+            --tag-rulesets "$RUNNER_TEMP/tag-rulesets.json" \
+            --release "$RUNNER_TEMP/release.json" \
+            --allow-missing-assets
+          mkdir -p "$RUNNER_TEMP/recovered-assets"
+          while IFS=$'\t' read -r asset_id asset_name; do
+            gh api \
+              -H 'Accept: application/octet-stream' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" \
+              > "$RUNNER_TEMP/recovered-assets/${asset_name}"
+            cmp "dist/${asset_name}" "$RUNNER_TEMP/recovered-assets/${asset_name}"
+          done < <(jq -r '.assets[] | [.id, .name] | @tsv' "$RUNNER_TEMP/release.json")
+          python scripts/verify_release_staging.py verify \
+            --directory dist \
+            --version "$RELEASE_VERSION" \
+            --tag "$RELEASE_TAG" \
+            --source-commit "$SOURCE_COMMIT" \
+            --immutable-releases "$RUNNER_TEMP/immutable-releases.json" \
+            --tag-rulesets "$RUNNER_TEMP/tag-rulesets.json" \
+            --release "$RUNNER_TEMP/release.json" \
+            --allow-missing-assets
+
+          while IFS=$'\t' read -r asset_name media_type; do
+            if jq -e --arg name "$asset_name" \
+              '.assets[] | select(.name == $name)' \
+              "$RUNNER_TEMP/release.json" >/dev/null; then
+              continue
+            fi
+            curl --fail-with-body --silent --show-error \
+              --request POST \
+              --header 'Accept: application/vnd.github+json' \
+              --header "Authorization: Bearer ${APP_TOKEN}" \
+              --header 'X-GitHub-Api-Version: 2026-03-10' \
+              --header "Content-Type: ${media_type}" \
+              --data-binary "@dist/${asset_name}" \
+              "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?name=${asset_name}" \
+              > "$RUNNER_TEMP/uploaded-${asset_name}.json"
+          done < <(jq -r '.artifacts[] | [.name, .media_type] | @tsv' \
+            "$RUNNER_TEMP/release-manifest.json")
+
+          gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+            > "$RUNNER_TEMP/release.json"
+          rm -rf "$RUNNER_TEMP/recovered-assets"
+          mkdir -p "$RUNNER_TEMP/recovered-assets"
+          while IFS=$'\t' read -r asset_id asset_name; do
+            gh api \
+              -H 'Accept: application/octet-stream' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" \
+              > "$RUNNER_TEMP/recovered-assets/${asset_name}"
+            cmp "dist/${asset_name}" "$RUNNER_TEMP/recovered-assets/${asset_name}"
+          done < <(jq -r '.assets[] | [.id, .name] | @tsv' "$RUNNER_TEMP/release.json")
+          set +e
+          git ls-remote --exit-code --tags origin \
+            "refs/tags/${RELEASE_TAG}" > "$RUNNER_TEMP/tag-ref-after-assets.txt"
+          tag_status=$?
+          set -e
+          case "$tag_status" in
+            0)
+              echo '::error::The release tag appeared before final draft verification.'
+              exit 1
+              ;;
+            2) test ! -s "$RUNNER_TEMP/tag-ref-after-assets.txt" ;;
+            *)
+              echo '::error::The release tag lookup failed after draft verification.'
+              exit 1
+              ;;
+          esac
+          gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/immutable-releases" \
+            > "$RUNNER_TEMP/immutable-releases-post.raw.json"
+          python scripts/verify_release_staging.py normalize-settings \
+            --input "$RUNNER_TEMP/immutable-releases-post.raw.json" \
+            --output "$RUNNER_TEMP/immutable-releases-post.json"
+          gh api --paginate --slurp \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/rulesets?includes_parents=true&per_page=100" \
+            > "$RUNNER_TEMP/tag-ruleset-pages-post.json"
+          jq -r \
+            '[.[][] | select(.target == "tag") | .id] | unique | .[]' \
+            "$RUNNER_TEMP/tag-ruleset-pages-post.json" \
+            > "$RUNNER_TEMP/tag-ruleset-ids-post.txt"
+          : > "$RUNNER_TEMP/tag-ruleset-details-post.ndjson"
+          while IFS= read -r ruleset_id; do
+            case "$ruleset_id" in
+              ''|*[!0-9]*)
+                echo '::error::A release tag ruleset ID is invalid.'
+                exit 1
+                ;;
+            esac
+            gh api \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/${GITHUB_REPOSITORY}/rulesets/${ruleset_id}?includes_parents=true" \
+              >> "$RUNNER_TEMP/tag-ruleset-details-post.ndjson"
+          done < "$RUNNER_TEMP/tag-ruleset-ids-post.txt"
+          jq -s '.' "$RUNNER_TEMP/tag-ruleset-details-post.ndjson" \
+            > "$RUNNER_TEMP/tag-rulesets-post.raw.json"
+          python scripts/verify_release_staging.py normalize-rulesets \
+            --input "$RUNNER_TEMP/tag-rulesets-post.raw.json" \
+            --tag "$RELEASE_TAG" \
+            --output "$RUNNER_TEMP/tag-rulesets-post.json"
+          cmp "$RUNNER_TEMP/immutable-releases.json" \
+            "$RUNNER_TEMP/immutable-releases-post.json"
+          cmp "$RUNNER_TEMP/tag-rulesets.json" \
+            "$RUNNER_TEMP/tag-rulesets-post.json"
+          python scripts/verify_release_staging.py verify \
+            --directory dist \
+            --version "$RELEASE_VERSION" \
+            --tag "$RELEASE_TAG" \
+            --source-commit "$SOURCE_COMMIT" \
+            --immutable-releases "$RUNNER_TEMP/immutable-releases-post.json" \
+            --tag-rulesets "$RUNNER_TEMP/tag-rulesets-post.json" \
+            --release "$RUNNER_TEMP/release.json"
           git fetch --no-tags origin \
             '+refs/heads/main:refs/remotes/origin/main'
           test "$(git rev-parse refs/remotes/origin/main)" = "$SOURCE_COMMIT"
           test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
-          if git ls-remote --exit-code --tags origin \
-            "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
-            echo '::error::The release tag appeared after validation.'
-            exit 1
-          fi
           git config user.name 'OpenAdapt Release App'
           git config user.email 'openadapt-release[bot]@users.noreply.github.com'
           git tag -a "$RELEASE_TAG" "$SOURCE_COMMIT" \
@@ -203,7 +520,7 @@ jobs:
           export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${auth}"
           git push origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
 
-  publish-pypi:
+  publish-staged-release:
     needs: authorize-release-tag
     if: >-
       github.event_name == 'push' &&
@@ -216,13 +533,14 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - name: Checkout the exact release tag
+      - name: Checkout the exact annotated release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: Verify the exact tag and release state
+        id: release
         run: |
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = 'OpenAdaptAI/openadapt-evals'
@@ -246,21 +564,144 @@ jobs:
             '+refs/heads/main:refs/remotes/origin/main'
           git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main
           python scripts/verify_release_lock.py
+          {
+            echo "source_commit=${GITHUB_SHA}"
+            echo "tag=${GITHUB_REF_NAME}"
+            echo "version=${version}"
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+      - name: Create the release App token
+        id: release-app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          version: "0.11.29"
+          app-id: 4730708
+          private-key: ${{ secrets.OPENADAPT_RELEASE_APP_PRIVATE_KEY }}
+          owner: OpenAdaptAI
+          repositories: openadapt-evals
+          permission-administration: read
+          permission-contents: write
 
-      - name: Build the exact tag
-        run: uv build
+      - name: Verify the release App identity
+        env:
+          APP_INSTALLATION_ID: ${{ steps.release-app.outputs.installation-id }}
+          APP_SLUG: ${{ steps.release-app.outputs.app-slug }}
+          APP_TOKEN: ${{ steps.release-app.outputs.token }}
+        run: |
+          set -euo pipefail
+          test "$APP_SLUG" = 'openadapt-release'
+          test "$APP_INSTALLATION_ID" = '156835568'
+          test -n "$APP_TOKEN"
+
+      - name: Recover and verify the durable draft assets
+        id: draft
+        env:
+          GH_TOKEN: ${{ steps.release-app.outputs.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          SOURCE_COMMIT: ${{ steps.release.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/immutable-releases" \
+            > "$RUNNER_TEMP/immutable-releases-current.raw.json"
+          python scripts/verify_release_staging.py normalize-settings \
+            --input "$RUNNER_TEMP/immutable-releases-current.raw.json" \
+            --output "$RUNNER_TEMP/immutable-releases.json"
+          gh api --paginate --slurp \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/rulesets?includes_parents=true&per_page=100" \
+            > "$RUNNER_TEMP/tag-ruleset-pages-current.json"
+          jq -r \
+            '[.[][] | select(.target == "tag") | .id] | unique | .[]' \
+            "$RUNNER_TEMP/tag-ruleset-pages-current.json" \
+            > "$RUNNER_TEMP/tag-ruleset-ids-current.txt"
+          : > "$RUNNER_TEMP/tag-ruleset-details-current.ndjson"
+          while IFS= read -r ruleset_id; do
+            case "$ruleset_id" in
+              ''|*[!0-9]*)
+                echo '::error::A release tag ruleset ID is invalid.'
+                exit 1
+                ;;
+            esac
+            gh api \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/${GITHUB_REPOSITORY}/rulesets/${ruleset_id}?includes_parents=true" \
+              >> "$RUNNER_TEMP/tag-ruleset-details-current.ndjson"
+          done < "$RUNNER_TEMP/tag-ruleset-ids-current.txt"
+          jq -s '.' "$RUNNER_TEMP/tag-ruleset-details-current.ndjson" \
+            > "$RUNNER_TEMP/tag-rulesets-current.raw.json"
+          python scripts/verify_release_staging.py normalize-rulesets \
+            --input "$RUNNER_TEMP/tag-rulesets-current.raw.json" \
+            --tag "$RELEASE_TAG" \
+            --output "$RUNNER_TEMP/tag-rulesets.json"
+          gh api --paginate --slurp \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            > "$RUNNER_TEMP/release-pages.json"
+          jq --arg tag "$RELEASE_TAG" \
+            '[.[][] | select(.tag_name == $tag)]' \
+            "$RUNNER_TEMP/release-pages.json" \
+            > "$RUNNER_TEMP/release-matches.json"
+          test "$(jq 'length' "$RUNNER_TEMP/release-matches.json")" = '1'
+          jq '.[0]' "$RUNNER_TEMP/release-matches.json" \
+            > "$RUNNER_TEMP/release.json"
+          release_id=$(jq -r '.id' "$RUNNER_TEMP/release.json")
+          case "$release_id" in
+            ''|null|*[!0-9]*)
+              echo '::error::The staged release ID is invalid.'
+              exit 1
+              ;;
+          esac
+          release_is_draft=$(jq -r '.draft' "$RUNNER_TEMP/release.json")
+          case "$release_is_draft" in
+            true) published_flag='' ;;
+            false) published_flag='--published' ;;
+            *)
+              echo '::error::The staged release state is invalid.'
+              exit 1
+              ;;
+          esac
+          python scripts/verify_release_staging.py inspect \
+            --version "$RELEASE_VERSION" \
+            --tag "$RELEASE_TAG" \
+            --source-commit "$SOURCE_COMMIT" \
+            --immutable-releases "$RUNNER_TEMP/immutable-releases.json" \
+            --tag-rulesets "$RUNNER_TEMP/tag-rulesets.json" \
+            --release "$RUNNER_TEMP/release.json" \
+            $published_flag
+          mkdir dist
+          while IFS=$'\t' read -r asset_id asset_name; do
+            gh api \
+              -H 'Accept: application/octet-stream' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" \
+              > "dist/${asset_name}"
+          done < <(jq -r '.assets[] | [.id, .name] | @tsv' "$RUNNER_TEMP/release.json")
+          python scripts/verify_release_staging.py verify \
+            --directory dist \
+            --version "$RELEASE_VERSION" \
+            --tag "$RELEASE_TAG" \
+            --source-commit "$SOURCE_COMMIT" \
+            --immutable-releases "$RUNNER_TEMP/immutable-releases.json" \
+            --tag-rulesets "$RUNNER_TEMP/tag-rulesets.json" \
+            --release "$RUNNER_TEMP/release.json" \
+            $published_flag
+          {
+            echo "id=${release_id}"
+            echo "was_draft=${release_is_draft}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Verify the public distribution boundary
         run: python scripts/check_source_boundary.py --require-dist
 
       - name: Refuse conflicting immutable PyPI files
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
@@ -272,7 +713,7 @@ jobs:
             --wait-seconds 300 \
             --poll-seconds 10
 
-      - name: Publish to PyPI with OIDC
+      - name: Publish the recovered files to PyPI with OIDC
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           print-hash: true
@@ -280,7 +721,7 @@ jobs:
 
       - name: Verify immutable PyPI publication bytes
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
@@ -291,75 +732,43 @@ jobs:
             --wait-seconds 300 \
             --poll-seconds 10
 
-  publish-github-release:
-    needs:
-      - authorize-release-tag
-      - publish-pypi
-    if: >-
-      github.event_name == 'push' &&
-      startsWith(github.ref, 'refs/tags/v') &&
-      needs.authorize-release-tag.result == 'success' &&
-      needs.publish-pypi.result == 'success' &&
-      github.actor == 'openadapt-release[bot]'
-    runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout the exact release tag
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Create the release App token
-        id: release-app
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ vars.OPENADAPT_RELEASE_APP_ID }}
-          private-key: ${{ secrets.OPENADAPT_RELEASE_APP_PRIVATE_KEY }}
-          owner: OpenAdaptAI
-          repositories: openadapt-evals
-          permission-contents: write
-
-      - name: Verify the release App identity
-        env:
-          APP_SLUG: ${{ steps.release-app.outputs.app-slug }}
-          APP_TOKEN: ${{ steps.release-app.outputs.token }}
-          EXPECTED_APP_ID: ${{ vars.OPENADAPT_RELEASE_APP_ID }}
-        run: |
-          set -euo pipefail
-          test "$APP_SLUG" = 'openadapt-release'
-          test -n "$APP_TOKEN"
-          case "$EXPECTED_APP_ID" in
-            ''|*[!0-9]*)
-              echo '::error::OPENADAPT_RELEASE_APP_ID must be a positive integer.'
-              exit 1
-              ;;
-          esac
-          test "$EXPECTED_APP_ID" -gt 0
-
-      - name: Publish the exact GitHub release
+      - name: Publish only the existing verified draft
+        if: steps.draft.outputs.was_draft == 'true'
         env:
           GH_TOKEN: ${{ steps.release-app.outputs.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_ID: ${{ steps.draft.outputs.id }}
         run: |
           set -euo pipefail
-          test "$(git cat-file -t "$GITHUB_REF")" = 'tag'
-          test "$(git rev-parse "${GITHUB_REF}^{commit}")" = "$GITHUB_SHA"
-          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo 'The exact GitHub release already exists.'
-          else
-            gh release create "$RELEASE_TAG" \
-              --repo "$GITHUB_REPOSITORY" \
-              --verify-tag \
-              --generate-notes \
-              --title "$RELEASE_TAG"
-          fi
-          state=$(gh release view "$RELEASE_TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --json author,isDraft,isPrerelease,tagName)
-          test "$(jq -r '.tagName' <<<"$state")" = "$RELEASE_TAG"
-          test "$(jq -r '.isDraft' <<<"$state")" = 'false'
-          test "$(jq -r '.isPrerelease' <<<"$state")" = 'false'
-          test "$(jq -r '.author.login' <<<"$state")" = 'openadapt-release[bot]'
+          printf '{"draft":false}\n' > "$RUNNER_TEMP/publish-release.json"
+          gh api --method PATCH \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            --input "$RUNNER_TEMP/publish-release.json" \
+            > "$RUNNER_TEMP/published-release.json"
+          test "$(jq -r '.id' "$RUNNER_TEMP/published-release.json")" = "$RELEASE_ID"
+
+      - name: Verify the existing release is now immutable
+        env:
+          GH_TOKEN: ${{ steps.release-app.outputs.token }}
+          RELEASE_ID: ${{ steps.draft.outputs.id }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          SOURCE_COMMIT: ${{ steps.release.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            > "$RUNNER_TEMP/published-release.json"
+          test "$(jq -r '.id' "$RUNNER_TEMP/published-release.json")" = "$RELEASE_ID"
+          python scripts/verify_release_staging.py verify \
+            --directory dist \
+            --version "$RELEASE_VERSION" \
+            --tag "$RELEASE_TAG" \
+            --source-commit "$SOURCE_COMMIT" \
+            --immutable-releases "$RUNNER_TEMP/immutable-releases.json" \
+            --tag-rulesets "$RUNNER_TEMP/tag-rulesets.json" \
+            --release "$RUNNER_TEMP/published-release.json" \
+            --published
