@@ -372,6 +372,32 @@ class TestSetupEndpointErrorStatus:
             data = resp.get_json()
             assert data["status"] == "ok"
 
+    def test_setup_returns_422_on_execute_subcall_failure(self):
+        """POST /setup should surface execute handler non-200 as 422."""
+        app = _import_app()
+        client = app.test_client()
+
+        with patch("requests.post") as mock_post:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 500
+            mock_resp.text = "command failed"
+            mock_post.return_value = mock_resp
+
+            resp = client.post(
+                "/setup",
+                json={
+                    "config": [
+                        {"type": "execute", "parameters": {"command": "echo hello", "shell": True}},
+                    ],
+                },
+                content_type="application/json",
+            )
+            assert resp.status_code == 422
+            data = resp.get_json()
+            assert data["status"] == "error"
+            assert data["results"][0]["status"] == "error"
+            assert "Execute failed" in data["results"][0]["error"]
+
 
 # ---------------------------------------------------------------------------
 # verify_apps injection in live adapter's _run_task_setup
@@ -468,6 +494,74 @@ class TestLiveAdapterVerifyAppsInjection:
             posted_config = call_args.kwargs.get("json", {}).get("config", [])
             assert len(posted_config) == 1
             assert posted_config[0]["type"] == "verify_apps"
+
+
+class TestSetupExecutePolicy:
+    """Test strict vs best-effort setup execute policy in WAALiveAdapter."""
+
+    def _make_adapter(self, *, best_effort: bool):
+        from openadapt_evals.adapters import WAALiveAdapter, WAALiveConfig
+        return WAALiveAdapter(WAALiveConfig(
+            server_url="http://test:5000",
+            evaluate_url="http://test:5050",
+            setup_execute_best_effort=best_effort,
+        ))
+
+    @staticmethod
+    def _error_setup_response(error: str = "boom"):
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.text = '{"status":"error"}'
+        resp.headers = {"content-type": "application/json"}
+        resp.json.return_value = {
+            "status": "error",
+            "results": [{"type": "execute", "status": "error", "error": error}],
+        }
+        return resp
+
+    def test_strict_raises_on_execute_step_error(self):
+        """Strict mode raises when /setup returns execute step errors."""
+        from openadapt_evals.adapters.waa.live import SetupReadinessError
+
+        adapter = self._make_adapter(best_effort=False)
+        req = MagicMock()
+        req.post.return_value = self._error_setup_response("task failed")
+
+        with pytest.raises(SetupReadinessError, match="command errors"):
+            adapter._run_setup_execute_commands(
+                req,
+                ['cmd /c "echo hello"'],
+                label="test execute batch",
+            )
+
+    def test_best_effort_does_not_raise_on_execute_step_error(self):
+        """Best-effort mode logs and continues on execute step errors."""
+        adapter = self._make_adapter(best_effort=True)
+        req = MagicMock()
+        req.post.return_value = self._error_setup_response("task failed")
+
+        adapter._run_setup_execute_commands(
+            req,
+            ['cmd /c "echo hello"'],
+            label="test execute batch",
+        )
+        req.post.assert_called_once()
+
+    def test_override_best_effort_per_call(self):
+        """Per-call override can enforce strict behavior even if config is best-effort."""
+        from openadapt_evals.adapters.waa.live import SetupReadinessError
+
+        adapter = self._make_adapter(best_effort=True)
+        req = MagicMock()
+        req.post.return_value = self._error_setup_response("task failed")
+
+        with pytest.raises(SetupReadinessError):
+            adapter._run_setup_execute_commands(
+                req,
+                ['cmd /c "echo hello"'],
+                label="test execute batch",
+                best_effort=False,
+            )
 
 
 # ---------------------------------------------------------------------------

@@ -95,6 +95,12 @@ def _normalize_app_name(name: str) -> str:
     return _APP_ALIASES.get(key, key)
 
 
+def _require_http_200(resp, operation: str) -> None:
+    """Raise RuntimeError when a setup sub-call does not return HTTP 200."""
+    if resp.status_code != 200:
+        raise RuntimeError(f"{operation} failed ({resp.status_code}): {resp.text[:200]}")
+
+
 def _setup_download(files, **_kwargs):
     """Download files from URLs and upload to Windows VM."""
     import requests as req
@@ -133,10 +139,8 @@ def _setup_download(files, **_kwargs):
             data=form,
             timeout=60,
         )
-        if resp.status_code == 200:
-            logger.info(f"Uploaded {os.path.basename(path)} -> {path}")
-        else:
-            logger.error(f"Upload failed ({resp.status_code}): {resp.text[:200]}")
+        _require_http_200(resp, "Upload")
+        logger.info(f"Uploaded {os.path.basename(path)} -> {path}")
 
 
 def _setup_launch(command, shell=False, **_kwargs):
@@ -147,8 +151,7 @@ def _setup_launch(command, shell=False, **_kwargs):
         json={"command": command, "shell": shell},
         timeout=30,
     )
-    if resp.status_code != 200:
-        logger.error(f"Launch failed ({resp.status_code}): {resp.text[:200]}")
+    _require_http_200(resp, "Launch")
 
 
 def _setup_sleep(seconds=1, **_kwargs):
@@ -164,8 +167,7 @@ def _setup_execute(command, shell=False, **_kwargs):
         json={"command": command, "shell": shell},
         timeout=60,
     )
-    if resp.status_code != 200:
-        logger.error(f"Execute failed ({resp.status_code}): {resp.text[:200]}")
+    _require_http_200(resp, "Execute")
 
 
 def _setup_open(path, **_kwargs):
@@ -176,8 +178,7 @@ def _setup_open(path, **_kwargs):
         json={"path": path},
         timeout=30,
     )
-    if resp.status_code != 200:
-        logger.error(f"Open failed ({resp.status_code}): {resp.text[:200]}")
+    _require_http_200(resp, "Open")
 
 
 def _setup_activate_window(window_name, strict=False, by_class=False, **_kwargs):
@@ -188,16 +189,14 @@ def _setup_activate_window(window_name, strict=False, by_class=False, **_kwargs)
         json={"window_name": window_name, "strict": strict, "by_class": by_class},
         timeout=10,
     )
-    if resp.status_code != 200:
-        logger.error(f"Activate window failed ({resp.status_code}): {resp.text[:200]}")
+    _require_http_200(resp, "Activate window")
 
 
 def _setup_close_all(**_kwargs):
     """Close all windows."""
     import requests as req
     resp = req.post(f"{WAA_SERVER}/setup/close_all", json={}, timeout=30)
-    if resp.status_code != 200:
-        logger.error(f"Close all failed ({resp.status_code}): {resp.text[:200]}")
+    _require_http_200(resp, "Close all")
 
 
 def _setup_create_folder(path, **_kwargs):
@@ -208,8 +207,7 @@ def _setup_create_folder(path, **_kwargs):
         json={"path": path},
         timeout=30,
     )
-    if resp.status_code != 200:
-        logger.error(f"Create folder failed ({resp.status_code}): {resp.text[:200]}")
+    _require_http_200(resp, "Create folder")
 
 
 def _setup_create_file(path, content="", **_kwargs):
@@ -220,8 +218,7 @@ def _setup_create_file(path, content="", **_kwargs):
         json={"path": path, "content": content},
         timeout=30,
     )
-    if resp.status_code != 200:
-        logger.error(f"Create file failed ({resp.status_code}): {resp.text[:200]}")
+    _require_http_200(resp, "Create file")
 
 
 def _setup_clear_task_files(**_kwargs):
@@ -232,8 +229,7 @@ def _setup_clear_task_files(**_kwargs):
         json={},
         timeout=30,
     )
-    if resp.status_code != 200:
-        logger.warning(f"Clear task files failed ({resp.status_code})")
+    _require_http_200(resp, "Clear task files")
 
 
 def _setup_verify_apps(apps, **_kwargs):

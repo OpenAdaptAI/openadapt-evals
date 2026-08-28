@@ -147,6 +147,7 @@ def _requested_environment_flags(args: argparse.Namespace) -> dict[str, str | bo
     return {
         "clean_desktop": bool(getattr(args, "clean_desktop", False)),
         "force_tray_icons": bool(getattr(args, "force_tray_icons", False)),
+        "setup_execute_best_effort": bool(getattr(args, "setup_execute_best_effort", False)),
         "waa_image_version": getattr(args, "waa_image_version", None),
     }
 
@@ -338,6 +339,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         waa_examples_path=waa_examples_path,
         clean_desktop=getattr(args, "clean_desktop", False),
         force_tray_icons=getattr(args, "force_tray_icons", False),
+        setup_execute_best_effort=getattr(args, "setup_execute_best_effort", False),
         waa_image_version=getattr(args, "waa_image_version", None),
     )
     adapter = WAALiveAdapter(config)
@@ -541,6 +543,7 @@ def cmd_live(args: argparse.Namespace) -> int:
         waa_examples_path=waa_examples_path,
         clean_desktop=getattr(args, "clean_desktop", False),
         force_tray_icons=getattr(args, "force_tray_icons", False),
+        setup_execute_best_effort=getattr(args, "setup_execute_best_effort", False),
         waa_image_version=getattr(args, "waa_image_version", None),
     )
     adapter = WAALiveAdapter(config)
@@ -945,6 +948,7 @@ docker ps -f name=winarena --format "Container: {{.Names}}, Status: {{.Status}}"
                 max_steps=args.max_steps,
                 clean_desktop=getattr(args, "clean_desktop", False),
                 force_tray_icons=getattr(args, "force_tray_icons", False),
+                setup_execute_best_effort=getattr(args, "setup_execute_best_effort", False),
                 waa_image_version=getattr(args, "waa_image_version", None),
             )
         )
@@ -2266,6 +2270,7 @@ def cmd_eval_suite(args: argparse.Namespace) -> int:
                     server_url=server_url,
                     evaluate_url=evaluate_url,
                     max_steps=args.max_steps,
+                    setup_execute_best_effort=getattr(args, "setup_execute_best_effort", False),
                 )
             )
             if not adapter.check_connection():
@@ -2397,6 +2402,8 @@ def main() -> int:
                            help="Apply deterministic clean-desktop policy (disable OneDrive/toast/taskbar noise)")
     run_parser.add_argument("--force-tray-icons", action="store_true",
                            help="Force network/audio tray icons visible for stable click-coordinate tasks")
+    run_parser.add_argument("--setup-execute-best-effort", action="store_true",
+                           help="Do not fail run when setup execute batches return command errors")
     run_parser.add_argument("--waa-image-version", type=str, default=None,
                            help="Pinned WAA image version label to record in run metadata")
 
@@ -2425,6 +2432,8 @@ def main() -> int:
                             help="Apply deterministic clean-desktop policy (disable OneDrive/toast/taskbar noise)")
     live_parser.add_argument("--force-tray-icons", action="store_true",
                             help="Force network/audio tray icons visible for stable click-coordinate tasks")
+    live_parser.add_argument("--setup-execute-best-effort", action="store_true",
+                            help="Do not fail run when setup execute batches return command errors")
     live_parser.add_argument("--waa-image-version", type=str, default=None,
                             help="Pinned WAA image version label to record in run metadata")
 
@@ -2597,6 +2606,8 @@ def main() -> int:
                                   help="Apply deterministic clean-desktop policy before smoke task")
     smoke_live_parser.add_argument("--force-tray-icons", action="store_true",
                                   help="Force network/audio tray icons visible during smoke task")
+    smoke_live_parser.add_argument("--setup-execute-best-effort", action="store_true",
+                                  help="Do not fail run when setup execute batches return command errors")
     smoke_live_parser.add_argument("--waa-image-version", type=str, default=None,
                                   help="Pinned WAA image version label to record in run metadata")
     smoke_live_parser.set_defaults(stop_vm=True)

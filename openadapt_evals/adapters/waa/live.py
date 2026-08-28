@@ -345,6 +345,8 @@ class WAALiveConfig:
         strict_setup_readiness: If True, fail task before step 0 when setup
             succeeded but target app cannot be focused/verified.
         setup_readiness_retries: Number of post-setup focus retries.
+        setup_execute_best_effort: If True, setup execute batches continue
+            on command failures; default False fails fast.
     """
 
     server_url: str = "http://localhost:5000"
@@ -362,6 +364,7 @@ class WAALiveConfig:
     waa_image_version: str | None = None
     strict_setup_readiness: bool = True
     setup_readiness_retries: int = 3
+    setup_execute_best_effort: bool = False
 
 
 class WAALiveAdapter(BenchmarkAdapter):
@@ -1481,10 +1484,16 @@ class WAALiveAdapter(BenchmarkAdapter):
         *,
         label: str,
         timeout: float = 20.0,
+        best_effort: bool | None = None,
     ) -> None:
         """Run a batch of setup execute commands."""
         if not commands:
             return
+        use_best_effort = (
+            self.config.setup_execute_best_effort
+            if best_effort is None
+            else best_effort
+        )
         evaluate_base = self.config.evaluate_url or self.config.server_url
         payload = {
             "config": [
@@ -1498,17 +1507,47 @@ class WAALiveAdapter(BenchmarkAdapter):
                 json=payload,
                 timeout=timeout,
             )
-            if resp.status_code == 200:
-                logger.info("%s applied (%d command(s))", label, len(commands))
-            else:
-                logger.warning(
-                    "%s failed: HTTP %s %s",
-                    label,
-                    resp.status_code,
-                    resp.text[:200],
+            response_text = getattr(resp, "text", "")
+            if resp.status_code != 200:
+                message = (
+                    f"{label} failed: HTTP {resp.status_code} "
+                    f"{response_text[:200]}"
                 )
+                if use_best_effort:
+                    logger.warning(message)
+                    return
+                raise SetupReadinessError(message)
+
+            payload_json = (
+                resp.json()
+                if resp.headers.get("content-type", "").startswith("application/json")
+                else {}
+            )
+            results = payload_json.get("results", [])
+            errors = [r for r in results if r.get("status") == "error"]
+            if errors:
+                details = "; ".join(
+                    f"{r.get('type')}: {r.get('error', 'unknown')}"
+                    for r in errors
+                )
+                message = f"{label} command errors: {details}"
+                if use_best_effort:
+                    logger.warning(message)
+                    return
+                raise SetupReadinessError(message)
+
+            logger.info("%s applied (%d command(s))", label, len(commands))
         except Exception as e:
-            logger.warning("%s request failed: %s", label, e)
+            if isinstance(e, SetupReadinessError):
+                if use_best_effort:
+                    logger.warning("%s", e)
+                    return
+                raise
+            message = f"{label} request failed: {e}"
+            if use_best_effort:
+                logger.warning(message)
+                return
+            raise SetupReadinessError(message) from e
 
     def _dismiss_notifications(self, requests_module) -> None:
         """Dismiss system notifications that persist through close_all.
@@ -1518,9 +1557,9 @@ class WAALiveAdapter(BenchmarkAdapter):
         Kill the notification processes and dismiss via keyboard.
         """
         commands = [
-            "taskkill /F /IM OneDrive.exe /T",
-            "taskkill /F /IM OneDriveStandaloneUpdater.exe /T",
-            "taskkill /F /IM ApplicationFrameHost.exe /T",
+            'cmd /c "taskkill /F /IM OneDrive.exe /T >nul 2>&1 || exit /b 0"',
+            'cmd /c "taskkill /F /IM OneDriveStandaloneUpdater.exe /T >nul 2>&1 || exit /b 0"',
+            'cmd /c "taskkill /F /IM ApplicationFrameHost.exe /T >nul 2>&1 || exit /b 0"',
             # Open/close action center to dismiss any currently surfaced toast.
             (
                 "python -c \""
@@ -1553,7 +1592,7 @@ class WAALiveAdapter(BenchmarkAdapter):
                     '/v DisableFileSyncNGSC /t REG_DWORD /d 1 /f'
                 ),
                 # Prevent OneDrive auto-start prompts on login.
-                'reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v OneDrive /f',
+                'cmd /c "reg delete \\"HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\" /v OneDrive /f >nul 2>&1 || exit /b 0"',
                 # Suppress notification toasts/popovers.
                 (
                     'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\PushNotifications" '
@@ -1702,8 +1741,8 @@ $obj | ConvertTo-Json -Compress
     def _prepare_libreoffice_clean_state(self, requests_module: Any) -> None:
         """Kill stale LibreOffice processes and clear recovery artifacts."""
         commands = [
-            "taskkill /F /IM soffice.bin /T",
-            "taskkill /F /IM soffice.exe /T",
+            'cmd /c "taskkill /F /IM soffice.bin /T >nul 2>&1 || exit /b 0"',
+            'cmd /c "taskkill /F /IM soffice.exe /T >nul 2>&1 || exit /b 0"',
             self._build_libreoffice_cleanup_command(),
         ]
         self._run_setup_execute_commands(
