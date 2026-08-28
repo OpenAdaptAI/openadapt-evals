@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any, Sequence
@@ -13,8 +15,10 @@ from typing import Any, Sequence
 from openadapt_evals.production_evidence import (
     ProductionEvidenceError,
     build_evidence_object_pair,
+    build_production_acceptance_manifest,
     build_production_acceptance_summary,
     canonical_json_bytes,
+    canonical_object_bytes,
 )
 
 _SUMMARY_INPUT_KEYS = frozenset(
@@ -27,14 +31,34 @@ _SUMMARY_INPUT_KEYS = frozenset(
         "release_sha256",
         "artifact_inventory_sha256",
         "publication_staging",
-        "expected_publication_assets",
-        "qualification_evidence_decision_receipt",
         "qualification_evidence_decision_receipt_references",
         "qualification_admission_references",
         "production_acceptance_manifest_references",
         "authority_state_sha256",
         "revocation_state_sha256",
         "signer_registry_sha256",
+        "issuer",
+        "issued_at",
+        "not_before",
+        "expires_at",
+    }
+)
+
+_MANIFEST_INPUT_KEYS = frozenset(
+    {
+        "target",
+        "claim_scope",
+        "acceptance_policy_sha256",
+        "release_identity",
+        "release",
+        "artifact_inventory",
+        "publication_staging",
+        "qualification_evidence_decision_receipt_references",
+        "qualification_admission_references",
+        "authority_state_sha256",
+        "revocation_state_sha256",
+        "signer_registry_sha256",
+        "issuer",
         "issued_at",
         "not_before",
         "expires_at",
@@ -86,7 +110,25 @@ def _write_atomic(path: Path, payload: bytes) -> None:
             temporary.unlink()
 
 
-def build_summary(input_path: Path, output_path: Path) -> dict[str, Any]:
+def _read_bytes(path: Path, context: str) -> bytes:
+    try:
+        value = path.read_bytes()
+    except OSError as exc:
+        raise ProductionEvidenceError(f"cannot read {context}: {path}") from exc
+    if not value:
+        raise ProductionEvidenceError(f"{context} must not be empty")
+    return value
+
+
+def build_summary(
+    input_path: Path,
+    output_path: Path,
+    *,
+    signer_registry: Path,
+    qualification_evidence_decision_receipt: Path,
+    qualification_admission: Path,
+    production_acceptance_manifest: Path,
+) -> dict[str, Any]:
     """Build one public v2 lifecycle summary from public inputs only."""
 
     payload = _read_json_object(input_path, "production summary input")
@@ -96,9 +138,141 @@ def build_summary(input_path: Path, output_path: Path) -> dict[str, Any]:
         raise ProductionEvidenceError(
             f"production summary input keys differ: missing={missing}, extra={extra}"
         )
-    summary = build_production_acceptance_summary(**payload)
-    _write_atomic(output_path, canonical_json_bytes(summary))
+    summary = build_production_acceptance_summary(
+        **payload,
+        signer_registry_bytes=_read_bytes(
+            signer_registry,
+            "qualification signer registry",
+        ),
+        qualification_evidence_decision_receipt_bytes=_read_bytes(
+            qualification_evidence_decision_receipt,
+            "registered qualification evidence decision receipt",
+        ),
+        qualification_admission_bytes=_read_bytes(
+            qualification_admission,
+            "registered qualification admission",
+        ),
+        production_acceptance_manifest_bytes=_read_bytes(
+            production_acceptance_manifest,
+            "registered production acceptance manifest",
+        ),
+    )
+    _write_atomic(output_path, canonical_object_bytes(summary))
     return summary
+
+
+def _read_central_lifecycle_policy(
+    repository: Path, source_commit: str
+) -> bytes:
+    if re.fullmatch(r"[0-9a-f]{40}", source_commit) is None:
+        raise ProductionEvidenceError(
+            "lifecycle policy source commit must be a full lowercase commit ID"
+        )
+    try:
+        remote = subprocess.run(
+            ["git", "-C", str(repository), "remote", "get-url", "origin"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise ProductionEvidenceError(
+            "cannot read the central lifecycle policy repository"
+        ) from exc
+    allowed_remotes = {
+        "git@github.com:OpenAdaptAI/.github.git",
+        "https://github.com/OpenAdaptAI/.github",
+        "https://github.com/OpenAdaptAI/.github.git",
+    }
+    if remote not in allowed_remotes:
+        raise ProductionEvidenceError(
+            "lifecycle policy repository is not OpenAdaptAI/.github"
+        )
+    try:
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repository),
+                "fetch",
+                "--no-tags",
+                "origin",
+                "+refs/heads/main:refs/remotes/origin/main",
+            ],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repository),
+                "merge-base",
+                "--is-ancestor",
+                source_commit,
+                "refs/remotes/origin/main",
+            ],
+            check=True,
+            capture_output=True,
+        )
+        return subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repository),
+                "show",
+                f"{source_commit}:production-lifecycle-policy.json",
+            ],
+            check=True,
+            capture_output=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise ProductionEvidenceError(
+            "cannot fetch or read the exact main-branch lifecycle policy commit"
+        ) from exc
+
+
+def build_manifest(
+    input_path: Path,
+    output_path: Path,
+    *,
+    lifecycle_policy_repository: Path,
+    lifecycle_policy_source_commit: str,
+    signer_registry: Path,
+    qualification_evidence_decision_receipt: Path,
+    qualification_admission: Path,
+) -> dict[str, Any]:
+    """Build one public-only v2 acceptance manifest."""
+
+    payload = _read_json_object(input_path, "production acceptance manifest input")
+    if set(payload) != _MANIFEST_INPUT_KEYS:
+        missing = sorted(_MANIFEST_INPUT_KEYS - set(payload))
+        extra = sorted(set(payload) - _MANIFEST_INPUT_KEYS)
+        raise ProductionEvidenceError(
+            f"production manifest input keys differ: missing={missing}, extra={extra}"
+        )
+    lifecycle_policy_bytes = _read_central_lifecycle_policy(
+        lifecycle_policy_repository,
+        lifecycle_policy_source_commit,
+    )
+    manifest = build_production_acceptance_manifest(
+        **payload,
+        lifecycle_policy_bytes=lifecycle_policy_bytes,
+        signer_registry_bytes=_read_bytes(
+            signer_registry,
+            "qualification signer registry",
+        ),
+        qualification_evidence_decision_receipt_bytes=_read_bytes(
+            qualification_evidence_decision_receipt,
+            "registered qualification evidence decision receipt",
+        ),
+        qualification_admission_bytes=_read_bytes(
+            qualification_admission,
+            "registered qualification admission",
+        ),
+    )
+    _write_atomic(output_path, canonical_object_bytes(manifest))
+    return manifest
 
 
 def build_pair(
@@ -115,6 +289,11 @@ def build_pair(
     """Write one regular object and its bundle to their exact public paths."""
 
     object_value = _read_json_object(object_path, "regular production evidence object")
+    object_bytes = _read_bytes(object_path, "regular production evidence object")
+    if object_bytes != canonical_object_bytes(object_value):
+        raise ProductionEvidenceError(
+            "regular production evidence object must be canonical JSON plus one LF"
+        )
     try:
         raw_bundle = sigstore_bundle_path.read_bytes()
     except OSError as exc:
@@ -143,6 +322,29 @@ def _parser() -> argparse.ArgumentParser:
     summary = commands.add_parser("summary", help="build a public lifecycle summary")
     summary.add_argument("--input", type=Path, required=True)
     summary.add_argument("--output", type=Path, required=True)
+    summary.add_argument("--signer-registry", type=Path, required=True)
+    summary.add_argument(
+        "--qualification-evidence-decision-receipt", type=Path, required=True
+    )
+    summary.add_argument("--qualification-admission", type=Path, required=True)
+    summary.add_argument(
+        "--production-acceptance-manifest", type=Path, required=True
+    )
+
+    manifest = commands.add_parser(
+        "manifest", help="build a public production-acceptance manifest"
+    )
+    manifest.add_argument("--input", type=Path, required=True)
+    manifest.add_argument("--output", type=Path, required=True)
+    manifest.add_argument(
+        "--lifecycle-policy-repository", type=Path, required=True
+    )
+    manifest.add_argument("--lifecycle-policy-source-commit", required=True)
+    manifest.add_argument("--signer-registry", type=Path, required=True)
+    manifest.add_argument(
+        "--qualification-evidence-decision-receipt", type=Path, required=True
+    )
+    manifest.add_argument("--qualification-admission", type=Path, required=True)
 
     pair = commands.add_parser("pair", help="build a content-addressed object pair")
     pair.add_argument("--kind", required=True)
@@ -160,7 +362,28 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         if args.command == "summary":
-            build_summary(args.input, args.output)
+            build_summary(
+                args.input,
+                args.output,
+                signer_registry=args.signer_registry,
+                qualification_evidence_decision_receipt=(
+                    args.qualification_evidence_decision_receipt
+                ),
+                qualification_admission=args.qualification_admission,
+                production_acceptance_manifest=args.production_acceptance_manifest,
+            )
+        elif args.command == "manifest":
+            build_manifest(
+                args.input,
+                args.output,
+                lifecycle_policy_repository=args.lifecycle_policy_repository,
+                lifecycle_policy_source_commit=args.lifecycle_policy_source_commit,
+                signer_registry=args.signer_registry,
+                qualification_evidence_decision_receipt=(
+                    args.qualification_evidence_decision_receipt
+                ),
+                qualification_admission=args.qualification_admission,
+            )
         else:
             build_pair(
                 kind=args.kind,

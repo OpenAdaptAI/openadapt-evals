@@ -2465,7 +2465,7 @@ def test_production_acceptance_target_scope_map_is_closed() -> None:
         "openadapt": "qualified_workflow_launcher_release",
     }
     assert MODULE.production_acceptance_policy_sha256() == (
-        "sha256:6cd6cfeeb6d430c0e9d3a4a55770cb2d9962c8769edc52fac5cc46bff31bee21"
+        "sha256:bc013d6533b13288ae996b413519ac4b185da94ee0b1cc9727b662e04b989b31"
     )
 
 
@@ -2496,7 +2496,7 @@ def test_builds_only_complete_target_neutral_production_manifest() -> None:
         "reliability",
         "retention",
     }
-    assert manifest["schema_version"] == "openadapt.production-acceptance/v2"
+    assert manifest["schema_version"] == "openadapt.production-acceptance/v1"
     assert manifest["target"] == "flow"
     assert manifest["claim_scope"] == "qualified_workflow_runtime_release"
     assert manifest["verdict"] == "accepted"
@@ -2578,7 +2578,7 @@ def test_browser_source_refuses_target_without_its_evidence_adapter(target: str)
 @pytest.mark.parametrize(
     "path,replacement",
     [
-        (("schema_version",), "openadapt.production-acceptance/v1"),
+        (("schema_version",), "openadapt.production-acceptance/v2"),
         (("target",), "cloud"),
         (("claim_scope",), "qualified_workflow_control_plane_deployment"),
         (("verdict",), "rejected"),

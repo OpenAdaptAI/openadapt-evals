@@ -25,14 +25,13 @@ def test_pair_command_writes_exact_content_addressed_paths(tmp_path: Path) -> No
     raw_bundle = tmp_path / "admission.sigstore.json"
     output_root = tmp_path / "registry"
     references_output = tmp_path / "references.json"
-    regular.write_text(
-        json.dumps(
+    regular.write_bytes(
+        evidence.canonical_object_bytes(
             {
                 "schema_version": "openadapt.qualification-admission/v3",
                 "verdict": "ADMIT",
             }
-        ),
-        encoding="utf-8",
+        )
     )
     bundle_bytes = b'{ "mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json" }\n'
     raw_bundle.write_bytes(bundle_bytes)
@@ -49,7 +48,7 @@ def test_pair_command_writes_exact_content_addressed_paths(tmp_path: Path) -> No
     )
 
     assert (output_root / regular_reference["object_path"]).read_bytes() == (
-        evidence.canonical_json_bytes(json.loads(regular.read_text(encoding="utf-8")))
+        regular.read_bytes()
     )
     assert (output_root / bundle_reference["object_path"]).read_bytes() == bundle_bytes
     assert json.loads(references_output.read_text(encoding="utf-8")) == [
@@ -79,3 +78,49 @@ def test_json_reader_rejects_duplicate_keys_and_floats(tmp_path: Path) -> None:
     floating.write_text('{"size":1.5}', encoding="utf-8")
     with pytest.raises(evidence.ProductionEvidenceError, match="floating-point"):
         MODULE._read_json_object(floating, "test object")
+
+
+def test_manifest_derives_lifecycle_digest_from_exact_policy_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = {key: None for key in MODULE._MANIFEST_INPUT_KEYS}
+    input_path = tmp_path / "manifest-input.json"
+    output_path = tmp_path / "manifest.json"
+    input_path.write_text(json.dumps(payload), encoding="utf-8")
+    observed: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        MODULE,
+        "_read_central_lifecycle_policy",
+        lambda _repository, _commit: b'{"schema_version":"policy"}\n',
+    )
+
+    def build(**kwargs: object) -> dict[str, object]:
+        observed.update(kwargs)
+        return {"schema_version": "manifest"}
+
+    monkeypatch.setattr(MODULE, "build_production_acceptance_manifest", build)
+    MODULE.build_manifest(
+        input_path,
+        output_path,
+        lifecycle_policy_repository=tmp_path,
+        lifecycle_policy_source_commit="a" * 40,
+        qualification_evidence_decision_receipt=input_path,
+        qualification_admission=input_path,
+    )
+
+    assert "lifecycle_policy_sha256" not in observed
+    assert observed["lifecycle_policy_bytes"] == b'{"schema_version":"policy"}\n'
+    assert output_path.read_bytes() == b'{"schema_version":"manifest"}\n'
+
+    payload["lifecycle_policy_sha256"] = _digest("c")
+    input_path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(evidence.ProductionEvidenceError, match="extra"):
+        MODULE.build_manifest(
+            input_path,
+            output_path,
+            lifecycle_policy_repository=tmp_path,
+            lifecycle_policy_source_commit="a" * 40,
+            qualification_evidence_decision_receipt=input_path,
+            qualification_admission=input_path,
+        )

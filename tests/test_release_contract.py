@@ -75,20 +75,18 @@ def test_release_configuration_is_fail_closed() -> None:
     assert "environment: release-identity" in workflow
     assert "environment: pypi" in workflow
     assert "actions/create-github-app-token@" in workflow
-    assert "vars.OPENADAPT_RELEASE_APP_ID" in workflow
+    assert workflow.count("app-id: 4730708") == 2
     assert "secrets.OPENADAPT_RELEASE_APP_PRIVATE_KEY" in workflow
+    assert workflow.count("permission-administration: read") == 2
     assert "permission-contents: write" in workflow
     assert "permission-pull-requests: write" not in workflow
-    publish_github_job = workflow.split("  publish-github-release:", 1)[1]
-    assert "environment: pypi" in publish_github_job
-    assert "permissions:\n      contents: read" in publish_github_job
-    assert "id: release-app" in publish_github_job
-    assert "owner: OpenAdaptAI" in publish_github_job
-    assert "repositories: openadapt-evals" in publish_github_job
-    assert "permission-contents: write" in publish_github_job
-    assert "test \"$APP_SLUG\" = 'openadapt-release'" in publish_github_job
-    assert "GH_TOKEN: ${{ steps.release-app.outputs.token }}" in publish_github_job
-    assert "GH_TOKEN: ${{ github.token }}" not in publish_github_job
+    publish_job = workflow.split("  publish-staged-release:", 1)[1]
+    assert "environment: pypi" in publish_job
+    assert "permissions:\n      contents: read\n      id-token: write" in publish_job
+    assert "test \"$APP_SLUG\" = 'openadapt-release'" in publish_job
+    assert "test \"$APP_INSTALLATION_ID\" = '156835568'" in publish_job
+    assert "GH_TOKEN: ${{ steps.release-app.outputs.token }}" in publish_job
+    assert "GH_TOKEN: ${{ github.token }}" not in publish_job
     assert re.search(r"(?m)^  workflow_dispatch:\s*$", workflow)
     assert re.search(r"(?m)^      version:\s*$", workflow)
     assert re.search(r"(?m)^      source_commit:\s*$", workflow)
@@ -96,7 +94,7 @@ def test_release_configuration_is_fail_closed() -> None:
     assert re.search(r"(?m)^    tags:\s*$", workflow)
     assert not re.search(r"(?m)^    branches:\s*$", workflow)
     assert "github.event_name == 'workflow_dispatch'" in workflow
-    assert "github.workflow }}-${{ github.event_name }}-${{ github.ref" in workflow
+    assert "group: release-openadapt-evals" in workflow
     assert "github.actor == 'openadapt-release[bot]'" in workflow
     assert "reject-lifecycle-app:" in workflow
     assert "github.actor != 'openadapt-lifecycle[bot]'" in workflow
@@ -114,32 +112,83 @@ def test_release_configuration_is_fail_closed() -> None:
     assert "gh pr create" not in workflow
     assert "automation/release" not in workflow
     assert "python-semantic-release" not in workflow
-    assert "run: uv build" in workflow
-    assert "python scripts/check_source_boundary.py --require-dist" in workflow
+    assert workflow.count("uv build") == 1
+    assert workflow.count("python scripts/check_source_boundary.py --require-dist") == 3
+    stage_job = workflow.split("  stage-release-and-create-tag:", 1)[1].split(
+        "  publish-staged-release:", 1
+    )[0]
+    assert "Build the exact protected-main source once" in stage_job
+    assert "Recover a complete exact draft without rebuilding" in stage_job
+    assert "if: steps.recovery.outputs.complete != 'true'" in stage_job
+    assert "Create or recover the exact App-owned draft" in stage_job
+    assert "repos/${GITHUB_REPOSITORY}/immutable-releases" in stage_job
+    assert "Capture the exact pre-draft release protections" in stage_job
+    assert workflow.count("rulesets?includes_parents=true&per_page=100") == 3
+    assert workflow.count("verify_release_staging.py normalize-settings") == 3
+    assert workflow.count("verify_release_staging.py normalize-rulesets") == 3
+    assert workflow.count('--tag-rulesets "$RUNNER_TEMP/') == 9
+    assert stage_job.count('--tag-rulesets "$RUNNER_TEMP/') == 6
+    assert publish_job.count('--tag-rulesets "$RUNNER_TEMP/') == 3
+    assert 'select(.target == "tag")' in workflow
+    assert "immutable-releases-post.json" in stage_job
+    assert "tag-rulesets-post.json" in stage_job
+    assert (
+        'cmp "$RUNNER_TEMP/immutable-releases.json" \\\n'
+        '            "$RUNNER_TEMP/immutable-releases-post.json"'
+    ) in stage_job
+    assert (
+        'cmp "$RUNNER_TEMP/tag-rulesets.json" \\\n            "$RUNNER_TEMP/tag-rulesets-post.json"'
+    ) in stage_job
+    assert "X-GitHub-Api-Version: 2026-03-10" in stage_job
+    assert "verify_release_staging.py prepare" in stage_job
+    assert "verify_release_staging.py inspect" in stage_job
+    assert stage_job.count("verify_release_staging.py verify") == 3
+    assert "--allow-missing-assets" in stage_job
+    assert "https://uploads.github.com/repos/${GITHUB_REPOSITORY}" in stage_job
+    assert '--header "Content-Type: ${media_type}"' in stage_job
+    assert stage_job.count("git ls-remote --exit-code --tags origin") >= 3
+    assert stage_job.count('case "$tag_status" in') >= 3
+    assert stage_job.count('2) test ! -s "$RUNNER_TEMP/') >= 3
+    assert ">/dev/null 2>&1" not in stage_job
+    assert "The release tag appeared before draft creation" in stage_job
+    assert "The release tag appeared before final draft verification" in stage_job
+    recovery = stage_job.index("Recover a complete exact draft without rebuilding")
+    build = stage_job.index("Build the exact protected-main source once")
+    boundary = stage_job.index("Verify the new public distribution boundary")
+    draft = stage_job.index("Create or recover the exact App-owned draft")
+    uploaded_assets = stage_job.index("https://uploads.github.com")
+    post_draft_proof = stage_job.index("immutable-releases-post.raw.json")
+    tag = stage_job.index('git tag -a "$RELEASE_TAG" "$SOURCE_COMMIT"')
+    assert recovery < build < boundary < draft < uploaded_assets < post_draft_proof < tag
+    assert "uv build" not in publish_job
+    assert "Build the exact tag" not in publish_job
+    assert "Recover and verify the durable draft assets" in publish_job
+    assert "verify_release_staging.py inspect" in publish_job
+    assert publish_job.count("verify_release_staging.py verify") == 2
+    assert publish_job.count("--published") >= 2
+    assert "gh api --method POST" not in publish_job
+    assert "Publish only the existing verified draft" in publish_job
+    assert "gh api --method PATCH" in publish_job
+    assert "printf '{\"draft\":false}\\n'" in publish_job
+    assert "gh release create" not in workflow
     assert "pypa/gh-action-pypi-publish@" in workflow
     assert "id-token: write" in workflow
     assert "skip-existing: true" in workflow
-    pypi_job = workflow.split("  publish-pypi:", 1)[1].split("  publish-github-release:", 1)[0]
-    preflight = pypi_job.index("Refuse conflicting immutable PyPI files")
-    publish = pypi_job.index("pypa/gh-action-pypi-publish@")
-    postflight = pypi_job.index("Verify immutable PyPI publication bytes")
+    preflight = publish_job.index("Refuse conflicting immutable PyPI files")
+    publish = publish_job.index("pypa/gh-action-pypi-publish@")
+    postflight = publish_job.index("Verify immutable PyPI publication bytes")
     assert preflight < publish < postflight
-    preflight_body = pypi_job[preflight:publish]
-    postflight_body = pypi_job[postflight:]
+    preflight_body = publish_job[preflight:publish]
+    postflight_body = publish_job[postflight:]
     assert "python scripts/verify_pypi_release.py" in preflight_body
     assert "--allow-matching-subset" in preflight_body
     assert "python scripts/verify_pypi_release.py" in postflight_body
     assert "--allow-matching-subset" not in postflight_body
-    assert "Verify immutable PyPI publication bytes" in pypi_job
-    assert "--directory dist" in pypi_job
-    assert '--version "$version"' in pypi_job
-    assert "--wait-seconds 300" in pypi_job
+    assert "Verify immutable PyPI publication bytes" in publish_job
+    assert "--directory dist" in publish_job
+    assert '--version "$version"' in publish_job
+    assert "--wait-seconds 300" in publish_job
     assert "first_release_heading=$(grep -Em1" in workflow
-    assert "gh release create" in workflow
-    assert "--json author,isDraft,isPrerelease,tagName" in publish_github_job
-    assert (
-        "test \"$(jq -r '.author.login' <<<\"$state\")\" = 'openadapt-release[bot]'"
-    ) in publish_github_job
     assert "ADMIN_TOKEN" not in workflow
     assert "PYPI_API_TOKEN" not in workflow
     assert "secrets.GITHUB_TOKEN" not in workflow
@@ -149,13 +198,16 @@ def test_release_configuration_is_fail_closed() -> None:
 
 def test_tag_publication_allows_an_exact_failed_run_to_be_retried() -> None:
     workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
-    authorize_job = workflow.split("  create-release-tag:", 1)[0]
-    publish_jobs = workflow.split("  publish-pypi:", 1)[1]
+    authorize_job = workflow.split("  stage-release-and-create-tag:", 1)[0]
+    publish_job = workflow.split("  publish-staged-release:", 1)[1]
     assert "test \"$ACTOR\" = 'openadapt-release[bot]'" in authorize_job
-    assert publish_jobs.count("github.actor == 'openadapt-release[bot]'") == 2
+    assert publish_job.count("github.actor == 'openadapt-release[bot]'") == 1
     assert "github.triggering_actor == 'openadapt-release[bot]'" not in authorize_job
-    assert "github.triggering_actor == 'openadapt-release[bot]'" not in publish_jobs
-    assert "gh release view" in publish_jobs
+    assert "github.triggering_actor == 'openadapt-release[bot]'" not in publish_job
+    assert "release_is_draft" in publish_job
+    assert "published_flag='--published'" in publish_job
+    assert "if: steps.draft.outputs.was_draft == 'true'" in publish_job
+    assert "skip-existing: true" in publish_job
 
 
 def test_all_third_party_actions_are_commit_pinned() -> None:
