@@ -84,6 +84,70 @@ _TARGET_RELEASE_CONTRACTS: Mapping[str, tuple[str, str, str, str]] = {
     "flow": ("production_flow", "OpenAdaptAI/openadapt-flow", "1291376938", "package"),
     "openadapt": ("production_openadapt", "OpenAdaptAI/OpenAdapt", "627024850", "package"),
 }
+_TARGET_ARTIFACT_CONTRACTS: Mapping[str, Mapping[str, tuple[str, tuple[str, ...]]]] = {
+    "agent": {
+        "python-sdist": ("application/gzip", ("github-release", "pypi")),
+        "python-wheel": ("application/zip", ("github-release", "pypi")),
+    },
+    "capture": {
+        "chrome-extension-zip": ("application/zip", ("github-release",)),
+        "python-sdist": ("application/gzip", ("github-release", "pypi")),
+        "python-wheel": ("application/zip", ("github-release", "pypi")),
+        "spdx-sbom": ("application/spdx+json", ("github-release",)),
+    },
+    "cloud": {
+        "deployment-manifest": (
+            "application/vnd.openadapt.production-deployment-manifest+json;version=1",
+            ("deployment",),
+        ),
+    },
+    "desktop": {
+        "cyclonedx-sbom": ("application/vnd.cyclonedx+json", ("github-release",)),
+        "linux-appimage": ("application/vnd.appimage", ("github-release",)),
+        "linux-deb": ("application/vnd.debian.binary-package", ("github-release",)),
+        "macos-dmg-arm64": ("application/x-apple-diskimage", ("github-release",)),
+        "macos-dmg-x86-64": ("application/x-apple-diskimage", ("github-release",)),
+        "python-sdist": ("application/gzip", ("github-release", "pypi")),
+        "python-wheel": ("application/zip", ("github-release", "pypi")),
+        "release-checksums": ("text/plain", ("github-release",)),
+        "verification-metadata-linux-x86-64": (
+            "application/vnd.openadapt.desktop-platform-verification+json;version=1",
+            ("github-release",),
+        ),
+        "verification-metadata-macos-arm64": (
+            "application/vnd.openadapt.desktop-platform-verification+json;version=1",
+            ("github-release",),
+        ),
+        "verification-metadata-macos-x86-64": (
+            "application/vnd.openadapt.desktop-platform-verification+json;version=1",
+            ("github-release",),
+        ),
+        "verification-metadata-windows-x86-64": (
+            "application/vnd.openadapt.desktop-platform-verification+json;version=1",
+            ("github-release",),
+        ),
+        "windows-msi": ("application/x-msi", ("github-release",)),
+        "windows-nsis": (
+            "application/vnd.microsoft.portable-executable",
+            ("github-release",),
+        ),
+    },
+    "docs": {
+        "deployment-manifest": (
+            "application/vnd.openadapt.production-deployment-manifest+json;version=1",
+            ("deployment",),
+        ),
+        "site-archive": ("application/gzip", ("deployment",)),
+    },
+    "flow": {
+        "python-sdist": ("application/gzip", ("github-release", "pypi")),
+        "python-wheel": ("application/zip", ("github-release", "pypi")),
+    },
+    "openadapt": {
+        "python-sdist": ("application/gzip", ("github-release", "pypi")),
+        "python-wheel": ("application/zip", ("github-release", "pypi")),
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -109,9 +173,27 @@ class DecisionReceiptVerifier(Protocol):
         self,
         receipt: Mapping[str, Any],
         *,
+        reference: Mapping[str, Any],
+        bundle_reference: Mapping[str, Any],
         object_sha256: str,
+        semantic_identity_sha256: str,
+        authority_state_sha256: str,
         signer_registry_sha256: str,
         revocation_state_sha256: str,
+        evaluation_time: datetime,
+    ) -> None: ...
+
+    def verify_registered_object(
+        self,
+        value: Mapping[str, Any],
+        *,
+        reference: Mapping[str, Any],
+        bundle_reference: Mapping[str, Any],
+        kind: str,
+        authority_state_sha256: str,
+        signer_registry_sha256: str,
+        revocation_state_sha256: str,
+        evaluation_time: datetime,
     ) -> None: ...
 
 
@@ -704,7 +786,8 @@ def build_production_acceptance_summary(
     not_before: str,
     expires_at: str,
     issuer: Mapping[str, Any],
-    decision_receipt_verifier: DecisionReceiptVerifier | None = None,
+    decision_receipt_verifier: DecisionReceiptVerifier,
+    evaluation_time: datetime,
 ) -> dict[str, Any]:
     """Build the remote-safe v3 summary after all three input pairs exist."""
 
@@ -721,9 +804,12 @@ def build_production_acceptance_summary(
     campaign = _validate_decision_receipt(
         receipt,
         reference=decision_pair[0],
+        bundle_reference=decision_pair[1],
+        expected_authority_state_sha256=authority_state_sha256,
         expected_signer_registry_sha256=signer_registry_sha256,
         expected_revocation_state_sha256=revocation_state_sha256,
         verifier=decision_receipt_verifier,
+        evaluation_time=evaluation_time,
     )
     staging = dict(publication_staging)
     staging_sha256 = _validate_publication_staging(
@@ -765,6 +851,7 @@ def build_production_acceptance_summary(
         production_acceptance_manifest=production_acceptance_manifest,
         expected_publication_assets=expected_publication_assets,
         decision_receipt_verifier=decision_receipt_verifier,
+        evaluation_time=evaluation_time,
     )
     return summary
 
@@ -776,7 +863,8 @@ def validate_production_acceptance_summary(
     qualification_admission: Mapping[str, Any],
     production_acceptance_manifest: Mapping[str, Any],
     expected_publication_assets: Sequence[Mapping[str, Any]],
-    decision_receipt_verifier: DecisionReceiptVerifier | None = None,
+    decision_receipt_verifier: DecisionReceiptVerifier,
+    evaluation_time: datetime,
 ) -> None:
     """Validate a v3 summary without reading any private campaign payload."""
 
@@ -820,9 +908,12 @@ def validate_production_acceptance_summary(
     receipt_summary = _validate_decision_receipt(
         qualification_evidence_decision_receipt,
         reference=value["qualification_evidence_decision_receipt_reference"],
+        bundle_reference=value["qualification_evidence_decision_receipt_bundle_reference"],
+        expected_authority_state_sha256=value["authority_state_sha256"],
         expected_signer_registry_sha256=value["signer_registry_sha256"],
         expected_revocation_state_sha256=value["revocation_state_sha256"],
         verifier=decision_receipt_verifier,
+        evaluation_time=evaluation_time,
     )
     _validate_campaign_summary(value["campaign_summary"])
     _validate_qualification_admission_binding(
@@ -832,12 +923,32 @@ def validate_production_acceptance_summary(
         receipt_bundle_reference=value["qualification_evidence_decision_receipt_bundle_reference"],
         admission_reference=value["qualification_admission_reference"],
     )
+    decision_receipt_verifier.verify_registered_object(
+        qualification_admission,
+        reference=value["qualification_admission_reference"],
+        bundle_reference=value["qualification_admission_bundle_reference"],
+        kind="qualification-admission",
+        authority_state_sha256=value["authority_state_sha256"],
+        signer_registry_sha256=value["signer_registry_sha256"],
+        revocation_state_sha256=value["revocation_state_sha256"],
+        evaluation_time=evaluation_time,
+    )
     _validate_acceptance_manifest_binding(
         production_acceptance_manifest,
         summary=value,
         receipt=qualification_evidence_decision_receipt,
         qualification_admission=qualification_admission,
         expected_publication_assets=expected_publication_assets,
+    )
+    decision_receipt_verifier.verify_registered_object(
+        production_acceptance_manifest,
+        reference=value["production_acceptance_manifest_reference"],
+        bundle_reference=value["production_acceptance_manifest_bundle_reference"],
+        kind="production-acceptance-manifest",
+        authority_state_sha256=value["authority_state_sha256"],
+        signer_registry_sha256=value["signer_registry_sha256"],
+        revocation_state_sha256=value["revocation_state_sha256"],
+        evaluation_time=evaluation_time,
     )
     if value["campaign_summary"] != receipt_summary:
         raise ProductionEvidenceError("campaign_summary differs from the public decision receipt")
@@ -888,6 +999,8 @@ def validate_production_acceptance_summary(
         raise ProductionEvidenceError("production summary validity exceeds the manifest")
     if value["evidence_identity_sha256"] != _production_evidence_identity(value):
         raise ProductionEvidenceError("evidence_identity_sha256 is invalid")
+    if not_before > evaluation_time or evaluation_time >= expires:
+        raise ProductionEvidenceError("production summary is not active at evaluation_time")
 
 
 def validate_release_verification_receipt(receipt: Mapping[str, Any]) -> None:
@@ -1147,9 +1260,12 @@ def _validate_decision_receipt(
     value: Mapping[str, Any],
     *,
     reference: Mapping[str, Any],
+    bundle_reference: Mapping[str, Any],
+    expected_authority_state_sha256: str,
     expected_signer_registry_sha256: str,
     expected_revocation_state_sha256: str,
-    verifier: DecisionReceiptVerifier | None = None,
+    verifier: DecisionReceiptVerifier,
+    evaluation_time: datetime,
 ) -> dict[str, Any]:
     receipt = dict(value)
     if set(receipt) != _DECISION_RECEIPT_KEYS:
@@ -1219,6 +1335,8 @@ def _validate_decision_receipt(
         raise ProductionEvidenceError("decision receipt validity is invalid")
     if (expires - not_before).total_seconds() > 7 * 24 * 60 * 60:
         raise ProductionEvidenceError("decision receipt validity exceeds seven days")
+    if not_before > evaluation_time or evaluation_time >= expires:
+        raise ProductionEvidenceError("decision receipt is not active at evaluation_time")
     if not isinstance(reference, Mapping):
         raise ProductionEvidenceError("decision receipt reference must be an object")
     validate_object_reference(reference)
@@ -1227,13 +1345,24 @@ def _validate_decision_receipt(
     object_sha256 = sha256_digest(canonical_json_bytes(receipt) + b"\n")
     if reference["object_sha256"] != object_sha256:
         raise ProductionEvidenceError("decision receipt does not match its public reference")
-    if verifier is not None:
-        verifier.verify(
-            receipt,
-            object_sha256=object_sha256,
-            signer_registry_sha256=expected_signer_registry_sha256,
-            revocation_state_sha256=expected_revocation_state_sha256,
-        )
+    semantic_identity_sha256 = _regular_semantic_identity(
+        kind="qualification-evidence-decision-receipt",
+        object_schema_version=DECISION_RECEIPT_SCHEMA,
+        object_value=receipt,
+    )
+    if reference["semantic_identity_sha256"] != semantic_identity_sha256:
+        raise ProductionEvidenceError("decision receipt semantic identity differs")
+    verifier.verify(
+        receipt,
+        reference=reference,
+        bundle_reference=bundle_reference,
+        object_sha256=object_sha256,
+        semantic_identity_sha256=semantic_identity_sha256,
+        authority_state_sha256=expected_authority_state_sha256,
+        signer_registry_sha256=expected_signer_registry_sha256,
+        revocation_state_sha256=expected_revocation_state_sha256,
+        evaluation_time=evaluation_time,
+    )
 
     campaign_summary = receipt["campaign_summary"]
     if not isinstance(campaign_summary, Mapping) or set(campaign_summary) != (
@@ -1249,12 +1378,10 @@ def _validate_decision_receipt(
     task_count = _require_positive_int(
         campaign_summary["task_count"], "decision receipt task_count"
     )
-    if minimum < 3:
-        raise ProductionEvidenceError("decision receipt requires fewer than three trials")
+    if minimum != 3:
+        raise ProductionEvidenceError("decision receipt minimum trial count must be exactly three")
     classes = campaign_summary["classes"]
     _validate_campaign_summary(classes)
-    if minimum != min(counts["minimum_trials_per_cell"] for counts in classes.values()):
-        raise ProductionEvidenceError("decision receipt minimum trial count differs")
     if any(counts["task_condition_cell_count"] < task_count for counts in classes.values()):
         raise ProductionEvidenceError("decision receipt omits a task/class cell")
     return {qualification_class: dict(counts) for qualification_class, counts in classes.items()}
@@ -1504,6 +1631,75 @@ def _validate_acceptance_manifest_binding(
         or release["source_repository_id"] != target_contract[2]
     ):
         raise ProductionEvidenceError("production release candidate identity is invalid")
+    if release["kind"] == "package":
+        if (
+            not isinstance(release["version"], str)
+            or not release["version"]
+            or len(release["version"]) > 80
+            or not isinstance(release["tag"], str)
+            or not release["tag"]
+            or len(release["tag"]) > 120
+            or release["deployment_id"] is not None
+            or release["deployment_sha256"] is not None
+        ):
+            raise ProductionEvidenceError("production package release candidate profile is invalid")
+    elif (
+        release["version"] is not None
+        or release["tag"] is not None
+        or not isinstance(release["deployment_id"], str)
+        or _DECIMAL_ID.fullmatch(release["deployment_id"]) is None
+        or not isinstance(release["deployment_sha256"], str)
+        or _SHA256.fullmatch(release["deployment_sha256"]) is None
+    ):
+        raise ProductionEvidenceError("production deployment release candidate profile is invalid")
+    artifact_profile = _TARGET_ARTIFACT_CONTRACTS[manifest["target"]]
+    if [item.get("kind") for item in expected_publication_assets] != sorted(artifact_profile):
+        raise ProductionEvidenceError("production artifact kinds differ from target profile")
+    if list(expected_publication_assets) != sorted(
+        expected_publication_assets,
+        key=lambda item: (item["kind"], item["name"], item["sha256"]),
+    ):
+        raise ProductionEvidenceError("production artifacts are not canonically ordered")
+    for artifact in expected_publication_assets:
+        media_type, destinations = artifact_profile[artifact["kind"]]
+        if artifact["media_type"] != media_type or artifact["publish_destinations"] != list(
+            destinations
+        ):
+            raise ProductionEvidenceError(
+                "production artifact media type or destinations differ from target profile"
+            )
+    if manifest["target"] == "desktop":
+        if any(
+            token in artifact["name"].casefold()
+            for artifact in expected_publication_assets
+            for token in ("beta", "candidate", "adhoc", "unsigned")
+        ):
+            raise ProductionEvidenceError(
+                "Desktop release filenames contain a non-production label"
+            )
+        version = release["version"]
+        expected_names = {
+            "verification-metadata-linux-x86-64": (
+                f"OpenAdapt-Desktop-v{version}-linux-x86_64-verification.json"
+            ),
+            "verification-metadata-macos-arm64": (
+                f"OpenAdapt-Desktop-v{version}-macos-arm64-verification.json"
+            ),
+            "verification-metadata-macos-x86-64": (
+                f"OpenAdapt-Desktop-v{version}-macos-x86_64-verification.json"
+            ),
+            "verification-metadata-windows-x86-64": (
+                f"OpenAdapt-Desktop-v{version}-windows-x86_64-verification.json"
+            ),
+        }
+        if any(
+            artifact["name"] != expected_names[artifact["kind"]]
+            for artifact in expected_publication_assets
+            if artifact["kind"] in expected_names
+        ):
+            raise ProductionEvidenceError(
+                "Desktop verification metadata filename differs from target profile"
+            )
     if release["artifacts"] != list(expected_publication_assets):
         raise ProductionEvidenceError("production release candidate artifacts differ")
     if (

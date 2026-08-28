@@ -4,10 +4,113 @@ import base64
 import copy
 import hashlib
 import json
+from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from openadapt_evals import production_evidence as evidence
+
+ROOT = Path(__file__).resolve().parents[1]
+_EVALUATION_TIME = datetime(2026, 8, 27, 12, 30, tzinfo=timezone.utc)
+_DECISION_PRIVATE_KEY = Ed25519PrivateKey.from_private_bytes(b"\x19" * 32)
+_DECISION_PUBLIC_KEY = _DECISION_PRIVATE_KEY.public_key()
+_DECISION_PUBLIC_BYTES = _DECISION_PUBLIC_KEY.public_bytes(
+    encoding=serialization.Encoding.Raw,
+    format=serialization.PublicFormat.Raw,
+)
+_DECISION_KEY_ID = "qa-ed25519-" + hashlib.sha256(_DECISION_PUBLIC_BYTES).hexdigest()[:16]
+
+
+class _CryptographicReceiptVerifier:
+    def verify(
+        self,
+        receipt: dict[str, object],
+        *,
+        reference: dict[str, object],
+        bundle_reference: dict[str, object],
+        object_sha256: str,
+        semantic_identity_sha256: str,
+        authority_state_sha256: str,
+        signer_registry_sha256: str,
+        revocation_state_sha256: str,
+        evaluation_time: datetime,
+    ) -> None:
+        assert object_sha256 == evidence.sha256_digest(
+            evidence.canonical_json_bytes(receipt) + b"\n"
+        )
+        assert semantic_identity_sha256 == evidence._regular_semantic_identity(
+            kind="qualification-evidence-decision-receipt",
+            object_schema_version=evidence.DECISION_RECEIPT_SCHEMA,
+            object_value=receipt,
+        )
+        assert authority_state_sha256 == _digest("6")
+        assert signer_registry_sha256 == _digest("8")
+        assert revocation_state_sha256 == _digest("7")
+        assert evaluation_time == _EVALUATION_TIME
+        assert reference["object_sha256"] == object_sha256
+        assert reference["semantic_identity_sha256"] == semantic_identity_sha256
+        assert bundle_reference["subject_sha256"] == object_sha256
+        statement_bytes = evidence.canonical_json_bytes(receipt["signing_statement"]) + b"\n"
+        signature = base64.b64decode(str(receipt["signature"]), validate=True)
+        try:
+            _DECISION_PUBLIC_KEY.verify(signature, statement_bytes)
+        except Exception as exc:
+            raise evidence.ProductionEvidenceError(
+                "test decision receipt signature verification failed"
+            ) from exc
+
+    def verify_registered_object(
+        self,
+        value: dict[str, object],
+        *,
+        reference: dict[str, object],
+        bundle_reference: dict[str, object],
+        kind: str,
+        authority_state_sha256: str,
+        signer_registry_sha256: str,
+        revocation_state_sha256: str,
+        evaluation_time: datetime,
+    ) -> None:
+        raw = evidence.canonical_json_bytes(value) + b"\n"
+        assert reference["kind"] == kind
+        assert reference["object_sha256"] == evidence.sha256_digest(raw)
+        assert reference["semantic_identity_sha256"] == evidence._regular_semantic_identity(
+            kind=kind,
+            object_schema_version=str(reference["object_schema_version"]),
+            object_value=value,
+        )
+        assert bundle_reference["subject_sha256"] == reference["object_sha256"]
+        assert authority_state_sha256 == _digest("6")
+        assert signer_registry_sha256 == _digest("8")
+        assert revocation_state_sha256 == _digest("7")
+        assert evaluation_time == _EVALUATION_TIME
+
+
+def _verifier() -> _CryptographicReceiptVerifier:
+    return _CryptographicReceiptVerifier()
+
+
+def _validate_summary(
+    summary: dict[str, object],
+    *,
+    qualification_evidence_decision_receipt: dict[str, object],
+    qualification_admission: dict[str, object],
+    production_acceptance_manifest: dict[str, object],
+    expected_publication_assets: list[dict[str, object]],
+    decision_receipt_verifier: object | None = None,
+) -> None:
+    evidence.validate_production_acceptance_summary(
+        summary,
+        qualification_evidence_decision_receipt=qualification_evidence_decision_receipt,
+        qualification_admission=qualification_admission,
+        production_acceptance_manifest=production_acceptance_manifest,
+        expected_publication_assets=expected_publication_assets,
+        decision_receipt_verifier=decision_receipt_verifier or _verifier(),
+        evaluation_time=_EVALUATION_TIME,
+    )
 
 
 def _digest(character: str) -> str:
@@ -60,6 +163,33 @@ def _campaign_summary() -> dict[str, dict[str, int]]:
     return summary
 
 
+def test_local_wire_profile_matches_pinned_central_fixture() -> None:
+    contract = json.loads(
+        (ROOT / "tests/fixtures/central-production-trust-989681f6.json").read_text(encoding="utf-8")
+    )
+    assert contract["source_commit"] == evidence.CENTRAL_TRUST_CONTRACT_COMMIT
+    assert contract["schemas"] == {
+        "qualification_release": evidence.QUALIFICATION_RELEASE_SCHEMA,
+        "qualification_admission": evidence.QUALIFICATION_ADMISSION_SCHEMA,
+        "decision_receipt": evidence.DECISION_RECEIPT_SCHEMA,
+        "acceptance_manifest": evidence.PRODUCTION_ACCEPTANCE_MANIFEST_SCHEMA,
+        "acceptance_summary": evidence.PRODUCTION_ACCEPTANCE_SUMMARY_SCHEMA,
+        "flow_release_verification": evidence.RELEASE_VERIFICATION_RECEIPT_SCHEMA,
+    }
+    assert contract["decision_campaign"] == {
+        "minimum_trials_per_task_condition": 3,
+        "classes": sorted(evidence._CAMPAIGN_CLASSES),
+    }
+    assert contract["release_candidate"]["required"] == sorted(evidence._RELEASE_CANDIDATE_KEYS)
+    assert {key: list(value) for key, value in evidence._TARGET_RELEASE_CONTRACTS.items()} == (
+        contract["targets"]
+    )
+    assert {
+        key: [media_type, list(destinations)]
+        for key, (media_type, destinations) in evidence._TARGET_ARTIFACT_CONTRACTS["flow"].items()
+    } == contract["flow_artifacts"]
+
+
 def _decision_receipt(campaign: dict[str, dict[str, int]]) -> dict[str, object]:
     receipt: dict[str, object] = {
         "schema_version": evidence.DECISION_RECEIPT_SCHEMA,
@@ -98,7 +228,7 @@ def _decision_receipt(campaign: dict[str, dict[str, int]]) -> dict[str, object]:
         "issued_at": "2026-08-27T11:00:00Z",
         "not_before": "2026-08-27T11:00:00Z",
         "expires_at": "2026-09-03T11:00:00Z",
-        "issuer_key_id": "qa-ed25519-0123456789abcdef",
+        "issuer_key_id": _DECISION_KEY_ID,
         "algorithm": "ed25519",
         "signing_statement": None,
         "signature": "",
@@ -124,7 +254,10 @@ def _decision_receipt(campaign: dict[str, dict[str, int]]) -> dict[str, object]:
         "unsigned_size_bytes": len(unsigned_bytes),
         "commitment_scheme": "sha256-canonical-json-lf",
     }
-    receipt["signature"] = base64.b64encode(b"s" * 64).decode("ascii")
+    statement_bytes = evidence.canonical_json_bytes(receipt["signing_statement"]) + b"\n"
+    receipt["signature"] = base64.b64encode(_DECISION_PRIVATE_KEY.sign(statement_bytes)).decode(
+        "ascii"
+    )
     return receipt
 
 
@@ -414,6 +547,8 @@ def _summary() -> tuple[
         not_before="2026-08-27T12:00:00Z",
         expires_at="2026-09-03T10:00:00Z",
         issuer=issuer,
+        decision_receipt_verifier=_verifier(),
+        evaluation_time=_EVALUATION_TIME,
     )
     return summary, receipt, admission_value, manifest_value, expected_assets
 
@@ -581,7 +716,7 @@ def test_builds_remote_safe_summary_from_three_prior_reference_pairs() -> None:
         "live_identity",
     ):
         assert private_field not in rendered
-    evidence.validate_production_acceptance_summary(
+    _validate_summary(
         summary,
         qualification_evidence_decision_receipt=receipt,
         qualification_admission=admission,
@@ -609,7 +744,7 @@ def test_summary_binds_durable_release_app_staging_and_two_tag_rulesets() -> Non
     mutated = copy.deepcopy(summary)
     mutated["publication_staging"]["immutable_releases"]["enabled"] = False
     with pytest.raises(evidence.ProductionEvidenceError, match="immutable"):
-        evidence.validate_production_acceptance_summary(
+        _validate_summary(
             mutated,
             qualification_evidence_decision_receipt=receipt,
             qualification_admission=admission,
@@ -623,7 +758,18 @@ def test_summary_rejects_draft_asset_or_tag_authority_drift() -> None:
     changed_assets = copy.deepcopy(expected_assets)
     changed_assets[0]["size_bytes"] += 1
     with pytest.raises(evidence.ProductionEvidenceError, match="release candidate"):
-        evidence.validate_production_acceptance_summary(
+        _validate_summary(
+            summary,
+            qualification_evidence_decision_receipt=receipt,
+            qualification_admission=admission,
+            production_acceptance_manifest=manifest,
+            expected_publication_assets=changed_assets,
+        )
+
+    changed_assets = copy.deepcopy(expected_assets)
+    changed_assets[0]["media_type"] = "application/zip"
+    with pytest.raises(evidence.ProductionEvidenceError, match="release candidate"):
+        _validate_summary(
             summary,
             qualification_evidence_decision_receipt=receipt,
             qualification_admission=admission,
@@ -640,7 +786,7 @@ def test_summary_rejects_draft_asset_or_tag_authority_drift() -> None:
         }
     ]
     with pytest.raises(evidence.ProductionEvidenceError, match="bypass"):
-        evidence.validate_production_acceptance_summary(
+        _validate_summary(
             changed_rules,
             qualification_evidence_decision_receipt=receipt,
             qualification_admission=admission,
@@ -654,7 +800,19 @@ def test_summary_rejects_release_target_and_validity_drift() -> None:
     changed_manifest = copy.deepcopy(manifest)
     changed_manifest["release"]["source_repository"] = "OpenAdaptAI/openadapt-desktop"
     with pytest.raises(evidence.ProductionEvidenceError, match="candidate identity"):
-        evidence.validate_production_acceptance_summary(
+        _validate_summary(
+            summary,
+            qualification_evidence_decision_receipt=receipt,
+            qualification_admission=admission,
+            production_acceptance_manifest=changed_manifest,
+            expected_publication_assets=expected_assets,
+        )
+
+    changed_manifest = copy.deepcopy(manifest)
+    changed_manifest["release"]["deployment_id"] = "12"
+    changed_manifest["release"]["deployment_sha256"] = _digest("d")
+    with pytest.raises(evidence.ProductionEvidenceError, match="package release candidate profile"):
+        _validate_summary(
             summary,
             qualification_evidence_decision_receipt=receipt,
             qualification_admission=admission,
@@ -665,7 +823,7 @@ def test_summary_rejects_release_target_and_validity_drift() -> None:
     changed_summary = copy.deepcopy(summary)
     changed_summary["expires_at"] = "2026-09-03T10:30:00Z"
     with pytest.raises(evidence.ProductionEvidenceError, match="exceeds the manifest"):
-        evidence.validate_production_acceptance_summary(
+        _validate_summary(
             changed_summary,
             qualification_evidence_decision_receipt=receipt,
             qualification_admission=admission,
@@ -679,7 +837,7 @@ def test_summary_rejects_noncanonical_admission_fields() -> None:
     changed_admission = copy.deepcopy(admission)
     changed_admission["bundle_version"] = "v1.35"
     with pytest.raises(evidence.ProductionEvidenceError, match="bundle_version"):
-        evidence.validate_production_acceptance_summary(
+        _validate_summary(
             summary,
             qualification_evidence_decision_receipt=receipt,
             qualification_admission=changed_admission,
@@ -693,7 +851,7 @@ def test_summary_extracts_only_the_remote_safe_receipt_classes() -> None:
     changed_receipt = copy.deepcopy(receipt)
     changed_receipt["entity_class"] = "custom customer noun"
     with pytest.raises(evidence.ProductionEvidenceError, match="remote-safe"):
-        evidence.validate_production_acceptance_summary(
+        _validate_summary(
             summary,
             qualification_evidence_decision_receipt=changed_receipt,
             qualification_admission=admission,
@@ -736,7 +894,7 @@ def test_summary_rejects_private_counts_or_receipt_drift() -> None:
     mutated = copy.deepcopy(summary)
     mutated["campaign_summary"]["healthy"]["task_name"] = 1
     with pytest.raises(evidence.ProductionEvidenceError, match="keys"):
-        evidence.validate_production_acceptance_summary(
+        _validate_summary(
             mutated,
             qualification_evidence_decision_receipt=receipt,
             qualification_admission=admission,
@@ -747,7 +905,7 @@ def test_summary_rejects_private_counts_or_receipt_drift() -> None:
     different_receipt = copy.deepcopy(receipt)
     different_receipt["campaign_summary"]["classes"]["healthy"]["observed_trial_count"] = 4
     with pytest.raises(evidence.ProductionEvidenceError, match="signing_statement"):
-        evidence.validate_production_acceptance_summary(
+        _validate_summary(
             summary,
             qualification_evidence_decision_receipt=different_receipt,
             qualification_admission=admission,
@@ -773,7 +931,7 @@ def test_summary_rejects_nonqualifying_class_counts(
     summary, receipt, admission, manifest, expected_assets = _summary()
     summary["campaign_summary"][qualification_class][field] = value
     with pytest.raises(evidence.ProductionEvidenceError):
-        evidence.validate_production_acceptance_summary(
+        _validate_summary(
             summary,
             qualification_evidence_decision_receipt=receipt,
             qualification_admission=admission,
@@ -786,21 +944,62 @@ def test_summary_can_delegate_receipt_signature_verification() -> None:
     summary, receipt, admission, manifest, expected_assets = _summary()
 
     class Verifier:
-        calls: list[tuple[str, str, str]] = []
+        calls: list[tuple[str, str, str, str, str, datetime]] = []
+        registered_calls: list[str] = []
 
         def verify(
             self,
             value: dict[str, object],
             *,
+            reference: dict[str, object],
+            bundle_reference: dict[str, object],
             object_sha256: str,
+            semantic_identity_sha256: str,
+            authority_state_sha256: str,
             signer_registry_sha256: str,
             revocation_state_sha256: str,
+            evaluation_time: datetime,
         ) -> None:
             assert value == receipt
-            self.calls.append((object_sha256, signer_registry_sha256, revocation_state_sha256))
+            assert reference["object_sha256"] == object_sha256
+            assert bundle_reference["subject_sha256"] == object_sha256
+            self.calls.append(
+                (
+                    object_sha256,
+                    semantic_identity_sha256,
+                    authority_state_sha256,
+                    signer_registry_sha256,
+                    revocation_state_sha256,
+                    evaluation_time,
+                )
+            )
+
+        def verify_registered_object(
+            self,
+            value: dict[str, object],
+            *,
+            reference: dict[str, object],
+            bundle_reference: dict[str, object],
+            kind: str,
+            authority_state_sha256: str,
+            signer_registry_sha256: str,
+            revocation_state_sha256: str,
+            evaluation_time: datetime,
+        ) -> None:
+            assert reference["kind"] == kind
+            assert bundle_reference["subject_sha256"] == reference["object_sha256"]
+            assert authority_state_sha256 == summary["authority_state_sha256"]
+            assert signer_registry_sha256 == summary["signer_registry_sha256"]
+            assert revocation_state_sha256 == summary["revocation_state_sha256"]
+            assert evaluation_time == _EVALUATION_TIME
+            assert (
+                evidence.sha256_digest(evidence.canonical_json_bytes(value) + b"\n")
+                == (reference["object_sha256"])
+            )
+            self.registered_calls.append(kind)
 
     verifier = Verifier()
-    evidence.validate_production_acceptance_summary(
+    _validate_summary(
         summary,
         qualification_evidence_decision_receipt=receipt,
         qualification_admission=admission,
@@ -811,10 +1010,101 @@ def test_summary_can_delegate_receipt_signature_verification() -> None:
     assert verifier.calls == [
         (
             summary["qualification_evidence_decision_receipt_reference"]["object_sha256"],
+            summary["qualification_evidence_decision_receipt_reference"][
+                "semantic_identity_sha256"
+            ],
+            summary["authority_state_sha256"],
             summary["signer_registry_sha256"],
             summary["revocation_state_sha256"],
+            _EVALUATION_TIME,
         )
     ]
+    assert verifier.registered_calls == [
+        "qualification-admission",
+        "production-acceptance-manifest",
+    ]
+
+
+def test_placeholder_decision_signature_cannot_produce_accepted_evidence() -> None:
+    receipt = _decision_receipt(_campaign_summary())
+    receipt["signature"] = base64.b64encode(b"placeholder-signature".ljust(64, b"!")).decode()
+    pair = _pair("qualification-evidence-decision-receipt", object_value=receipt)
+    with pytest.raises(evidence.ProductionEvidenceError, match="signature verification failed"):
+        evidence._validate_decision_receipt(
+            receipt,
+            reference=pair.references[0],
+            bundle_reference=pair.references[1],
+            expected_authority_state_sha256=_digest("6"),
+            expected_signer_registry_sha256=_digest("8"),
+            expected_revocation_state_sha256=_digest("7"),
+            verifier=_verifier(),
+            evaluation_time=_EVALUATION_TIME,
+        )
+
+
+def test_decision_receipt_must_be_current_and_match_registered_identity() -> None:
+    receipt = _decision_receipt(_campaign_summary())
+    pair = _pair("qualification-evidence-decision-receipt", object_value=receipt)
+    with pytest.raises(evidence.ProductionEvidenceError, match="not active"):
+        evidence._validate_decision_receipt(
+            receipt,
+            reference=pair.references[0],
+            bundle_reference=pair.references[1],
+            expected_authority_state_sha256=_digest("6"),
+            expected_signer_registry_sha256=_digest("8"),
+            expected_revocation_state_sha256=_digest("7"),
+            verifier=_verifier(),
+            evaluation_time=datetime(2026, 9, 3, 11, 0, tzinfo=timezone.utc),
+        )
+
+    changed_reference = dict(pair.references[0])
+    changed_reference["semantic_identity_sha256"] = _digest("f")
+    changed_reference["registry_entry_sha256"] = evidence._registry_entry_sha256(changed_reference)
+    with pytest.raises(evidence.ProductionEvidenceError, match="semantic identity differs"):
+        evidence._validate_decision_receipt(
+            receipt,
+            reference=changed_reference,
+            bundle_reference=pair.references[1],
+            expected_authority_state_sha256=_digest("6"),
+            expected_signer_registry_sha256=_digest("8"),
+            expected_revocation_state_sha256=_digest("7"),
+            verifier=_verifier(),
+            evaluation_time=_EVALUATION_TIME,
+        )
+
+
+def test_decision_receipt_minimum_is_exactly_three() -> None:
+    receipt = _decision_receipt(_campaign_summary())
+    receipt["campaign_summary"]["minimum_trials_per_task_condition"] = 4
+    unsigned = dict(receipt)
+    unsigned.pop("signature")
+    unsigned.pop("signing_statement")
+    unsigned_bytes = evidence.canonical_json_bytes(unsigned) + b"\n"
+    receipt["signing_statement"] = {
+        "schema_version": "openadapt.qualification-evidence-signing-statement/v1",
+        "object_schema_version": evidence.DECISION_RECEIPT_SCHEMA,
+        "signature_domain": evidence.DECISION_RECEIPT_SIGNATURE_DOMAIN.decode(),
+        "unsigned_object_sha256": evidence.sha256_digest(unsigned_bytes),
+        "unsigned_size_bytes": len(unsigned_bytes),
+        "commitment_scheme": "sha256-canonical-json-lf",
+    }
+    receipt["signature"] = base64.b64encode(
+        _DECISION_PRIVATE_KEY.sign(
+            evidence.canonical_json_bytes(receipt["signing_statement"]) + b"\n"
+        )
+    ).decode()
+    pair = _pair("qualification-evidence-decision-receipt", object_value=receipt)
+    with pytest.raises(evidence.ProductionEvidenceError, match="exactly three"):
+        evidence._validate_decision_receipt(
+            receipt,
+            reference=pair.references[0],
+            bundle_reference=pair.references[1],
+            expected_authority_state_sha256=_digest("6"),
+            expected_signer_registry_sha256=_digest("8"),
+            expected_revocation_state_sha256=_digest("7"),
+            verifier=_verifier(),
+            evaluation_time=_EVALUATION_TIME,
+        )
 
 
 def test_validates_flow_only_release_verification_receipt_v1() -> None:
@@ -874,3 +1164,12 @@ def test_validates_flow_only_release_verification_receipt_v1() -> None:
     changed["target"] = "desktop"
     with pytest.raises(evidence.ProductionEvidenceError, match="target"):
         evidence.validate_release_verification_receipt(changed)
+
+
+def test_accepts_exact_pinned_central_flow_verification_fixture() -> None:
+    path = ROOT / "tests/fixtures/central-989681f6-flow-release-verification.json"
+    raw = path.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == (
+        "bf170018cd1d3519f40ebd2788e158dd34a789c7bfe1e85e30e3a445e5e40af8"
+    )
+    evidence.validate_release_verification_receipt(json.loads(raw))
