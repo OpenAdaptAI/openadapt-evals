@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "openadapt-evals"
 version = "0.94.1"
-description = "Qualification evidence and evaluation infrastructure for OpenAdapt"
+description = "Evaluation infrastructure for GUI agent benchmarks"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -16,7 +16,7 @@ maintainers = [
     {name = "OpenAdaptAI", email = "contact@openadapt.ai"}
 ]
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",

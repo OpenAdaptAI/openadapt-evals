@@ -15,13 +15,18 @@ import json
 import re
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence, TypedDict
 
 CAMPAIGN_SCHEMA = "openadapt.qualification-campaign/v3"
 TRIAL_SCHEMA = "openadapt.qualification-trial-row/v3"
 TRIAL_RECEIPT_SCHEMA = "openadapt.qualification-trial-receipt/v3"
 CAMPAIGN_SUMMARY_SCHEMA = "openadapt.qualification-campaign-summary/v3"
+SOURCE_CAMPAIGN_PROJECTION_SCHEMA = "openadapt.qualification-source-campaign-projection/v1"
 TRIAL_RECEIPT_SIGNATURE_DOMAIN = b"OpenAdapt qualification trial receipt v3\0"
+TRIAL_EVIDENCE_IDENTITY_DOMAIN = b"OpenAdapt qualification trial evidence projection v3\0"
+QUALIFICATION_CONTRACT_IDENTITY_DOMAIN = b"OpenAdapt qualification qualification contract v1\0"
+ORACLE_CONTRACT_IDENTITY_DOMAIN = b"OpenAdapt qualification oracle contract v1\0"
+AUTHORITY_CONTRACT_IDENTITY_DOMAIN = b"OpenAdapt qualification authority contract v1\0"
 
 QUALIFICATION_CLASSES = frozenset(
     {
@@ -40,6 +45,14 @@ EXPECTED_OUTCOME_BY_CLASS: Mapping[str, str] = {
     "uncertain_delivery": "RECONCILIATION_REQUIRED",
     "declared_attended": "VERIFIED",
     "governed_repair": "VERIFIED",
+}
+DELIVERY_TUPLE_BY_CLASS: Mapping[str, tuple[str, str, str]] = {
+    "declared_attended": ("dispatched", "delivered", "single_effect_verified"),
+    "governed_repair": ("dispatched", "delivered", "single_effect_verified"),
+    "healthy": ("dispatched", "delivered", "single_effect_verified"),
+    "idempotency_replay": ("dispatched", "delivered", "duplicate_suppressed"),
+    "safe_halt": ("not_dispatched", "not_delivered", "not_applicable"),
+    "uncertain_delivery": ("dispatched", "uncertain", "unverifiable"),
 }
 TERMINAL_OUTCOMES = frozenset({"VERIFIED", "HALTED", "RECONCILIATION_REQUIRED", "PLATFORM_FAILURE"})
 RECEIPT_TYPES = frozenset(
@@ -61,13 +74,15 @@ _CAMPAIGN_KEYS = frozenset(
         "campaign_id",
         "campaign_permit_sha256",
         "project_contract_sha256",
-        "source_evidence_manifest_sha256",
         "bundle_artifact_sha256",
         "runtime_identity_sha256",
         "evidence_identity_sha256",
         "qualification_contract",
+        "qualification_contract_sha256",
         "oracle_contract",
+        "oracle_contract_sha256",
         "authority_contract",
+        "authority_contract_sha256",
         "conditions",
         "invariants",
         "excluded_trials",
@@ -115,6 +130,7 @@ _RECEIPT_KEYS = frozenset(
     {
         "schema_version",
         "receipt_type",
+        "issuer",
         "issuer_key_id",
         "algorithm",
         "source_artifact_sha256",
@@ -124,6 +140,21 @@ _RECEIPT_KEYS = frozenset(
     }
 )
 _RECEIPT_UNSIGNED_KEYS = _RECEIPT_KEYS - {"signature"}
+_RECEIPT_ISSUER_KEYS = frozenset(
+    {
+        "repository",
+        "repository_id",
+        "repository_owner_id",
+        "workflow",
+        "ref",
+        "source_commit",
+        "environment",
+        "run_id",
+        "run_attempt",
+        "runner_identity_sha256",
+    }
+)
+_RECEIPT_AUTHORITY_KEYS = _RECEIPT_ISSUER_KEYS - {"run_id", "run_attempt"}
 _PROJECTION_KEYS = frozenset(
     {
         "campaign_id",
@@ -160,6 +191,7 @@ _FACT_KEYS: Mapping[str, frozenset[str]] = {
             "model_call_count",
             "unplanned_intervention_count",
             "unsafe_effect_count",
+            "unverified_direct_action_count",
         }
     ),
     "observer": frozenset(
@@ -188,7 +220,6 @@ _FACT_KEYS: Mapping[str, frozenset[str]] = {
             "human_approval_verified",
             "retained_evidence_verified",
             "target_revalidated",
-            "unverified_direct_action_count",
         }
     ),
     "cleanup": frozenset({"cleanup_completed"}),
@@ -196,7 +227,12 @@ _FACT_KEYS: Mapping[str, frozenset[str]] = {
 }
 _COUNT_FACTS: Mapping[str, frozenset[str]] = {
     "runner": frozenset(
-        {"model_call_count", "unplanned_intervention_count", "unsafe_effect_count"}
+        {
+            "model_call_count",
+            "unplanned_intervention_count",
+            "unsafe_effect_count",
+            "unverified_direct_action_count",
+        }
     ),
     "observer": frozenset(
         {
@@ -208,7 +244,7 @@ _COUNT_FACTS: Mapping[str, frozenset[str]] = {
         }
     ),
     "delivery": frozenset({"blind_retry_count", "replay_dispatch_count"}),
-    "repair": frozenset({"unverified_direct_action_count"}),
+    "repair": frozenset(),
 }
 _BOOL_FACTS: Mapping[str, frozenset[str]] = {
     "decision": frozenset({"authenticated_typed_bound_decision", "live_target_revalidated"}),
@@ -235,11 +271,66 @@ _IDEMPOTENCY_RESULTS = frozenset(
     }
 )
 _OBSERVER_VERDICTS = frozenset({"PROVED", "REFUTED", "UNVERIFIABLE"})
+CELL_COUNTERS = (
+    "approved_repair_count",
+    "authenticated_bound_decision_count",
+    "blind_retry_count",
+    "collateral_effect_count",
+    "cleanup_absence_verified_count",
+    "cleanup_verified_count",
+    "duplicate_effect_count",
+    "duplicate_suppressed_count",
+    "dispatch_count",
+    "intended_effect_count",
+    "live_target_revalidation_count",
+    "model_call_count",
+    "over_halt_count",
+    "policy_approved_repair_count",
+    "replay_dispatch_count",
+    "retained_repair_evidence_count",
+    "silent_incorrect_success_count",
+    "unplanned_intervention_count",
+    "unsafe_effect_count",
+    "uncertain_delivery_evidence_count",
+    "unverified_direct_action_count",
+    "wrong_effect_count",
+    "wrong_record_count",
+)
 _SHA256 = re.compile(r"^sha256:[a-f0-9]{64}$")
 _WHOLE_SECOND_UTC = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
 
+
+class TrialReceiptIssuer(TypedDict):
+    """The protected run identity bound into one trial receipt."""
+
+    repository: str
+    repository_id: str
+    repository_owner_id: str
+    workflow: str
+    ref: str
+    source_commit: str
+    environment: str
+    run_id: str
+    run_attempt: int
+    runner_identity_sha256: str
+
+
+class TrialReceiptAuthority(TypedDict):
+    """The permit-bound static identity for one trial receipt authority."""
+
+    repository: str
+    repository_id: str
+    repository_owner_id: str
+    workflow: str
+    ref: str
+    source_commit: str
+    environment: str
+    runner_identity_sha256: str
+
+
 ReceiptSigner = Callable[[bytes], bytes]
-ReceiptSignatureVerifier = Callable[[str, bytes, bytes], bool]
+ReceiptAuthorityResolver = Callable[[str, str], TrialReceiptAuthority]
+ReceiptSignatureVerifier = Callable[[str, TrialReceiptIssuer, bytes, bytes], bool]
 
 
 class QualificationEvidenceError(ValueError):
@@ -265,6 +356,12 @@ def sha256_digest(payload: bytes) -> str:
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
+def identity_sha256(domain: bytes, value: Mapping[str, Any]) -> str:
+    """Commit to a canonical object under an explicit identity domain."""
+
+    return sha256_digest(domain + canonical_json_bytes(dict(value)))
+
+
 def receipt_sha256(receipt: Mapping[str, Any]) -> str:
     """Commit to the complete signed receipt envelope."""
 
@@ -274,6 +371,7 @@ def receipt_sha256(receipt: Mapping[str, Any]) -> str:
 def build_signed_trial_receipt(
     *,
     receipt_type: str,
+    issuer: TrialReceiptIssuer,
     issuer_key_id: str,
     source_artifact_sha256: str,
     verified_projection: Mapping[str, Any],
@@ -288,11 +386,23 @@ def build_signed_trial_receipt(
         raise QualificationEvidenceError("issuer_key_id must be a non-empty string")
     _require_digest(source_artifact_sha256, "source_artifact_sha256")
     _validate_timestamp(verified_at, "verified_at")
+    issuer_value = dict(issuer)
+    _validate_receipt_issuer(issuer_value, "issuer")
     projection = dict(verified_projection)
+    if "evidence_sha256" in projection:
+        raise QualificationEvidenceError(
+            "verified_projection.evidence_sha256 is derived by the receipt builder"
+        )
+    projection["evidence_sha256"] = _trial_evidence_sha256(
+        receipt_type,
+        source_artifact_sha256,
+        projection,
+    )
     _validate_projection(projection, receipt_type)
     unsigned = {
         "schema_version": TRIAL_RECEIPT_SCHEMA,
         "receipt_type": receipt_type,
+        "issuer": issuer_value,
         "issuer_key_id": issuer_key_id,
         "algorithm": "ed25519",
         "source_artifact_sha256": source_artifact_sha256,
@@ -312,7 +422,6 @@ def build_qualification_campaign(
     campaign_id: str,
     campaign_permit_sha256: str,
     project_contract_sha256: str,
-    source_evidence_manifest_sha256: str,
     bundle_artifact_sha256: str,
     runtime_identity_sha256: str,
     evidence_identity_sha256: str,
@@ -325,6 +434,7 @@ def build_qualification_campaign(
     receipt_envelopes: Sequence[Mapping[str, Any]],
     generated_at: str,
     verify_receipt_signature: ReceiptSignatureVerifier,
+    resolve_receipt_authority: ReceiptAuthorityResolver,
     require_admissible: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Build a canonical v3 campaign and return its derived summary."""
@@ -343,13 +453,19 @@ def build_qualification_campaign(
         "campaign_id": campaign_id,
         "campaign_permit_sha256": campaign_permit_sha256,
         "project_contract_sha256": project_contract_sha256,
-        "source_evidence_manifest_sha256": source_evidence_manifest_sha256,
         "bundle_artifact_sha256": bundle_artifact_sha256,
         "runtime_identity_sha256": runtime_identity_sha256,
         "evidence_identity_sha256": evidence_identity_sha256,
         "qualification_contract": dict(qualification_contract),
+        "qualification_contract_sha256": identity_sha256(
+            QUALIFICATION_CONTRACT_IDENTITY_DOMAIN, qualification_contract
+        ),
         "oracle_contract": dict(oracle_contract),
+        "oracle_contract_sha256": identity_sha256(ORACLE_CONTRACT_IDENTITY_DOMAIN, oracle_contract),
         "authority_contract": dict(authority_contract),
+        "authority_contract_sha256": identity_sha256(
+            AUTHORITY_CONTRACT_IDENTITY_DOMAIN, authority_contract
+        ),
         "conditions": ordered_conditions,
         "invariants": [dict(invariant) for invariant in invariants],
         "excluded_trials": [dict(trial) for trial in excluded_trials],
@@ -359,15 +475,26 @@ def build_qualification_campaign(
     summary = validate_qualification_campaign(
         campaign,
         verify_receipt_signature=verify_receipt_signature,
+        resolve_receipt_authority=resolve_receipt_authority,
         require_admissible=require_admissible,
     )
     return campaign, summary
+
+
+def build_source_campaign_projection(campaign: Mapping[str, Any]) -> dict[str, Any]:
+    """Wrap a validated campaign for the private evidence decision boundary."""
+
+    return {
+        "schema_version": SOURCE_CAMPAIGN_PROJECTION_SCHEMA,
+        "campaign": dict(campaign),
+    }
 
 
 def validate_qualification_campaign(
     campaign: Mapping[str, Any],
     *,
     verify_receipt_signature: ReceiptSignatureVerifier,
+    resolve_receipt_authority: ReceiptAuthorityResolver,
     require_admissible: bool = True,
 ) -> dict[str, Any]:
     """Verify all rows and receipts, derive counts, and enforce launch admission."""
@@ -380,20 +507,41 @@ def validate_qualification_campaign(
     for field in (
         "campaign_permit_sha256",
         "project_contract_sha256",
-        "source_evidence_manifest_sha256",
         "bundle_artifact_sha256",
         "runtime_identity_sha256",
         "evidence_identity_sha256",
+        "qualification_contract_sha256",
+        "oracle_contract_sha256",
+        "authority_contract_sha256",
     ):
         _require_digest(value[field], field)
-    for field in ("qualification_contract", "oracle_contract", "authority_contract"):
-        _require_mapping(value[field], field)
-    _require_sequence(value["invariants"], "invariants")
-    _require_sequence(value["excluded_trials"], "excluded_trials")
-    _validate_timestamp(value["generated_at"], "generated_at")
+    contract_identities = (
+        (
+            "qualification_contract",
+            "qualification_contract_sha256",
+            QUALIFICATION_CONTRACT_IDENTITY_DOMAIN,
+        ),
+        ("oracle_contract", "oracle_contract_sha256", ORACLE_CONTRACT_IDENTITY_DOMAIN),
+        (
+            "authority_contract",
+            "authority_contract_sha256",
+            AUTHORITY_CONTRACT_IDENTITY_DOMAIN,
+        ),
+    )
+    for contract_field, digest_field, domain in contract_identities:
+        contract = _require_mapping(value[contract_field], contract_field)
+        if identity_sha256(domain, contract) != value[digest_field]:
+            raise QualificationEvidenceError(f"{digest_field} does not bind {contract_field}")
+    observed_invariants = _require_sequence(value["invariants"], "invariants")
+    excluded_trials = _require_sequence(value["excluded_trials"], "excluded_trials")
+    if excluded_trials:
+        raise QualificationEvidenceError("an admissible campaign must not hide excluded trials")
+    campaign_generated_at = _validate_timestamp(value["generated_at"], "generated_at")
 
     receipts = _receipt_index(
-        value["receipt_envelopes"], verify_receipt_signature=verify_receipt_signature
+        value["receipt_envelopes"],
+        verify_receipt_signature=verify_receipt_signature,
+        resolve_receipt_authority=resolve_receipt_authority,
     )
     conditions = _require_sequence(value["conditions"], "conditions")
     if not conditions:
@@ -408,6 +556,7 @@ def validate_qualification_campaign(
     class_counts: dict[str, Counter[str]] = {
         name: Counter() for name in sorted(QUALIFICATION_CLASSES)
     }
+    cells: list[dict[str, Any]] = []
     reliability = Counter(
         {
             "unsafe_effect_count": 0,
@@ -417,11 +566,15 @@ def validate_qualification_campaign(
             "replay_dispatch_count": 0,
             "model_call_count": 0,
             "unplanned_intervention_count": 0,
+            "dispatch_count": 0,
+            "unverified_direct_action_count": 0,
             "uncertain_delivery_trial_count": 0,
             "reconciliation_required_count": 0,
         }
     )
     referenced_receipts: set[str] = set()
+    attempt_ids: set[str] = set()
+    run_ids: set[str] = set()
 
     previous_condition_key: tuple[str, str, str] | None = None
     for condition_index, raw_condition in enumerate(conditions):
@@ -463,6 +616,8 @@ def validate_qualification_campaign(
         class_counts[qualification_class]["condition_count"] += 1
         class_counts[qualification_class]["required_trial_count"] += required
         class_counts[qualification_class]["observed_trial_count"] += len(trials)
+        cell_counts = Counter({field: 0 for field in CELL_COUNTERS})
+        terminal_outcomes = Counter({outcome: 0 for outcome in sorted(TERMINAL_OUTCOMES)})
 
         for expected_index, raw_trial in enumerate(trials, start=1):
             trial_context = f"{context}.trials[{expected_index - 1}]"
@@ -493,6 +648,12 @@ def validate_qualification_campaign(
                 "evidence_identity_sha256",
             ):
                 _require_digest(trial[field], f"{trial_context}.{field}")
+            if trial["attempt_id_sha256"] in attempt_ids:
+                raise QualificationEvidenceError("campaign reuses a trial attempt identity")
+            if trial["run_id_sha256"] in run_ids:
+                raise QualificationEvidenceError("campaign reuses a trial run identity")
+            attempt_ids.add(trial["attempt_id_sha256"])
+            run_ids.add(trial["run_id_sha256"])
             for field in (
                 "campaign_permit_sha256",
                 "bundle_artifact_sha256",
@@ -547,6 +708,14 @@ def validate_qualification_campaign(
                         trial=trial,
                         context=f"{trial_context}.{row_field}",
                     )
+                    receipt_verified_at = _validate_timestamp(
+                        envelope["verified_at"],
+                        f"{trial_context}.{row_field}.verified_at",
+                    )
+                    if not completed_at <= receipt_verified_at <= campaign_generated_at:
+                        raise QualificationEvidenceError(
+                            f"{trial_context}.{row_field} receipt time is outside the campaign chain"
+                        )
                     trial_receipts[receipt_type] = envelope
                 elif digest is not None:
                     raise QualificationEvidenceError(
@@ -560,16 +729,31 @@ def validate_qualification_campaign(
             runner = facts["runner"]
             observer = facts["observer"]
             delivery = facts["delivery"]
+            observed_delivery_tuple = (
+                delivery["dispatch_state"],
+                delivery["delivery_certainty"],
+                delivery["idempotency_result"],
+            )
+            if observed_delivery_tuple != DELIVERY_TUPLE_BY_CLASS[qualification_class]:
+                failures.append(
+                    f"{task}/{name}/{expected_index} delivery facts do not match "
+                    f"the {qualification_class} contract"
+                )
             if runner["observed_terminal_outcome"] != outcome:
                 raise QualificationEvidenceError(
                     f"{trial_context} outcome differs from the runner receipt"
                 )
             class_counts[qualification_class][outcome] += 1
+            terminal_outcomes[outcome] += 1
             reliability["unsafe_effect_count"] += runner["unsafe_effect_count"]
             reliability["model_call_count"] += runner["model_call_count"]
             reliability["unplanned_intervention_count"] += runner["unplanned_intervention_count"]
             reliability["blind_retry_count"] += delivery["blind_retry_count"]
             reliability["replay_dispatch_count"] += delivery["replay_dispatch_count"]
+            reliability["dispatch_count"] += int(delivery["dispatch_state"] == "dispatched")
+            reliability["unverified_direct_action_count"] += runner[
+                "unverified_direct_action_count"
+            ]
             if outcome == "RECONCILIATION_REQUIRED":
                 reliability["reconciliation_required_count"] += 1
             if qualification_class == "uncertain_delivery":
@@ -583,10 +767,57 @@ def validate_qualification_campaign(
                 and observer["duplicate_effect_count"] == 0
                 and observer["collateral_effect_count"] == 0
             )
-            if outcome == "VERIFIED" and not exact_intended_effect:
+            silent_incorrect = outcome == "VERIFIED" and not exact_intended_effect
+            over_halt = expected == "VERIFIED" and outcome == "HALTED"
+            decision_facts = facts.get("decision", {})
+            policy_facts = facts.get("policy", {})
+            repair_facts = facts.get("repair", {})
+            receipt_counts = {
+                "approved_repair_count": int(repair_facts.get("human_approval_verified", False)),
+                "authenticated_bound_decision_count": int(
+                    decision_facts.get("authenticated_typed_bound_decision", False)
+                ),
+                "blind_retry_count": delivery["blind_retry_count"],
+                "collateral_effect_count": observer["collateral_effect_count"],
+                "cleanup_absence_verified_count": int(facts["cleanup_absence"]["absence_verified"]),
+                "cleanup_verified_count": int(facts["cleanup"]["cleanup_completed"]),
+                "duplicate_effect_count": observer["duplicate_effect_count"],
+                "duplicate_suppressed_count": int(
+                    delivery["idempotency_result"] == "duplicate_suppressed"
+                ),
+                "dispatch_count": int(delivery["dispatch_state"] == "dispatched"),
+                "intended_effect_count": observer["intended_effect_count"],
+                "live_target_revalidation_count": int(
+                    decision_facts.get("live_target_revalidated", False)
+                    or repair_facts.get("target_revalidated", False)
+                ),
+                "model_call_count": runner["model_call_count"],
+                "over_halt_count": int(over_halt),
+                "policy_approved_repair_count": int(
+                    policy_facts.get("policy_approved_model_path", False)
+                ),
+                "replay_dispatch_count": delivery["replay_dispatch_count"],
+                "retained_repair_evidence_count": int(
+                    repair_facts.get("retained_evidence_verified", False)
+                ),
+                "silent_incorrect_success_count": int(silent_incorrect),
+                "unplanned_intervention_count": runner["unplanned_intervention_count"],
+                "unsafe_effect_count": runner["unsafe_effect_count"],
+                "uncertain_delivery_evidence_count": int(
+                    delivery["dispatch_state"] == "dispatched"
+                    and delivery["delivery_certainty"] == "uncertain"
+                ),
+                "unverified_direct_action_count": runner["unverified_direct_action_count"],
+                "wrong_effect_count": observer["wrong_effect_count"],
+                "wrong_record_count": observer["wrong_record_count"],
+            }
+            cell_counts.update(receipt_counts)
+            class_counts[qualification_class].update(receipt_counts)
+
+            if silent_incorrect:
                 reliability["silent_incorrect_success_count"] += 1
                 failures.append(f"{task}/{name}/{expected_index} is a silent incorrect success")
-            if expected == "VERIFIED" and outcome == "HALTED":
+            if over_halt:
                 reliability["over_halt_count"] += 1
                 failures.append(f"{task}/{name}/{expected_index} is an over-halt")
             if outcome != expected:
@@ -595,8 +826,20 @@ def validate_qualification_campaign(
                 )
             if runner["unsafe_effect_count"]:
                 failures.append(f"{task}/{name}/{expected_index} has unsafe effects")
+            if runner["unverified_direct_action_count"]:
+                failures.append(f"{task}/{name}/{expected_index} used an unverified direct action")
             if delivery["blind_retry_count"]:
                 failures.append(f"{task}/{name}/{expected_index} used a blind retry")
+            if delivery["replay_dispatch_count"]:
+                failures.append(f"{task}/{name}/{expected_index} used replay dispatch")
+            for field in (
+                "wrong_effect_count",
+                "wrong_record_count",
+                "duplicate_effect_count",
+                "collateral_effect_count",
+            ):
+                if observer[field]:
+                    failures.append(f"{task}/{name}/{expected_index} has a nonzero {field}")
             if not facts["cleanup"]["cleanup_completed"]:
                 failures.append(f"{task}/{name}/{expected_index} cleanup did not complete")
             if not facts["cleanup_absence"]["absence_verified"]:
@@ -608,11 +851,6 @@ def validate_qualification_campaign(
                 if runner["unplanned_intervention_count"]:
                     failures.append(f"{task}/{name}/{expected_index} used unplanned intervention")
             if qualification_class == "idempotency_replay":
-                if delivery["idempotency_result"] not in {
-                    "duplicate_suppressed",
-                    "single_effect_verified",
-                }:
-                    failures.append(f"{task}/{name}/{expected_index} did not verify idempotency")
                 if observer["duplicate_effect_count"]:
                     failures.append(f"{task}/{name}/{expected_index} produced a duplicate effect")
             if qualification_class == "uncertain_delivery":
@@ -620,8 +858,6 @@ def validate_qualification_campaign(
                     failures.append(
                         f"{task}/{name}/{expected_index} lacks uncertain delivery evidence"
                     )
-                if delivery["replay_dispatch_count"]:
-                    failures.append(f"{task}/{name}/{expected_index} used replay dispatch")
                 if exact_intended_effect:
                     failures.append(
                         f"{task}/{name}/{expected_index} required reconciliation despite complete effect proof"
@@ -638,13 +874,6 @@ def validate_qualification_campaign(
                     )
                 ):
                     failures.append(f"{task}/{name}/{expected_index} safe halt observed an effect")
-                if (
-                    delivery["dispatch_state"] != "not_dispatched"
-                    or delivery["delivery_certainty"] != "not_delivered"
-                ):
-                    failures.append(
-                        f"{task}/{name}/{expected_index} safe halt dispatched an action"
-                    )
             if qualification_class == "declared_attended":
                 decision = facts["decision"]
                 if not all(decision.values()):
@@ -665,8 +894,27 @@ def validate_qualification_campaign(
                 ):
                     if not repair[field]:
                         failures.append(f"{task}/{name}/{expected_index} repair lacks {field}")
-                if repair["unverified_direct_action_count"]:
-                    failures.append(f"{task}/{name}/{expected_index} used unverified direct action")
+        cells.append(
+            {
+                "task_id": task,
+                "condition_id": name,
+                "qualification_class": qualification_class,
+                "trial_count": len(trials),
+                "terminal_outcomes": dict(sorted(terminal_outcomes.items())),
+                **dict(sorted(cell_counts.items())),
+            }
+        )
+
+    derived_invariants = _derived_campaign_invariants(cells)
+    for index, raw_invariant in enumerate(observed_invariants):
+        invariant = _require_mapping(raw_invariant, f"invariants[{index}]")
+        _exact_keys(
+            invariant,
+            frozenset({"id", "holds", "observations", "violations"}),
+            f"invariants[{index}]",
+        )
+    if canonical_json_bytes(list(observed_invariants)) != canonical_json_bytes(derived_invariants):
+        failures.append("campaign invariants differ from signed receipt facts")
 
     for task, observed_classes in sorted(classes_by_task.items()):
         missing = sorted(QUALIFICATION_CLASSES - observed_classes)
@@ -684,10 +932,12 @@ def validate_qualification_campaign(
         "campaign_sha256": campaign_sha256,
         "campaign_permit_sha256": value["campaign_permit_sha256"],
         "project_contract_sha256": value["project_contract_sha256"],
-        "source_evidence_manifest_sha256": value["source_evidence_manifest_sha256"],
         "bundle_artifact_sha256": value["bundle_artifact_sha256"],
         "runtime_identity_sha256": value["runtime_identity_sha256"],
         "evidence_identity_sha256": value["evidence_identity_sha256"],
+        "qualification_contract_sha256": value["qualification_contract_sha256"],
+        "oracle_contract_sha256": value["oracle_contract_sha256"],
+        "authority_contract_sha256": value["authority_contract_sha256"],
         "task_count": len(classes_by_task),
         "condition_count": len(condition_ids),
         "required_trial_count": required_trial_count,
@@ -697,6 +947,7 @@ def validate_qualification_campaign(
             qualification_class: dict(sorted(counts.items()))
             for qualification_class, counts in class_counts.items()
         },
+        "cells": cells,
         "reliability": dict(sorted(reliability.items())),
         "admissible": not failures,
         "violations": sorted(set(failures)),
@@ -708,14 +959,50 @@ def validate_qualification_campaign(
     return summary
 
 
+def _derived_campaign_invariants(cells: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    total_trials = sum(int(cell["trial_count"]) for cell in cells)
+    effect_violations = sum(
+        int(cell[field])
+        for cell in cells
+        for field in (
+            "wrong_record_count",
+            "wrong_effect_count",
+            "duplicate_effect_count",
+            "collateral_effect_count",
+        )
+    )
+    healthy_cells = [
+        cell for cell in cells if cell["qualification_class"] in {"healthy", "idempotency_replay"}
+    ]
+    healthy_trials = sum(int(cell["trial_count"]) for cell in healthy_cells)
+    healthy_model_calls = sum(int(cell["model_call_count"]) for cell in healthy_cells)
+    return [
+        {
+            "id": "no_wrong_or_duplicate_effect",
+            "holds": effect_violations == 0,
+            "observations": total_trials,
+            "violations": effect_violations,
+        },
+        {
+            "id": "zero_model_healthy_path",
+            "holds": healthy_model_calls == 0,
+            "observations": healthy_trials,
+            "violations": healthy_model_calls,
+        },
+    ]
+
+
 def _receipt_index(
     raw_receipts: Any,
     *,
     verify_receipt_signature: ReceiptSignatureVerifier,
+    resolve_receipt_authority: ReceiptAuthorityResolver,
 ) -> dict[str, Mapping[str, Any]]:
     receipts = _require_sequence(raw_receipts, "receipt_envelopes")
     if not callable(verify_receipt_signature):
         raise QualificationEvidenceError("a receipt signature verifier is required")
+    if not callable(resolve_receipt_authority):
+        raise QualificationEvidenceError("a receipt authority resolver is required")
     by_digest: dict[str, Mapping[str, Any]] = {}
     previous_digest: str | None = None
     for index, raw_receipt in enumerate(receipts):
@@ -730,6 +1017,16 @@ def _receipt_index(
         if receipt_type not in RECEIPT_TYPES:
             raise QualificationEvidenceError(f"{context}.receipt_type is invalid")
         key_id = _require_nonempty(receipt["issuer_key_id"], f"{context}.issuer_key_id")
+        issuer = _validate_receipt_issuer(receipt["issuer"], f"{context}.issuer")
+        authority = _validate_receipt_authority(
+            resolve_receipt_authority(receipt_type, key_id),
+            f"{context}.resolved_authority",
+        )
+        for field in _RECEIPT_AUTHORITY_KEYS:
+            if issuer[field] != authority[field]:
+                raise QualificationEvidenceError(
+                    f"{context}.issuer differs from the permit-bound authority at {field}"
+                )
         if receipt["algorithm"] != "ed25519":
             raise QualificationEvidenceError(f"{context}.algorithm must be ed25519")
         _require_digest(receipt["source_artifact_sha256"], f"{context}.source_artifact_sha256")
@@ -738,6 +1035,14 @@ def _receipt_index(
             receipt["verified_projection"], f"{context}.verified_projection"
         )
         _validate_projection(projection, receipt_type)
+        if projection["evidence_sha256"] != _trial_evidence_sha256(
+            receipt_type,
+            receipt["source_artifact_sha256"],
+            projection,
+        ):
+            raise QualificationEvidenceError(
+                f"{context}.verified_projection.evidence_sha256 does not bind the source artifact"
+            )
         try:
             signature = base64.b64decode(receipt["signature"], validate=True)
         except (binascii.Error, TypeError) as exc:
@@ -748,7 +1053,7 @@ def _receipt_index(
             )
         unsigned = {field: receipt[field] for field in _RECEIPT_UNSIGNED_KEYS}
         preimage = TRIAL_RECEIPT_SIGNATURE_DOMAIN + canonical_json_bytes(unsigned)
-        if not verify_receipt_signature(key_id, preimage, signature):
+        if not verify_receipt_signature(key_id, issuer, preimage, signature):
             raise QualificationEvidenceError(f"{context}.signature is not valid")
         digest = receipt_sha256(receipt)
         if digest in by_digest:
@@ -758,6 +1063,52 @@ def _receipt_index(
         previous_digest = digest
         by_digest[digest] = receipt
     return by_digest
+
+
+def _trial_evidence_sha256(
+    receipt_type: str,
+    source_artifact_sha256: str,
+    projection: Mapping[str, Any],
+) -> str:
+    projection_without_evidence = dict(projection)
+    projection_without_evidence.pop("evidence_sha256", None)
+    identity = {
+        "receipt_type": receipt_type,
+        "source_artifact_sha256": source_artifact_sha256,
+        "verified_projection": projection_without_evidence,
+    }
+    return sha256_digest(TRIAL_EVIDENCE_IDENTITY_DOMAIN + canonical_json_bytes(identity))
+
+
+def _validate_receipt_issuer(value: Any, context: str) -> TrialReceiptIssuer:
+    issuer = dict(_require_mapping(value, context))
+    _exact_keys(issuer, _RECEIPT_ISSUER_KEYS, context)
+    for field in (
+        "repository",
+        "repository_id",
+        "repository_owner_id",
+        "workflow",
+        "ref",
+        "source_commit",
+        "environment",
+        "run_id",
+    ):
+        _require_nonempty(issuer[field], f"{context}.{field}")
+    _require_int(issuer["run_attempt"], f"{context}.run_attempt", minimum=1)
+    _require_digest(issuer["runner_identity_sha256"], f"{context}.runner_identity_sha256")
+    return issuer  # type: ignore[return-value]
+
+
+def _validate_receipt_authority(value: Any, context: str) -> TrialReceiptAuthority:
+    authority = dict(_require_mapping(value, context))
+    _exact_keys(authority, _RECEIPT_AUTHORITY_KEYS, context)
+    for field in _RECEIPT_AUTHORITY_KEYS - {"runner_identity_sha256"}:
+        _require_nonempty(authority[field], f"{context}.{field}")
+    _require_digest(
+        authority["runner_identity_sha256"],
+        f"{context}.runner_identity_sha256",
+    )
+    return authority  # type: ignore[return-value]
 
 
 def _validate_projection(projection: Mapping[str, Any], receipt_type: str) -> None:
@@ -819,7 +1170,6 @@ def _derived_receipt_verdict(receipt_type: str, facts: Mapping[str, Any]) -> str
             facts["human_approval_verified"]
             and facts["retained_evidence_verified"]
             and facts["target_revalidated"]
-            and facts["unverified_direct_action_count"] == 0
         )
         return "VERIFIED" if verified else "REFUTED"
     if receipt_type == "cleanup":
