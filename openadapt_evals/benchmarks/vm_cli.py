@@ -8312,6 +8312,7 @@ Examples:
         "--model", default="gpt-4o-mini", help="Model name (default: gpt-4o-mini)"
     )
     p_pool_run.add_argument("--qualification-dir", required=True, type=Path)
+    p_pool_run.add_argument("--task-contracts", required=True, type=Path)
     p_pool_run.set_defaults(func=cmd_pool_run)
 
     # pool-cleanup
@@ -8354,6 +8355,7 @@ Examples:
         help="Directory with <worker>.identity.json and <worker>.egress.json",
     )
     p_pool_auto.add_argument("--run-evidence-dir", required=True, type=Path)
+    p_pool_auto.add_argument("--task-contracts", required=True, type=Path)
     p_pool_auto.set_defaults(func=cmd_pool_auto)
 
     # pool-pause

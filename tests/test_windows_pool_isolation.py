@@ -17,6 +17,7 @@ from openadapt_evals.infrastructure.pool import (
     WAA_START_SCRIPT_TEMPLATE,
     WINDOWS_EGRESS_BOOTSTRAP_SCRIPT,
     PoolManager,
+    select_qualified_task,
 )
 from openadapt_evals.infrastructure.ssh_tunnel import SSHTunnelManager, TunnelConfig
 from openadapt_evals.infrastructure.windows_pool_isolation import (
@@ -40,10 +41,29 @@ from openadapt_evals.infrastructure.windows_pool_isolation import (
     validate_worker_identity,
     worker_identity_sha256,
 )
+from openadapt_evals.infrastructure.windows_worker_task_contract import (
+    WorkerTaskContract,
+    derive_task_condition,
+    derive_task_selector,
+)
 
 NOW = datetime(2026, 8, 27, 18, 0, tzinfo=timezone.utc)
 LIVE_NFT_SHA256 = "sha256:" + "f" * 64
 PROXY_PASSWORD = "proxy-secret-credential"
+
+
+def _task_contract_for_subset(subset: bytes, *, ordinal: int = 1) -> WorkerTaskContract:
+    selector = derive_task_selector(
+        campaign_artifact_sha256="sha256:" + "c" * 64,
+        task_source_sha256="sha256:" + hashlib.sha256(subset).hexdigest(),
+        task_ordinal=ordinal,
+    )
+    condition = derive_task_condition(
+        task_id_sha256=selector.task_id_sha256,
+        condition_source_sha256="sha256:" + "d" * 64,
+        condition_ordinal=1,
+    )
+    return WorkerTaskContract(selector=selector, condition=condition)
 
 
 def _identity(**overrides):
@@ -546,6 +566,47 @@ def test_benchmark_dispatch_requires_one_exact_task_contract_per_worker():
         manager.run(tasks=1, api_key="test-only", qualification_dir=Path("."))
 
 
+def test_qualified_task_selection_binds_exact_subset_bytes_and_ordinal():
+    subset = b'{"domain":["task-a"]}\n'
+    contract = _task_contract_for_subset(subset)
+
+    domain, task, selected = select_qualified_task(
+        {"domain": ["task-a", "task-b"]},
+        task_contract=contract,
+        requested_task="task-a",
+    )
+
+    assert (domain, task, selected) == ("domain", "task-a", subset)
+
+
+def test_qualified_task_selection_refuses_source_and_label_substitution():
+    subset = b'{"domain":["task-a"]}\n'
+    contract = _task_contract_for_subset(subset)
+
+    with pytest.raises(RuntimeError, match="differs from the qualified task source"):
+        select_qualified_task(
+            {"domain": ["task-b"]},
+            task_contract=contract,
+        )
+    with pytest.raises(RuntimeError, match="requested task label differs"):
+        select_qualified_task(
+            {"domain": ["task-a"]},
+            task_contract=contract,
+            requested_task="task-b",
+        )
+
+
+def test_qualified_task_selection_refuses_ordinal_substitution():
+    subset = b'{"domain":["task-a"]}\n'
+    contract = _task_contract_for_subset(subset, ordinal=2)
+
+    with pytest.raises(RuntimeError, match="ordinal is outside"):
+        select_qualified_task(
+            {"domain": ["task-a"]},
+            task_contract=contract,
+        )
+
+
 def test_live_start_and_dispatch_rechecks_use_the_pinned_boundary():
     calls = []
     dispatches = 0
@@ -695,6 +756,7 @@ def test_oa_vm_cli_exposes_the_three_step_qualified_start():
     assert auto_help.returncode == 0, auto_help.stderr
     assert "--qualification-dir" in auto_help.stdout
     assert "--run-evidence-dir" in auto_help.stdout
+    assert "--task-contracts" in auto_help.stdout
     assert "--baseline-sha256" not in auto_help.stdout
 
     assert "--api-key" not in result.stdout
@@ -713,6 +775,7 @@ def test_oa_vm_cli_exposes_the_three_step_qualified_start():
     )
     assert run_help.returncode == 0, run_help.stderr
     assert "--api-key" not in run_help.stdout
+    assert "--task-contracts" in run_help.stdout
 
 
 def test_acr_provisioning_uses_pinned_manager_and_password_stdin_only():

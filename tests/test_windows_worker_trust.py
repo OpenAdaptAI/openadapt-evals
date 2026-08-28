@@ -28,6 +28,7 @@ from openadapt_evals.infrastructure.windows_worker_trust import (
     PROCESS_START_IDENTITY_DOMAIN,
     START_ID_DOMAIN,
     TERMINAL_RECEIPT_IDENTITY_DOMAIN,
+    AuthorizedWorkerDispatch,
     ProviderObservation,
     VerifiedWorkerAdmission,
     WorkerTrustAuthority,
@@ -519,6 +520,31 @@ def test_authority_refuses_a_central_dispatch_for_a_different_task(monkeypatch) 
             run_id="123",
             task_contract=expected,
         )
+
+
+def test_terminal_issuer_makes_one_exact_idempotent_replay() -> None:
+    class _UncertainIssuer(_DispatchAuthority):
+        issue_calls = 0
+
+        def _issue_terminal(self, **bindings):
+            self.issue_calls += 1
+            assert bindings["terminal_evidence"] == {"terminal": "exact"}
+            raise RuntimeError("uncertain central response")
+
+    observation = _observation()
+    admission = _admission(observation)
+    capability = b"c" * 32
+    dispatch = _dispatch(admission, capability)
+    authority = _UncertainIssuer(dispatch, capability)
+
+    with pytest.raises(RuntimeError, match="uncertain central response"):
+        authority.issue_terminal(
+            admission=VerifiedWorkerAdmission._from_authority(admission),
+            dispatch=AuthorizedWorkerDispatch._from_authority(dispatch, capability),
+            terminal_evidence={"terminal": "exact"},
+        )
+
+    assert authority.issue_calls == 2
 
 
 def _prelaunch_evidence(

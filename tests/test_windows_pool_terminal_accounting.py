@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
 from unittest.mock import patch
@@ -16,6 +17,10 @@ from openadapt_evals.infrastructure.pool import (
 )
 from openadapt_evals.infrastructure.windows_worker_dispatch import (
     QualifiedPrelaunchEvidence,
+)
+from openadapt_evals.infrastructure.windows_worker_trust import (
+    AuthorizedWorkerDispatch,
+    VerifiedWorkerTerminal,
 )
 
 
@@ -211,6 +216,82 @@ def test_worker_interrupt_enters_the_same_termination_proof_path() -> None:
     build.assert_called_once()
 
 
+@dataclass(frozen=True)
+class _MinimalProcess:
+    dispatch_id_sha256: str
+    process_start_identity_sha256: str
+
+
+def test_monitor_failure_retains_canonical_uncertainty_and_attempts_interrupt() -> None:
+    process = _MinimalProcess(_sha("dispatch"), _sha("process"))
+    interrupt = {
+        "state": "INTERRUPTED_PROVEN",
+        "process": {
+            "dispatch_id_sha256": process.dispatch_id_sha256,
+            "process_start_identity_sha256": process.process_start_identity_sha256,
+        },
+        "log_sha256": _sha("interrupt-log"),
+    }
+    with (
+        patch(
+            "openadapt_evals.infrastructure.windows_worker_dispatch.read_process_terminal",
+            side_effect=RuntimeError("ssh lost"),
+        ),
+        patch(
+            "openadapt_evals.infrastructure.windows_worker_dispatch.interrupt_process",
+            return_value=interrupt,
+        ) as stop,
+        patch(
+            "openadapt_evals.infrastructure.windows_worker_dispatch.build_terminal_evidence",
+            return_value={"terminal_state": "QUARANTINED"},
+        ) as build,
+    ):
+        result = _build_postlaunch_terminal_evidence(
+            manager="manager",
+            admission="admission",
+            dispatch="dispatch",
+            process=process,
+            interrupt_requested=Event(),
+            poll_seconds=0,
+        )
+
+    assert result == {"terminal_state": "QUARANTINED"}
+    stop.assert_called_once_with("manager", process)
+    readback = build.call_args.kwargs["terminal_readback"]
+    assert readback["state"] == "UNCERTAIN"
+    assert readback["log_sha256"].startswith("sha256:")
+
+
+def test_monitor_and_interrupt_failure_stays_quarantined_and_uncertain() -> None:
+    process = _MinimalProcess(_sha("dispatch"), _sha("process"))
+    with (
+        patch(
+            "openadapt_evals.infrastructure.windows_worker_dispatch.read_process_terminal",
+            side_effect=RuntimeError("ssh lost"),
+        ),
+        patch(
+            "openadapt_evals.infrastructure.windows_worker_dispatch.interrupt_process",
+            side_effect=RuntimeError("stop unconfirmed"),
+        ),
+        patch(
+            "openadapt_evals.infrastructure.windows_worker_dispatch.build_terminal_evidence",
+            return_value={"terminal_state": "QUARANTINED"},
+        ) as build,
+    ):
+        _build_postlaunch_terminal_evidence(
+            manager="manager",
+            admission="admission",
+            dispatch="dispatch",
+            process=process,
+            interrupt_requested=Event(),
+            poll_seconds=0,
+        )
+
+    interrupt_evidence = build.call_args.kwargs["interrupt_evidence"]
+    assert interrupt_evidence["state"] == "INTERRUPT_UNCERTAIN"
+    assert interrupt_evidence["process_group_absent"] is False
+
+
 def test_prelaunch_quarantine_uses_the_canonical_evidence_builder() -> None:
     outcome = QualifiedPrelaunchEvidence(terminal_evidence={"process": None})
     built = {"terminal_state": "PRELAUNCH_QUARANTINED"}
@@ -240,13 +321,20 @@ def test_prelaunch_quarantine_uses_the_canonical_evidence_builder() -> None:
     )
 
 
-def _receipt(worker: str, state: str = "VERIFIED") -> dict[str, object]:
-    return {
+def _receipt(worker: str, state: str = "VERIFIED") -> VerifiedWorkerTerminal:
+    return VerifiedWorkerTerminal._from_authority({
         "receipt_id_sha256": _sha(f"receipt:{worker}"),
         "dispatch_id_sha256": _sha(f"dispatch:{worker}"),
         "task_id_sha256": _sha(f"task:{worker}"),
         "terminal_state": state,
-    }
+    })
+
+
+def _dispatch(worker: str) -> AuthorizedWorkerDispatch:
+    return AuthorizedWorkerDispatch._from_authority(
+        {"dispatch_id_sha256": _sha(f"dispatch:{worker}")},
+        b"test-only-capability" * 2,
+    )
 
 
 def _result(*, second_state: str = "SAFE_HALT") -> PoolRunResult:
@@ -271,6 +359,10 @@ def _result(*, second_state: str = "SAFE_HALT") -> PoolRunResult:
         dispatch_ids_by_worker={
             "worker-1": _sha("dispatch:worker-1"),
             "worker-2": _sha("dispatch:worker-2"),
+        },
+        authorized_dispatches_by_worker={
+            "worker-1": _dispatch("worker-1"),
+            "worker-2": _dispatch("worker-2"),
         },
     )
 
@@ -337,27 +429,58 @@ def test_prelaunch_quarantine_is_one_closed_failed_task() -> None:
 
 def test_duplicate_dispatch_receipt_is_refused() -> None:
     result = _result()
-    duplicate = dict(result.terminal_receipts[1])
-    duplicate["dispatch_id_sha256"] = result.terminal_receipts[0][
+    duplicate = dict(result.terminal_receipts[1].object)
+    duplicate["dispatch_id_sha256"] = result.terminal_receipts[0].object[
         "dispatch_id_sha256"
     ]
-    result.terminal_receipts = (result.terminal_receipts[0], duplicate)
+    result.terminal_receipts = (
+        result.terminal_receipts[0],
+        VerifiedWorkerTerminal._from_authority(duplicate),
+    )
     with pytest.raises(RuntimeError, match="not exact and unique"):
         _validate(result)
 
 
 def test_duplicate_central_receipt_identity_is_refused() -> None:
     result = _result()
-    second = dict(result.terminal_receipts[1])
-    second["receipt_id_sha256"] = result.terminal_receipts[0]["receipt_id_sha256"]
-    result.terminal_receipts = (result.terminal_receipts[0], second)
+    second = dict(result.terminal_receipts[1].object)
+    second["receipt_id_sha256"] = result.terminal_receipts[0].object[
+        "receipt_id_sha256"
+    ]
+    result.terminal_receipts = (
+        result.terminal_receipts[0],
+        VerifiedWorkerTerminal._from_authority(second),
+    )
     with pytest.raises(RuntimeError, match="not exact and unique"):
         _validate(result)
 
 
 def test_repeated_task_identity_is_valid_for_independent_trials() -> None:
     result = _result()
-    second = dict(result.terminal_receipts[1])
-    second["task_id_sha256"] = result.terminal_receipts[0]["task_id_sha256"]
-    result.terminal_receipts = (result.terminal_receipts[0], second)
+    second = dict(result.terminal_receipts[1].object)
+    second["task_id_sha256"] = result.terminal_receipts[0].object["task_id_sha256"]
+    result.terminal_receipts = (
+        result.terminal_receipts[0],
+        VerifiedWorkerTerminal._from_authority(second),
+    )
     assert _validate(result) is result
+
+
+def test_plain_mapping_cannot_fabricate_a_verified_terminal() -> None:
+    result = _result()
+    result.terminal_receipts = (
+        result.terminal_receipts[0],
+        result.terminal_receipts[1].object,
+    )
+    with pytest.raises(RuntimeError, match="opaque verified result"):
+        _validate(result)
+
+
+def test_plain_mapping_cannot_fabricate_an_authorized_dispatch() -> None:
+    result = _result()
+    result.authorized_dispatches_by_worker = {
+        **result.authorized_dispatches_by_worker,
+        "worker-2": {"dispatch_id_sha256": _sha("dispatch:worker-2")},
+    }
+    with pytest.raises(RuntimeError, match="opaque central result"):
+        _validate(result)

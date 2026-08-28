@@ -958,11 +958,18 @@ class WorkerTrustAuthority(ABC):
         dispatch: AuthorizedWorkerDispatch,
         terminal_evidence: Mapping[str, Any],
     ) -> VerifiedWorkerTerminal:
-        raw = self._issue_terminal(
-            admission=admission.object,
-            dispatch=dispatch.object,
-            terminal_evidence=terminal_evidence,
-        )
+        bindings = {
+            "admission": admission.object,
+            "dispatch": dispatch.object,
+            "terminal_evidence": terminal_evidence,
+        }
+        try:
+            raw = self._issue_terminal(**bindings)
+        except Exception:
+            # The central issuer selects one byte-identical receipt by the
+            # dispatch identity. One exact replay reconciles an uncertain
+            # response without creating a second terminal result.
+            raw = self._issue_terminal(**bindings)
         validated = validate_worker_terminal(
             raw,
             dispatch=dispatch.object,

@@ -27,6 +27,7 @@ Example:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -34,7 +35,7 @@ import re
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from threading import Event
@@ -48,6 +49,10 @@ from openadapt_evals.infrastructure.azure_vm import (
 )
 from openadapt_evals.infrastructure.windows_worker_task_contract import (
     WorkerTaskContract,
+)
+from openadapt_evals.infrastructure.windows_worker_trust import (
+    AuthorizedWorkerDispatch,
+    VerifiedWorkerTerminal,
 )
 
 if TYPE_CHECKING:
@@ -82,6 +87,48 @@ def _proxy_start_values(policy: dict[str, Any]) -> dict[str, str | int]:
     }
 
 
+def select_qualified_task(
+    metadata: object,
+    *,
+    task_contract: WorkerTaskContract,
+    requested_task: str | None = None,
+) -> tuple[str, str, bytes]:
+    """Select only the exact subset whose bytes have the qualified source hash."""
+
+    if not isinstance(metadata, dict) or not metadata:
+        raise RuntimeError("Qualified task metadata is invalid.")
+    pairs = [
+        (domain, task_id)
+        for domain, task_list in metadata.items()
+        if isinstance(domain, str) and isinstance(task_list, list)
+        for task_id in task_list
+        if isinstance(task_id, str)
+    ]
+    task_index = task_contract.selector.task_ordinal - 1
+    if task_index >= len(pairs):
+        raise RuntimeError("Qualified task ordinal is outside the admitted metadata.")
+    domain, exact_task = pairs[task_index]
+    subset = (
+        json.dumps(
+            {domain: [exact_task]},
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+        + b"\n"
+    )
+    subset_sha256 = "sha256:" + hashlib.sha256(subset).hexdigest()
+    if subset_sha256 != task_contract.selector.task_source_sha256:
+        raise RuntimeError(
+            "The selected task subset differs from the qualified task source."
+        )
+    if requested_task is not None and requested_task != exact_task:
+        raise RuntimeError(
+            "The requested task label differs from the qualified task source."
+        )
+    return domain, exact_task, subset
+
+
 @dataclass
 class PoolRunResult:
     """Result of running benchmark tasks across a pool."""
@@ -93,11 +140,16 @@ class PoolRunResult:
     worker_results: list[tuple[str, int, int, str | None]]
     """List of (worker_name, completed, failed, error_or_none)."""
 
-    terminal_receipts: tuple[Mapping[str, Any], ...] = ()
+    terminal_receipts: tuple[VerifiedWorkerTerminal, ...] = ()
     """One centrally issued terminal receipt for each requested task."""
 
     dispatch_ids_by_worker: Mapping[str, str] = field(default_factory=dict)
     """Exact local worker-to-dispatch correlation for those receipts."""
+
+    authorized_dispatches_by_worker: Mapping[
+        str, AuthorizedWorkerDispatch
+    ] = field(default_factory=dict)
+    """Opaque central dispatches that establish the expected receipt set."""
 
 
 def validate_terminal_pool_result(
@@ -114,6 +166,8 @@ def validate_terminal_pool_result(
     expected_dispatch_ids = set(expected_dispatches.values())
     if (
         result.total_tasks != task_count
+        or not isinstance(result.authorized_dispatches_by_worker, Mapping)
+        or set(result.authorized_dispatches_by_worker) != expected_workers
         or not isinstance(result.dispatch_ids_by_worker, Mapping)
         or dict(result.dispatch_ids_by_worker) != dict(expected_dispatches)
         or len(expected_dispatch_ids) != task_count
@@ -126,6 +180,12 @@ def validate_terminal_pool_result(
         )
     ):
         raise RuntimeError("Qualified terminal expectations are not exact and unique.")
+    for worker, dispatch in result.authorized_dispatches_by_worker.items():
+        if (
+            not isinstance(dispatch, AuthorizedWorkerDispatch)
+            or dispatch.object.get("dispatch_id_sha256") != expected_dispatches[worker]
+        ):
+            raise RuntimeError("A qualified dispatch is not an opaque central result.")
     if len(result.worker_results) != task_count:
         raise RuntimeError("A requested task has no worker terminal result.")
     rows: dict[str, tuple[str, int, int, str | None]] = {}
@@ -154,9 +214,10 @@ def validate_terminal_pool_result(
         raise RuntimeError("A requested task has no central terminal receipt.")
     receipts_by_dispatch: dict[str, Mapping[str, Any]] = {}
     receipt_ids: set[str] = set()
-    for receipt in result.terminal_receipts:
-        if not isinstance(receipt, Mapping):
-            raise RuntimeError("A central terminal receipt is invalid.")
+    for terminal in result.terminal_receipts:
+        if not isinstance(terminal, VerifiedWorkerTerminal):
+            raise RuntimeError("A central terminal receipt is not an opaque verified result.")
+        receipt = terminal.object
         dispatch_id = receipt.get("dispatch_id_sha256")
         receipt_id = receipt.get("receipt_id_sha256")
         task_id = receipt.get("task_id_sha256")
@@ -193,8 +254,8 @@ def validate_terminal_pool_result(
             )
 
     completed = sum(
-        receipt["terminal_state"] == "VERIFIED"
-        for receipt in result.terminal_receipts
+        terminal.object["terminal_state"] == "VERIFIED"
+        for terminal in result.terminal_receipts
     )
     failed = task_count - completed
     row_completed = sum(row[1] for row in result.worker_results)
@@ -228,16 +289,73 @@ def _build_postlaunch_terminal_evidence(
     )
 
     interrupt_evidence: Mapping[str, Any] | None = None
+
+    def uncertain_failure(phase: str, error: BaseException) -> tuple[
+        Mapping[str, Any], Mapping[str, Any]
+    ]:
+        failure = {
+            "schema_version": "openadapt.qualification-worker-monitor-failure/v1",
+            "dispatch_id_sha256": process.dispatch_id_sha256,
+            "process_start_identity_sha256": process.process_start_identity_sha256,
+            "phase": phase,
+            "error_class": type(error).__name__,
+        }
+        failure_bytes = (
+            json.dumps(
+                failure,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+            + b"\n"
+        )
+        failure_sha256 = "sha256:" + hashlib.sha256(failure_bytes).hexdigest()
+        readback = {
+            "state": "UNCERTAIN",
+            "exit_code": None,
+            "log_sha256": failure_sha256,
+            "log_size_bytes": len(failure_bytes),
+            "process": asdict(process),
+        }
+        uncertain_interrupt = {
+            "state": "INTERRUPT_UNCERTAIN",
+            "leader_identity_matched": False,
+            "process_group_absent": False,
+            "remaining_member_count": 1,
+            "log_sha256": failure_sha256,
+            "log_size_bytes": len(failure_bytes),
+            "process": asdict(process),
+        }
+        return readback, uncertain_interrupt
+
     while True:
         if interrupt_requested.is_set():
-            interrupt_evidence = interrupt_process(manager, process)
-            terminal_readback = read_process_terminal(manager, process)
+            try:
+                interrupt_evidence = interrupt_process(manager, process)
+                terminal_readback = read_process_terminal(manager, process)
+            except Exception as exc:
+                terminal_readback, interrupt_evidence = uncertain_failure(
+                    "interrupt",
+                    exc,
+                )
             break
         try:
             terminal_readback = read_process_terminal(manager, process)
         except KeyboardInterrupt:
             interrupt_requested.set()
             continue
+        except Exception as exc:
+            interrupt_requested.set()
+            try:
+                interrupt_evidence = interrupt_process(manager, process)
+            except Exception as interrupt_exc:
+                terminal_readback, interrupt_evidence = uncertain_failure(
+                    "monitor-and-interrupt",
+                    interrupt_exc,
+                )
+            else:
+                terminal_readback, _ = uncertain_failure("monitor", exc)
+            break
         if terminal_readback["state"] != "RUNNING":
             break
         interrupt_requested.wait(poll_seconds)
@@ -1011,9 +1129,49 @@ class PoolManager:
             )
             if not isinstance(result, PoolRunResult):
                 raise RuntimeError("The external task authority returned an invalid result.")
+            expected_workers = {worker.name for worker in ready_workers}
+            if (
+                result.total_tasks != tasks
+                or set(result.authorized_dispatches_by_worker) != expected_workers
+            ):
+                raise RuntimeError(
+                    "The external task authority did not return every authorized task."
+                )
+            expected_dispatches: dict[str, str] = {}
+            contracts_by_worker = dict(
+                zip(
+                    (worker.name for worker in ready_workers),
+                    task_contracts,
+                    strict=True,
+                )
+            )
+            for worker_name, authorized in result.authorized_dispatches_by_worker.items():
+                if not isinstance(authorized, AuthorizedWorkerDispatch):
+                    raise RuntimeError(
+                        "The external task authority returned a non-central dispatch."
+                    )
+                dispatch = authorized.object
+                admission = qualified_admissions[worker_name].object
+                contract = contracts_by_worker[worker_name]
+                if (
+                    dispatch.get("worker_admission_sha256")
+                    != admission["admission_object_sha256"]
+                    or dispatch.get("worker_identity_sha256")
+                    != admission["worker_identity_sha256"]
+                    or dispatch.get("campaign_artifact_sha256")
+                    != contract.selector.campaign_artifact_sha256
+                    or dispatch.get("task_id_sha256")
+                    != contract.selector.task_id_sha256
+                    or dispatch.get("task_condition_sha256")
+                    != contract.condition.task_condition_sha256
+                ):
+                    raise RuntimeError(
+                        "The external task authority returned a different task dispatch."
+                    )
+                expected_dispatches[worker_name] = dispatch["dispatch_id_sha256"]
             return validate_terminal_pool_result(
                 result,
-                expected_dispatches=result.dispatch_ids_by_worker,
+                expected_dispatches=expected_dispatches,
             )
 
         def run_on_worker(
@@ -1022,8 +1180,8 @@ class PoolManager:
             total_workers: int,
         ) -> tuple[
             tuple[str, int, int, str | None],
-            Mapping[str, Any],
-            str,
+            VerifiedWorkerTerminal,
+            AuthorizedWorkerDispatch,
         ]:
             from openadapt_evals.infrastructure.windows_worker_dispatch import (
                 launch_authorized_process,
@@ -1062,42 +1220,13 @@ class PoolManager:
                 metadata = json.loads(metadata_result.stdout)
             except json.JSONDecodeError as exc:
                 raise RuntimeError("Qualified task metadata is invalid.") from exc
-            if not isinstance(metadata, dict) or not metadata:
-                raise RuntimeError("Qualified task metadata is invalid.")
-            pairs = [
-                (domain, task_id)
-                for domain, task_list in metadata.items()
-                if isinstance(domain, str) and isinstance(task_list, list)
-                for task_id in task_list
-                if isinstance(task_id, str)
-            ]
-            requested_task = task_ids[worker_idx] if task_ids is not None else "-"
-            if requested_task == "-":
-                task_index = task_contract.selector.task_ordinal - 1
-                if task_index >= len(pairs):
-                    raise RuntimeError(
-                        "Qualified task ordinal is outside the admitted metadata."
-                    )
-                domain, exact_task = pairs[task_index]
-            else:
-                matches = [pair for pair in pairs if pair[1] == requested_task]
-                if len(matches) != 1:
-                    raise RuntimeError("Requested task identity is not unique.")
-                domain, exact_task = matches[0]
-            exact_task_id = f"{domain}:{exact_task}"
-            subset = (
-                json.dumps(
-                    {domain: [exact_task]},
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    ensure_ascii=False,
-                ).encode("utf-8")
-                + b"\n"
+            requested_task = task_ids[worker_idx] if task_ids is not None else None
+            domain, exact_task, subset = select_qualified_task(
+                metadata,
+                task_contract=task_contract,
+                requested_task=requested_task,
             )
-            if interrupt_requested.is_set():
-                raise RuntimeError(
-                    "Operator interrupt stopped the task before dispatch authorization."
-                )
+            exact_task_id = f"{domain}:{exact_task}"
             authorized = self.worker_trust_authority.authorize_dispatch(
                 admission=admission,
                 run_id=worker.qualified_run_id,
@@ -1152,8 +1281,8 @@ class PoolManager:
                 )
             return (
                 worker_result,
-                terminal.object,
-                authorized.object["dispatch_id_sha256"],
+                terminal,
+                authorized,
             )
 
         self._log("POOL-RUN", "")
@@ -1161,8 +1290,10 @@ class PoolManager:
         start_time = time.time()
 
         results: list[tuple[str, int, int, str | None]] = []
-        terminal_receipts: list[Mapping[str, Any]] = []
+        terminal_receipts: list[VerifiedWorkerTerminal] = []
         expected_dispatches: dict[str, str] = {}
+        authorized_dispatches: dict[str, AuthorizedWorkerDispatch] = {}
+        reconciliation_failures: dict[str, str] = {}
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
             futures = {}
             for worker_idx, worker in enumerate(ready_workers):
@@ -1173,12 +1304,22 @@ class PoolManager:
             while pending:
                 try:
                     future = next(as_completed(pending))
-                    worker_result, terminal_receipt, dispatch_id = future.result()
+                    worker_result, terminal_receipt, authorized_dispatch = future.result()
                 except KeyboardInterrupt:
                     interrupt_requested.set()
                     self._log(
                         "POOL-RUN",
                         "Operator interrupt received; quarantining active worker processes.",
+                    )
+                    continue
+                except Exception as exc:
+                    pending.remove(future)
+                    interrupt_requested.set()
+                    name = futures[future]
+                    reconciliation_failures[name] = type(exc).__name__
+                    self._log(
+                        "POOL-RUN",
+                        f"  {name}: terminal reconciliation required",
                     )
                     continue
                 pending.remove(future)
@@ -1189,8 +1330,17 @@ class PoolManager:
                     self._log("POOL-RUN", f"  {name}: completed {completed} tasks")
                 results.append(worker_result)
                 terminal_receipts.append(terminal_receipt)
+                dispatch_id = authorized_dispatch.object["dispatch_id_sha256"]
                 expected_dispatches[name] = dispatch_id
+                authorized_dispatches[name] = authorized_dispatch
                 self.registry.update_pool_progress(completed=completed, failed=failed)
+
+        if reconciliation_failures:
+            failed_workers = ", ".join(sorted(reconciliation_failures))
+            raise RuntimeError(
+                "Terminal reconciliation is required for qualified workers: "
+                + failed_workers
+            )
 
         elapsed = time.time() - start_time
         total_completed = sum(r[1] for r in results)
@@ -1212,6 +1362,7 @@ class PoolManager:
             worker_results=results,
             terminal_receipts=tuple(terminal_receipts),
             dispatch_ids_by_worker=dict(expected_dispatches),
+            authorized_dispatches_by_worker=dict(authorized_dispatches),
         )
         return validate_terminal_pool_result(
             result,
