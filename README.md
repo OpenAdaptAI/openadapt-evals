@@ -182,6 +182,12 @@ screenshot. There's also a standalone GRPO trainer with no openadapt-ml
 dependency, an OpenEnv-compatible environment, and a four-pass pipeline that
 turns desktop recordings into structured workflows.
 
+ExtraDup (`python -m openadapt_evals.extradup`) mutates a MockMed gold write
+and asks whether a checker notices. Gold is FAIL when the system of record has
+the wrong cardinality or an extra field. If the checker cannot kill ExtraDup,
+it cannot underwrite a write. See
+[`openadapt_evals/extradup/README.md`](openadapt_evals/extradup/README.md).
+
 Runbooks for the demo-conditioned eval, the full evaluation runner, the UI-Venus
 grounder endpoint, GRPO training, and writing your own agent are in
 [docs/WORKFLOWS.md](docs/WORKFLOWS.md), along with the package tree.
