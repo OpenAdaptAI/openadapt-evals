@@ -258,11 +258,38 @@ jobs:
       - name: Verify the public distribution boundary
         run: python scripts/check_source_boundary.py --require-dist
 
+      - name: Refuse conflicting immutable PyPI files
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          test "$RELEASE_TAG" = "v${version}"
+          python scripts/verify_pypi_release.py \
+            --directory dist \
+            --version "$version" \
+            --allow-matching-subset \
+            --wait-seconds 300 \
+            --poll-seconds 10
+
       - name: Publish to PyPI with OIDC
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           print-hash: true
           skip-existing: true
+
+      - name: Verify immutable PyPI publication bytes
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          test "$RELEASE_TAG" = "v${version}"
+          python scripts/verify_pypi_release.py \
+            --directory dist \
+            --version "$version" \
+            --wait-seconds 300 \
+            --poll-seconds 10
 
   publish-github-release:
     needs:
@@ -277,7 +304,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
-      contents: write
+      contents: read
     steps:
       - name: Checkout the exact release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -285,21 +312,42 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Create the release App token
+        id: release-app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.OPENADAPT_RELEASE_APP_ID }}
+          private-key: ${{ secrets.OPENADAPT_RELEASE_APP_PRIVATE_KEY }}
+          owner: OpenAdaptAI
+          repositories: openadapt-evals
+          permission-contents: write
+
+      - name: Verify the release App identity
+        env:
+          APP_SLUG: ${{ steps.release-app.outputs.app-slug }}
+          APP_TOKEN: ${{ steps.release-app.outputs.token }}
+          EXPECTED_APP_ID: ${{ vars.OPENADAPT_RELEASE_APP_ID }}
+        run: |
+          set -euo pipefail
+          test "$APP_SLUG" = 'openadapt-release'
+          test -n "$APP_TOKEN"
+          case "$EXPECTED_APP_ID" in
+            ''|*[!0-9]*)
+              echo '::error::OPENADAPT_RELEASE_APP_ID must be a positive integer.'
+              exit 1
+              ;;
+          esac
+          test "$EXPECTED_APP_ID" -gt 0
+
       - name: Publish the exact GitHub release
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.release-app.outputs.token }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           test "$(git cat-file -t "$GITHUB_REF")" = 'tag'
           test "$(git rev-parse "${GITHUB_REF}^{commit}")" = "$GITHUB_SHA"
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            state=$(gh release view "$RELEASE_TAG" \
-              --repo "$GITHUB_REPOSITORY" \
-              --json isDraft,isPrerelease,tagName)
-            test "$(jq -r '.tagName' <<<"$state")" = "$RELEASE_TAG"
-            test "$(jq -r '.isDraft' <<<"$state")" = 'false'
-            test "$(jq -r '.isPrerelease' <<<"$state")" = 'false'
             echo 'The exact GitHub release already exists.'
           else
             gh release create "$RELEASE_TAG" \
@@ -308,3 +356,10 @@ jobs:
               --generate-notes \
               --title "$RELEASE_TAG"
           fi
+          state=$(gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json author,isDraft,isPrerelease,tagName)
+          test "$(jq -r '.tagName' <<<"$state")" = "$RELEASE_TAG"
+          test "$(jq -r '.isDraft' <<<"$state")" = 'false'
+          test "$(jq -r '.isPrerelease' <<<"$state")" = 'false'
+          test "$(jq -r '.author.login' <<<"$state")" = 'openadapt-release[bot]'
