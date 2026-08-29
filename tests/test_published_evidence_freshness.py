@@ -28,7 +28,7 @@ def test_repo_manifest_is_internally_consistent() -> None:
 def test_repo_manifest_keeps_old_evidence_stale_and_names_the_exact_rerun() -> None:
     manifest = MODULE.load_manifest(MANIFEST)
     current = MODULE.current_entry(manifest)
-    for old_version in ("1.30.0", "1.31.0", "1.32.0"):
+    for old_version in ("1.31.0", "1.32.0", "1.33.0"):
         old = next(
             item
             for item in manifest["evidence"]
@@ -36,10 +36,10 @@ def test_repo_manifest_keeps_old_evidence_stale_and_names_the_exact_rerun() -> N
         )
         assert old["status"] == "superseded"
         assert "not relabeled" in old["stale_reason"].lower()
-    assert current["flow_version"] == "1.33.0"
+    assert current["flow_version"] == "1.34.0"
     assert current["production_acceptance"] is False
     previous = next(
-        item for item in manifest["evidence"] if item["flow_version"] == "1.32.0"
+        item for item in manifest["evidence"] if item["flow_version"] == "1.33.0"
     )
     assert previous["superseded_by"] == current["path"]
 

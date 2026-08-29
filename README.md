@@ -122,8 +122,8 @@ which release it was measured against, and
 `scripts/check_published_evidence_freshness.py` fails when that pin drifts. It
 runs offline on every pull request and against PyPI on a daily schedule.
 
-The current set is `current_flow_v1_33_0_local_20260826`, measured 2026-08-26
-against Flow 1.33.0 on macOS with headless Chromium. One synthetic MockMed
+The current set is `current_flow_v1_34_0_local_20260829`, measured 2026-08-29
+against Flow 1.34.0 on macOS with headless Chromium. One synthetic MockMed
 workflow, three arms, three runs each:
 
 | Condition | Compiled replay | DOM positional | DOM name-scoped |
@@ -136,23 +136,23 @@ The `rename` row is the one worth reading. It changes `Open` to `View` and
 `Save Encounter` to `Submit Encounter`, and both Playwright selector controls
 failed loudly at the first renamed locator before mutating anything. Those are
 unsupported-drift halts, not silent wrong writes. Compiled replay is also
-roughly thirty times slower per run than a working selector, 6.9s against
-0.21s, which is the honest reminder that structural actuation should stay the
+roughly thirty times slower per run than a working selector, 6.4s against
+0.20s, which is the honest reminder that structural actuation should stay the
 preferred tier wherever an application gives you one.
 
 Zero silent incorrect successes, zero wrong actions, zero over-halts, zero
 model calls, $0.00 across all 27 runs. Full report, caveats, and the dependency
-freeze: [`docs/eval_results/current_flow_v1_33_0_local_20260826/`](docs/eval_results/current_flow_v1_33_0_local_20260826/).
+freeze: [`docs/eval_results/current_flow_v1_34_0_local_20260829/`](docs/eval_results/current_flow_v1_34_0_local_20260829/).
 
 Publish a new set rather than editing an old one. Superseded reports stay
-reproducible against the wheel they were measured on, and none of the eight get
+reproducible against the wheel they were measured on, and none of the nine get
 deleted.
 
 ## What this repository cannot tell you yet
 
 - **There is no current Flow-versus-zero-shot number.** The word `current` on an
   evidence set means release-fresh, not production-accepted. No Azure WAA VM was
-  started for the 1.33.0 set and no model was called.
+  started for the 1.34.0 set and no model was called.
 - **The live WAA path is not finished.** `scripts/eval_flow_on_waa.py` leaves
   `WAALiveAdapter.evaluate` unwired on the replay path, so it cannot
   independently score success, and the hybrid live path returns before
