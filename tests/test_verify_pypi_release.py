@@ -262,3 +262,14 @@ def test_any_other_hidden_file_in_dist_is_still_refused(tmp_path: Path) -> None:
     (directory / ".gitignore").write_bytes(b"*.whl\n")
     with pytest.raises(ReleaseVerificationError, match="unexpected local distribution"):
         verify_pypi_release(directory, VERSION, fetch=_fetch(bodies))
+
+
+def test_publish_attestation_sidecars_are_not_distributions(tmp_path: Path) -> None:
+    # pypa/gh-action-pypi-publish writes <file>.publish.attestation beside
+    # each uploaded file before the post-publication verification runs.
+    directory, _, bodies = _fixture(tmp_path)
+    for name in list(bodies):
+        filename = name.rsplit("/", 1)[-1]
+        if filename.endswith((".whl", ".tar.gz")):
+            (directory / f"{filename}.publish.attestation").write_bytes(b"{}")
+    verify_pypi_release(directory, VERSION, fetch=_fetch(bodies))
