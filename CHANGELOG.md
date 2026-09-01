@@ -1,6 +1,13 @@
 # CHANGELOG
 
 
+## v0.95.1 (2026-09-01)
+
+### Bug Fixes
+
+- **release**: Accept the dist/.gitignore marker uv build writes (#323) ([`b5c3cdf`](https://github.com/OpenAdaptAI/openadapt-evals/commit/b5c3cdfe38829afadf232062236683f684952afb))
+
+
 ## v0.95.0 (2026-09-01)
 
 ### Features
