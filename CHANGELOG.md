@@ -1,6 +1,18 @@
 # CHANGELOG
 
 
+## v0.96.0 (2026-09-01)
+
+### Features
+
+- **reward**: TRL and verl adapters for certified reward receipts, plus the MockMed proof (#326) ([`1b1fdfb`](https://github.com/OpenAdaptAI/openadapt-evals/commit/1b1fdfbfb949af1a8ded5eb74d4a6137ef505141))
+- **prime**: Openadapt-mockmed-extradup verifiers environment (#324) ([`e3c1e71`](https://github.com/OpenAdaptAI/openadapt-evals/commit/e3c1e7144b68b3c8e7afa19fb6dbfc210b706e35))
+
+### Bug Fixes
+
+- **release**: Accept the .publish.attestation sidecars the publish action writes (#327) ([`a19cec5`](https://github.com/OpenAdaptAI/openadapt-evals/commit/a19cec5c81b4aabafdb403b8994214b290a85e5a))
+
+
 ## v0.95.1 (2026-09-01)
 
 ### Bug Fixes
