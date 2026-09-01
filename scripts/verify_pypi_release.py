@@ -22,6 +22,7 @@ SHA256 = re.compile(r"^[0-9a-f]{64}$")
 MAX_METADATA_BYTES = 4 * 1024 * 1024
 MAX_ARTIFACT_BYTES = 256 * 1024 * 1024
 BUILD_TOOL_IGNORE_FILE = ".gitignore"
+PUBLISH_ATTESTATION_SUFFIX = ".publish.attestation"
 
 
 class ReleaseVerificationError(RuntimeError):
@@ -89,6 +90,12 @@ def _local_artifacts(directory: Path) -> dict[str, Artifact]:
             # it creates, so the build output never gets committed. It is not a
             # distribution and PyPI never sees it. Anything else hidden in
             # dist/ is still refused below.
+            continue
+        if path.name.endswith(PUBLISH_ATTESTATION_SUFFIX):
+            # pypa/gh-action-pypi-publish writes `<distribution>.publish.attestation`
+            # beside each file it uploads. The post-publication verification
+            # step runs after that, so the sidecar is expected there; it is
+            # not a distribution and PyPI serves it separately, if at all.
             continue
         if path.name.endswith(".whl"):
             package_type = "bdist_wheel"
