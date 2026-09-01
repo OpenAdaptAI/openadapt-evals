@@ -188,6 +188,13 @@ the wrong cardinality or an extra field. If the checker cannot kill ExtraDup,
 it cannot underwrite a write. See
 [`openadapt_evals/extradup/README.md`](openadapt_evals/extradup/README.md).
 
+`openadapt_evals.reward` wires TRL GRPO or verl to a reward endpoint that
+answers with signed `openadapt-types` receipts, drops unscored episodes
+instead of scoring them 0, and never calls a tier-0 read certified.
+`python -m openadapt_evals.reward.proof` scores scripted MockMed rollouts with
+a visual-only and a certified reward, no model needed. See
+[docs/reward/README.md](docs/reward/README.md).
+
 Runbooks for the demo-conditioned eval, the full evaluation runner, the UI-Venus
 grounder endpoint, GRPO training, and writing your own agent are in
 [docs/WORKFLOWS.md](docs/WORKFLOWS.md), along with the package tree.
