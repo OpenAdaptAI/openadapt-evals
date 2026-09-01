@@ -14,7 +14,6 @@ from openadapt_types.reward import (
 
 from openadapt_evals.reward.devsigner import DevelopmentSigner, sha256_digest
 
-HAS_SCOPE = "calibration_scope" in RewardEvidenceReceiptV1.model_fields
 SIGNER = DevelopmentSigner(b"tests.reward_fixtures")
 POLICY_CHECKPOINT = "policy.checkpoint.test-0001"
 ISSUED_AT = "2026-09-01T00:00:00Z"

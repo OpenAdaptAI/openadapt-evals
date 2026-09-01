@@ -9,7 +9,6 @@ import pytest
 
 from openadapt_evals.reward import proof
 from openadapt_evals.reward.devsigner import verify_signature
-from tests.reward_fixtures import HAS_SCOPE
 
 DOCS = Path(__file__).resolve().parents[1] / "docs" / "reward"
 COMMITTED_JSON = DOCS / "proof_2026-09-01.json"
@@ -68,7 +67,6 @@ def test_outage_is_unscored_never_zero(run: proof.ProofRun) -> None:
     assert row["paid"] == 0 and row["over_refusal_rate"] == 0.0
 
 
-@pytest.mark.skipif(not HAS_SCOPE, reason="installed openadapt-types has no calibration_scope")
 def test_certified_reward_is_certified_with_synthetic_scope(run: proof.ProofRun) -> None:
     for row in run.table:
         if row["reward"] == proof.CERTIFIED:

@@ -28,7 +28,6 @@ from openadapt_evals.reward.trl import REWARD_FUNC_NAME, CertifiedRewardFunction
 from tests.reward_fixtures import (
     CERTIFICATE,
     CONTRACT,
-    HAS_SCOPE,
     POLICY_CHECKPOINT,
     certificate,
     receipt,
@@ -93,29 +92,28 @@ def test_consecutive_groups_by_size_and_by_prompt() -> None:
         consecutive_groups(["a"] * 5, 4)
 
 
-@pytest.mark.skipif(not HAS_SCOPE, reason="installed openadapt-types has no calibration_scope")
 def test_unscored_episode_is_dropped_not_scored_zero() -> None:
     episodes = ["ep.0001.a", "ep.0001.b", "ep.0001.c", "ep.0001.d"]
     receipts = receipts_by_episode(
         {
             episodes[0]: RewardOutcomeV1.VERIFIED,
-            episodes[1]: RewardOutcomeV1.WRONG_EFFECT,
+            episodes[1]: RewardOutcomeV1.HALTED_BEFORE_EFFECT,
             episodes[2]: RewardOutcomeV1.FAILED_PLATFORM,
             episodes[3]: RewardOutcomeV1.RECONCILIATION_REQUIRED,
         }
     )
     fn = _reward_fn(receipts)
     rewards = _call(fn, episodes)
-    scored_mean = (1.0 + -1.0) / 2
-    assert rewards == [1.0, -1.0, pytest.approx(scored_mean), pytest.approx(scored_mean)]
-    assert 0.0 not in rewards[2:]
+    scored_mean = (1.0 + 0.0) / 2
+    assert rewards == [1.0, 0.0, pytest.approx(scored_mean), pytest.approx(scored_mean)]
+    # The unscored pair took the scored mean, not 0.0, and left it unchanged.
+    assert sum(rewards) / len(rewards) == pytest.approx(scored_mean)
     columns = fn.metadata_columns()
     assert columns["reward_unscored"] == [False, False, True, True]
     assert columns["reward_certified"] == [True, True, True, True]
     assert columns["reward_calibration_scope"] == ["synthetic"] * 4
 
 
-@pytest.mark.skipif(not HAS_SCOPE, reason="installed openadapt-types has no calibration_scope")
 def test_all_unscored_group_returns_none_for_trl() -> None:
     episodes = ["ep.0002.a", "ep.0002.b", "ep.0002.c", "ep.0002.d"]
     receipts = receipts_by_episode({item: RewardOutcomeV1.FAILED_PLATFORM for item in episodes})
@@ -157,7 +155,6 @@ def test_development_run_scores_but_never_certifies(caplog: pytest.LogCaptureFix
 # -- certificate expiry --------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not HAS_SCOPE, reason="installed openadapt-types has no calibration_scope")
 def test_expired_certificate_is_logged_and_halts(caplog: pytest.LogCaptureFixture) -> None:
     episodes = ["ep.0006.a", "ep.0006.b", "ep.0006.c", "ep.0006.d"]
     short = certificate(issued_at_policy_update=0, expiry_policy_updates=10)

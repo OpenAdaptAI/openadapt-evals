@@ -19,7 +19,6 @@ from openadapt_evals.reward.verl import (
 from tests.reward_fixtures import (
     CERTIFICATE,
     CONTRACT,
-    HAS_SCOPE,
     POLICY_CHECKPOINT,
     certificate,
     receipts_by_episode,
@@ -48,7 +47,6 @@ def _infos(episodes: list[str]) -> list[dict]:
 # -- unscored drop by uid ----------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not HAS_SCOPE, reason="installed openadapt-types has no calibration_scope")
 def test_unscored_sample_gets_its_uid_group_mean() -> None:
     episodes = ["vep.0001.a", "vep.0001.b", "vep.0001.c", "vep.0001.d"]
     receipts = receipts_by_episode(
@@ -71,7 +69,6 @@ def test_unscored_sample_gets_its_uid_group_mean() -> None:
     assert scored[1].unscored
 
 
-@pytest.mark.skipif(not HAS_SCOPE, reason="installed openadapt-types has no calibration_scope")
 def test_all_unscored_group_is_flagged_and_zeroed_in_tensor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

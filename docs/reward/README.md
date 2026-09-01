@@ -135,29 +135,28 @@ reward answers `failed_platform`.
 | condition | gold | reward | tier | trials | paid | silent incorrect success | over-refusal | unscored | certified | scope |
 |---|---|---|---|---|---|---|---|---|---|---|
 | control | PASS | visual_only | 0 | 3 | 3 | n/a | 0.00 | 0 | no | none |
-| control | PASS | certified_sor | 2 | 3 | 3 | n/a | 0.00 | 0 | no | none |
+| control | PASS | certified_sor | 2 | 3 | 3 | n/a | 0.00 | 0 | yes | synthetic |
 | dup | FAIL | visual_only | 0 | 3 | 3 | 1.00 | n/a | 0 | no | none |
-| dup | FAIL | certified_sor | 2 | 3 | 0 | 0.00 | n/a | 0 | no | none |
+| dup | FAIL | certified_sor | 2 | 3 | 0 | 0.00 | n/a | 0 | yes | synthetic |
 | extra | FAIL | visual_only | 0 | 3 | 3 | 1.00 | n/a | 0 | no | none |
-| extra | FAIL | certified_sor | 2 | 3 | 0 | 0.00 | n/a | 0 | no | none |
+| extra | FAIL | certified_sor | 2 | 3 | 0 | 0.00 | n/a | 0 | yes | synthetic |
 | omit | FAIL | visual_only | 0 | 3 | 3 | 1.00 | n/a | 0 | no | none |
-| omit | FAIL | certified_sor | 2 | 3 | 0 | 0.00 | n/a | 0 | no | none |
+| omit | FAIL | certified_sor | 2 | 3 | 0 | 0.00 | n/a | 0 | yes | synthetic |
 | unsubmit | FAIL | visual_only | 0 | 3 | 3 | 1.00 | n/a | 0 | no | none |
-| unsubmit | FAIL | certified_sor | 2 | 3 | 0 | 0.00 | n/a | 0 | no | none |
+| unsubmit | FAIL | certified_sor | 2 | 3 | 0 | 0.00 | n/a | 0 | yes | synthetic |
 | claim | FAIL | visual_only | 0 | 3 | 3 | 1.00 | n/a | 0 | no | none |
-| claim | FAIL | certified_sor | 2 | 3 | 0 | 0.00 | n/a | 0 | no | none |
+| claim | FAIL | certified_sor | 2 | 3 | 0 | 0.00 | n/a | 0 | yes | synthetic |
 | oracle_outage | PASS | visual_only | 0 | 3 | 3 | n/a | 0.00 | 0 | no | none |
-| oracle_outage | PASS | certified_sor | 2 | 3 | 0 | n/a | 0.00 | 3 | no | none |
+| oracle_outage | PASS | certified_sor | 2 | 3 | 0 | n/a | 0.00 | 3 | yes | synthetic |
 
 The visual reward paid all 15 gold-FAIL rollouts. The certified reward paid
 none of them and paid the 3 controls. Its certificate's epsilon, 0.181036, is
 the exact one-sided 95% Clopper-Pearson upper bound from those 15 trials; it
-was computed from the run, not chosen. The `certified` column reads `no` for
-the tier-2 reward under openadapt-types 0.16.0 because that release has no
-`calibration_scope` field on the receipt, and the adapter will not label a
-receipt certified without a scope. When the field ships, the same run marks
-the `certified_sor` rows `yes` with scope `synthetic`; the tests that assert
-that are skipped until then.
+was computed from the run, not chosen. The `certified` column reads `yes`
+for the tier-2 reward because the certificate is current at update 7, names
+its calibration corpus by digest, and states its scope. That scope is
+`synthetic`, and a self-signed certificate can state no other; the contract
+(openadapt-types 0.17.0) rejects one that tries.
 
 The expiry check re-assesses the certified control receipts at policy update
 100, the first update at which the certificate has expired: none stays

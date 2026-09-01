@@ -15,7 +15,7 @@
     "calibration_scope": "synthetic",
     "certificate_id": "reward.certificate.proof-synthetic",
     "delta": 0.05,
-    "digest": "sha256:a9d506ea4f6d0d36be204c0d4b8319d2d8c6d1f3b7c6599ad592a630a9107d78",
+    "digest": "sha256:7e98d24947d6511a2e354f2f1d0e656e3a1604ac57331439f6bc3a96c2995be9",
     "epsilon": 0.181036,
     "expiry_policy_updates": 100,
     "issued_at_policy_update": 0,
@@ -64,10 +64,10 @@
       "rewards": {
         "certified_sor": {
           "receipt_id": "receipt.proof.control.t0.s101.certified_sor",
-          "reward_calibration_scope": null,
+          "reward_calibration_scope": "synthetic",
           "reward_certificate_id": "reward.certificate.proof-synthetic",
           "reward_certificate_state": "current",
-          "reward_certified": false,
+          "reward_certified": true,
           "reward_development_only": false,
           "reward_episode_id": "proof.control.t0.s101",
           "reward_oracle_tier": 2,
@@ -113,10 +113,10 @@
       "rewards": {
         "certified_sor": {
           "receipt_id": "receipt.proof.control.t1.s202.certified_sor",
-          "reward_calibration_scope": null,
+          "reward_calibration_scope": "synthetic",
           "reward_certificate_id": "reward.certificate.proof-synthetic",
           "reward_certificate_state": "current",
-          "reward_certified": false,
+          "reward_certified": true,
           "reward_development_only": false,
           "reward_episode_id": "proof.control.t1.s202",
           "reward_oracle_tier": 2,
@@ -162,10 +162,10 @@
       "rewards": {
         "certified_sor": {
           "receipt_id": "receipt.proof.control.t2.s303.certified_sor",
-          "reward_calibration_scope": null,
+          "reward_calibration_scope": "synthetic",
           "reward_certificate_id": "reward.certificate.proof-synthetic",
           "reward_certificate_state": "current",
-          "reward_certified": false,
+          "reward_certified": true,
           "reward_development_only": false,
           "reward_episode_id": "proof.control.t2.s303",
           "reward_oracle_tier": 2,
@@ -211,10 +211,10 @@
       "rewards": {
         "certified_sor": {
           "receipt_id": "receipt.proof.dup.t0.s101.certified_sor",
-          "reward_calibration_scope": null,
+          "reward_calibration_scope": "synthetic",
           "reward_certificate_id": "reward.certificate.proof-synthetic",
           "reward_certificate_state": "current",
-          "reward_certified": false,
+          "reward_certified": true,
           "reward_development_only": false,
           "reward_episode_id": "proof.dup.t0.s101",
           "reward_oracle_tier": 2,
@@ -262,10 +262,10 @@
       "rewards": {
         "certified_sor": {
           "receipt_id": "receipt.proof.dup.t1.s202.certified_sor",
-          "reward_calibration_scope": null,
+          "reward_calibration_scope": "synthetic",
           "reward_certificate_id": "reward.certificate.proof-synthetic",
           "reward_certificate_state": "current",
-          "reward_certified": false,
+          "reward_certified": true,
           "reward_development_only": false,
           "reward_episode_id": "proof.dup.t1.s202",
           "reward_oracle_tier": 2,
@@ -313,10 +313,10 @@
       "rewards": {
         "certified_sor": {
           "receipt_id": "receipt.proof.dup.t2.s303.certified_sor",
-          "reward_calibration_scope": null,
+          "reward_calibration_scope": "synthetic",
           "reward_certificate_id": "reward.certificate.proof-synthetic",
           "reward_certificate_state": "current",
-          "reward_certified": false,
+          "reward_certified": true,
           "reward_development_only": false,
           "reward_episode_id": "proof.dup.t2.s303",
           "reward_oracle_tier": 2,
@@ -364,10 +364,10 @@
       "rewards": {
         "certified_sor": {
           "receipt_id": "receipt.proof.extra.t0.s101.certified_sor",
-          "reward_calibration_scope": null,
+          "reward_calibration_scope": "synthetic",
           "reward_certificate_id": "reward.certificate.proof-synthetic",
           "reward_certificate_state": "current",
-          "reward_certified": false,
+          "reward_certified": true,
           "reward_development_only": false,
           "reward_episode_id": "proof.extra.t0.s101",
           "reward_oracle_tier": 2,
@@ -415,10 +415,10 @@
       "rewards": {
         "certified_sor": {
           "receipt_id": "receipt.proof.extra.t1.s202.certified_sor",
-          "reward_calibration_scope": null,
+          "reward_calibration_scope": "synthetic",
           "reward_certificate_id": "reward.certificate.proof-synthetic",
           "reward_certificate_state": "current",
-          "reward_certified": false,
+          "reward_certified": true,
           "reward_development_only": false,
           "reward_episode_id": "proof.extra.t1.s202",
           "reward_oracle_tier": 2,
@@ -466,10 +466,10 @@
       "rewards": {
         "certified_sor": {
           "receipt_id": "receipt.proof.extra.t2.s303.certified_sor",
-          "reward_calibration_scope": null,
+          "reward_calibration_scope": "synthetic",
           "reward_certificate_id": "reward.certificate.proof-synthetic",
           "reward_certificate_state": "current",
-          "reward_certified": false,
+          "reward_certified": true,
           "reward_development_only": false,
           "reward_episode_id": "proof.extra.t2.s303",
           "reward_oracle_tier": 2,
@@ -517,10 +517,10 @@
       "rewards": {
         "certified_sor": {
           "receipt_id": "receipt.proof.omit.t0.s101.certified_sor",
-          "reward_calibration_scope": null,
+          "reward_calibration_scope": "synthetic",
           "reward_certificate_id": "reward.certificate.proof-synthetic",
           "reward_certificate_state": "current",
-          "reward_certified": false,
+          "reward_certified": true,
           "reward_development_only": false,
           "reward_episode_id": "proof.omit.t0.s101",
           "reward_oracle_tier": 2,
@@ -568,10 +568,10 @@
       "rewards": {
         "certified_sor": {
           "receipt_id": "receipt.proof.omit.t1.s202.certified_sor",
-          "reward_calibration_scope": null,
+          "reward_calibration_scope": "synthetic",
           "reward_certificate_id": "reward.certificate.proof-synthetic",
           "reward_certificate_state": "current",
-          "reward_certified": false,
+          "reward_certified": true,
           "reward_development_only": false,
           "reward_episode_id": "proof.omit.t1.s202",
           "reward_oracle_tier": 2,
@@ -619,10 +619,10 @@
       "rewards": {
         "certified_sor": {
           "receipt_id": "receipt.proof.omit.t2.s303.certified_sor",
-          "reward_calibration_scope": null,
+          "reward_calibration_scope": "synthetic",
           "reward_certificate_id": "reward.certificate.proof-synthetic",
           "reward_certificate_state": "current",
-          "reward_certified": false,
+          "reward_certified": true,
           "reward_development_only": false,
           "reward_episode_id": "proof.omit.t2.s303",
           "reward_oracle_tier": 2,
@@ -670,10 +670,10 @@
       "rewards": {
         "certified_sor": {
           "receipt_id": "receipt.proof.unsubmit.t0.s101.certified_sor",
-          "reward_calibration_scope": null,
+          "reward_calibration_scope": "synthetic",
           "reward_certificate_id": "reward.certificate.proof-synthetic",
           "reward_certificate_state": "current",
-          "reward_certified": false,
+          "reward_certified": true,
           "reward_development_only": false,
           "reward_episode_id": "proof.unsubmit.t0.s101",
           "reward_oracle_tier": 2,
@@ -721,10 +721,10 @@
       "rewards": {
         "certified_sor": {
           "receipt_id": "receipt.proof.unsubmit.t1.s202.certified_sor",
-          "reward_calibration_scope": null,
+          "reward_calibration_scope": "synthetic",
           "reward_certificate_id": "reward.certificate.proof-synthetic",
           "reward_certificate_state": "current",
-          "reward_certified": false,
+          "reward_certified": true,
           "reward_development_only": false,
           "reward_episode_id": "proof.unsubmit.t1.s202",
           "reward_oracle_tier": 2,
@@ -772,10 +772,10 @@
       "rewards": {
         "certified_sor": {
           "receipt_id": "receipt.proof.unsubmit.t2.s303.certified_sor",
-          "reward_calibration_scope": null,
+          "reward_calibration_scope": "synthetic",
           "reward_certificate_id": "reward.certificate.proof-synthetic",
           "reward_certificate_state": "current",
-          "reward_certified": false,
+          "reward_certified": true,
           "reward_development_only": false,
           "reward_episode_id": "proof.unsubmit.t2.s303",
           "reward_oracle_tier": 2,
@@ -823,10 +823,10 @@
       "rewards": {
         "certified_sor": {
           "receipt_id": "receipt.proof.claim.t0.s101.certified_sor",
-          "reward_calibration_scope": null,
+          "reward_calibration_scope": "synthetic",
           "reward_certificate_id": "reward.certificate.proof-synthetic",
           "reward_certificate_state": "current",
-          "reward_certified": false,
+          "reward_certified": true,
           "reward_development_only": false,
           "reward_episode_id": "proof.claim.t0.s101",
           "reward_oracle_tier": 2,
@@ -874,10 +874,10 @@
       "rewards": {
         "certified_sor": {
           "receipt_id": "receipt.proof.claim.t1.s202.certified_sor",
-          "reward_calibration_scope": null,
+          "reward_calibration_scope": "synthetic",
           "reward_certificate_id": "reward.certificate.proof-synthetic",
           "reward_certificate_state": "current",
-          "reward_certified": false,
+          "reward_certified": true,
           "reward_development_only": false,
           "reward_episode_id": "proof.claim.t1.s202",
           "reward_oracle_tier": 2,
@@ -925,10 +925,10 @@
       "rewards": {
         "certified_sor": {
           "receipt_id": "receipt.proof.claim.t2.s303.certified_sor",
-          "reward_calibration_scope": null,
+          "reward_calibration_scope": "synthetic",
           "reward_certificate_id": "reward.certificate.proof-synthetic",
           "reward_certificate_state": "current",
-          "reward_certified": false,
+          "reward_certified": true,
           "reward_development_only": false,
           "reward_episode_id": "proof.claim.t2.s303",
           "reward_oracle_tier": 2,
@@ -976,10 +976,10 @@
       "rewards": {
         "certified_sor": {
           "receipt_id": "receipt.proof.oracle_outage.t0.s101.certified_sor",
-          "reward_calibration_scope": null,
+          "reward_calibration_scope": "synthetic",
           "reward_certificate_id": "reward.certificate.proof-synthetic",
           "reward_certificate_state": "current",
-          "reward_certified": false,
+          "reward_certified": true,
           "reward_development_only": false,
           "reward_episode_id": "proof.oracle_outage.t0.s101",
           "reward_oracle_tier": 2,
@@ -1025,10 +1025,10 @@
       "rewards": {
         "certified_sor": {
           "receipt_id": "receipt.proof.oracle_outage.t1.s202.certified_sor",
-          "reward_calibration_scope": null,
+          "reward_calibration_scope": "synthetic",
           "reward_certificate_id": "reward.certificate.proof-synthetic",
           "reward_certificate_state": "current",
-          "reward_certified": false,
+          "reward_certified": true,
           "reward_development_only": false,
           "reward_episode_id": "proof.oracle_outage.t1.s202",
           "reward_oracle_tier": 2,
@@ -1074,10 +1074,10 @@
       "rewards": {
         "certified_sor": {
           "receipt_id": "receipt.proof.oracle_outage.t2.s303.certified_sor",
-          "reward_calibration_scope": null,
+          "reward_calibration_scope": "synthetic",
           "reward_certificate_id": "reward.certificate.proof-synthetic",
           "reward_certificate_state": "current",
-          "reward_certified": false,
+          "reward_certified": true,
           "reward_development_only": false,
           "reward_episode_id": "proof.oracle_outage.t2.s303",
           "reward_oracle_tier": 2,
@@ -1142,8 +1142,8 @@
       "unscored": 0
     },
     {
-      "calibration_scope": null,
-      "certified": false,
+      "calibration_scope": "synthetic",
+      "certified": true,
       "condition": "control",
       "gold": "PASS",
       "oracle_tier": 2,
@@ -1168,8 +1168,8 @@
       "unscored": 0
     },
     {
-      "calibration_scope": null,
-      "certified": false,
+      "calibration_scope": "synthetic",
+      "certified": true,
       "condition": "dup",
       "gold": "FAIL",
       "oracle_tier": 2,
@@ -1194,8 +1194,8 @@
       "unscored": 0
     },
     {
-      "calibration_scope": null,
-      "certified": false,
+      "calibration_scope": "synthetic",
+      "certified": true,
       "condition": "extra",
       "gold": "FAIL",
       "oracle_tier": 2,
@@ -1220,8 +1220,8 @@
       "unscored": 0
     },
     {
-      "calibration_scope": null,
-      "certified": false,
+      "calibration_scope": "synthetic",
+      "certified": true,
       "condition": "omit",
       "gold": "FAIL",
       "oracle_tier": 2,
@@ -1246,8 +1246,8 @@
       "unscored": 0
     },
     {
-      "calibration_scope": null,
-      "certified": false,
+      "calibration_scope": "synthetic",
+      "certified": true,
       "condition": "unsubmit",
       "gold": "FAIL",
       "oracle_tier": 2,
@@ -1272,8 +1272,8 @@
       "unscored": 0
     },
     {
-      "calibration_scope": null,
-      "certified": false,
+      "calibration_scope": "synthetic",
+      "certified": true,
       "condition": "claim",
       "gold": "FAIL",
       "oracle_tier": 2,
@@ -1298,8 +1298,8 @@
       "unscored": 0
     },
     {
-      "calibration_scope": null,
-      "certified": false,
+      "calibration_scope": "synthetic",
+      "certified": true,
       "condition": "oracle_outage",
       "gold": "PASS",
       "oracle_tier": 2,
@@ -1314,6 +1314,6 @@
   "trials_per_condition": 3,
   "versions": {
     "openadapt-evals": "0.94.1",
-    "openadapt-types": "0.16.0"
+    "openadapt-types": "0.17.0"
   }
 }

@@ -37,6 +37,7 @@ from openadapt_types.reward import (
 )
 
 SYNTHETIC_SCOPE = "synthetic"
+SELF_SIGNED = "self_signed"
 
 
 def sha256_digest(payload: bytes | Mapping[str, Any]) -> str:
@@ -44,14 +45,6 @@ def sha256_digest(payload: bytes | Mapping[str, Any]) -> str:
 
     data = payload if isinstance(payload, bytes) else canonical_json_bytes(payload)
     return "sha256:" + hashlib.sha256(data).hexdigest()
-
-
-def _with_scope_if_supported(model: type, payload: dict[str, Any], scope: str) -> dict[str, Any]:
-    """Add ``calibration_scope`` when the installed contract declares it."""
-
-    if "calibration_scope" in getattr(model, "model_fields", {}):
-        payload["calibration_scope"] = scope
-    return payload
 
 
 class DevelopmentSigner:
@@ -89,8 +82,13 @@ class DevelopmentSigner:
         issued_at: str,
         expiry_policy_updates: int | None = None,
         calibration_scope: str = SYNTHETIC_SCOPE,
+        issuer: str = SELF_SIGNED,
     ) -> RewardCertificateV1:
-        """Issue a certificate that satisfies ``contract.certificate_policy``."""
+        """Issue a certificate that satisfies ``contract.certificate_policy``.
+
+        The contract allows a self-signed certificate to carry synthetic
+        scope only; passing another scope raises at validation.
+        """
 
         policy = contract.certificate_policy
         payload: dict[str, Any] = {
@@ -104,9 +102,10 @@ class DevelopmentSigner:
             "issued_at_policy_update": issued_at_policy_update,
             "expiry_policy_updates": expiry_policy_updates or policy.expiry_policy_updates,
             "issued_at": issued_at,
+            "calibration_scope": calibration_scope,
+            "issuer": issuer,
             "issuer_key_id": self.key_id,
         }
-        _with_scope_if_supported(RewardCertificateV1, payload, calibration_scope)
         unsigned = RewardCertificateV1.model_validate({**payload, "signature": "A" * 86 + "=="})
         payload["signature"] = self.sign(unsigned.unsigned_payload())
         return RewardCertificateV1.model_validate(payload)
@@ -127,13 +126,14 @@ class DevelopmentSigner:
         certificate: RewardCertificateV1 | None = None,
         uncertainty: RewardUncertaintyStateV1 | None = None,
         scoring: RewardScoringPolicyV1 = DEFAULT_REWARD_SCORING,
-        calibration_scope: str = SYNTHETIC_SCOPE,
     ) -> RewardEvidenceReceiptV1:
         """Issue a receipt whose flags follow the contract's own rules.
 
         ``certified`` is true only at tier 2 or 3 with a certificate current
-        at ``policy_update``. Unscored outcomes carry no scalar and no
-        components. The caller cannot override either.
+        at ``policy_update``. The calibration scope and corpus digest come
+        from that certificate; a receipt with no certificate carries neither.
+        Unscored outcomes carry no scalar and no components. The caller
+        cannot override any of this.
         """
 
         outcome = RewardOutcomeV1(outcome)
@@ -172,6 +172,12 @@ class DevelopmentSigner:
             "certificate_id": certificate.certificate_id if certificate is not None else None,
             "certificate_digest": certificate.digest if certificate is not None else None,
             "certificate_state": state.value,
+            "calibration_corpus_digest": (
+                certificate.calibration_corpus_digest if certificate is not None else None
+            ),
+            "calibration_scope": (
+                certificate.calibration_scope.value if certificate is not None else None
+            ),
             "uncertainty": uncertainty.value,
             "certified": certified,
             "development_only": development_only,
@@ -179,7 +185,6 @@ class DevelopmentSigner:
             "nonce": nonce,
             "issued_at": issued_at,
         }
-        _with_scope_if_supported(RewardEvidenceReceiptV1, payload, calibration_scope)
         unsigned = RewardEvidenceReceiptV1.model_validate({**payload, "signature": "A" * 86 + "=="})
         assert unsigned.scoring_class is (
             RewardScoringClassV1.UNSCORED if unscored else unsigned.scoring_class

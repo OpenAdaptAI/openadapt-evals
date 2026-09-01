@@ -46,7 +46,7 @@ dependencies = [
     "openadapt-consilium>=0.3.2",
     "openadapt-telemetry>=0.2.0",
     # Requires openadapt_types.reward (RewardEvidenceReceiptV1, RewardCertificateV1, score).
-    "openadapt-types>=0.16.0",
+    "openadapt-types>=0.17.0",
 ]
 
 [project.optional-dependencies]

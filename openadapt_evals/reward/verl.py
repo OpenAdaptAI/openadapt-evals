@@ -213,7 +213,7 @@ class CertifiedRewardManager(_Base):
 
         responses = data.batch["responses"]
         prompt_length = data.batch["prompts"].shape[-1]
-        valid_lengths = data.batch["attention_mask"][:, prompt_length:].sum(dim=-1)
+        valid_lengths = data.batch["attention_mask"][:, prompt_length:].sum(axis=-1)
         uids = list(data.non_tensor_batch["uid"])
         extra_infos = list(data.non_tensor_batch.get("extra_info", [{} for _ in uids]))
         update = self.policy_update(getattr(data, "meta_info", None))

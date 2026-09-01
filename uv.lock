@@ -3614,7 +3614,7 @@ requires-dist = [
     { name = "openadapt-ml", extras = ["training"], marker = "extra == 'training'", specifier = ">=0.11.0" },
     { name = "openadapt-retrieval", marker = "extra == 'retrieval'", specifier = ">=0.1.0" },
     { name = "openadapt-telemetry", specifier = ">=0.2.0" },
-    { name = "openadapt-types", specifier = ">=0.16.0" },
+    { name = "openadapt-types", specifier = ">=0.17.0" },
     { name = "openai", specifier = ">=1.0.0" },
     { name = "outlines", marker = "extra == 'dev'", specifier = ">=0.1.0" },
     { name = "outlines", marker = "extra == 'training'", specifier = ">=0.1.0" },
@@ -3725,14 +3725,14 @@ wheels = [
 
 [[package]]
 name = "openadapt-types"
-version = "0.16.0"
+version = "0.17.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6e/92/89b7cc854d9f4a13b6d7a35b57f8928448f1068dcd1020e80946df191963/openadapt_types-0.16.0.tar.gz", hash = "sha256:0a288b12f3ab47e99b7ba5a107a66a37d65e74daa6985bc426d971ba976e01eb", size = 210917 }
+sdist = { url = "https://files.pythonhosted.org/packages/17/d5/549afc2b6bdde8a0a80d4eec67644275df251ee1654f3189f0cc66235730/openadapt_types-0.17.0.tar.gz", hash = "sha256:43dc00d82d6d8feb2cfaa16960224a85933440d7dee3b5f3c60618873535287b", size = 212574 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3f/c1/e6f0e529bd434c3a1468938a1ec5ed00867ebaa0e28d3f818b4e7f7591f5/openadapt_types-0.16.0-py3-none-any.whl", hash = "sha256:160ad3e40bd7dd67670c973c15e7c7adf340bfef5f07fc4e722032defe5921e3", size = 153923 },
+    { url = "https://files.pythonhosted.org/packages/55/9a/bec1d51cba5749732ceeba6e4abf7abe6aeaa22c849a1edb26b97c7ab479/openadapt_types-0.17.0-py3-none-any.whl", hash = "sha256:79738ab529f71241963725c6a40603deae032ff60c61d66baf33d7a248b1afa9", size = 155033 },
 ]
 
 [[package]]
