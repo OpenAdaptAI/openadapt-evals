@@ -248,3 +248,17 @@ def test_local_distribution_names_must_identify_the_exact_version(tmp_path: Path
 
     with pytest.raises(ReleaseVerificationError, match="wheel does not identify"):
         verify_pypi_release(directory, VERSION, fetch=_fetch(bodies))
+
+
+def test_build_tool_ignore_marker_in_dist_is_not_a_distribution(tmp_path: Path) -> None:
+    # uv build writes dist/.gitignore containing "*" when it creates dist/.
+    directory, _, bodies = _fixture(tmp_path)
+    (directory / ".gitignore").write_bytes(b"*\n")
+    verify_pypi_release(directory, VERSION, fetch=_fetch(bodies))
+
+
+def test_any_other_hidden_file_in_dist_is_still_refused(tmp_path: Path) -> None:
+    directory, _, bodies = _fixture(tmp_path)
+    (directory / ".gitignore").write_bytes(b"*.whl\n")
+    with pytest.raises(ReleaseVerificationError, match="unexpected local distribution"):
+        verify_pypi_release(directory, VERSION, fetch=_fetch(bodies))

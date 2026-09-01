@@ -21,6 +21,7 @@ STABLE_VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 MAX_METADATA_BYTES = 4 * 1024 * 1024
 MAX_ARTIFACT_BYTES = 256 * 1024 * 1024
+BUILD_TOOL_IGNORE_FILE = ".gitignore"
 
 
 class ReleaseVerificationError(RuntimeError):
@@ -83,6 +84,12 @@ def _local_artifacts(directory: Path) -> dict[str, Artifact]:
     for path in sorted(directory.iterdir()):
         if not path.is_file() or path.is_symlink():
             raise ReleaseVerificationError(f"unexpected local distribution: {path.name}")
+        if path.name == BUILD_TOOL_IGNORE_FILE and path.read_bytes().strip() == b"*":
+            # `uv build` writes a one-line `*` .gitignore into a dist/ directory
+            # it creates, so the build output never gets committed. It is not a
+            # distribution and PyPI never sees it. Anything else hidden in
+            # dist/ is still refused below.
+            continue
         if path.name.endswith(".whl"):
             package_type = "bdist_wheel"
         elif path.name.endswith(".tar.gz"):
