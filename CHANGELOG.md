@@ -1,11 +1,28 @@
 # CHANGELOG
 
 
-## v0.94.1 (2026-08-26)
+## v0.95.0 (2026-09-01)
+
+### Features
+
+- ExtraDup kit against MockMed and local OpenEMR (#320) ([`fe0524e`](https://github.com/OpenAdaptAI/openadapt-evals/commit/fe0524ea1fd67d4f6a5281939bda59ab08777574))
+- **evidence**: Publish the Flow 1.34.0 comparison; supersede 1.33.0 (#319) ([`1ed4814`](https://github.com/OpenAdaptAI/openadapt-evals/commit/1ed4814c400c4adc3a5f023a5abf6f8916b7d95a))
+- **evidence**: Add v3 qualification and immutable recovery (#303) ([`5901a64`](https://github.com/OpenAdaptAI/openadapt-evals/commit/5901a64535208aa69672fb8130c63efe28159ccb))
 
 ### Bug Fixes
 
+- **windows**: Require fresh isolation proofs before pool work (#315) ([`3505f3b`](https://github.com/OpenAdaptAI/openadapt-evals/commit/3505f3b01f3ac1315dcdbf44e307762523e6c50c))
+- **evidence**: Follow the verified-certificate retention receipt (#317) ([`77d5514`](https://github.com/OpenAdaptAI/openadapt-evals/commit/77d5514c093161fd53e002717b95d2c6d8388dc6))
 - **evidence**: Match the retention digests the Cloud writer emits (#311) ([`df12b3c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/df12b3ce72ad02992a7c7e389d8ccf2cfd01774c))
+
+### Documentation
+
+- Rewrite README for a human reader (#318) ([`9b0af2f`](https://github.com/OpenAdaptAI/openadapt-evals/commit/9b0af2f7fad0d9badc57a43c7e8ce15e39b1ee1c))
+
+### Chores
+
+- **policy**: Sync generated source boundary (#316) ([`4e7885c`](https://github.com/OpenAdaptAI/openadapt-evals/commit/4e7885c5da3d38669543457e396aec1bfba8d1ec))
+- **release**: Prepare 0.94.1 (#312) ([`dbcaec8`](https://github.com/OpenAdaptAI/openadapt-evals/commit/dbcaec83e422cad91392de80a74f658870bdf190))
 
 
 ## v0.94.0 (2026-08-26)
