@@ -182,6 +182,12 @@ openadapt-ml = { path = "../openadapt-ml", editable = true }
 [tool.hatch.build.targets.wheel]
 packages = ["openadapt_evals", "scripts"]
 
+# The Prime Intellect Environments Hub package under environments/ is
+# published on its own with `prime env push`. It is not part of this
+# distribution, so the sdist excludes it and the wheel never listed it.
+[tool.hatch.build.targets.sdist]
+exclude = ["environments/"]
+
 [tool.pytest.ini_options]
 markers = [
     "heavy: requires ML deps (torch, transformers, trl, openadapt-ml) — skipped in light CI",
