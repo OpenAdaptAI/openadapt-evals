@@ -62,6 +62,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--num-examples", type=int, default=2)
     parser.add_argument("--cases", nargs="*", default=list(env_module.ALL_CASES))
     args = parser.parse_args(argv)
+    # vf-eval runs with the output directory as its cwd and resolves -o
+    # against that, so a relative path would nest itself.
+    args.output_dir = args.output_dir.resolve()
     args.output_dir.mkdir(parents=True, exist_ok=True)
     server = scripted_policy.serve("127.0.0.1", 0)
     base_url = f"http://127.0.0.1:{server.server_address[1]}/v1"
