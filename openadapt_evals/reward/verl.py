@@ -36,12 +36,16 @@ from typing import Any
 from openadapt_types.reward import RewardCertificateV1
 
 from openadapt_evals.reward.receipts import (
+    ORACLE_IDENTITY_KEY,
+    RUNTIME_SIGNAL_KEY,
     EpisodeDescriptor,
     HttpRewardEndpoint,
+    OracleIdentityError,
     RewardEndpointError,
     RewardSource,
     ScoredEpisode,
     assess_receipt,
+    clean_oracle_identity,
     fetch_receipts,
     fill_unscored_with_group_mean,
     require_certified_or_unscored,
@@ -69,6 +73,7 @@ class CertifiedRewardManager(_Base):
           reward_manager: openadapt_certified
           reward_kwargs:
             endpoint_url: http://reward-worker:8080
+            endpoint_token: ${REWARD_WORKER_TOKEN}
             reward_contract_digest: sha256:...
             policy_checkpoint_id: policy.checkpoint.0001
             require_certified: true
@@ -76,6 +81,16 @@ class CertifiedRewardManager(_Base):
     Each sample's ``extra_info`` must carry ``episode_id`` (and may carry
     ``task_id``). The policy update comes from ``data.meta_info["global_steps"]``
     when verl sets it, else from ``policy_update``.
+
+    Each sample must also name its oracle identity, a mapping keyed exactly as
+    the contract's ``oracle.identity_keys``. The manager reads it from
+    ``non_tensor_batch[oracle_identity_key]`` (a dataset column of that
+    name), else from ``extra_info[oracle_identity_key]``, and sends it as
+    ``metadata.oracle_identity``. A sample with neither raises
+    ``OracleIdentityError`` before any HTTP call; the worker would otherwise
+    answer 422 ``identity_missing``. ``runtime_signal_key`` is read the same
+    way and is optional. Set ``oracle_identity_key=None`` only when every
+    identity was registered with ``RewardWorker.begin_episode`` in-process.
     """
 
     def __init__(
@@ -87,6 +102,7 @@ class CertifiedRewardManager(_Base):
         *,
         source: RewardSource | None = None,
         endpoint_url: str | None = None,
+        endpoint_token: str | None = None,
         reward_contract_digest: str,
         policy_checkpoint_id: str,
         require_certified: bool = True,
@@ -94,6 +110,8 @@ class CertifiedRewardManager(_Base):
         policy_update: int | Callable[[], int] | None = None,
         episode_id_key: str = "episode_id",
         task_id_key: str | None = "task_id",
+        oracle_identity_key: str | None = ORACLE_IDENTITY_KEY,
+        runtime_signal_key: str | None = RUNTIME_SIGNAL_KEY,
         environment_id: str | None = None,
         on_endpoint_error: str = "raise",
         **_ignored: Any,
@@ -101,7 +119,7 @@ class CertifiedRewardManager(_Base):
         if source is None:
             if endpoint_url is None:
                 raise ValueError("pass source= or endpoint_url=")
-            source = HttpRewardEndpoint(endpoint_url)
+            source = HttpRewardEndpoint(endpoint_url, token=endpoint_token)
         if on_endpoint_error not in {"raise", "unscored"}:
             raise ValueError("on_endpoint_error must be 'raise' or 'unscored'")
         self.tokenizer = tokenizer
@@ -115,6 +133,8 @@ class CertifiedRewardManager(_Base):
         self._policy_update = policy_update
         self.episode_id_key = episode_id_key
         self.task_id_key = task_id_key
+        self.oracle_identity_key = oracle_identity_key
+        self.runtime_signal_key = runtime_signal_key
         self.environment_id = environment_id
         self.on_endpoint_error = on_endpoint_error
         if compute_score is not None:
@@ -123,6 +143,11 @@ class CertifiedRewardManager(_Base):
             logger.warning(
                 "require_certified=False: rewards from this manager may be "
                 "development_only and are never certified"
+            )
+        if oracle_identity_key is None:
+            logger.warning(
+                "oracle_identity_key=None: samples carry no oracle identity; the "
+                "reward worker refuses any episode not registered with begin_episode"
             )
 
     # -- pure part ----------------------------------------------------------------------
@@ -144,12 +169,17 @@ class CertifiedRewardManager(_Base):
         extra_infos: Sequence[dict[str, Any]],
         group_ids: Sequence[Any],
         policy_update: int,
+        *,
+        identities: Sequence[Any] | None = None,
+        runtime_signals: Sequence[Any] | None = None,
     ) -> tuple[list[float | None], dict[str, list[Any]], list[ScoredEpisode | None]]:
         """Score one batch without touching tensors.
 
-        Returns the per-sample reward (``None`` only for a group with no
-        scored member), the ``reward_extra_info`` columns, and the scored
-        episodes.
+        ``identities`` and ``runtime_signals`` are the per-sample columns from
+        ``non_tensor_batch``; when ``None``, each sample's ``extra_info`` is
+        read under the same key. Returns the per-sample reward (``None`` only
+        for a group with no scored member), the ``reward_extra_info``
+        columns, and the scored episodes.
         """
 
         descriptors = [
@@ -162,8 +192,10 @@ class CertifiedRewardManager(_Base):
                 if self.task_id_key and self.task_id_key in info
                 else None,
                 environment_id=self.environment_id,
+                oracle_identity=self._identity(info, identities, index),
+                runtime_signal=self._signal(info, runtime_signals, index),
             )
-            for info in extra_infos
+            for index, info in enumerate(extra_infos)
         ]
         receipts = self._fetch(descriptors)
         scored: list[ScoredEpisode | None] = []
@@ -194,6 +226,39 @@ class CertifiedRewardManager(_Base):
             logger.info("dropped %d of %d episodes as unscored", dropped, len(values))
         return rewards, extra, scored
 
+    def _identity(
+        self, info: dict[str, Any], column: Sequence[Any] | None, index: int
+    ) -> dict[str, str] | None:
+        key = self.oracle_identity_key
+        if key is None:
+            return None
+        episode_id = info.get(self.episode_id_key)
+        where = f"non_tensor_batch[{key!r}], episode {episode_id!s}"
+        if column is not None:
+            if len(column) <= index:
+                raise OracleIdentityError(f"{where}: the column is shorter than the batch")
+            return clean_oracle_identity(column[index], where=where)
+        if key in info:
+            return clean_oracle_identity(
+                info[key], where=f"extra_info[{key!r}], episode {episode_id!s}"
+            )
+        raise OracleIdentityError(
+            f"episode {episode_id!s} names no oracle identity: neither "
+            f"non_tensor_batch[{key!r}] nor extra_info[{key!r}] is set. The reward worker "
+            "needs the contract's identity_keys or it answers 422 identity_missing. Add the "
+            "dataset column, or pass oracle_identity_key=None when every identity was "
+            "registered with RewardWorker.begin_episode."
+        )
+
+    def _signal(self, info: dict[str, Any], column: Sequence[Any] | None, index: int) -> str | None:
+        key = self.runtime_signal_key
+        if key is None:
+            return None
+        if column is not None and len(column) > index and column[index] is not None:
+            return str(column[index])
+        value = info.get(key)
+        return None if value is None else str(value)
+
     def _fetch(self, descriptors: Sequence[EpisodeDescriptor]) -> list[Any]:
         if self.on_endpoint_error == "raise":
             return fetch_receipts(self.source, descriptors)
@@ -216,8 +281,12 @@ class CertifiedRewardManager(_Base):
         valid_lengths = data.batch["attention_mask"][:, prompt_length:].sum(axis=-1)
         uids = list(data.non_tensor_batch["uid"])
         extra_infos = list(data.non_tensor_batch.get("extra_info", [{} for _ in uids]))
+        identities = self._non_tensor_column(data, self.oracle_identity_key)
+        signals = self._non_tensor_column(data, self.runtime_signal_key)
         update = self.policy_update(getattr(data, "meta_info", None))
-        rewards, extra, _scored = self.score_batch(extra_infos, uids, update)
+        rewards, extra, _scored = self.score_batch(
+            extra_infos, uids, update, identities=identities, runtime_signals=signals
+        )
 
         reward_tensor = torch.zeros_like(responses, dtype=torch.float32)
         for index, reward in enumerate(rewards):
@@ -230,6 +299,15 @@ class CertifiedRewardManager(_Base):
         if return_dict:
             return {"reward_tensor": reward_tensor, "reward_extra_info": extra}
         return reward_tensor
+
+    @staticmethod
+    def _non_tensor_column(data: Any, key: str | None) -> list[Any] | None:
+        if key is None:
+            return None
+        batch = data.non_tensor_batch
+        if key not in batch:
+            return None
+        return list(batch[key])
 
 
 def register_with_verl(name: str = REWARD_MANAGER_NAME) -> bool:
