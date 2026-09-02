@@ -18,6 +18,14 @@ class WriteSpec:
     ``expected_new`` is ``|spec(M)|``. ``allowed_fields`` is every key a
     legitimate write may persist, including store-assigned identity. A field
     outside this set is Extra-Field.
+
+    ``identity_fields`` names the keys that say WHICH record the write must
+    land on. They are the contract's ``oracle_identity``. Every other spec
+    field is content. Separating the two is what lets an oracle answer "the
+    right content in the wrong chart", which a content check cannot.
+
+    ``decoy_identity`` is a different record in the same collection. The
+    ``wrong_record`` operator writes the correct content there.
     """
 
     env: str
@@ -28,6 +36,8 @@ class WriteSpec:
     extra_field: str
     extra_value: str
     omit_field: str
+    identity_fields: frozenset[str]
+    decoy_identity: Mapping[str, str]
 
 
 # MockMed triage-save, the same synthetic encounter the Flow fault server
@@ -47,6 +57,8 @@ MOCKMED_GOLD = WriteSpec(
     extra_field="priority",
     extra_value="stat",
     omit_field="note",
+    identity_fields=frozenset({"patient_id"}),
+    decoy_identity={"patient_id": "p0"},
 )
 
 
@@ -67,7 +79,31 @@ OPENEMR_GOLD = WriteSpec(
     extra_field="occupation",
     extra_value="Hardware",
     omit_field="lname",
+    identity_fields=frozenset({"pubpid"}),
+    decoy_identity={"pubpid": "MRN-0000"},
 )
+
+
+def identity_of(spec: WriteSpec) -> dict[str, str]:
+    """The record the write must land on: ``oracle_identity`` for this spec."""
+    missing = set(spec.identity_fields) - set(spec.fields)
+    if missing:
+        raise KeyError(
+            f"spec {spec.env}/{spec.collection} names identity field(s) "
+            f"{sorted(missing)} it does not carry"
+        )
+    return {key: spec.fields[key] for key in sorted(spec.identity_fields)}
+
+
+def decoy_of(spec: WriteSpec) -> dict[str, str]:
+    """A different record in the same collection. Never the spec's own."""
+    decoy = {key: spec.decoy_identity[key] for key in sorted(spec.identity_fields)}
+    if decoy == identity_of(spec):
+        raise ValueError(
+            f"decoy identity {decoy} equals the spec identity; the wrong-record "
+            "operator would be a no-op"
+        )
+    return decoy
 
 
 GOLD_SPECS: tuple[WriteSpec, ...] = (MOCKMED_GOLD, OPENEMR_GOLD)

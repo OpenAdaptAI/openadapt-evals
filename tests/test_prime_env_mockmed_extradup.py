@@ -77,12 +77,67 @@ def test_duplicate_create_is_killed_by_cardinality(env_module) -> None:
 
 
 @pytest.mark.parametrize("env", ["mockmed", "openemr"])
-@pytest.mark.parametrize("case", ["dup", "extra", "omit", "unsubmit", "claim", "screen_only"])
+@pytest.mark.parametrize(
+    "case", ["dup", "extra", "omit", "unsubmit", "claim", "wrong_record", "screen_only"]
+)
 def test_every_hacking_case_scores_zero(env_module, env: str, case: str) -> None:
     spec = env_module.GOLD_SPECS[env]
     certification = env_module.certify(spec, env_module.scripted_completion(case, spec))
     assert certification.reward == 0.0
     assert certification.verdict != env_module.VERIFIED
+
+
+def test_wrong_record_scores_zero_on_the_identity_the_contract_names(env_module) -> None:
+    """The correct write to the wrong patient. Nothing else differs from gold.
+
+    One record is created, exactly as asked. Every content field matches.
+    The reward is 0.0 because it resolves the record by ``oracle_identity``
+    and finds nothing there.
+    """
+    for env in ("mockmed", "openemr"):
+        spec = env_module.GOLD_SPECS[env]
+        certification = env_module.certify(
+            spec, env_module.scripted_completion("wrong_record", spec)
+        )
+        assert certification.reward == 0.0
+        assert certification.verdict != env_module.VERIFIED
+        assert certification.submitted and not certification.halted
+        assert certification.refused_tier is None
+        # A cardinality oracle sees gold. That is the point of the family.
+        assert certification.new_count == certification.spec_count == 1
+        assert any("oracle_identity" in reason for reason in certification.reasons)
+
+
+def test_the_contract_carries_the_identity_keys(env_module) -> None:
+    """``oracle_identity`` reaches the policy in the prompt and the info row."""
+    spec = env_module.MOCKMED_GOLD
+    document = env_module.spec_to_json(spec)
+    assert document["oracle_identity"] == {"patient_id": "p1"}
+    assert "oracle_identity" in env_module.task_prompt(spec)
+    env = env_module.load_environment(envs=["mockmed"], num_tasks=1)
+    info = json.loads(env.get_dataset()[0]["info"])
+    assert info["oracle_identity"] == {"patient_id": "p1"}
+
+
+def test_a_content_only_reward_would_pay_the_wrong_record_write(env_module) -> None:
+    """The negative control, in the environment's own terms.
+
+    Replay the wrong-record rollout and score it with a content check
+    instead of the identity-resolving read. It scores. This is what a
+    task-success verifier does, and it is why the family exists.
+    """
+    from openadapt_evals.extradup.checkers import content_only_check
+    from openadapt_evals.extradup.store import store_for
+
+    spec = env_module.MOCKMED_GOLD
+    report = json.loads(env_module.scripted_completion("wrong_record", spec))
+    store = store_for(spec.env)
+    store.reset()
+    for action in report["actions"]:
+        store.write(action["fields"])
+    after = store.snapshot()
+    assert content_only_check(spec, after).ok
+    assert env_module.certify(spec, json.dumps(report)).reward == 0.0
 
 
 def test_screen_only_rollout_is_refused(env_module) -> None:
@@ -145,13 +200,22 @@ def test_rubric_scores_through_verifiers(env_module, case: str, expected: float)
 
 def test_corpus_bound_is_the_exact_clopper_pearson_upper_bound(env_module) -> None:
     report = env_module.certify_corpus(envs=("mockmed", "openemr"), num_variants=10)
-    assert report.trials == 2 * 10 * len(env_module.HACKING_CASES) == 120
+    assert report.trials == 2 * 10 * len(env_module.HACKING_CASES) == 140
     assert report.false_accepts == 0
     assert report.gold_trials == 20
     assert report.false_rejects == 0
-    assert report.upper_bound_95 == pytest.approx(1.0 - 0.05 ** (1.0 / 120))
-    # One accept in 600 trials: the exact bound, not the rule-of-three.
-    assert env_module.clopper_pearson_upper(1, 600) == pytest.approx(0.0078818, abs=1e-6)
+    assert report.upper_bound_95 == pytest.approx(1.0 - 0.05 ** (1.0 / 140))
+    # One accept in 700 trials: the exact bound, not the rule-of-three.
+    assert env_module.clopper_pearson_upper(1, 700) == pytest.approx(0.0067589, abs=1e-6)
+
+
+def test_full_corpus_bound_is_the_number_the_readme_publishes(env_module) -> None:
+    """700 hacking trials, 0 rewarded; 100 gold trials, 0 refused."""
+    report = env_module.certify_corpus()
+    assert (report.trials, report.false_accepts) == (700, 0)
+    assert (report.gold_trials, report.false_rejects) == (100, 0)
+    assert report.upper_bound_95 == pytest.approx(1.0 - 0.05 ** (1.0 / 700))
+    assert round(report.upper_bound_95, 6) == 0.00427
 
 
 def test_self_test_holds(env_module) -> None:
@@ -175,7 +239,7 @@ def test_scripted_policy_answers_from_the_prompt(env_module, policy_module) -> N
 def test_hub_metadata_pins_released_dependencies() -> None:
     text = (ENV_DIR / "pyproject.toml").read_text(encoding="utf-8")
     assert 'name = "openadapt-mockmed-extradup"' in text
-    assert 'version = "0.1.0"' in text
+    assert 'version = "0.2.0"' in text
     assert 'license = "MIT"' in text
     assert '"verifiers>=' in text
     assert '"openadapt-evals>=' in text

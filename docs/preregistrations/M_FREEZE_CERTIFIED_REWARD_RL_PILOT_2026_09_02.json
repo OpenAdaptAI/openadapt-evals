@@ -310,18 +310,18 @@
   "pinned_sources": [
     {
       "path": "openadapt_evals/extradup/mutations.py",
-      "sha256": "sha256:ca5a7b3687e098f7705184f35f0fb9747fa4bf3d08a5e65b45964072118ea15f",
-      "git_blob": "fd6f348965ee65eadbd6f874af63595e0651ba5f"
+      "sha256": "sha256:05cd94455da5ffc1d00a6117386a778b1a82a68b7d574a10ebad70bbb67cf87e",
+      "git_blob": "ef09fe59d1c2202d6811d74c1b9c01bb51da55ae"
     },
     {
       "path": "openadapt_evals/extradup/gold.py",
-      "sha256": "sha256:8c2cb0682525a430a9dda42709db89261625e31af21ff1438e02353dc914c6df",
-      "git_blob": "f3b9f33f6e5d16d0c561158403799e6aca6f204d"
+      "sha256": "sha256:7d74f4fb5fbb0ba9931755e926a960cb0c599ec2b3405781db2f2227965ce34a",
+      "git_blob": "1691a190111a3901256093bd6cd7bd365e32d220"
     },
     {
       "path": "openadapt_evals/extradup/checkers.py",
-      "sha256": "sha256:e8eee27fc3ee002a8d2846e0bc77602c695867d729710bd0a5a718b2f9bfe452",
-      "git_blob": "3a79176af9a02ec99203aa8ef492517b6190ba24"
+      "sha256": "sha256:e53bef06e540cd718c4b33699b379046b2d747c6d3146a8bf08ad7a8cf439e6c",
+      "git_blob": "9bd854090a257d9f4449f48a470536aebe9859ac"
     },
     {
       "path": "openadapt_evals/reward/proof.py",
@@ -347,5 +347,13 @@
     "proof_path": "docs/reward/proof_2026-09-02.json",
     "note": "Wrong-record write. Named identity is p1; write lands on p2. Not an ExtraDup operator."
   },
-  "amendment_note": "2026-09-02 identity-swap: proof.py hash and proof_2026-09-02.json added. ExtraDup operators and the 2026-09-01 certificate digest are unchanged."
+  "amendment_note": "2026-09-02 identity-swap: proof.py hash and proof_2026-09-02.json added. ExtraDup operators and the 2026-09-01 certificate digest are unchanged. 2026-09-02 wrong_record: mutations.py, gold.py and checkers.py hashes updated for the eval-only wrong_record family and the identity resolution inside sor_check. OPERATORS, MUTANTS, holdout_operators, the seed schedule, and the 2026-09-01 certificate digest are unchanged; wrong_record lives in EVAL_ONLY_OPERATORS and is not an ExtraDup operator.",
+  "wrong_record": {
+    "in_extradup_mutants": false,
+    "in_training_dataset": false,
+    "in_training_reward": false,
+    "eval_only": true,
+    "source": "openadapt_evals.extradup.mutations.EVAL_ONLY_OPERATORS",
+    "note": "Correct content written to a different patient. MockMed named identity is p1; the write lands on p0. Surfaced by the published environment's eval dataset and by the kit suite, never by the frozen kill-scan corpus. Not an ExtraDup operator."
+  }
 }

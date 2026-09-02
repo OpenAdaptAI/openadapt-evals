@@ -9,12 +9,20 @@ from pathlib import Path
 from typing import Any, Optional
 
 from openadapt_evals.extradup.checkers import (
+    content_only_check,
     field_inclusion_check,
+    identity_check,
     sor_check,
     visual_only_check,
 )
 from openadapt_evals.extradup.gold import GOLD_SPECS, WriteSpec
-from openadapt_evals.extradup.mutations import MUTANTS, OPERATORS, apply
+from openadapt_evals.extradup.mutations import (
+    ALL_OPERATORS,
+    EVAL_ONLY_OPERATORS,
+    MUTANTS,
+    OPERATORS,
+    apply,
+)
 from openadapt_evals.extradup.seal import REFUSED, VERIFIED, seal_verdict
 from openadapt_evals.extradup.store import store_for
 
@@ -31,6 +39,8 @@ class CellReport:
     sor: str
     sor_reasons: tuple[str, ...]
     field_inclusion: str
+    content_only: str
+    identity: str
     visual_only: str
     seal: str
     new_count: int
@@ -50,6 +60,11 @@ def cell_id(spec: WriteSpec, operator: str) -> str:
 
 
 def cells() -> dict[str, tuple[WriteSpec, str]]:
+    """The frozen corpus: ``OPERATORS`` only.
+
+    ``kill_scan`` digests this, and the Phase-1 M-freeze pins the operator
+    list, so an eval-only family must not appear here. Use ``all_cells``.
+    """
     found: dict[str, tuple[WriteSpec, str]] = {}
     for spec in GOLD_SPECS:
         for operator in OPERATORS:
@@ -57,13 +72,28 @@ def cells() -> dict[str, tuple[WriteSpec, str]]:
     return found
 
 
+def eval_only_cells() -> dict[str, tuple[WriteSpec, str]]:
+    """Families added after the freeze. Suite and eval dataset, never training."""
+    return {
+        cell_id(spec, operator): (spec, operator)
+        for spec in GOLD_SPECS
+        for operator in EVAL_ONLY_OPERATORS
+    }
+
+
+def all_cells() -> dict[str, tuple[WriteSpec, str]]:
+    return {**cells(), **eval_only_cells()}
+
+
 def run_cell(cell: str) -> CellReport:
-    spec, operator = cells()[cell]
+    spec, operator = all_cells()[cell]
     store = store_for(spec.env)
     before, after, screen = apply(store, spec, operator)
     added = [row for row in after if row["id"] not in {r["id"] for r in before}]
     sor = sor_check(spec, before, after)
     inclusion = field_inclusion_check(spec, after)
+    content = content_only_check(spec, after)
+    identity = identity_check(spec, before, after)
     visual = visual_only_check(screen)
     return CellReport(
         id=cell,
@@ -73,6 +103,8 @@ def run_cell(cell: str) -> CellReport:
         sor=sor.verdict,
         sor_reasons=sor.reasons,
         field_inclusion=inclusion.verdict,
+        content_only=content.verdict,
+        identity=identity.verdict,
         visual_only=visual.verdict,
         seal=seal_verdict(spec, before, after),
         new_count=len(added),
@@ -86,7 +118,7 @@ def _dump(value: Any) -> str:
 
 def cmd_list(_args: argparse.Namespace) -> int:
     print(f"{SUITE_NAME}: {SUITE_LABEL}")
-    for cell, (spec, operator) in cells().items():
+    for cell, (spec, operator) in all_cells().items():
         gold = _gold_for(operator)
         print(f"{cell}\t{spec.env}\t{operator}\tgold={gold}")
     return 0
@@ -99,7 +131,7 @@ def cmd_show(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    catalog = cells()
+    catalog = all_cells()
     if args.id not in catalog:
         raise SystemExit(f"unknown mutant {args.id!r}")
     report = run_cell(args.id)
@@ -116,14 +148,14 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 def check_invariants(reports: Optional[dict[str, CellReport]] = None) -> list[str]:
     """Return problems. Empty means the kit holds."""
-    catalog = cells()
+    catalog = all_cells()
     reports = reports or {cell: run_cell(cell) for cell in catalog}
     problems: list[str] = []
 
     expected_ids = {
         f"{env}:{op}"
         for env in ("mockmed", "openemr")
-        for op in OPERATORS
+        for op in ALL_OPERATORS
     }
     if set(reports) != expected_ids:
         problems.append(f"cell set drifted: {sorted(reports)}")
@@ -159,6 +191,33 @@ def check_invariants(reports: Optional[dict[str, CellReport]] = None) -> list[st
         if extra_ni.seal != REFUSED:
             problems.append(f"{env}:dup: Seal must REFUSE Extra-NI, got {extra_ni.seal}")
 
+    for env in ("mockmed", "openemr"):
+        wrong = reports[f"{env}:wrong_record"]
+        # The whole point: gold cardinality, gold screen, gold content.
+        if wrong.new_count != wrong.spec_count:
+            problems.append(
+                f"{env}:wrong_record: |new| must equal |spec| "
+                f"(got {wrong.new_count} != {wrong.spec_count})"
+            )
+        if wrong.visual_only != "PASS":
+            problems.append(f"{env}:wrong_record: the screen must look like success")
+        if wrong.content_only != "PASS":
+            problems.append(
+                f"{env}:wrong_record: a content check must PASS; the content is correct"
+            )
+        if wrong.identity != "FAIL":
+            problems.append(
+                f"{env}:wrong_record: identity resolution must FAIL, got {wrong.identity}"
+            )
+        if wrong.sor != "FAIL" or wrong.seal != REFUSED:
+            problems.append(
+                f"{env}:wrong_record: SoR must FAIL and the Seal must REFUSE "
+                f"(got sor={wrong.sor} seal={wrong.seal})"
+            )
+        control = reports[f"{env}:control"]
+        if control.identity != "PASS":
+            problems.append(f"{env}:control: identity resolution must PASS")
+
     mock_dup = reports["mockmed:dup"]
     if mock_dup.seal == VERIFIED:
         problems.append("mockmed:dup: Seal/VERIFIED path must refuse Extra-NI")
@@ -169,7 +228,7 @@ def check_invariants(reports: Optional[dict[str, CellReport]] = None) -> list[st
 
 
 def cmd_check(_args: argparse.Namespace) -> int:
-    reports = {cell: run_cell(cell) for cell in cells()}
+    reports = {cell: run_cell(cell) for cell in all_cells()}
     problems = check_invariants(reports)
     if problems:
         for problem in problems:
@@ -177,7 +236,8 @@ def cmd_check(_args: argparse.Namespace) -> int:
         return 1
     print(
         "PASS: ExtraDup SoR fails every mutant; field-inclusion still PASSes "
-        "dup/extra; Seal refuses Extra-NI on MockMed"
+        "dup/extra; a content check still PASSes wrong_record; Seal refuses "
+        "Extra-NI on MockMed"
     )
     return 0
 
