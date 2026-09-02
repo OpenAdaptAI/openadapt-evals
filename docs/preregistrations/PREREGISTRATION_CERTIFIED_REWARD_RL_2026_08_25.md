@@ -232,3 +232,12 @@ Phase-1 artifacts it builds on are merged and content-addressed:
 PRs #49 (`d528cb4`), #50 (`16ed90a`), #51 (`74d07ce`),
 #52 (`afea75c`), #53 (`c94d792`), #54 (`42b85cf`), #55 (`6fdf085`) in
 `OpenAdaptAI/openadapt-attest-bench`.
+
+Amendments after this tag (separate commits; they do not redefine the
+sections above):
+
+- `docs/preregistrations/M_FREEZE_CERTIFIED_REWARD_RL_PILOT_2026_09_02.json`
+  (markdown sibling of the same stem): Phase-1/pilot M-freeze. Pins the
+  checkpoint, learning rate, group size, K=3 seed schedule, certificate
+  digest, ExtraDup mutants, train vs holdout patient ids, arms, and
+  metrics before any training step.
