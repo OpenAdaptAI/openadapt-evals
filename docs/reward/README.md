@@ -164,24 +164,33 @@ python -m openadapt_evals.extradup kill-scan
 It runs the frozen MockMed corpus, prints silent-incorrect-success on gold-FAIL
 mutants vs honest-write on the control, keeps `execute_seal: false` /
 `production_seal: false`, and does not mix those mutants into a training
-reward. Same numbers as below. `--verdicts path.json` scores someone else's
-checker on the same cells.
+reward. Same numbers as the ExtraDup-only snapshot. `--verdicts path.json`
+scores someone else's checker on the same cells.
 
 `python -m openadapt_evals.reward.proof` is the underlying generator: scripted
 policies against the in-memory MockMed store from `openadapt_evals.extradup`,
 two rewards through the same `assess_receipt` path the adapters use. No model,
-no GPU. Three trials per condition on the seed schedule `[101, 202, 303]`;
-the seed picks the banner wording and the receipt identities. The committed
-output is [`proof_2026-09-01.md`](proof_2026-09-01.md) and
-[`proof_2026-09-01.json`](proof_2026-09-01.json); a test regenerates it and
-fails if the committed file drifts from the code.
+no GPU, not a trained policy, not a Production Seal. Three trials per
+condition on the seed schedule `[101, 202, 303]`; the seed picks the banner
+wording and the receipt identities.
+
+The ExtraDup-only snapshot is
+[`proof_2026-09-01.md`](proof_2026-09-01.md) and
+[`proof_2026-09-01.json`](proof_2026-09-01.json). A test regenerates it from
+the frozen condition set and fails if that file drifts. The current committed
+output, which adds the `identity_swap` family, is
+[`proof_2026-09-02.md`](proof_2026-09-02.md) and
+[`proof_2026-09-02.json`](proof_2026-09-02.json).
 
 `visual_only` is a tier-0 reward that believes the saved banner, the filled
-form, or the policy's claim. `certified_sor` is a tier-2 reward that runs
-ExtraDup's `sor_check` (record count, no extra field, every spec field) behind
-a self-signed synthetic-scope certificate. `oracle_outage` is not an ExtraDup
-family: the write is correct but the store cannot be read, so the certified
-reward answers `failed_platform`.
+form, or the policy's claim. `certified_sor` is a tier-2 reward that reads the
+named `oracle.identity_keys` and runs ExtraDup's `sor_check` (record count,
+no extra field, every spec field) on that record, behind a self-signed
+synthetic-scope certificate. `identity_swap` writes a correct-looking note
+onto the wrong `patient_id`; the banner still says saved, and the named
+record is unchanged. `oracle_outage` is not an ExtraDup family: the write is
+correct but the store cannot be read, so the certified reward answers
+`failed_platform`.
 
 | condition | gold | reward | tier | trials | paid | silent incorrect success | over-refusal | unscored | certified | scope |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -197,17 +206,21 @@ reward answers `failed_platform`.
 | unsubmit | FAIL | certified_sor | 2 | 3 | 0 | 0.00 | n/a | 0 | yes | synthetic |
 | claim | FAIL | visual_only | 0 | 3 | 3 | 1.00 | n/a | 0 | no | none |
 | claim | FAIL | certified_sor | 2 | 3 | 0 | 0.00 | n/a | 0 | yes | synthetic |
+| identity_swap | FAIL | visual_only | 0 | 3 | 3 | 1.00 | n/a | 0 | no | none |
+| identity_swap | FAIL | certified_sor | 2 | 3 | 0 | 0.00 | n/a | 0 | yes | synthetic |
 | oracle_outage | PASS | visual_only | 0 | 3 | 3 | n/a | 0.00 | 0 | no | none |
 | oracle_outage | PASS | certified_sor | 2 | 3 | 0 | n/a | 0.00 | 3 | yes | synthetic |
 
-The visual reward paid all 15 gold-FAIL rollouts. The certified reward paid
-none of them and paid the 3 controls. Its certificate's epsilon, 0.181036, is
-the exact one-sided 95% Clopper-Pearson upper bound from those 15 trials; it
-was computed from the run, not chosen. The `certified` column reads `yes`
-for the tier-2 reward because the certificate is current at update 7, names
-its calibration corpus by digest, and states its scope. That scope is
-`synthetic`, and a self-signed certificate can state no other; the contract
-(openadapt-types 0.17.0) rejects one that tries.
+The visual reward paid all 18 gold-FAIL rollouts, including identity_swap.
+The certified reward paid none of them and paid the 3 controls. Its
+certificate's epsilon, 0.153318, is the exact one-sided 95% Clopper-Pearson
+upper bound from those 18 trials; it was computed from the run, not chosen.
+The 09-01 snapshot's epsilon, 0.181036, is the same bound over the 15
+ExtraDup-only trials. The `certified` column reads `yes` for the tier-2 reward because the
+certificate is current at update 7, names its calibration corpus by digest,
+and states its scope. That scope is `synthetic`, and a self-signed
+certificate can state no other; the contract (openadapt-types 0.17.0)
+rejects one that tries.
 
 The expiry check re-assesses the certified control receipts at policy update
 100, the first update at which the certificate has expired: none stays
@@ -217,7 +230,7 @@ certified and the adapter logs three expiry warnings.
 
 It does not train anything, so it says nothing about how the two rewards
 change a policy. It does not touch a real system of record. The bound is for
-15 synthetic trials at one seed schedule and would move with either. The
+18 synthetic trials at one seed schedule and would move with either. The
 reward worker that issues production receipts is a separate piece of work in
 `openadapt-flow`; until it ships, the only receipts this package has seen were
 signed by its own development key.
