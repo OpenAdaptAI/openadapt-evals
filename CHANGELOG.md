@@ -1,6 +1,18 @@
 # CHANGELOG
 
 
+## v0.96.1 (2026-09-02)
+
+### Bug Fixes
+
+- **reward**: Trainer adapters carry the oracle identity the worker requires (#332) ([`0fec942`](https://github.com/OpenAdaptAI/openadapt-evals/commit/0fec942c4e371bbeee3b8990850482d667146e24))
+- **prime**: Pin verifiers below 0.3.2, the last release with SingleTurnEnv (#330) ([`c541aa8`](https://github.com/OpenAdaptAI/openadapt-evals/commit/c541aa825b7b6b2cab35c39508a4e4dc5b014057))
+
+### Documentation
+
+- **prime**: Options brief for the verifiers Taskset port (#329) ([`44ec3b3`](https://github.com/OpenAdaptAI/openadapt-evals/commit/44ec3b32959615e565c6d994cacab9a1d80bb3df))
+
+
 ## v0.96.0 (2026-09-01)
 
 ### Features
