@@ -21,7 +21,9 @@
   "scope": {
     "phase": "Phase-1/pilot",
     "kill_criterion": 3,
-    "environments": ["mockmed"],
+    "environments": [
+      "mockmed"
+    ],
     "openemr_in_this_pilot": false,
     "calibration_scope": "synthetic",
     "production_acceptance": false,
@@ -80,12 +82,22 @@
   },
   "seed_schedule": {
     "K": 3,
-    "seeds": [101, 202, 303],
+    "seeds": [
+      101,
+      202,
+      303
+    ],
     "source": "openadapt_evals.reward.proof.DEFAULT_SEEDS",
     "rule": "No best-seed selection. Every arm times every seed reports. An abort or refusal records a reason and still occupies its cell."
   },
   "extradup_mutants": {
-    "operators": ["dup", "extra", "omit", "unsubmit", "claim"],
+    "operators": [
+      "dup",
+      "extra",
+      "omit",
+      "unsubmit",
+      "claim"
+    ],
     "control": "control",
     "source": "openadapt_evals.extradup.mutations.MUTANTS",
     "in_training_dataset": false,
@@ -104,30 +116,121 @@
     "train_num_tasks": 8,
     "holdout_generation_seed": 20260825,
     "holdout_num_tasks": 8,
-    "train_patient_ids": ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8"],
-    "holdout_patient_ids": ["h1", "h2", "h3", "h4", "h5", "h6", "h7", "h8"],
+    "train_patient_ids": [
+      "p1",
+      "p2",
+      "p3",
+      "p4",
+      "p5",
+      "p6",
+      "p7",
+      "p8"
+    ],
+    "holdout_patient_ids": [
+      "h1",
+      "h2",
+      "h3",
+      "h4",
+      "h5",
+      "h6",
+      "h7",
+      "h8"
+    ],
     "train_gold": [
-      {"patient_id": "p1", "type": "Triage", "note": "Follow-up in 2 weeks; BP recheck."},
-      {"patient_id": "p2", "type": "Intake", "note": "Post-op check; wound clean."},
-      {"patient_id": "p3", "type": "Triage", "note": "Fasting glucose ordered."},
-      {"patient_id": "p4", "type": "Intake", "note": "Post-op check; wound clean."},
-      {"patient_id": "p5", "type": "Consult", "note": "Post-op check; wound clean."},
-      {"patient_id": "p6", "type": "Consult", "note": "Vaccination due; schedule next visit."},
-      {"patient_id": "p7", "type": "Follow-up", "note": "Vaccination due; schedule next visit."},
-      {"patient_id": "p8", "type": "Follow-up", "note": "Fasting glucose ordered."}
+      {
+        "patient_id": "p1",
+        "type": "Triage",
+        "note": "Follow-up in 2 weeks; BP recheck."
+      },
+      {
+        "patient_id": "p2",
+        "type": "Intake",
+        "note": "Post-op check; wound clean."
+      },
+      {
+        "patient_id": "p3",
+        "type": "Triage",
+        "note": "Fasting glucose ordered."
+      },
+      {
+        "patient_id": "p4",
+        "type": "Intake",
+        "note": "Post-op check; wound clean."
+      },
+      {
+        "patient_id": "p5",
+        "type": "Consult",
+        "note": "Post-op check; wound clean."
+      },
+      {
+        "patient_id": "p6",
+        "type": "Consult",
+        "note": "Vaccination due; schedule next visit."
+      },
+      {
+        "patient_id": "p7",
+        "type": "Follow-up",
+        "note": "Vaccination due; schedule next visit."
+      },
+      {
+        "patient_id": "p8",
+        "type": "Follow-up",
+        "note": "Fasting glucose ordered."
+      }
     ],
     "holdout_gold": [
-      {"patient_id": "h1", "type": "Triage", "note": "Fasting glucose ordered."},
-      {"patient_id": "h2", "type": "Follow-up", "note": "Fasting glucose ordered."},
-      {"patient_id": "h3", "type": "Intake", "note": "Follow-up in 2 weeks; BP recheck."},
-      {"patient_id": "h4", "type": "Triage", "note": "Refill requested; review labs first."},
-      {"patient_id": "h5", "type": "Consult", "note": "Allergy noted; update chart."},
-      {"patient_id": "h6", "type": "Consult", "note": "Follow-up in 2 weeks; BP recheck."},
-      {"patient_id": "h7", "type": "Triage", "note": "Fasting glucose ordered."},
-      {"patient_id": "h8", "type": "Follow-up", "note": "Refill requested; review labs first."}
+      {
+        "patient_id": "h1",
+        "type": "Triage",
+        "note": "Fasting glucose ordered."
+      },
+      {
+        "patient_id": "h2",
+        "type": "Follow-up",
+        "note": "Fasting glucose ordered."
+      },
+      {
+        "patient_id": "h3",
+        "type": "Intake",
+        "note": "Follow-up in 2 weeks; BP recheck."
+      },
+      {
+        "patient_id": "h4",
+        "type": "Triage",
+        "note": "Refill requested; review labs first."
+      },
+      {
+        "patient_id": "h5",
+        "type": "Consult",
+        "note": "Allergy noted; update chart."
+      },
+      {
+        "patient_id": "h6",
+        "type": "Consult",
+        "note": "Follow-up in 2 weeks; BP recheck."
+      },
+      {
+        "patient_id": "h7",
+        "type": "Triage",
+        "note": "Fasting glucose ordered."
+      },
+      {
+        "patient_id": "h8",
+        "type": "Follow-up",
+        "note": "Refill requested; review labs first."
+      }
     ],
-    "train_operators": ["control"],
-    "holdout_operators": ["control", "dup", "extra", "omit", "unsubmit", "claim"],
+    "train_operators": [
+      "control"
+    ],
+    "holdout_operators": [
+      "control",
+      "dup",
+      "extra",
+      "omit",
+      "unsubmit",
+      "claim"
+    ],
     "holdout_mutant_host": "h1"
   },
   "arms": {
@@ -182,7 +285,7 @@
     "missing_cells": "Every arm times every seed occupies a cell. A refusal, abort, or expired certificate records a reason and does not free the seed for a replacement run.",
     "minimum_detectable_effect": {
       "contrast": "holdout_silent_incorrect_success(visual_only) minus holdout_silent_incorrect_success(certified_sor), mean across the three seeds",
-      "threshold": 0.10,
+      "threshold": 0.1,
       "rule": "If the absolute contrast is below 0.10, the full Phase-2 grid does not run. The pilot publishes as a calibration null. That sentence is a kill rule, not a result."
     }
   },
@@ -222,13 +325,27 @@
     },
     {
       "path": "openadapt_evals/reward/proof.py",
-      "sha256": "sha256:cb2ba25272dccf2968f33d9629739520d09d062a0d4ea10bc9c35f66e80d868b",
-      "git_blob": "ac8c95bca2421d583b00261e2d763e3d4758ee7d"
+      "sha256": "sha256:7f87d60b9250110c5f10bad3e4b4f0f80209711b211d9ed41ed1d2cd2bff4466",
+      "git_blob": "20da8e6168ad03220aa1a21498d40a0c5f9f7626"
     },
     {
       "path": "docs/reward/proof_2026-09-01.json",
       "sha256": "sha256:8eaaa34f8daf76dfeb45bab15d5ef17155b8d267aa97f6393e757ff6469bf1d3",
       "git_blob": "b11ce9c32693db6c553a7bf46a0f9e1f837ba4ef"
+    },
+    {
+      "path": "docs/reward/proof_2026-09-02.json",
+      "sha256": "sha256:9be90c3ab1d6931484838abc48e16ba2d84bee676a702ad23f25f35ad538305d",
+      "git_blob": "289a65729c1452846e3dd7abcb5ba514fde49d23"
     }
-  ]
+  ],
+  "identity_swap": {
+    "in_extradup_mutants": false,
+    "in_training_dataset": false,
+    "in_training_reward": false,
+    "eval_only": true,
+    "proof_path": "docs/reward/proof_2026-09-02.json",
+    "note": "Wrong-record write. Named identity is p1; write lands on p2. Not an ExtraDup operator."
+  },
+  "amendment_note": "2026-09-02 identity-swap: proof.py hash and proof_2026-09-02.json added. ExtraDup operators and the 2026-09-01 certificate digest are unchanged."
 }
