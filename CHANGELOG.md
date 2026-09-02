@@ -1,6 +1,20 @@
 # CHANGELOG
 
 
+## v0.97.0 (2026-09-02)
+
+### Features
+
+- **extradup**: Add the eval-only wrong_record family and resolve the record by identity (#337) ([`cad5560`](https://github.com/OpenAdaptAI/openadapt-evals/commit/cad5560d6b7482f2cb99b9735e0ac3c5aae714c8))
+- **reward**: Add identity-swap family to the MockMed ExtraDup proof (#335) ([`40f6646`](https://github.com/OpenAdaptAI/openadapt-evals/commit/40f66466ce8cb9586c220249285a349af5d3373d))
+- **extradup**: Add kill-scan CLI for the frozen ExtraDup corpus (#336) ([`1130f8d`](https://github.com/OpenAdaptAI/openadapt-evals/commit/1130f8db899703a8557262ace57097fa943944c5))
+
+### Documentation
+
+- Freeze M for certified-reward RL Phase-1/pilot (#334) ([`00fc435`](https://github.com/OpenAdaptAI/openadapt-evals/commit/00fc43524c3cc7f5412445ac08708d9be5d4ff3c))
+- **prime**: Install the environment from the Prime Intellect hub (#333) ([`8ccb61e`](https://github.com/OpenAdaptAI/openadapt-evals/commit/8ccb61e6d8c5d7950ee72cf465abe36a7fde58fb))
+
+
 ## v0.96.1 (2026-09-02)
 
 ### Bug Fixes

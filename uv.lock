@@ -3481,7 +3481,7 @@ wheels = [
 
 [[package]]
 name = "openadapt-evals"
-version = "0.96.1"
+version = "0.97.0"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
