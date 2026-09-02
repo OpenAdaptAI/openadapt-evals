@@ -50,6 +50,48 @@ class ReceiptMismatchError(ValueError):
     """The receipt does not bind the contract, certificate, or episode expected."""
 
 
+class OracleIdentityError(ValueError):
+    """An episode names no oracle identity, or names one the worker cannot use.
+
+    The reward worker needs the identity keys the contract declares
+    (``oracle.identity_keys``) to know which record to read. Without them it
+    answers HTTP 422 ``identity_missing`` and the batch stops mid-flight. The
+    adapters raise this before the first HTTP call instead.
+    """
+
+
+ORACLE_IDENTITY_KEY = "oracle_identity"
+RUNTIME_SIGNAL_KEY = "runtime_signal"
+
+
+def clean_oracle_identity(raw: Any, *, where: str) -> dict[str, str]:
+    """Coerce one identity mapping into the ``{str: str}`` shape the worker takes.
+
+    ``where`` names the column (and episode) for the error message. Keys and
+    values are stringified, the way flow's ``episode_from_columns`` does;
+    an empty key or value is refused because the worker refuses it too.
+    """
+
+    if raw is None:
+        raise OracleIdentityError(f"{where} carries no oracle identity")
+    if not isinstance(raw, Mapping):
+        raise OracleIdentityError(
+            f"{where} must be a mapping of identity keys to values, got {type(raw).__name__}"
+        )
+    if not raw:
+        raise OracleIdentityError(f"{where} is an empty oracle identity")
+    identity: dict[str, str] = {}
+    for key, value in raw.items():
+        text_key = str(key)
+        text_value = "" if value is None else str(value)
+        if not text_key or not text_value:
+            raise OracleIdentityError(
+                f"{where}: oracle identity key {text_key!r} has an empty key or value"
+            )
+        identity[text_key] = text_value
+    return dict(sorted(identity.items()))
+
+
 @dataclass(frozen=True)
 class EpisodeDescriptor:
     """What the trainer tells the reward endpoint about one episode.
@@ -57,6 +99,13 @@ class EpisodeDescriptor:
     ``episode_id`` names the rollout the oracle must read. The other fields
     bind the receipt to a contract and a policy checkpoint so the trainer can
     refuse a receipt that answers a different question.
+
+    ``oracle_identity`` is the record the oracle reads, keyed exactly as the
+    contract's ``oracle.identity_keys``. On the wire it travels as
+    ``metadata.oracle_identity``, the place the flow worker reads it from.
+    ``runtime_signal`` travels as ``metadata.runtime_signal`` and is what the
+    episode runtime said about its own end; the worker defaults it to
+    ``completed`` when absent.
     """
 
     episode_id: str
@@ -66,10 +115,19 @@ class EpisodeDescriptor:
     task_id: str | None = None
     environment_id: str | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    oracle_identity: Mapping[str, str] | None = None
+    runtime_signal: str | None = None
 
     def as_payload(self) -> dict[str, Any]:
         payload = asdict(self)
-        payload["metadata"] = dict(self.metadata)
+        metadata = dict(self.metadata)
+        identity = payload.pop("oracle_identity")
+        if identity is not None:
+            metadata[ORACLE_IDENTITY_KEY] = dict(identity)
+        signal = payload.pop("runtime_signal")
+        if signal is not None:
+            metadata[RUNTIME_SIGNAL_KEY] = signal
+        payload["metadata"] = metadata
         return {key: value for key, value in payload.items() if value is not None}
 
 
@@ -193,15 +251,17 @@ class HttpRewardEndpoint:
     """``POST {base_url}/v1/rewards`` with an episode descriptor.
 
     The flow reward worker owns the route. This client sends the descriptor
-    as JSON and expects a receipt (or ``{"receipt": ...}``) back with status
-    200. Any other status, a transport error, or an invalid body raises
-    ``RewardEndpointError``. Nothing here invents a scalar.
+    as JSON (``EpisodeDescriptor.as_payload``, identity and signal under
+    ``metadata``) and expects a receipt (or ``{"receipt": ...}``) back with
+    status 200. Any other status, a transport error, or an invalid body
+    raises ``RewardEndpointError``. Nothing here invents a scalar.
     """
 
     def __init__(
         self,
         base_url: str,
         *,
+        token: str | None = None,
         timeout_seconds: float = 60.0,
         headers: Mapping[str, str] | None = None,
         max_concurrency: int = 8,
@@ -210,6 +270,10 @@ class HttpRewardEndpoint:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self.headers = dict(headers or {})
+        # The flow worker requires ``Authorization: Bearer <token>`` on the
+        # rewards route; ``token`` is the short way to set that header.
+        if token is not None:
+            self.headers["Authorization"] = f"Bearer {token}"
         self.max_concurrency = max(1, int(max_concurrency))
         # An httpx transport, for tests (``httpx.MockTransport``).
         self.transport = transport

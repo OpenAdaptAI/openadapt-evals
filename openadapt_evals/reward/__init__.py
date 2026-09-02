@@ -11,6 +11,10 @@ expects and enforce three rules the receipt states:
 * certificate expiry is logged, and in ``require_certified`` mode it stops
   the run.
 
+Every episode also carries the oracle identity the worker needs to read the
+record (``metadata.oracle_identity`` on the wire). An episode without one is
+refused here, before any HTTP call, not by the worker with a 422.
+
 The reward worker itself (oracle read, judge, signing, HTTP route) lives in
 ``openadapt-flow``. This package consumes its receipts.
 """
@@ -19,6 +23,7 @@ from openadapt_evals.reward.receipts import (
     CallableRewardSource,
     EpisodeDescriptor,
     HttpRewardEndpoint,
+    OracleIdentityError,
     RewardEndpointError,
     ScoredEpisode,
     UncertifiedRewardError,
@@ -31,6 +36,7 @@ __all__ = [
     "CallableRewardSource",
     "EpisodeDescriptor",
     "HttpRewardEndpoint",
+    "OracleIdentityError",
     "RewardEndpointError",
     "ScoredEpisode",
     "UncertifiedRewardError",

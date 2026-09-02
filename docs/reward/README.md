@@ -30,14 +30,17 @@ TRL's `GRPOTrainer` accepts reward functions that take `prompts`, `completions`,
 and every dataset column as keyword arguments and return one float per
 completion ([TRL docs](https://huggingface.co/docs/trl/main/en/grpo_trainer),
 "Using a custom reward function"). Your dataset needs an `episode_id` column
-that names the rollout the oracle will read.
+that names the rollout the oracle will read, and an `oracle_identity` column
+that says which record it reads (see below).
 
 ```python
+import os
+
 from openadapt_evals.reward import HttpRewardEndpoint
 from openadapt_evals.reward.trl import CertifiedRewardFunction
 
 reward = CertifiedRewardFunction(
-    HttpRewardEndpoint("http://reward-worker:8080"),
+    HttpRewardEndpoint("http://reward-worker:8080", token=os.environ["REWARD_WORKER_TOKEN"]),
     reward_contract_digest="sha256:...",      # the contract every receipt must bind
     policy_checkpoint_id="policy.checkpoint.0001",
     num_generations=config.num_generations,   # TRL's group size
@@ -81,15 +84,43 @@ reward_model:
   reward_manager: openadapt_certified
   reward_kwargs:
     endpoint_url: http://reward-worker:8080
+    endpoint_token: ${REWARD_WORKER_TOKEN}
     reward_contract_digest: sha256:...
     policy_checkpoint_id: policy.checkpoint.0001
     require_certified: true
 ```
 
-Each sample's `extra_info` must carry `episode_id`. The manager groups samples
+Each sample's `extra_info` must carry `episode_id`, and each sample needs an
+`oracle_identity` (a dataset column of that name, which lands in
+`non_tensor_batch`, or a key inside `extra_info`). The manager groups samples
 by `non_tensor_batch["uid"]`, the same key verl's GRPO advantage uses, reads
 the policy update from `meta_info["global_steps"]`, and returns the per-sample
 flags in `reward_extra_info`.
+
+## The oracle identity column
+
+The worker reads one record per episode, and the contract's
+`oracle.identity_keys` say which keys name it. For the seeded MockMed bundle
+that is `["patient_id"]`, so each row of the `oracle_identity` column is a
+mapping like `{"patient_id": "patient-honest-0001"}`. Both adapters send it
+as `metadata.oracle_identity` in the `POST /v1/rewards` body, next to the
+optional `metadata.runtime_signal` from a `runtime_signal` column. Keys and
+values are sent as strings, sorted by key, the shape the worker validates.
+
+An episode with no identity is refused by the worker with HTTP 422
+`identity_missing`, which the adapter would surface as `RewardEndpointError`
+part way through a batch. So the adapter checks first. A batch whose dataset
+lacks the column, or any row that is empty or `None`, raises
+`OracleIdentityError` before the first HTTP call, and the message names the
+column (`oracle_identity_column` in TRL, `oracle_identity_key` in verl; both
+default to `oracle_identity`). Set that option to `None` only when the
+environment registered every identity in-process with
+`RewardWorker.begin_episode` before the rollout; the adapter then sends none
+and logs a warning at construction.
+
+The receipt that comes back binds `episode_id` and the contract digest, not
+the identity. The worker records the identity it read in its own evidence
+file, which stays on its disk.
 
 ## The unscored rule
 

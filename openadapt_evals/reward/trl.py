@@ -35,12 +35,16 @@ from typing import Any
 from openadapt_types.reward import RewardCertificateV1
 
 from openadapt_evals.reward.receipts import (
+    ORACLE_IDENTITY_KEY,
+    RUNTIME_SIGNAL_KEY,
     EpisodeDescriptor,
+    OracleIdentityError,
     RewardEndpointError,
     RewardSource,
     ScoredEpisode,
     afetch_receipts,
     assess_receipt,
+    clean_oracle_identity,
     consecutive_groups,
     fetch_receipts,
     fill_unscored_with_group_mean,
@@ -75,6 +79,20 @@ class CertifiedRewardFunction:
         policy_update: overrides ``trainer_state.global_step`` (an int or a
             zero-argument callable).
         episode_id_column: the dataset column that names each episode.
+        oracle_identity_column: the dataset column that holds each episode's
+            oracle identity, a mapping keyed exactly as the contract's
+            ``oracle.identity_keys`` (for MockMed, ``{"patient_id": ...}``).
+            It is sent as ``metadata.oracle_identity``, where the flow
+            reward worker reads it. The column is required: a batch without
+            it raises ``OracleIdentityError`` before any HTTP call, because
+            the worker would answer 422 ``identity_missing`` for every
+            episode. Pass ``None`` only when the environment registered
+            every identity with ``RewardWorker.begin_episode`` in-process.
+        runtime_signal_column: the dataset column with the runtime's own
+            end-of-episode signal (``completed``, ``halted_before_effect``,
+            ``refused``, ``rejected_policy``, ``failed_platform``), sent as
+            ``metadata.runtime_signal``. Optional: when the column is
+            absent the worker assumes ``completed``.
         on_endpoint_error: ``"raise"`` (default) or ``"unscored"``. The
             latter treats a transport failure as a dropped episode and logs
             it at ERROR; there is no receipt for it.
@@ -92,6 +110,8 @@ class CertifiedRewardFunction:
         policy_update: int | Callable[[], int] | None = None,
         episode_id_column: str = "episode_id",
         task_id_column: str | None = "task_id",
+        oracle_identity_column: str | None = ORACLE_IDENTITY_KEY,
+        runtime_signal_column: str | None = RUNTIME_SIGNAL_KEY,
         environment_id: str | None = None,
         on_endpoint_error: str = "raise",
     ) -> None:
@@ -106,6 +126,8 @@ class CertifiedRewardFunction:
         self._policy_update = policy_update
         self.episode_id_column = episode_id_column
         self.task_id_column = task_id_column
+        self.oracle_identity_column = oracle_identity_column
+        self.runtime_signal_column = runtime_signal_column
         self.environment_id = environment_id
         self.on_endpoint_error = on_endpoint_error
         self.last_batch: list[ScoredEpisode | None] = []
@@ -115,6 +137,11 @@ class CertifiedRewardFunction:
             logger.warning(
                 "require_certified=False: rewards from this function may be "
                 "development_only and are never certified"
+            )
+        if oracle_identity_column is None:
+            logger.warning(
+                "oracle_identity_column=None: episodes carry no oracle identity; the "
+                "reward worker refuses any episode not registered with begin_episode"
             )
 
     # -- descriptor construction ---------------------------------------------------
@@ -141,6 +168,8 @@ class CertifiedRewardFunction:
                 f"dataset column {self.episode_id_column!r} must supply one episode id per completion"
             )
         task_ids = kwargs.get(self.task_id_column) if self.task_id_column else None
+        identities = self.identities(episode_ids, kwargs)
+        signals = self._column(self.runtime_signal_column, episode_ids, kwargs)
         update = self.policy_update(kwargs)
         found: list[EpisodeDescriptor] = []
         for index, episode_id in enumerate(episode_ids):
@@ -152,9 +181,55 @@ class CertifiedRewardFunction:
                     reward_contract_digest=self.reward_contract_digest,
                     task_id=str(task_ids[index]) if task_ids is not None else None,
                     environment_id=self.environment_id,
+                    oracle_identity=identities[index] if identities is not None else None,
+                    runtime_signal=str(signals[index]) if signals is not None else None,
                 )
             )
         return found
+
+    def identities(
+        self, episode_ids: Sequence[Any], kwargs: dict[str, Any]
+    ) -> list[dict[str, str]] | None:
+        """One cleaned oracle identity per episode, or ``None`` when disabled.
+
+        Raises ``OracleIdentityError`` before any receipt is fetched when the
+        column is required and absent, or when any row has no usable identity.
+        """
+
+        column = self.oracle_identity_column
+        if column is None:
+            return None
+        raw = kwargs.get(column)
+        if raw is None:
+            raise OracleIdentityError(
+                f"dataset column {column!r} is missing: the reward worker needs each "
+                "episode's oracle identity (its contract's identity_keys) or it answers "
+                "422 identity_missing. Add the column, or pass oracle_identity_column=None "
+                "when every identity was registered with RewardWorker.begin_episode."
+            )
+        if len(raw) != len(episode_ids):
+            raise OracleIdentityError(
+                f"dataset column {column!r} has {len(raw)} rows for {len(episode_ids)} episodes"
+            )
+        return [
+            clean_oracle_identity(item, where=f"column {column!r}, episode {episode_id!s}")
+            for item, episode_id in zip(raw, episode_ids)
+        ]
+
+    @staticmethod
+    def _column(
+        name: str | None, episode_ids: Sequence[Any], kwargs: dict[str, Any]
+    ) -> Sequence[Any] | None:
+        if name is None:
+            return None
+        values = kwargs.get(name)
+        if values is None:
+            return None
+        if len(values) != len(episode_ids):
+            raise ValueError(
+                f"dataset column {name!r} has {len(values)} rows for {len(episode_ids)} episodes"
+            )
+        return values
 
     # -- scoring --------------------------------------------------------------------
 

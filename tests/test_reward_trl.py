@@ -18,6 +18,7 @@ from openadapt_evals.reward import (
     CallableRewardSource,
     EpisodeDescriptor,
     HttpRewardEndpoint,
+    OracleIdentityError,
     RewardEndpointError,
     UncertifiedRewardError,
     assess_receipt,
@@ -30,6 +31,8 @@ from tests.reward_fixtures import (
     CONTRACT,
     POLICY_CHECKPOINT,
     certificate,
+    identities_for,
+    identity_for,
     receipt,
     receipts_by_episode,
 )
@@ -58,9 +61,19 @@ def _reward_fn(receipts, **kwargs) -> CertifiedRewardFunction:
     return CertifiedRewardFunction(_source(receipts), **options)
 
 
-def _call(fn: CertifiedRewardFunction, episodes: list[str], step: int = 3, prompts=None):
+def _call(
+    fn: CertifiedRewardFunction,
+    episodes: list[str],
+    step: int = 3,
+    prompts=None,
+    **columns,
+):
     prompts = prompts or ["p"] * len(episodes)
-    return fn(prompts, ["c"] * len(episodes), episode_id=episodes, trainer_state=_State(step))
+    columns.setdefault("oracle_identity", identities_for(episodes))
+    columns = {key: value for key, value in columns.items() if value is not None}
+    return fn(
+        prompts, ["c"] * len(episodes), episode_id=episodes, trainer_state=_State(step), **columns
+    )
 
 
 # -- unscored drop --------------------------------------------------------------------------
@@ -215,7 +228,13 @@ def test_async_path_matches_sync(caplog: pytest.LogCaptureFixture) -> None:
     assert coroutine_fn.__name__ == REWARD_FUNC_NAME == fn.__name__
     expected = _call(fn, episodes)
     got = asyncio.run(
-        coroutine_fn(["p"] * 4, ["c"] * 4, episode_id=episodes, trainer_state=_State(3))
+        coroutine_fn(
+            ["p"] * 4,
+            ["c"] * 4,
+            episode_id=episodes,
+            oracle_identity=identities_for(episodes),
+            trainer_state=_State(3),
+        )
     )
     assert got == expected
     assert expected[3] == pytest.approx((1.0 + 0.0 + 1.0) / 3)
@@ -242,8 +261,173 @@ def test_http_endpoint_posts_descriptor_and_parses_receipt() -> None:
     assert asyncio.run(endpoint.afetch(descriptor)) == signed
     assert seen[0]["policy_checkpoint_id"] == POLICY_CHECKPOINT
     assert seen[0]["reward_contract_digest"] == CONTRACT.digest
+    # Without an identity the body is the one this client always sent.
+    assert seen[0] == {
+        "episode_id": episode,
+        "policy_checkpoint_id": POLICY_CHECKPOINT,
+        "policy_update": 3,
+        "reward_contract_digest": CONTRACT.digest,
+        "task_id": "task.test.0001",
+        "metadata": {},
+    }
     with pytest.raises(RewardEndpointError, match="HTTP 500"):
         endpoint.fetch(EpisodeDescriptor("ep.0010.b", POLICY_CHECKPOINT, 3, CONTRACT.digest))
+
+
+# -- oracle identity ------------------------------------------------------------------------
+
+
+def test_http_body_carries_metadata_oracle_identity_and_bearer() -> None:
+    """The wire body is exactly what the flow reward worker reads."""
+
+    episode = "ep.0012.a"
+    signed = receipt(episode, RewardOutcomeV1.VERIFIED)
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"receipt": signed.model_dump(mode="json")})
+
+    endpoint = HttpRewardEndpoint(
+        "http://reward.test", token="secret-token", transport=httpx.MockTransport(handler)
+    )
+    descriptor = EpisodeDescriptor(
+        episode,
+        POLICY_CHECKPOINT,
+        3,
+        CONTRACT.digest,
+        oracle_identity={"record_id": "rec-0012"},
+        runtime_signal="completed",
+    )
+    assert endpoint.fetch(descriptor) == signed
+    request = seen[0]
+    assert request.headers["Authorization"] == "Bearer secret-token"
+    body = json.loads(request.content)
+    assert body == {
+        "episode_id": episode,
+        "policy_checkpoint_id": POLICY_CHECKPOINT,
+        "policy_update": 3,
+        "reward_contract_digest": CONTRACT.digest,
+        "metadata": {
+            "oracle_identity": {"record_id": "rec-0012"},
+            "runtime_signal": "completed",
+        },
+    }
+    assert "oracle_identity" not in body  # only under metadata, never top-level
+    assert body["metadata"]["oracle_identity"] == identity_for(episode) | {"record_id": "rec-0012"}
+
+
+def test_identity_column_reaches_every_descriptor() -> None:
+    episodes = ["ep.0013.a", "ep.0013.b", "ep.0013.c", "ep.0013.d"]
+    receipts = receipts_by_episode({item: RewardOutcomeV1.VERIFIED for item in episodes})
+    seen: list[EpisodeDescriptor] = []
+
+    def fetch(descriptor: EpisodeDescriptor):
+        seen.append(descriptor)
+        return receipts[descriptor.episode_id]
+
+    options = {
+        "reward_contract_digest": CONTRACT.digest,
+        "policy_checkpoint_id": POLICY_CHECKPOINT,
+        "num_generations": 4,
+        "certificate": CERTIFICATE,
+    }
+    fn = CertifiedRewardFunction(CallableRewardSource(fetch), **options)
+    # Values are stringified and keys sorted, the shape the worker validates.
+    identities = [{"record_id": 1000 + index} for index in range(4)]
+    signals = ["completed", "completed", "halted_before_effect", "completed"]
+    assert _call(fn, episodes, oracle_identity=identities, runtime_signal=signals) == [1.0] * 4
+    assert [d.oracle_identity for d in seen] == [{"record_id": str(1000 + i)} for i in range(4)]
+    assert [d.runtime_signal for d in seen] == signals
+    assert seen[2].as_payload()["metadata"] == {
+        "oracle_identity": {"record_id": "1002"},
+        "runtime_signal": "halted_before_effect",
+    }
+
+
+def test_missing_identity_column_is_refused_before_any_fetch() -> None:
+    episodes = ["ep.0014.a", "ep.0014.b", "ep.0014.c", "ep.0014.d"]
+    receipts = receipts_by_episode({item: RewardOutcomeV1.VERIFIED for item in episodes})
+    calls: list[str] = []
+
+    def fetch(descriptor: EpisodeDescriptor):
+        calls.append(descriptor.episode_id)
+        return receipts[descriptor.episode_id]
+
+    fn = CertifiedRewardFunction(
+        CallableRewardSource(fetch),
+        reward_contract_digest=CONTRACT.digest,
+        policy_checkpoint_id=POLICY_CHECKPOINT,
+        num_generations=4,
+        certificate=CERTIFICATE,
+    )
+    with pytest.raises(OracleIdentityError, match="'oracle_identity'.*identity_missing"):
+        _call(fn, episodes, oracle_identity=None)
+    assert calls == []
+
+    # A renamed column is named in the error too.
+    renamed = CertifiedRewardFunction(
+        CallableRewardSource(fetch),
+        reward_contract_digest=CONTRACT.digest,
+        policy_checkpoint_id=POLICY_CHECKPOINT,
+        num_generations=4,
+        certificate=CERTIFICATE,
+        oracle_identity_column="patient",
+    )
+    with pytest.raises(OracleIdentityError, match="'patient'"):
+        _call(renamed, episodes)
+    assert calls == []
+    assert (
+        _call(renamed, episodes, oracle_identity=None, patient=identities_for(episodes))
+        == [1.0] * 4
+    )
+    assert calls == episodes
+
+
+def test_empty_identity_row_is_refused_naming_the_episode() -> None:
+    episodes = ["ep.0015.a", "ep.0015.b", "ep.0015.c", "ep.0015.d"]
+    receipts = receipts_by_episode({item: RewardOutcomeV1.VERIFIED for item in episodes})
+    fn = _reward_fn(receipts)
+    bad = identities_for(episodes)
+    bad[2] = {}
+    with pytest.raises(OracleIdentityError, match="ep.0015.c"):
+        _call(fn, episodes, oracle_identity=bad)
+    bad[2] = {"record_id": ""}
+    with pytest.raises(OracleIdentityError, match="empty key or value"):
+        _call(fn, episodes, oracle_identity=bad)
+    bad[2] = None
+    with pytest.raises(OracleIdentityError, match="carries no oracle identity"):
+        _call(fn, episodes, oracle_identity=bad)
+    with pytest.raises(OracleIdentityError, match="3 rows for 4 episodes"):
+        _call(fn, episodes, oracle_identity=identities_for(episodes[:3]))
+
+
+def test_identity_column_can_be_disabled_for_registered_episodes(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """``None`` means the environment called ``begin_episode``; nothing is sent."""
+
+    episodes = ["ep.0016.a", "ep.0016.b", "ep.0016.c", "ep.0016.d"]
+    receipts = receipts_by_episode({item: RewardOutcomeV1.VERIFIED for item in episodes})
+    seen: list[EpisodeDescriptor] = []
+
+    def fetch(descriptor: EpisodeDescriptor):
+        seen.append(descriptor)
+        return receipts[descriptor.episode_id]
+
+    with caplog.at_level(logging.WARNING, logger="openadapt_evals.reward.trl"):
+        fn = CertifiedRewardFunction(
+            CallableRewardSource(fetch),
+            reward_contract_digest=CONTRACT.digest,
+            policy_checkpoint_id=POLICY_CHECKPOINT,
+            num_generations=4,
+            certificate=CERTIFICATE,
+            oracle_identity_column=None,
+        )
+    assert any("begin_episode" in record.getMessage() for record in caplog.records)
+    assert _call(fn, episodes, oracle_identity=None) == [1.0] * 4
+    assert all(d.oracle_identity is None for d in seen)
+    assert all(d.as_payload()["metadata"] == {} for d in seen)
 
 
 def test_endpoint_error_can_drop_instead_of_raise(caplog: pytest.LogCaptureFixture) -> None:

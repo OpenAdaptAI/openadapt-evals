@@ -95,3 +95,15 @@ def receipts_by_episode(
     outcomes: dict[str, RewardOutcomeV1 | str], **kwargs: object
 ) -> dict[str, RewardEvidenceReceiptV1]:
     return {episode: receipt(episode, outcome, **kwargs) for episode, outcome in outcomes.items()}
+
+
+def identity_for(episode_id: str) -> dict[str, str]:
+    """The oracle identity for one episode, keyed as ``CONTRACT.oracle.identity_keys``."""
+
+    return {"record_id": f"rec.{episode_id}"}
+
+
+def identities_for(episode_ids: list[str]) -> list[dict[str, str]]:
+    """The ``oracle_identity`` dataset column for a batch."""
+
+    return [identity_for(item) for item in episode_ids]
