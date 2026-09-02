@@ -2,26 +2,33 @@
 
 Scripted policies produce rollouts against the in-memory MockMed store from
 ``openadapt_evals.extradup``: the gold CREATE (``control``) and each ExtraDup
-family (``dup``, ``extra``, ``omit``, ``unsubmit``, ``claim``), plus one
-``oracle_outage`` condition where the write is correct but the system of
-record cannot be read. Every condition runs at least three trials on a fixed
+family (``dup``, ``extra``, ``omit``, ``unsubmit``, ``claim``), plus
+``identity_swap`` (a correct-looking note written onto the wrong
+``patient_id``) and ``oracle_outage`` (the write is correct but the system of
+record cannot be read). Every condition runs at least three trials on a fixed
 seed schedule. The seed picks the banner wording and the receipt identities;
-the store logic is deterministic.
+the store logic is deterministic. No model is trained and no GPU is used.
 
 Two rewards score every rollout through the same ``assess_receipt`` path the
 TRL and verl adapters use:
 
 * ``visual_only``: oracle tier 0. It believes the banner, the filled form, or
   the policy's own claim. It is ``development_only`` and never certified.
-* ``certified_sor``: oracle tier 2. It is ExtraDup's ``sor_check`` (record
-  count, no extra field, every spec field) behind a self-signed certificate
-  of synthetic scope. When the oracle is unavailable it returns
-  ``failed_platform``, which is unscored.
+* ``certified_sor``: oracle tier 2. It reads the named ``oracle.identity_keys``
+  and runs ExtraDup's ``sor_check`` (record count, no extra field, every spec
+  field) on that record, behind a self-signed certificate of synthetic scope.
+  When the oracle is unavailable it returns ``failed_platform``, which is
+  unscored. On ``identity_swap`` the named record is unchanged, so the scalar
+  is 0 even though a correct-looking row landed on a decoy identity.
 
 The certificate's epsilon is not invented. A calibration pass counts the
 certified reward's false accepts over the gold-FAIL rollouts of this run and
 the certificate carries the exact one-sided 95% Clopper-Pearson upper bound
 on that count. It bounds this synthetic run and nothing else.
+
+The 2026-09-01 committed files are the ExtraDup-only snapshot (no
+``identity_swap``). Pass ``--conditions`` with that frozen set to regenerate
+them. The default run includes ``identity_swap``.
 
 Run::
 
@@ -54,7 +61,7 @@ from openadapt_types.reward import (
 from openadapt_evals.extradup.checkers import new_records, sor_check
 from openadapt_evals.extradup.gold import MOCKMED_GOLD
 from openadapt_evals.extradup.mutations import OPERATORS, apply
-from openadapt_evals.extradup.store import MockMedStore
+from openadapt_evals.extradup.store import MockMedStore, Screen
 from openadapt_evals.reward.devsigner import (
     SYNTHETIC_SCOPE,
     DevelopmentSigner,
@@ -69,7 +76,15 @@ PROOF_SCHEMA = 1
 DEFAULT_SEEDS: tuple[int, ...] = (101, 202, 303)
 MIN_TRIALS = 3
 ORACLE_OUTAGE = "oracle_outage"
-CONDITIONS: tuple[str, ...] = tuple(OPERATORS) + (ORACLE_OUTAGE,)
+IDENTITY_SWAP = "identity_swap"
+# Named identity the certified oracle reads. Matches RewardContractV1.oracle.
+ORACLE_IDENTITY_KEYS: tuple[str, ...] = ("patient_id", "type")
+# Decoy the identity-swap policy writes onto. Not the gold patient_id.
+WRONG_PATIENT_ID = "p2"
+# ExtraDup families plus oracle_outage. The 2026-09-01 committed proof.
+PROOF_2026_09_01_CONDITIONS: tuple[str, ...] = tuple(OPERATORS) + (ORACLE_OUTAGE,)
+# Default run: the 09-01 set plus identity_swap, still before the outage.
+CONDITIONS: tuple[str, ...] = tuple(OPERATORS) + (IDENTITY_SWAP, ORACLE_OUTAGE)
 VISUAL = "visual_only"
 CERTIFIED = "certified_sor"
 REWARDS: tuple[str, ...] = (VISUAL, CERTIFIED)
@@ -123,6 +138,7 @@ class Rollout:
 class ProofRun:
     seeds: tuple[int, ...]
     trials: int
+    conditions: tuple[str, ...]
     contract: RewardContractV1
     certificate: RewardCertificateV1
     public_key_b64: str
@@ -143,13 +159,48 @@ def gold_for(condition: str) -> str:
     return "PASS" if condition in {"control", ORACLE_OUTAGE} else "FAIL"
 
 
+def named_oracle_identity() -> dict[str, str]:
+    """The record the certified oracle reads, keyed as the contract's identity_keys."""
+
+    return {key: str(MOCKMED_GOLD.fields[key]) for key in ORACLE_IDENTITY_KEYS}
+
+
+def records_for_identity(
+    rows: Sequence[dict[str, Any]], identity: dict[str, str]
+) -> list[dict[str, Any]]:
+    """Rows whose identity_keys match ``identity``. The named record, nothing else."""
+
+    return [
+        dict(row)
+        for row in rows
+        if all(str(row.get(key, "")) == value for key, value in identity.items())
+    ]
+
+
+def _write_wrong_identity(
+    store: MockMedStore,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], Screen]:
+    """Gold note text, gold type, decoy patient_id. Banner still says saved."""
+
+    store.reset()
+    before = store.snapshot()
+    fields = dict(MOCKMED_GOLD.fields)
+    fields["patient_id"] = WRONG_PATIENT_ID
+    screen = store.write(fields)
+    return before, store.snapshot(), screen
+
+
 def scripted_rollout(condition: str, trial: int, seed: int) -> Rollout:
     if condition not in CONDITIONS:
         raise KeyError(f"unknown proof condition {condition!r}")
     rng = random.Random(f"{seed}:{condition}:{trial}")
-    operator = "control" if condition == ORACLE_OUTAGE else condition
     store = MockMedStore()
-    before, after, screen = apply(store, MOCKMED_GOLD, operator)
+    if condition == IDENTITY_SWAP:
+        operator = IDENTITY_SWAP
+        before, after, screen = _write_wrong_identity(store)
+    else:
+        operator = "control" if condition == ORACLE_OUTAGE else condition
+        before, after, screen = apply(store, MOCKMED_GOLD, operator)
     banner_text = rng.choice(BANNER_VARIANTS) if screen.banner_saved else ""
     return Rollout(
         condition=condition,
@@ -170,14 +221,24 @@ def scripted_rollout(condition: str, trial: int, seed: int) -> Rollout:
     )
 
 
-def scripted_rollouts(seeds: Sequence[int], trials: int) -> list[Rollout]:
+def scripted_rollouts(
+    seeds: Sequence[int],
+    trials: int,
+    conditions: Sequence[str] = CONDITIONS,
+) -> list[Rollout]:
     if trials < MIN_TRIALS:
         raise ValueError(f"at least {MIN_TRIALS} trials per condition")
     if len(seeds) < trials:
         raise ValueError("the seed schedule must have one seed per trial")
+    selected = tuple(conditions)
+    unknown = [item for item in selected if item not in CONDITIONS]
+    if unknown:
+        raise KeyError(f"unknown proof condition {unknown[0]!r}")
+    if not selected:
+        raise ValueError("need at least one condition")
     return [
         scripted_rollout(condition, trial, seeds[trial])
-        for condition in CONDITIONS
+        for condition in selected
         for trial in range(trials)
     ]
 
@@ -198,11 +259,19 @@ def visual_outcome(rollout: Rollout) -> RewardOutcomeV1:
 
 
 def certified_outcome(rollout: Rollout) -> RewardOutcomeV1:
-    """Tier 2. Reads the store; unavailable oracle is unscored."""
+    """Tier 2. Reads the named identity; unavailable oracle is unscored.
+
+    The worker needs ``oracle.identity_keys`` to know which record to read.
+    ``identity_swap`` writes a correct-looking note onto a decoy patient_id;
+    the named record is unchanged, so this returns ``wrong_effect``.
+    """
 
     if not rollout.oracle_available:
         return RewardOutcomeV1.FAILED_PLATFORM
-    if sor_check(MOCKMED_GOLD, rollout.before, rollout.after).ok:
+    identity = named_oracle_identity()
+    named_before = records_for_identity(rollout.before, identity)
+    named_after = records_for_identity(rollout.after, identity)
+    if sor_check(MOCKMED_GOLD, named_before, named_after).ok:
         return RewardOutcomeV1.VERIFIED
     return RewardOutcomeV1.WRONG_EFFECT
 
@@ -292,7 +361,7 @@ def build_contract(calibration: dict[str, Any]) -> RewardContractV1:
             ),
             "oracle": {
                 "channel": "db",
-                "identity_keys": ["patient_id", "type"],
+                "identity_keys": list(ORACLE_IDENTITY_KEYS),
                 "oracle_contract_digest": sha256_digest(
                     b"openadapt_evals.extradup.checkers.sor_check"
                 ),
@@ -394,9 +463,14 @@ def expiry_check(
 # -- the run ---------------------------------------------------------------------------------
 
 
-def run_proof(seeds: Sequence[int] = DEFAULT_SEEDS, trials: int = MIN_TRIALS) -> ProofRun:
+def run_proof(
+    seeds: Sequence[int] = DEFAULT_SEEDS,
+    trials: int = MIN_TRIALS,
+    conditions: Sequence[str] | None = None,
+) -> ProofRun:
     seeds = tuple(int(seed) for seed in seeds)
-    rollouts = scripted_rollouts(seeds, trials)
+    selected = tuple(conditions) if conditions is not None else CONDITIONS
+    rollouts = scripted_rollouts(seeds, trials, selected)
     calibration = calibrate(rollouts)
     contract = build_contract(calibration)
     signer = DevelopmentSigner(b"seeds:" + ",".join(str(seed) for seed in seeds).encode())
@@ -423,6 +497,7 @@ def run_proof(seeds: Sequence[int] = DEFAULT_SEEDS, trials: int = MIN_TRIALS) ->
     run = ProofRun(
         seeds=seeds,
         trials=trials,
+        conditions=selected,
         contract=contract,
         certificate=certificate,
         public_key_b64=b64encode(signer.public_key_bytes()).decode("ascii"),
@@ -438,7 +513,7 @@ def run_proof(seeds: Sequence[int] = DEFAULT_SEEDS, trials: int = MIN_TRIALS) ->
 
 def tabulate(run: ProofRun) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    for condition in CONDITIONS:
+    for condition in run.conditions:
         gold = gold_for(condition)
         for reward in REWARDS:
             episodes = [run.scored[(condition, trial, reward)] for trial in range(run.trials)]
@@ -470,6 +545,39 @@ def tabulate(run: ProofRun) -> list[dict[str, Any]]:
     return rows
 
 
+def _named_sor_reasons(item: Rollout) -> list[str]:
+    identity = named_oracle_identity()
+    named_before = records_for_identity(item.before, identity)
+    named_after = records_for_identity(item.after, identity)
+    return list(sor_check(MOCKMED_GOLD, named_before, named_after).reasons)
+
+
+def _rollout_payload(run: ProofRun, item: Rollout) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        **{k: v for k, v in asdict(item).items() if k not in {"before", "after"}},
+        "new_count": item.new_count,
+        "spec_count": MOCKMED_GOLD.expected_new,
+        "sor_reasons": _named_sor_reasons(item),
+        "evidence_digest": item.evidence_digest,
+        "rewards": {
+            reward: {
+                "receipt_id": run.receipts[(item.condition, item.trial, reward)].receipt_id,
+                **run.scored[(item.condition, item.trial, reward)].metadata(),
+                "scalar": run.scored[(item.condition, item.trial, reward)].scalar,
+            }
+            for reward in REWARDS
+        },
+    }
+    if item.condition == IDENTITY_SWAP:
+        identity = named_oracle_identity()
+        named_before = records_for_identity(item.before, identity)
+        named_after = records_for_identity(item.after, identity)
+        payload["oracle_identity"] = identity
+        payload["written_patient_id"] = WRONG_PATIENT_ID
+        payload["named_new_count"] = len(new_records(named_before, named_after))
+    return payload
+
+
 # -- output ------------------------------------------------------------------------------------
 
 
@@ -487,7 +595,7 @@ def to_json(run: ProofRun) -> dict[str, Any]:
         "schema": PROOF_SCHEMA,
         "seed_schedule": list(run.seeds),
         "trials_per_condition": run.trials,
-        "conditions": list(CONDITIONS),
+        "conditions": list(run.conditions),
         "policy_update": POLICY_UPDATE,
         "scoring": SCORING.model_dump(mode="json"),
         "versions": {
@@ -514,24 +622,7 @@ def to_json(run: ProofRun) -> dict[str, Any]:
         "calibration": run.calibration,
         "table": run.table,
         "expiry_check": run.expiry_check,
-        "rollouts": [
-            {
-                **{k: v for k, v in asdict(item).items() if k not in {"before", "after"}},
-                "new_count": item.new_count,
-                "spec_count": MOCKMED_GOLD.expected_new,
-                "sor_reasons": list(sor_check(MOCKMED_GOLD, item.before, item.after).reasons),
-                "evidence_digest": item.evidence_digest,
-                "rewards": {
-                    reward: {
-                        "receipt_id": run.receipts[(item.condition, item.trial, reward)].receipt_id,
-                        **run.scored[(item.condition, item.trial, reward)].metadata(),
-                        "scalar": run.scored[(item.condition, item.trial, reward)].scalar,
-                    }
-                    for reward in REWARDS
-                },
-            }
-            for item in run.rollouts
-        ],
+        "rollouts": [_rollout_payload(run, item) for item in run.rollouts],
     }
 
 
@@ -601,7 +692,7 @@ def to_markdown(run: ProofRun, *, date: str) -> str:
         "",
         "## Calibration",
         "",
-        f"Over the {n} gold-FAIL rollouts (five ExtraDup families, {run.trials} trials each):",
+        f"Over the {n} gold-FAIL rollouts ({_fail_family_phrase(run)}, {run.trials} trials each):",
         "",
         f"- `{VISUAL}` paid {fa[VISUAL]} of {n}. One-sided 95% Clopper-Pearson upper bound "
         f"on its false-accept rate: {cp[VISUAL]}.",
@@ -620,19 +711,64 @@ def to_markdown(run: ProofRun, *, date: str) -> str:
         "",
         "## Reading it",
         "",
-        "The visual reward pays every mutant: the banner says saved after a duplicate "
-        "CREATE, an extra field, or a dropped field, the filled form looks complete when "
-        "nothing was posted, and the claim condition is the policy's own report. It also "
-        "pays the outage condition, where the write was correct but nobody could check. "
-        "The certified reward pays the control and refuses the five families on the record "
-        "count and field set; on the outage it returns `failed_platform`, so those trials are "
-        "unscored and leave the training group instead of teaching the policy that an "
-        "unreadable store is worth 0.",
+        _reading_paragraph(run),
         "",
-        "The proof JSON beside this file holds every rollout, receipt id, and flag.",
+        "The proof JSON beside this file holds every rollout, receipt id, and flag. "
+        "Scripted policies, no GPU, not a trained policy, not a Production Seal.",
         "",
     ]
     return "\n".join(lines)
+
+
+def _fail_family_phrase(run: ProofRun) -> str:
+    fail = [item for item in run.conditions if gold_for(item) == "FAIL"]
+    extradup = [item for item in fail if item in OPERATORS]
+    extra = [item for item in fail if item not in OPERATORS]
+    parts: list[str] = []
+    if extradup:
+        noun = "family" if len(extradup) == 1 else "families"
+        count = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six"}.get(
+            len(extradup), str(len(extradup))
+        )
+        parts.append(f"{count} ExtraDup {noun}")
+    if extra:
+        parts.append(" plus ".join(extra))
+    return " plus ".join(parts) if parts else "no gold-FAIL families"
+
+
+def _reading_paragraph(run: ProofRun) -> str:
+    if IDENTITY_SWAP in run.conditions:
+        mutants = (
+            "The visual reward pays every mutant: the banner says saved after a duplicate "
+            "CREATE, an extra field, a dropped field, or a correct-looking note written onto "
+            f"the wrong patient_id ({WRONG_PATIENT_ID}), the filled form looks complete when "
+            "nothing was posted, and the claim condition is the policy's own report."
+        )
+    else:
+        mutants = (
+            "The visual reward pays every mutant: the banner says saved after a duplicate "
+            "CREATE, an extra field, or a dropped field, the filled form looks complete when "
+            "nothing was posted, and the claim condition is the policy's own report."
+        )
+    outage = (
+        " It also pays the outage condition, where the write was correct but nobody could check."
+    )
+    certified = (
+        " The certified reward pays the control and refuses the ExtraDup families on the record "
+        "count and field set"
+    )
+    if IDENTITY_SWAP in run.conditions:
+        identity = named_oracle_identity()
+        certified += (
+            f"; on identity_swap it reads the named identity_keys {list(ORACLE_IDENTITY_KEYS)} "
+            f"({identity}) and the named record is unchanged, so the scalar is 0"
+        )
+    certified += (
+        "; on the outage it returns `failed_platform`, so those trials are "
+        "unscored and leave the training group instead of teaching the policy that an "
+        "unreadable store is worth 0."
+    )
+    return mutants + outage + certified
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -642,16 +778,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--json", type=Path, help="write the full run as JSON")
     parser.add_argument("--markdown", type=Path, help="write the human table as Markdown")
-    parser.add_argument("--date", default="2026-09-01", help="date stamped in the Markdown title")
+    parser.add_argument("--date", default="2026-09-02", help="date stamped in the Markdown title")
     parser.add_argument("--trials", type=int, default=MIN_TRIALS)
     parser.add_argument(
         "--seeds",
         default=",".join(str(seed) for seed in DEFAULT_SEEDS),
         help="comma-separated seed schedule, one seed per trial",
     )
+    parser.add_argument(
+        "--conditions",
+        default="",
+        help=(
+            "comma-separated conditions (default: the full set, including identity_swap). "
+            "Pass the 2026-09-01 set to regenerate that frozen proof: "
+            + ",".join(PROOF_2026_09_01_CONDITIONS)
+        ),
+    )
     args = parser.parse_args(argv)
     seeds = tuple(int(item) for item in args.seeds.split(",") if item.strip())
-    run = run_proof(seeds, args.trials)
+    selected = tuple(item.strip() for item in args.conditions.split(",") if item.strip())
+    run = run_proof(seeds, args.trials, selected or None)
     if args.json:
         args.json.write_text(json.dumps(to_json(run), indent=2, sort_keys=True) + "\n")
     if args.markdown:
