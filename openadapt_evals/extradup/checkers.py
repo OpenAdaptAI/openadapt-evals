@@ -7,6 +7,11 @@ spec field present, no extra field. Gold for a mutant is FAIL.
 in some record. It ignores extra records and extra fields. That is the
 WorkArena form monitor / AppWorld C_allow inclusion checker.
 
+``content_only_check`` asks only whether the CONTENT is right. It ignores
+the identity fields, so it cannot tell the right note in the right chart
+from the right note in someone else's chart. Any task-success verifier that
+scores the form it knows about is this checker.
+
 ``visual_only_check`` believes the banner, the filled form, or the agent's
 claim. A Seal that hashes a screenshot is this checker.
 """
@@ -16,7 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from openadapt_evals.extradup.gold import WriteSpec
+from openadapt_evals.extradup.gold import WriteSpec, identity_of
 from openadapt_evals.extradup.store import Screen
 
 
@@ -38,23 +43,80 @@ def new_records(
     return [row for row in after if row["id"] not in before_ids]
 
 
+def records_under(
+    identity: dict[str, str], records: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Rows whose identity keys all carry the values in ``identity``."""
+    return [
+        row
+        for row in records
+        if all(row.get(key) == value for key, value in identity.items())
+    ]
+
+
+def identity_check(
+    spec: WriteSpec,
+    before: list[dict[str, Any]],
+    after: list[dict[str, Any]],
+) -> CheckResult:
+    """Resolve the record by ``oracle_identity``, then count what landed there.
+
+    This answers WHERE, not WHAT. A write whose every content field is
+    correct but whose identity is another patient adds no record under the
+    contract identity, so this check FAILs it while a content check PASSes.
+    """
+    identity = identity_of(spec)
+    added = new_records(before, after)
+    landed = records_under(identity, added)
+    if len(landed) == spec.expected_new:
+        return CheckResult("PASS")
+    reason = (
+        f"|new(M) under oracle_identity {identity}|={len(landed)} "
+        f"!= |spec(M)|={spec.expected_new}"
+    )
+    elsewhere = [row for row in added if row not in landed]
+    if elsewhere:
+        others = sorted(
+            {
+                str({key: row.get(key) for key in identity})
+                for row in elsewhere
+            }
+        )
+        reason += "; the write landed on " + ", ".join(others)
+    return CheckResult("FAIL", (reason,))
+
+
 def sor_check(
     spec: WriteSpec,
     before: list[dict[str, Any]],
     after: list[dict[str, Any]],
 ) -> CheckResult:
-    """Independent SoR read. Duplicate-CREATE dies on cardinality."""
+    """Independent SoR read. WHERE first, then WHAT.
+
+    Duplicate-CREATE dies on cardinality. A correct write to another
+    patient dies on the identity resolution, not on a field comparison:
+    the identity keys are checked as identity, so removing one from the
+    content loop cannot silently reopen the wrong-record hole.
+    """
     added = new_records(before, after)
     reasons: list[str] = []
     if len(added) != spec.expected_new:
         reasons.append(
             f"|new(M)|={len(added)} != |spec(M)|={spec.expected_new}"
         )
+    # Only when the write landed somewhere but nowhere under the contract
+    # identity. When some record did land there, cardinality already speaks
+    # and a second count would say nothing new.
+    if added and not records_under(identity_of(spec), added):
+        reasons.extend(identity_check(spec, before, after).reasons)
+    content = {
+        key: value for key, value in spec.fields.items() if key not in spec.identity_fields
+    }
     for row in added:
         extras = set(row) - spec.allowed_fields
         if extras:
             reasons.append("extra field(s): " + ", ".join(sorted(extras)))
-        for key, value in spec.fields.items():
+        for key, value in content.items():
             if row.get(key) != value:
                 reasons.append(f"missing or wrong {key}={value!r}")
     if reasons:
@@ -77,6 +139,29 @@ def field_inclusion_check(
             missing.append(f"{key}={value!r}")
     if missing:
         return CheckResult("FAIL", tuple(f"spec field absent: {item}" for item in missing))
+    return CheckResult("PASS")
+
+
+def content_only_check(
+    spec: WriteSpec,
+    after: list[dict[str, Any]],
+) -> CheckResult:
+    """PASS iff every non-identity spec field-value appears in some record.
+
+    This is the task-success verifier. It scores the content of the form it
+    knows about and has no notion of which record was supposed to change, so
+    ``wrong_record`` PASSes here and FAILs ``sor_check``.
+    """
+    content = {
+        key: value for key, value in spec.fields.items() if key not in spec.identity_fields
+    }
+    missing = [
+        f"{key}={value!r}"
+        for key, value in content.items()
+        if not any(row.get(key) == value for row in after)
+    ]
+    if missing:
+        return CheckResult("FAIL", tuple(f"spec content absent: {item}" for item in missing))
     return CheckResult("PASS")
 
 

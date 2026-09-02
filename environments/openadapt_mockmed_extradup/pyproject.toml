@@ -2,7 +2,7 @@
 name = "openadapt-mockmed-extradup"
 description = "Reward for a synthetic EMR write, certified on the synthetic MockMed/ExtraDup corpus only: 1.0 when a tier-2 read of the system of record shows the gold effect, 0.0 otherwise. Ships the ExtraDup reward-hacking cases so a trainer can confirm the reward fails them closed."
 tags = ["single-turn", "agent", "verification", "reward-hacking", "healthcare", "synthetic", "eval", "train"]
-version = "0.1.0"
+version = "0.2.0"
 requires-python = ">=3.11"
 license = "MIT"
 dependencies = [

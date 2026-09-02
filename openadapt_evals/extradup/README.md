@@ -3,15 +3,27 @@
 If your agent runtime's checker cannot kill ExtraDup, it cannot underwrite a write.
 
 ExtraDup takes a gold CREATE on MockMed, and on an OpenEMR-shaped local store,
-and applies dup, extra, omit, unsubmit, and claim. Gold is FAIL: the system of
-record has the wrong cardinality or an extra field. Duplicate-CREATE is killed
-by `|new(M)| = |spec(M)|`. Checking that the expected field values showed up
-somewhere won't do it.
+and applies dup, extra, omit, unsubmit, and claim, plus the eval-only
+wrong_record. Gold is FAIL: the system of record has the wrong cardinality,
+an extra field, or the right content on the wrong patient. Duplicate-CREATE
+is killed by `|new(M)| = |spec(M)|`. Checking that the expected field values
+showed up somewhere won't do it.
 
 A visual-only checker still PASSes Extra-NI and Extra-Field. So does a
 field-inclusion checker, the kind that asks only whether the spec fields
 appear. That PASS is the miss. A Seal that emits `VERIFIED` on it cannot
 underwrite a write.
+
+`wrong_record` is the family that cardinality cannot reach. One record lands,
+which is what the task asked for, and every content field in it is correct.
+Only the chart it hangs off is wrong. Every check that scores content PASSes
+it. The oracle has to resolve the record by the identity keys the contract
+names before it looks at the content.
+
+It lives in `EVAL_ONLY_OPERATORS`, not `OPERATORS`. The kill-scan corpus and
+the Phase-1 M-freeze pin `OPERATORS`, so a family added after that freeze
+stays out of both and out of any training reward. `check`, `list`, and `run`
+reach it through `all_cells()`; `kill-scan` still reads the frozen `cells()`.
 
 ## Kill-scan
 
@@ -94,6 +106,22 @@ The banner can still say saved.
 `unsubmit`. Fill the form, never POST. The form looks complete.
 
 `claim`. The agent reports success. Nothing lands.
+
+`wrong_record` (eval-only). Write every correct field to a different patient: `p0`
+instead of the spec's `patient_id` on MockMed, `MRN-0000` instead of the
+spec's `pubpid` on the OpenEMR-shaped store. `|new| = 1`, which matches gold.
+The banner says saved, same as gold. `content_only_check` PASSes, because
+the content is right. `identity_check` resolves the row set under the
+contract's `oracle_identity`, finds nothing, and FAILs. `sor_check` runs that
+resolution first and reports which record the write did land on.
+
+Worth knowing before you copy this into a real oracle: MockMed carries
+`patient_id` as a typed form field, so a plain field comparison happens to
+catch the swap. Most EMR screens don't work that way. You navigate to a chart
+and then fill the encounter form, so the identity comes from the navigation
+context and never appears among the fields the agent typed. A field
+comparison PASSes that write. Resolving by `oracle_identity` is what still
+works when the identity isn't in the payload.
 
 `control`. The gold write. SoR PASS, Seal `VERIFIED`. That's how we know
 the oracle isn't stuck on FAIL.

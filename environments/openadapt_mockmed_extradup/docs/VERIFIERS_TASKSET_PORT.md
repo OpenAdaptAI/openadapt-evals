@@ -35,7 +35,7 @@ The hub still expects v0. `prime env push` (0.6.31) reads only the pyproject: na
 
 **B. Port to Taskset now, before the first hub push.** Rewrite the glue (about 300 lines), the pytest file, `check_fails_closed.py`, the CI job, and the README quickstart. Six to ten hours. Moderate risk during the port, all of it in glue: `score_from_screen=True` must raise from a `TasksetConfig` validator so the refusal stays visible at the config surface; the labeled rows must keep their case labels in `TaskData`; the metrics must stay unweighted. `certify_corpus()` and its Clopper-Pearson bound are untouched. The CI job needs the four local flags above and the `null` harness. The `openadapt-evals` pin is unchanged. Blocker: a v1-only package fails today's hub scan (#1982), so the first push lists with a failed scan or not at all.
 
-**C. Publish 0.1.0 as is, port as 0.2.0 after the listing exists.** Do A today and push 0.1.0. Do B as 0.2.0 when verifiers ships a stable release with no `verifiers.legacy` or #1982 closes with the scan accepting v1, whichever comes first; 0.2.0 then pins `verifiers>=<that release>`. Work, risk, and CI effect are A's now and B's later. The `openadapt-evals` pin is unchanged in both steps.
+**C. Publish on the v0 API as is, port in a later minor after the listing exists.** Do A today and push. Do B when verifiers ships a stable release with no `verifiers.legacy` or #1982 closes with the scan accepting v1, whichever comes first; that release then pins `verifiers>=<that release>`. Work, risk, and CI effect are A's now and B's later. The `openadapt-evals` pin is unchanged in both steps.
 
 ## Recommendation
 
@@ -45,8 +45,8 @@ Nothing in any port may change: the reward is 1.0 only on a tier-2 `VERIFIED` re
 
 ## Verification list for the porter
 
-1. `python openadapt_mockmed_extradup.py` prints 1.0 for both `control` entries, 0.0 for the twelve hacking entries, then 600 trials, 0 false accepts, 100 gold, 0 false rejects, `upper_bound_95` 0.0050.
+1. `python openadapt_mockmed_extradup.py` prints 1.0 for both `control` entries, 0.0 for the fourteen hacking entries, then 700 trials, 0 false accepts, 100 gold, 0 false rejects, `upper_bound_95` 0.0043.
 2. `python -m pytest tests/test_prime_env_mockmed_extradup.py -q` passes, with `test_load_environment_refuses_to_score_from_the_screen` rewritten for the config surface.
-3. `python check_fails_closed.py --num-examples 2` exits 0 and prints `ok` for all seven cases.
+3. `python check_fails_closed.py --num-examples 2` exits 0 and prints `ok` for all eight cases.
 4. `eval openadapt-mockmed-extradup --model scripted/dup ...` against `scripted_policy.py serve` writes a `traces.jsonl` in which every episode has `certified_reward` 0.0 and `inadmissible_evidence_offered` 0.0; the `screen_only` run has `inadmissible_evidence_offered` 1.0.
 5. `uv pip install --dry-run openadapt-mockmed-extradup` resolves against the pinned verifiers on Python 3.11 and 3.12.
