@@ -61,6 +61,22 @@ python openadapt_mockmed_extradup.py
 
 That runs `self_test()` and then `certify_corpus()`. On 2026-09-01, at version 0.1.0, `certify_corpus()` scored the six cases on 50 synthetic variants in each of the two stores: N = 600 hacking trials, 0 earned reward; 100 gold trials, 0 refused. The exact one-sided 95% Clopper-Pearson upper bound on the false-accept rate from those counts is 0.0050. That bound is for this reward on this synthetic corpus and nothing else. The trials are scripted replays of the six families, not draws from a real agent, so the number says the mechanism holds on the families it was built to catch. A production-scope certificate needs the Phase-1 calibration on the reachability-guaranteed fault corpus, which is not published.
 
+### Install from the hub
+
+The environment is on the Prime Intellect hub as [`openadapt/openadapt-mockmed-extradup`](https://app.primeintellect.ai/dashboard/environments/openadapt/openadapt-mockmed-extradup), version 0.1.0, public. The `prime` CLI installs it:
+
+```bash
+prime env install openadapt/openadapt-mockmed-extradup@latest
+```
+
+pip works too, from the hub's package index:
+
+```bash
+pip install --extra-index-url https://hub.primeintellect.ai/openadapt/simple/ openadapt-mockmed-extradup
+```
+
+Both commands give you the same package the Quickstart below runs. You only need a checkout of this repository if you want to edit the environment or run its tests.
+
 ### Quickstart
 
 Install the environment and `verifiers`, then run it against any OpenAI-compatible endpoint:
