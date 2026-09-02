@@ -66,7 +66,7 @@ That runs `self_test()` and then `certify_corpus()`. On 2026-09-01, at version 0
 Install the environment and `verifiers`, then run it against any OpenAI-compatible endpoint:
 
 ```bash
-uv pip install verifiers openadapt-mockmed-extradup
+uv pip install "verifiers>=0.3.1,<0.3.2" openadapt-mockmed-extradup
 uv run vf-eval openadapt-mockmed-extradup -m gpt-4.1-mini -n 8 -r 1
 ```
 
