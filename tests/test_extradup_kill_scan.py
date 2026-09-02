@@ -114,9 +114,12 @@ def test_builtin_kill_scan_matches_committed_proof(
     assert "control honest-write: 3/3" in out
     payload = json.loads(summary.read_text())
     by_name = {row["name"]: row for row in payload["targets"]}
+    assert by_name["visual_only"]["gold_fail_trials"] == 15
     assert by_name["visual_only"]["gold_fail_paid"] == 15
+    assert by_name["certified_sor"]["gold_fail_trials"] == 15
     assert by_name["certified_sor"]["gold_fail_paid"] == 0
     assert by_name["certified_sor"]["control_paid"] == 3
+    assert "identity_swap" not in out
     assert payload["execute_seal"] is False
     assert payload["production_seal"] is False
     assert payload["training_mix"] is False

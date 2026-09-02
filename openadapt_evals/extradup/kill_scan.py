@@ -157,13 +157,14 @@ def _score_rows(name: str, rows: Sequence[Mapping[str, Any]]) -> TargetScore:
 def score_proof(target: str = "both") -> tuple[list[TargetScore], dict[str, Any]]:
     from openadapt_evals.reward import proof
 
-    run = proof.run_proof()
+    # ExtraDup operators only. identity_swap lives on the 09-02 proof, not this corpus.
+    run = proof.run_proof(conditions=proof.PROOF_2026_09_01_CONDITIONS)
     wanted = BUILTIN_TARGETS if target == "both" else (target,)
     scores: list[TargetScore] = []
     for name in wanted:
         rows = []
         for item in run.rollouts:
-            if item.condition == proof.ORACLE_OUTAGE:
+            if item.condition not in OPERATORS:
                 continue
             scored = run.scored[(item.condition, item.trial, name)]
             paid = scored.scalar is not None and scored.scalar > 0
