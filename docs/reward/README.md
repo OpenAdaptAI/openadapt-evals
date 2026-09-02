@@ -13,6 +13,15 @@ The reward worker (oracle read, judge, signing, the HTTP route) lives in
 proof below, `openadapt_evals.reward.devsigner` builds receipts from the same
 contract with a throwaway ed25519 key.
 
+The environment that produces the MockMed ExtraDup rollouts is a `verifiers`
+package on the Prime Intellect hub,
+[`openadapt/openadapt-mockmed-extradup`](https://app.primeintellect.ai/dashboard/environments/openadapt/openadapt-mockmed-extradup)
+(version 0.1.0). `prime env install openadapt/openadapt-mockmed-extradup@latest`
+installs it; the environment's
+[README](../../environments/openadapt_mockmed_extradup/README.md) has the pip
+form and the six labeled reward-hacking cases. Its reward is certified in
+synthetic scope, the same scope this page describes.
+
 ## What today's certificate is
 
 There is exactly one certificate scope in use today: **synthetic**. It is
