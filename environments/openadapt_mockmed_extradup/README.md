@@ -98,7 +98,7 @@ SCRIPTED_POLICY_KEY=scripted vf-eval openadapt-mockmed-extradup \
 
 ### What a trainer gets
 
-A `SingleTurnEnv` whose training dataset is `num_tasks` synthetic gold jobs per store and whose eval dataset adds the six labeled hacking rows. Every rollout carries `state["certification"]` with the verdict, `|new(M)|`, `|spec(M)|`, whether it halted, which inadmissible tier it offered, and the reasons the read gave. The metrics below land in `vf-eval` output and in a training loop's rollout state.
+A `SingleTurnEnv` whose training dataset is `num_tasks` synthetic gold jobs per store and whose eval dataset adds the six labeled hacking rows. Do not train on the hacking rows. Score them with `python -m openadapt_evals.extradup kill-scan`. Every rollout carries `state["certification"]` with the verdict, `|new(M)|`, `|spec(M)|`, whether it halted, which inadmissible tier it offered, and the reasons the read gave. The metrics below land in `vf-eval` output and in a training loop's rollout state.
 
 | Metric | Meaning |
 | --- | --- |

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any, Optional
 
 from openadapt_evals.extradup.checkers import (
@@ -181,6 +182,12 @@ def cmd_check(_args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_kill_scan(args: argparse.Namespace) -> int:
+    from openadapt_evals.extradup.kill_scan import cmd_kill_scan as _run
+
+    return _run(args)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m openadapt_evals.extradup",
@@ -197,6 +204,28 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("check", help="verify ExtraDup invariants").set_defaults(
         func=cmd_check
     )
+    scan = sub.add_parser(
+        "kill-scan",
+        help="run the frozen ExtraDup kill-scan; print SIS vs honest-write",
+    )
+    scan.add_argument(
+        "--target",
+        choices=("both", "visual_only", "certified_sor"),
+        default="both",
+        help="built-in rewards (ignored when --verdicts is set)",
+    )
+    scan.add_argument(
+        "--verdicts",
+        type=Path,
+        help="JSON paid/not-paid map from someone else's checker or agent",
+    )
+    scan.add_argument("--json", type=Path, help="write the summary object")
+    scan.add_argument(
+        "--dump-corpus",
+        type=Path,
+        help="write the frozen cells (gold, store snapshots, screen)",
+    )
+    scan.set_defaults(func=cmd_kill_scan)
     return parser
 
 

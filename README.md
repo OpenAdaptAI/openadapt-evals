@@ -182,18 +182,21 @@ screenshot. There's also a standalone GRPO trainer with no openadapt-ml
 dependency, an OpenEnv-compatible environment, and a four-pass pipeline that
 turns desktop recordings into structured workflows.
 
-ExtraDup (`python -m openadapt_evals.extradup`) mutates a MockMed gold write
-and asks whether a checker notices. Gold is FAIL when the system of record has
-the wrong cardinality or an extra field. If the checker cannot kill ExtraDup,
-it cannot underwrite a write. See
-[`openadapt_evals/extradup/README.md`](openadapt_evals/extradup/README.md).
+ExtraDup is the frozen duplicate-write kill-scan. Gold is FAIL when the
+system of record has the wrong cardinality or an extra field. One command
+scores the certified reward against a visual-only baseline, or a paid/not-paid
+map from someone else's checker:
 
-`openadapt_evals.reward` wires TRL GRPO or verl to a reward endpoint that
-answers with signed `openadapt-types` receipts, drops unscored episodes
-instead of scoring them 0, and never calls a tier-0 read certified.
-`python -m openadapt_evals.reward.proof` scores scripted MockMed rollouts with
-a visual-only and a certified reward, no model needed. See
-[docs/reward/README.md](docs/reward/README.md).
+```text
+python -m openadapt_evals.extradup kill-scan
+```
+
+It prints silent-incorrect-success on the FAIL mutants and honest-write on
+the control. `execute_seal` and `production_seal` stay false; mutants stay off
+the training reward. On the committed 2026-09-01 MockMed run, `visual_only`
+paid 15/15 gold-FAIL and `certified_sor` paid 0/15 FAIL and 3/3 honest. See
+[`openadapt_evals/extradup/README.md`](openadapt_evals/extradup/README.md)
+and [docs/reward/README.md](docs/reward/README.md).
 
 Runbooks for the demo-conditioned eval, the full evaluation runner, the UI-Venus
 grounder endpoint, GRPO training, and writing your own agent are in

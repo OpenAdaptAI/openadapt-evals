@@ -155,13 +155,24 @@ and trains the group at zero advantage) and as zeros in verl, flagged
 
 ## The proof
 
-`python -m openadapt_evals.reward.proof` runs scripted policies against the
-in-memory MockMed store from `openadapt_evals.extradup` and scores every
-rollout with two rewards through the same `assess_receipt` path the adapters
-use. No model, no GPU. Three trials per condition on the seed schedule
-`[101, 202, 303]`; the seed picks the banner wording and the receipt
-identities. The committed output is
-[`proof_2026-09-01.md`](proof_2026-09-01.md) and
+The ExtraDup kill-scan is the one command:
+
+```text
+python -m openadapt_evals.extradup kill-scan
+```
+
+It runs the frozen MockMed corpus, prints silent-incorrect-success on gold-FAIL
+mutants vs honest-write on the control, keeps `execute_seal: false` /
+`production_seal: false`, and does not mix those mutants into a training
+reward. Same numbers as below. `--verdicts path.json` scores someone else's
+checker on the same cells.
+
+`python -m openadapt_evals.reward.proof` is the underlying generator: scripted
+policies against the in-memory MockMed store from `openadapt_evals.extradup`,
+two rewards through the same `assess_receipt` path the adapters use. No model,
+no GPU. Three trials per condition on the seed schedule `[101, 202, 303]`;
+the seed picks the banner wording and the receipt identities. The committed
+output is [`proof_2026-09-01.md`](proof_2026-09-01.md) and
 [`proof_2026-09-01.json`](proof_2026-09-01.json); a test regenerates it and
 fails if the committed file drifts from the code.
 
