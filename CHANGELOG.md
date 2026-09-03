@@ -1,6 +1,17 @@
 # CHANGELOG
 
 
+## v0.97.1 (2026-09-03)
+
+### Bug Fixes
+
+- **reward,extradup**: Resolve identity every call, and stop selling a bound nobody checked (#342) ([`97f659e`](https://github.com/OpenAdaptAI/openadapt-evals/commit/97f659e7e8e7464eab303c73f3f6877f7dfd0cb9))
+
+### Chores
+
+- **prime**: Pin the environment to the release that carries wrong_record (#341) ([`ef43bc5`](https://github.com/OpenAdaptAI/openadapt-evals/commit/ef43bc539042e735ff2f816e2a19ae35db38272c))
+
+
 ## v0.97.0 (2026-09-03)
 
 ### Features
