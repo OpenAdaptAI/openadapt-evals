@@ -62,11 +62,7 @@ from openadapt_evals.extradup.checkers import new_records, sor_check
 from openadapt_evals.extradup.gold import MOCKMED_GOLD
 from openadapt_evals.extradup.mutations import OPERATORS, apply
 from openadapt_evals.extradup.store import MockMedStore, Screen
-from openadapt_evals.reward.devsigner import (
-    SYNTHETIC_SCOPE,
-    DevelopmentSigner,
-    sha256_digest,
-)
+from openadapt_evals.reward.devsigner import DevelopmentSigner, sha256_digest
 from openadapt_evals.reward.receipts import ScoredEpisode, assess_receipt
 
 logger = logging.getLogger(__name__)
@@ -447,6 +443,7 @@ def expiry_check(
                 policy_update=update,
                 expected_contract_digest=contract.digest,
                 certificate=certificate,
+                certificate_policy=contract.certificate_policy,
             )
             checked += 1
             still_certified += int(episode.certified)
@@ -482,7 +479,6 @@ def run_proof(
         ),
         issued_at_policy_update=0,
         issued_at=ISSUED_AT,
-        calibration_scope=SYNTHETIC_SCOPE,
     )
     receipts = issue_receipts(signer, contract, certificate, rollouts)
     scored: dict[tuple[str, int, str], ScoredEpisode] = {}
@@ -493,6 +489,7 @@ def run_proof(
             expected_contract_digest=contract.digest,
             expected_episode_id=receipt.episode_id,
             certificate=certificate if key[2] == CERTIFIED else None,
+            certificate_policy=contract.certificate_policy,
         )
     run = ProofRun(
         seeds=seeds,

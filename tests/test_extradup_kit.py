@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+from itertools import product
+
 import pytest
 
 from openadapt_evals.extradup import (
@@ -18,6 +21,7 @@ from openadapt_evals.extradup.checkers import (
     field_inclusion_check,
     identity_check,
     new_records,
+    records_under,
     sor_check,
     visual_only_check,
 )
@@ -173,3 +177,59 @@ def test_python_module_check() -> None:
     assert main(["list"]) == 0
     assert main(["run", "mockmed:dup"]) == 0
     assert main(["run", "mockmed:control"]) == 0
+
+
+def test_identity_is_resolved_even_when_the_count_agrees() -> None:
+    """`expected_new=2`, one correct row and one on the decoy patient.
+
+    Guarding the identity resolution on "nothing landed under the contract
+    identity" hid this: `sor_check` returned PASS while `identity_check`
+    returned FAIL and named the decoy. Both gold specs write one record,
+    where a right count forces a right subject, so no shipped fixture could
+    reach it.
+    """
+    spec = replace(MOCKMED_GOLD, expected_new=2)
+    identity = identity_of(spec)
+    decoy = decoy_of(spec)
+    before = [{"id": "e0", **identity, "type": "Triage", "note": "old"}]
+    content = {key: value for key, value in spec.fields.items() if key not in identity}
+    correct = {"id": "e1", **identity, **content}
+    elsewhere = {"id": "e2", **decoy, **content}
+
+    split = sor_check(spec, before, before + [correct, elsewhere])
+    assert split.verdict == "FAIL"
+    assert identity_check(spec, before, before + [correct, elsewhere]).verdict == "FAIL"
+    reasons = ";".join(split.reasons)
+    assert "under oracle_identity" in reasons
+    assert str(decoy) in reasons
+
+    both_right = {"id": "e3", **identity, **content}
+    assert sor_check(spec, before, before + [correct, both_right]).verdict == "PASS"
+
+
+def test_the_wording_rule_never_decides_the_verdict() -> None:
+    """`sor_check` suppresses a redundant sentence, never a check.
+
+    The identity reason is left out when every added row is already under
+    the contract identity, because the cardinality line then reports the
+    same number about the same rows. Whenever identity resolution fails,
+    one of the two lines fires.
+    """
+    spec = replace(MOCKMED_GOLD, expected_new=2)
+    identity = identity_of(spec)
+    decoy = decoy_of(spec)
+    content = {key: value for key, value in spec.fields.items() if key not in identity}
+    rows = {
+        "right": {**identity, **content},
+        "wrong": {**decoy, **content},
+    }
+    for count in range(4):
+        for places in product(("right", "wrong"), repeat=count):
+            after = [
+                {"id": f"e{index}", **rows[place]} for index, place in enumerate(places)
+            ]
+            landed = len(records_under(identity, after))
+            result = sor_check(spec, [], after)
+            assert result.ok == (
+                landed == spec.expected_new and len(after) == spec.expected_new
+            ), (places, result)

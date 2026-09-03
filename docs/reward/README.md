@@ -24,14 +24,45 @@ synthetic scope, the same scope this page describes.
 
 ## What today's certificate is
 
-There is exactly one certificate scope in use today: **synthetic**. It is
-calibrated on the MockMed ExtraDup rollouts in this repository and it bounds
-those rollouts and nothing else. A **production** scope needs the Phase-1
-calibration described in
+There is exactly one certificate scope: **synthetic**. It is calibrated on the
+MockMed ExtraDup rollouts in this repository and it bounds those rollouts and
+nothing else. A **production** scope needs the Phase-1 calibration described in
 [`docs/preregistrations/PREREGISTRATION_CERTIFIED_REWARD_RL_2026_08_25.md`](../preregistrations/PREREGISTRATION_CERTIFIED_REWARD_RL_2026_08_25.md),
 which is not published. Nothing in this package labels a reward `certified`
 without a scope on the receipt, and it logs the scope beside every certified
 receipt so a training log cannot hide which one it trained on.
+
+`DevelopmentSigner.issue_certificate` takes no scope and no issuer argument.
+It always mints `calibration_scope: synthetic` and `issuer: self_signed`,
+because a key derived from a seed can honestly claim one thing: someone
+computed a bound on a synthetic corpus. Both used to be plain parameters, and
+passing `issuer="organization"` produced a receipt reading `certified: true,
+calibration_scope: production, production_certified: true` from this package
+alone, with no worker, no oracle, and no read.
+
+## The contract's certificate policy is the bar
+
+Every `RewardContractV1` names the bound it demands in `certificate_policy`.
+`issue_receipt` marks an episode `certified` only when the certificate names
+that same contract by digest and clears the policy: epsilon and delta no
+looser, the same threshold, the same calibration corpus, an expiry no longer.
+A certificate measured at epsilon 0.248885 against a contract demanding 0.05
+scores its scalar and is not certified. Handing `issue_receipt` a certificate
+for a different contract raises rather than downgrades, because that is a
+wiring bug and not a weak bound.
+
+A trainer that holds the contract can make the same check on the way in. Pass
+`certificate_policy=contract.certificate_policy` to `CertifiedRewardFunction`,
+to the verl manager, or to `assess_receipt` directly, and a certificate weaker
+than the contract asked for stops counting as certified, with the two bounds
+logged side by side. Without it, a trainer that was handed only a contract
+digest has nothing to compare against and the receipt's own flag stands.
+
+Two things this stack does not do, so nobody assumes otherwise. Nobody looks
+up an issuer key: `verify_signature` checks a signature against a public key
+you already hold, and there is no registry that says which keys count. And
+there is no revocation list. A certificate stops being current when its
+policy-update expiry runs out.
 
 ## Wiring TRL
 
@@ -54,6 +85,7 @@ reward = CertifiedRewardFunction(
     policy_checkpoint_id="policy.checkpoint.0001",
     num_generations=config.num_generations,   # TRL's group size
     certificate=certificate,                  # RewardCertificateV1 the trainer holds
+    certificate_policy=contract.certificate_policy,   # the bound the contract demands
 )
 
 trainer = GRPOTrainer(model=model, args=config, reward_funcs=[reward.as_async()], ...)
