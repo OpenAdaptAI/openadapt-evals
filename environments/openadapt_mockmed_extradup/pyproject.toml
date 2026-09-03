@@ -7,7 +7,7 @@ requires-python = ">=3.11"
 license = "MIT"
 dependencies = [
     "verifiers>=0.3.1,<0.3.2",
-    "openadapt-evals>=0.95.1",
+    "openadapt-evals>=0.97.0",
 ]
 
 [project.urls]
