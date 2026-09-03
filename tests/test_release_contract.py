@@ -104,6 +104,15 @@ def test_release_configuration_is_fail_closed() -> None:
     assert "test \"$GITHUB_REF\" = 'refs/heads/main'" in workflow
     assert 'test "$GITHUB_SHA" = "$REQUESTED_SOURCE_COMMIT"' in workflow
     assert "refs/remotes/origin/main" in workflow
+    create_tag_job = workflow.split("  create-release-tag:", 1)[1].split("  publish-pypi:", 1)[0]
+    assert "permissions:\n      actions: read\n      contents: read" in create_tag_job
+    assert "python scripts/verify_release_ci.py" in create_tag_job
+    assert "GH_TOKEN: ${{ github.token }}" in create_tag_job
+    assert '--repository "$GITHUB_REPOSITORY"' in create_tag_job
+    assert '--sha "$REQUESTED_SOURCE_COMMIT"' in create_tag_job
+    assert create_tag_job.index("python scripts/verify_release_ci.py") < create_tag_job.index(
+        "id: release-app"
+    )
     assert 'git tag -a "$RELEASE_TAG" "$SOURCE_COMMIT"' in workflow
     assert "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}" in workflow
     app_pushes = [
@@ -162,6 +171,6 @@ def test_all_third_party_actions_are_commit_pinned() -> None:
     action_pattern = re.compile(r"uses:\s*([^\s@]+)@([^\s#]+)")
     for path in (ROOT / ".github" / "workflows").glob("*.yml"):
         for action, action_ref in action_pattern.findall(path.read_text(encoding="utf-8")):
-            assert re.fullmatch(r"[0-9a-f]{40}", action_ref), (
-                f"{path.name}: {action}@{action_ref} is not pinned to a commit"
-            )
+            assert re.fullmatch(
+                r"[0-9a-f]{40}", action_ref
+            ), f"{path.name}: {action}@{action_ref} is not pinned to a commit"
