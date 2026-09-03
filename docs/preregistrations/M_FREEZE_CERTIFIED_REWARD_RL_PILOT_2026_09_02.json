@@ -320,13 +320,13 @@
     },
     {
       "path": "openadapt_evals/extradup/checkers.py",
-      "sha256": "sha256:e53bef06e540cd718c4b33699b379046b2d747c6d3146a8bf08ad7a8cf439e6c",
-      "git_blob": "9bd854090a257d9f4449f48a470536aebe9859ac"
+      "sha256": "sha256:a5c73116db2000aa17e46abae1616cca0c694f82742ace52bad5a10888b34f71",
+      "git_blob": "e2669ff809be7add2a99d1174e6760cd37223c3c"
     },
     {
       "path": "openadapt_evals/reward/proof.py",
-      "sha256": "sha256:7f87d60b9250110c5f10bad3e4b4f0f80209711b211d9ed41ed1d2cd2bff4466",
-      "git_blob": "20da8e6168ad03220aa1a21498d40a0c5f9f7626"
+      "sha256": "sha256:f278a66356a8469d06772bc558f89e6a6f7fb6265db993b51f71acc51ea662a0",
+      "git_blob": "ecdff94d80440b40d19f0a0a4bf18a87d5490e71"
     },
     {
       "path": "docs/reward/proof_2026-09-01.json",
@@ -347,7 +347,7 @@
     "proof_path": "docs/reward/proof_2026-09-02.json",
     "note": "Wrong-record write. Named identity is p1; write lands on p2. Not an ExtraDup operator."
   },
-  "amendment_note": "2026-09-02 identity-swap: proof.py hash and proof_2026-09-02.json added. ExtraDup operators and the 2026-09-01 certificate digest are unchanged. 2026-09-02 wrong_record: mutations.py, gold.py and checkers.py hashes updated for the eval-only wrong_record family and the identity resolution inside sor_check. OPERATORS, MUTANTS, holdout_operators, the seed schedule, and the 2026-09-01 certificate digest are unchanged; wrong_record lives in EVAL_ONLY_OPERATORS and is not an ExtraDup operator.",
+  "amendment_note": "2026-09-02 identity-swap: proof.py hash and proof_2026-09-02.json added. ExtraDup operators and the 2026-09-01 certificate digest are unchanged. 2026-09-02 wrong_record: mutations.py, gold.py and checkers.py hashes updated for the eval-only wrong_record family and the identity resolution inside sor_check. OPERATORS, MUTANTS, holdout_operators, the seed schedule, and the 2026-09-01 certificate digest are unchanged; wrong_record lives in EVAL_ONLY_OPERATORS and is not an ExtraDup operator. 2026-09-03 unconditional identity resolution: checkers.py and proof.py hashes updated. sor_check resolved the record by oracle_identity only when nothing had landed there, so at |spec(M)| > 1 a write that split between the named record and another one returned PASS. The resolution now runs on every call and decides the verdict; the reason strings for the frozen families are unchanged, and proof_2026-09-01.json and proof_2026-09-02.json are byte-identical. proof.py drops the calibration_scope argument that no longer exists on DevelopmentSigner and passes the contract's certificate_policy to assess_receipt. OPERATORS, MUTANTS, holdout_operators, the seed schedule, the arms, and the 2026-09-01 certificate digest are unchanged. No result was reported against this freeze.",
   "wrong_record": {
     "in_extradup_mutants": false,
     "in_training_dataset": false,

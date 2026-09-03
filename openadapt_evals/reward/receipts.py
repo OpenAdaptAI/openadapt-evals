@@ -20,6 +20,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from openadapt_types.reward import (
     REWARD_CERTIFIED_MINIMUM_TIER,
+    RewardCertificatePolicyV1,
     RewardCertificateStateV1,
     RewardCertificateV1,
     RewardCertificationRefused,
@@ -356,10 +357,17 @@ def assess_receipt(
     expected_contract_digest: str | None = None,
     expected_episode_id: str | None = None,
     certificate: RewardCertificateV1 | None = None,
+    certificate_policy: RewardCertificatePolicyV1 | None = None,
 ) -> ScoredEpisode:
     """Turn one receipt into a scored episode, applying the trainer-side rules.
 
     * The receipt must bind the expected contract digest and episode id.
+    * When the trainer holds both the certificate and the contract's
+      ``certificate_policy``, the certificate has to clear that policy. A
+      certificate with a looser epsilon, delta, threshold, corpus, or expiry
+      than the contract asked for turns ``certified`` off here, and says so
+      at WARNING. Omitting the policy leaves the receipt's own flag standing,
+      which is what a trainer that was handed only a contract digest can do.
     * ``development_only`` (tier 0 or 1) can never be certified. The receipt
       contract already forbids that combination; this re-checks it so a
       receipt built outside the contract cannot slip through.
@@ -414,6 +422,25 @@ def assess_receipt(
         verdict = score(receipt.reward_outcome, tier, certificate, policy_update)
         state = certificate.state_at(policy_update)
         certified = bool(receipt.certified and verdict.certified)
+        if certificate_policy is not None and not certificate.satisfies(
+            certificate_policy
+        ):
+            logger.warning(
+                "reward certificate %s is weaker than the contract policy "
+                "(epsilon=%s delta=%s threshold=%s expiry=%d against epsilon=%s "
+                "delta=%s threshold=%s expiry=%d); receipt %s is not certified",
+                receipt.certificate_id,
+                certificate.epsilon,
+                certificate.delta,
+                certificate.threshold,
+                certificate.expiry_policy_updates,
+                certificate_policy.epsilon,
+                certificate_policy.delta,
+                certificate_policy.threshold,
+                certificate_policy.expiry_policy_updates,
+                receipt.receipt_id,
+            )
+            certified = False
     else:
         state = receipt.certificate_state
         certified = bool(

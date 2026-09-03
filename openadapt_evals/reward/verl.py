@@ -33,7 +33,7 @@ import logging
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from openadapt_types.reward import RewardCertificateV1
+from openadapt_types.reward import RewardCertificatePolicyV1, RewardCertificateV1
 
 from openadapt_evals.reward.receipts import (
     ORACLE_IDENTITY_KEY,
@@ -107,6 +107,7 @@ class CertifiedRewardManager(_Base):
         policy_checkpoint_id: str,
         require_certified: bool = True,
         certificate: RewardCertificateV1 | None = None,
+        certificate_policy: RewardCertificatePolicyV1 | None = None,
         policy_update: int | Callable[[], int] | None = None,
         episode_id_key: str = "episode_id",
         task_id_key: str | None = "task_id",
@@ -130,6 +131,7 @@ class CertifiedRewardManager(_Base):
         self.policy_checkpoint_id = policy_checkpoint_id
         self.require_certified = require_certified
         self.certificate = certificate
+        self.certificate_policy = certificate_policy
         self._policy_update = policy_update
         self.episode_id_key = episode_id_key
         self.task_id_key = task_id_key
@@ -209,6 +211,7 @@ class CertifiedRewardManager(_Base):
                 expected_contract_digest=self.reward_contract_digest,
                 expected_episode_id=descriptor.episode_id,
                 certificate=self.certificate,
+                certificate_policy=self.certificate_policy,
             )
             if self.require_certified:
                 require_certified_or_unscored(episode)

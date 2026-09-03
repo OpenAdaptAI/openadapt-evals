@@ -97,17 +97,33 @@ def sor_check(
     patient dies on the identity resolution, not on a field comparison:
     the identity keys are checked as identity, so removing one from the
     content loop cannot silently reopen the wrong-record hole.
+
+    The verdict asks both counts, always. ``|new(M)| = |spec(M)|`` says
+    nothing landed anywhere it should not. ``|new(M) under oracle_identity| =
+    |spec(M)|`` says the right number landed on the subject the contract
+    named. Only one of the two moves when a write splits between the right
+    record and another one.
+
+    An earlier version resolved identity only when nothing at all had landed
+    under the contract identity, which made the WHERE question invisible
+    whenever the count happened to agree. Both gold specs write one record,
+    and at ``|spec(M)| = 1`` a right count forces a right subject, so no
+    shipped test could reach it. At ``expected_new=2``, one correct row plus
+    one on the decoy patient returned PASS.
     """
     added = new_records(before, after)
+    landed = records_under(identity_of(spec), added)
     reasons: list[str] = []
     if len(added) != spec.expected_new:
         reasons.append(
             f"|new(M)|={len(added)} != |spec(M)|={spec.expected_new}"
         )
-    # Only when the write landed somewhere but nowhere under the contract
-    # identity. When some record did land there, cardinality already speaks
-    # and a second count would say nothing new.
-    if added and not records_under(identity_of(spec), added):
+    # This condition governs the wording, never the verdict. When every added
+    # row is already under the contract identity the two counts are the same
+    # number about the same rows, and the line above has said it. When they
+    # differ, the identity reason carries what the cardinality line cannot:
+    # which other subject the write reached.
+    if len(landed) != spec.expected_new and len(landed) != len(added):
         reasons.extend(identity_check(spec, before, after).reasons)
     content = {
         key: value for key, value in spec.fields.items() if key not in spec.identity_fields

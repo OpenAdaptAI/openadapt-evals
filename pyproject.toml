@@ -47,7 +47,13 @@ dependencies = [
     "openadapt-consilium>=0.3.2",
     "openadapt-telemetry>=0.2.0",
     # Requires openadapt_types.reward (RewardEvidenceReceiptV1, RewardCertificateV1, score).
-    "openadapt-types>=0.17.0",
+    # Bounded pin, same as openadapt-flow uses. openadapt-types is 0-based semver
+    # with major_on_zero=false, so a breaking change lands as a minor bump and an
+    # unbounded floor would take it silently. openadapt-types#40 narrows the
+    # certificate contracts and changes score() to require the reward contract;
+    # widening this bound and updating assess_receipt go in one PR after that
+    # release, not before.
+    "openadapt-types>=0.17.0,<0.18.0",
 ]
 
 [project.optional-dependencies]

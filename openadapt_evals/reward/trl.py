@@ -32,7 +32,7 @@ import logging
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from openadapt_types.reward import RewardCertificateV1
+from openadapt_types.reward import RewardCertificatePolicyV1, RewardCertificateV1
 
 from openadapt_evals.reward.receipts import (
     ORACLE_IDENTITY_KEY,
@@ -76,6 +76,10 @@ class CertifiedRewardFunction:
             receipt is then logged as ``development_only``.
         certificate: the certificate the trainer holds. When given, expiry
             is re-evaluated at the trainer's own global step.
+        certificate_policy: the contract's ``certificate_policy``. Give it
+            alongside ``certificate`` and the trainer checks that the bound
+            it holds is at least as tight as the contract demanded; a looser
+            certificate stops being counted as certified.
         policy_update: overrides ``trainer_state.global_step`` (an int or a
             zero-argument callable).
         episode_id_column: the dataset column that names each episode.
@@ -107,6 +111,7 @@ class CertifiedRewardFunction:
         num_generations: int | None = None,
         require_certified: bool = True,
         certificate: RewardCertificateV1 | None = None,
+        certificate_policy: RewardCertificatePolicyV1 | None = None,
         policy_update: int | Callable[[], int] | None = None,
         episode_id_column: str = "episode_id",
         task_id_column: str | None = "task_id",
@@ -123,6 +128,7 @@ class CertifiedRewardFunction:
         self.num_generations = num_generations
         self.require_certified = require_certified
         self.certificate = certificate
+        self.certificate_policy = certificate_policy
         self._policy_update = policy_update
         self.episode_id_column = episode_id_column
         self.task_id_column = task_id_column
@@ -247,6 +253,7 @@ class CertifiedRewardFunction:
                 expected_contract_digest=self.reward_contract_digest,
                 expected_episode_id=descriptor.episode_id,
                 certificate=self.certificate,
+                certificate_policy=self.certificate_policy,
             )
             if self.require_certified:
                 require_certified_or_unscored(episode)

@@ -81,13 +81,20 @@ class DevelopmentSigner:
         issued_at_policy_update: int,
         issued_at: str,
         expiry_policy_updates: int | None = None,
-        calibration_scope: str = SYNTHETIC_SCOPE,
-        issuer: str = SELF_SIGNED,
     ) -> RewardCertificateV1:
-        """Issue a certificate that satisfies ``contract.certificate_policy``.
+        """Issue a self-signed, synthetic-scope certificate for ``contract``.
 
-        The contract allows a self-signed certificate to carry synthetic
-        scope only; passing another scope raises at validation.
+        The scope and the issuer are not parameters. This signer holds a key
+        derived from a seed, and nobody verifies that key, so a certificate
+        from here can honestly claim one thing: someone computed a bound on a
+        synthetic corpus. Passing ``issuer="organization"`` used to buy a
+        receipt reading ``certified: true, calibration_scope: production``
+        with no worker, no oracle, and no read. There is no parameter to pass
+        now, and ``openadapt-types`` has no enum member to accept.
+
+        Every field except the identifiers is copied from
+        ``contract.certificate_policy``, so the certificate satisfies the
+        contract that asked for it.
         """
 
         policy = contract.certificate_policy
@@ -102,8 +109,8 @@ class DevelopmentSigner:
             "issued_at_policy_update": issued_at_policy_update,
             "expiry_policy_updates": expiry_policy_updates or policy.expiry_policy_updates,
             "issued_at": issued_at,
-            "calibration_scope": calibration_scope,
-            "issuer": issuer,
+            "calibration_scope": SYNTHETIC_SCOPE,
+            "issuer": SELF_SIGNED,
             "issuer_key_id": self.key_id,
         }
         unsigned = RewardCertificateV1.model_validate({**payload, "signature": "A" * 86 + "=="})
@@ -129,21 +136,34 @@ class DevelopmentSigner:
     ) -> RewardEvidenceReceiptV1:
         """Issue a receipt whose flags follow the contract's own rules.
 
-        ``certified`` is true only at tier 2 or 3 with a certificate current
-        at ``policy_update``. The calibration scope and corpus digest come
-        from that certificate; a receipt with no certificate carries neither.
-        Unscored outcomes carry no scalar and no components. The caller
-        cannot override any of this.
+        ``certified`` is true only at tier 2 or 3 with a certificate that is
+        current at ``policy_update``, names this contract by digest, and
+        clears ``contract.certificate_policy``. That last check is the one
+        that was missing: a certificate whose measured epsilon was 0.248885
+        against a contract demanding 0.05 produced ``certified`` anyway.
+
+        The calibration scope and corpus digest come from that certificate; a
+        receipt with no certificate carries neither. Unscored outcomes carry
+        no scalar and no components. The caller cannot override any of this.
         """
 
         outcome = RewardOutcomeV1(outcome)
         tier = int(oracle_tier)
         development_only = tier < REWARD_CERTIFIED_MINIMUM_TIER
         state = certificate_state(certificate, policy_update)
+        if (
+            certificate is not None
+            and certificate.reward_contract_digest != contract.digest
+        ):
+            raise ValueError(
+                f"certificate {certificate.certificate_id} names reward contract "
+                f"{certificate.reward_contract_digest}, not {contract.digest}"
+            )
         certified = (
             not development_only
             and certificate is not None
             and state is RewardCertificateStateV1.CURRENT
+            and certificate.satisfies(contract.certificate_policy)
         )
         scalar = scoring.scalar_for(outcome)
         unscored = scalar is None

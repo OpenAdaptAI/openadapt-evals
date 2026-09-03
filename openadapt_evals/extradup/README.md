@@ -113,7 +113,7 @@ spec's `pubpid` on the OpenEMR-shaped store. `|new| = 1`, which matches gold.
 The banner says saved, same as gold. `content_only_check` PASSes, because
 the content is right. `identity_check` resolves the row set under the
 contract's `oracle_identity`, finds nothing, and FAILs. `sor_check` runs that
-resolution first and reports which record the write did land on.
+resolution on every call and reports which record the write did land on.
 
 Worth knowing before you copy this into a real oracle: MockMed carries
 `patient_id` as a typed form field, so a plain field comparison happens to
@@ -125,6 +125,23 @@ works when the identity isn't in the payload.
 
 `control`. The gold write. SoR PASS, Seal `VERIFIED`. That's how we know
 the oracle isn't stuck on FAIL.
+
+## Two counts, both asked every time
+
+`sor_check` asks `|new(M)| = |spec(M)|`, so nothing landed anywhere it should
+not, and `|new(M) under oracle_identity| = |spec(M)|`, so the right number
+landed on the record the contract named. Only one of the two moves when a
+write splits between the named record and another one.
+
+Both gold specs write one record. At `|spec(M)| = 1` a right count forces a
+right subject, so the two questions are hard to tell apart here, and an
+earlier version resolved identity only when nothing at all had landed under
+the contract identity. That guard was invisible to every shipped fixture and
+wrong above 1. Set `expected_new = 2`, add one correct row and one on the
+decoy patient, and it returned PASS while `identity_check` returned FAIL.
+
+If you write your own spec, this is the line to keep. The count you can read
+off a screenshot is not the count that says which chart you wrote to.
 
 ## What this kit does not ship
 
