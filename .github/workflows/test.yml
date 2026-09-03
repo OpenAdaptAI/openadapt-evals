@@ -61,6 +61,7 @@ jobs:
         run: |
           uv build --no-sources
           python scripts/check_source_boundary.py --require-dist
+          python scripts/check_third_party_notices.py --require-dist
 
       - name: Run tests
         run: |

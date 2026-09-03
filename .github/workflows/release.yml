@@ -57,6 +57,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: release-identity
     permissions:
+      actions: read
       contents: read
     steps:
       - name: Checkout exact protected main
@@ -68,6 +69,7 @@ jobs:
       - name: Bind the request to the reviewed release state
         id: release
         env:
+          GH_TOKEN: ${{ github.token }}
           REQUESTED_SOURCE_COMMIT: ${{ inputs.source_commit }}
           REQUESTED_VERSION: ${{ inputs.version }}
         run: |
@@ -88,6 +90,9 @@ jobs:
           git fetch --no-tags origin \
             '+refs/heads/main:refs/remotes/origin/main'
           test "$(git rev-parse refs/remotes/origin/main)" = "$REQUESTED_SOURCE_COMMIT"
+          python scripts/verify_release_ci.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --sha "$REQUESTED_SOURCE_COMMIT"
           python scripts/verify_release_lock.py
 
           project_version=$(python - <<'PY'
@@ -257,6 +262,9 @@ jobs:
 
       - name: Verify the public distribution boundary
         run: python scripts/check_source_boundary.py --require-dist
+
+      - name: Verify third-party notices
+        run: python scripts/check_third_party_notices.py --require-dist
 
       - name: Refuse conflicting immutable PyPI files
         env:
