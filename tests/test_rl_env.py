@@ -370,6 +370,24 @@ class TestInstruction:
         # The adapter's own observation object is left untouched.
         assert adapter_obs.raw_observation == {"source": "adapter"}
 
+    def test_delegated_pixel_action_observation_carries_the_instruction(self) -> None:
+        adapter_obs = BenchmarkObservation(viewport=(640, 480))
+        adapter = MagicMock(spec=["load_task", "reset", "step", "evaluate", "pixel_action"])
+        adapter.load_task.side_effect = lambda task_id: BenchmarkTask(
+            task_id=task_id, instruction="Open Notepad", domain="notepad"
+        )
+        adapter.reset.return_value = adapter_obs
+        adapter.pixel_action.return_value = (adapter_obs, False, {})
+        env = RLEnvironment(adapter=adapter)
+        env.reset(ResetConfig(task_id="notepad_1"))
+
+        step = env.pixel_action(x=10, y=20)
+
+        assert adapter.pixel_action.called
+        assert step.observation.raw_observation["instruction"] == "Open Notepad"
+        assert env.trajectory[-1].observation.raw_observation["instruction"] == "Open Notepad"
+        assert adapter_obs.raw_observation is None
+
     def test_mock_adapter_reset_carries_its_task_instruction(
         self, mock_env: RLEnvironment
     ) -> None:
