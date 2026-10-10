@@ -215,6 +215,11 @@ uv sync --extra dev
 uv run pytest tests/ -v
 ```
 
+Every dependency installs from PyPI, so you don't need other OpenAdapt
+repositories checked out next to this one. To work against a local copy of
+one, install it into the environment after syncing, for example
+`uv pip install -e ../openadapt-ml`, and don't commit a `path` source for it.
+
 This is research infrastructure and it moves fast. Branches and pull requests
 only, never a direct push to `main`. PR titles need
 [conventional commit](https://www.conventionalcommits.org/) format, because
