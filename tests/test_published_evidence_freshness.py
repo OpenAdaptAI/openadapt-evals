@@ -659,6 +659,29 @@ def test_readme_states_which_release_the_current_numbers_were_measured_on() -> N
         assert f"Flow {waiver['version']} has not been re-measured" in readme
 
 
+def test_readme_comparison_numbers_come_from_the_current_set() -> None:
+    """The README quotes the current set's results. When a new set replaces the
+    old one, the quoted numbers must change with it, or the page names the new
+    release next to numbers measured on the old one."""
+
+    entry = MODULE.current_entry(MODULE.load_manifest(MANIFEST))
+    results = json.loads((ROOT / entry["path"] / "results.json").read_text(encoding="utf-8"))
+    aggregate = results["aggregate"]
+    readme = " ".join((ROOT / "README.md").read_text(encoding="utf-8").split())
+
+    compiled = aggregate["compiled"]["clean"]["steady_wall_s_median"]
+    assert f"median of {compiled:.1f} seconds per run" in readme
+    for arm in ("dom", "dom_named"):
+        median = aggregate[arm]["clean"]["steady_wall_s_median"]
+        assert f"against {median:.2f} seconds for the Playwright scripts" in readme
+    for condition in results["conditions"]:
+        cells = [
+            f"{aggregate[arm][condition]['task_success_count']}/{aggregate[arm][condition]['n']}"
+            for arm in ("compiled", "dom", "dom_named")
+        ]
+        assert f"| `{condition}` | " + " | ".join(cells) + " |" in readme
+
+
 def test_a_failing_scheduled_check_leaves_an_open_issue() -> None:
     """GitHub turns off a public repo's schedules after 60 days without a
     commit. A red scheduled run must leave a durable signal that outlives the
