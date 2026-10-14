@@ -27,6 +27,7 @@ lifecycle.
 | `smoke-live` | End-to-end smoke test with auto-deallocate |
 | `dashboard`, `azure-monitor` | VM usage dashboard, Azure ML job monitoring |
 | `wandb-demo`, `wandb-report`, `wandb-log` | Weights and Biases integration |
+| `audit-verifier` | Edit correct benchmark runs, replay them, and report which wrong end states the benchmark's own checker passes. Built in: `toy` (synthetic, offline) and `appworld`. See [Audit a benchmark's checker](../README.md#audit-a-benchmarks-checker) |
 
 ## VM lifecycle CLI (`oa`)
 
