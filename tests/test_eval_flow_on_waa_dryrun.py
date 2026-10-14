@@ -40,7 +40,7 @@ def test_hybrid_dry_run_shows_fallback_cost(capsys):
 def test_guardrails_are_printed(capsys):
     efw.main(["--tasks", "10"])
     out = capsys.readouterr().out
-    assert "HARD GUARDRAILS" in out
+    assert "SPEND CAPS" in out
     assert "per-run cap" in out
     assert "total cap" in out
 

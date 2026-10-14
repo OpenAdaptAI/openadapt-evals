@@ -573,9 +573,9 @@ class WAALiveAdapter(BenchmarkAdapter):
 
         # Fallback: create minimal task
         logger.warning(
-            f"Could not load full task config for {task_id}. "
-            "Evaluation will use fallback heuristics. "
-            "Set waa_examples_path or deploy /task endpoint for proper evaluation."
+            f"Could not load the WAA task config for {task_id}, so the agent gets "
+            "a placeholder instruction and WAA's checker has no evaluator spec "
+            "to score it with. Set waa_examples_path or deploy the /task endpoint."
         )
         return BenchmarkTask(
             task_id=task_id,
@@ -1194,8 +1194,8 @@ class WAALiveAdapter(BenchmarkAdapter):
         native evaluators (getters + metrics) to determine task success.
 
         If the task has an evaluator config in raw_config, it's sent to
-        the server. If the /evaluate endpoint is not available, falls back
-        to a simple heuristic based on actions taken.
+        the server. If the /evaluate endpoint is not available, the result is
+        a failure marked as an infrastructure error, not a heuristic score.
 
         Uses ``evaluate_timeout`` (default 180s) instead of the general
         ``timeout`` (90s) because WAA evaluators often need to reach the
