@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
 """Evaluate openadapt-flow on WindowsAgentArena (WAA).
 
-Two eval modes, both scored by WAA's own task verifier:
+Two modes:
 
   replay  -- demonstrate-then-replay: compile ONE demo into a bundle and replay
              it via WindowsBackend against the WAA in-guest server (~0 model
-             calls). Paradigm-correct eval for a demonstration compiler.
+             calls), after running the task's WAA setup steps. WAA's own task
+             evaluator scores each replay. Runs with --live or --dry-run.
   hybrid  -- compiled replay first, computer-use agent fallback ONLY on a
-             detected halt. Drive-able by the WAA runner; directly comparable
-             to a pure agent baseline on the same tasks.
+             detected halt. This command prices a hybrid run (--dry-run) but
+             does not execute one. To run it, drive
+             ``openadapt_evals.flow.HybridFlowAgent`` with
+             ``evaluate_agent_on_benchmark`` and your own agent.
 
 Safety: this command is **dry-run by default**. It never provisions Azure,
 never starts a VM, never spends money, and makes no network calls unless you
-pass ``--live`` (which additionally requires a reachable WAA server and stays
-under the hard cost caps). The prior $40-70 uncapped-run incident is why the
-caps below are mandatory.
+pass ``--live``, which also requires a reachable WAA server. The spend caps it
+prints are checked by ``HybridFlowAgent``; a ``--live`` replay records each
+task's model calls and estimated cost in ``results.json`` but does not stop at
+a cap.
 
 Examples:
     # Cost estimate + plan for a 10-task and full (154) replay run (no network):
@@ -24,7 +28,7 @@ Examples:
     # Hybrid dry-run with an assumed 30% halt/fallback rate:
     python scripts/eval_flow_on_waa.py --mode hybrid --tasks 154 --fallback-rate 0.3 --dry-run
 
-    # Live run (GATED: needs Azure + a revived waa-pool + maintainer go):
+    # Live replay (needs a running WAA server; see `oa-vm pool-create`):
     python scripts/eval_flow_on_waa.py --mode replay --task-ids <id1>,<id2> \
         --bundles ./flow_bundles --server-url http://localhost:5001 --live
 """
@@ -143,7 +147,7 @@ def print_estimate(args: argparse.Namespace, guard: CostGuardConfig) -> dict:
         print(f"    Savings vs baseline:   ${r['savings_vs_baseline_usd']:.2f}")
 
     print()
-    print("  HARD GUARDRAILS (enforced on any --live paid run):")
+    print("  SPEND CAPS (HybridFlowAgent checks these; a --live replay does not):")
     print(f"    per-run cap:      ${guard.per_run_usd:.2f}")
     print(f"    total cap:        ${guard.total_usd:.2f}")
     print(f"    per-task tokens:  {guard.per_task_tokens:,}")
@@ -166,7 +170,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--env", choices=["waa", "parallels"], default="waa",
                    help="Environment: 'waa' = CLOUD Azure ($); 'parallels' = "
                         "LOCAL Apple-Silicon VM ($0, opt-in OPENADAPT_PARALLELS=1).")
-    p.add_argument("--mode", choices=["replay", "hybrid"], default="replay")
+    p.add_argument("--mode", choices=["replay", "hybrid"], default="replay",
+                   help="replay: run compiled bundles, scored by WAA's evaluator. "
+                        "hybrid: cost estimate only (no --live).")
     p.add_argument("--tasks", type=int, default=10,
                    help="Number of tasks (used for the estimate when --task-ids is absent).")
     p.add_argument("--task-ids", type=str, default=None,
@@ -174,6 +180,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--bundles", type=str, default=None,
                    help="Directory of compiled bundles, one per task_id subdir.")
     p.add_argument("--server-url", type=str, default="http://localhost:5001")
+    p.add_argument("--evaluate-url", type=str, default=None,
+                   help="WAA evaluate server URL (default: --server-url, then port 5050).")
+    p.add_argument("--waa-examples-path", type=str, default=None,
+                   help="Local WAA evaluation_examples_windows directory, used when "
+                        "the evaluate server cannot serve task configs.")
     p.add_argument("--model", choices=sorted(MODELS), default=DEFAULT_MODEL,
                    help="Fallback / baseline computer-use model for cost.")
     p.add_argument("--fallback-rate", type=float, default=0.30,
@@ -189,7 +200,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--dry-run", action="store_true",
                    help="Print the plan + cost estimate and exit (default when --live absent).")
     p.add_argument("--live", action="store_true",
-                   help="Actually run against a reachable WAA server (GATED; needs Azure + $).")
+                   help="Run against a reachable WAA server (replay mode only; VM time costs $).")
     p.add_argument("--run-root", type=str, default="flow_waa_results")
     p.add_argument("--json", action="store_true", help="Also emit the plan+estimate as JSON.")
     args = p.parse_args(argv)
@@ -232,21 +243,25 @@ def main(argv: Optional[list[str]] = None) -> int:
             print("  compiled bundles per task, OPENADAPT_PARALLELS=1, then --live. $0.")
         else:
             print("  DRY-RUN: no VM provisioned, no task run, no money spent.")
-            print("  A live run needs: Azure creds + a revived waa-pool VM"
-                  " (oa-vm pool-create/pool-wait),")
-            print("  compiled bundles for each task, then re-run with --live.")
+            if args.mode == "hybrid":
+                print("  Hybrid is estimate-only here; --live runs --mode replay.")
+            else:
+                print("  A live run needs: a running WAA server"
+                      " (oa-vm pool-create/pool-wait),")
+                print("  compiled bundles for each task, then re-run with --live.")
         return 0
 
     return _run_live(args, plan, guard)
 
 
 def _run_live(args: argparse.Namespace, plan: dict, guard: CostGuardConfig) -> int:
-    """Execute a real run. GATED: requires a reachable WAA server + bundles.
+    """Execute a real replay run. Requires a reachable WAA server + bundles.
 
     This path does NOT create or start any Azure/AWS resource -- it assumes a
-    WAA server is already reachable at ``--server-url`` (revive the pool with
-    ``oa-vm pool-create`` / ``oa-vm pool-wait`` first). Kept minimal on purpose;
-    the maintainer's explicit go is required before running it.
+    WAA server is already reachable at ``--server-url`` (start one with
+    ``oa-vm pool-create`` / ``oa-vm pool-wait`` first). For each task it runs
+    WAA's setup steps, replays the compiled bundle, and scores the result with
+    WAA's own evaluator. Per-task metrics go to ``<run-root>/results.json``.
     """
     import requests  # local import: not needed for dry-run
 
@@ -256,6 +271,14 @@ def _run_live(args: argparse.Namespace, plan: dict, guard: CostGuardConfig) -> i
 
     if args.env == "parallels":
         return _run_live_parallels(args, plan, guard)
+
+    if args.mode != "replay":
+        print("\n  REFUSING --live: --mode hybrid is estimate-only in this command."
+              "\n  Run the compiled arm with --mode replay, or drive"
+              " openadapt_evals.flow.HybridFlowAgent"
+              "\n  with evaluate_agent_on_benchmark and your own agent.",
+              file=sys.stderr)
+        return 3
 
     print(f"\n  Probing WAA server at {args.server_url} ...")
     try:
@@ -268,32 +291,54 @@ def _run_live(args: argparse.Namespace, plan: dict, guard: CostGuardConfig) -> i
     ledger = SpendLedger(guard)
     run_root = Path(args.run_root)
 
-    if args.mode == "replay":
-        from openadapt_evals.flow.replay_runner import (
-            FlowTask,
-            aggregate_replay_metrics,
-            run_demonstrate_then_replay,
+    from openadapt_evals.adapters.waa.live import WAALiveAdapter, WAALiveConfig
+    from openadapt_evals.flow.replay_runner import (
+        FlowTask,
+        aggregate_replay_metrics,
+        load_waa_tasks,
+        run_demonstrate_then_replay,
+        waa_live_hooks,
+    )
+
+    adapter = WAALiveAdapter(
+        WAALiveConfig(
+            server_url=args.server_url,
+            evaluate_url=args.evaluate_url,
+            waa_examples_path=args.waa_examples_path,
         )
+    )
+    waa_tasks, problems = load_waa_tasks(adapter, [t["task_id"] for t in plan["tasks"]])
+    if problems:
+        print("\n  REFUSING --live: these tasks cannot be scored by WAA's evaluator:",
+              file=sys.stderr)
+        for problem in problems:
+            print(f"    {problem}", file=sys.stderr)
+        return 2
+    setup_fn, evaluator = waa_live_hooks(adapter, waa_tasks)
 
-        tasks = [
-            FlowTask(task_id=t["task_id"], bundle_dir=Path(t["bundle_dir"]))
-            for t in plan["tasks"]
-        ]
-        # NOTE: wire a real WAA evaluator here (WAALiveAdapter.evaluate) once the
-        # maintainer approves a live run; left None so replay is not falsely
-        # self-scored.
-        metrics = run_demonstrate_then_replay(tasks, args.server_url, run_root)
-        summary = aggregate_replay_metrics(metrics)
-        # Replay makes ~0 model calls, so the paid ledger should stay at $0;
-        # report it for transparency (and to prove no silent spend).
-        print(json.dumps({"summary": summary, "ledger": ledger.summary()}, indent=2))
-        return 0
-
-    print("\n  hybrid --live requires a base computer-use agent + WAALiveAdapter wiring;"
-          "\n  construct HybridFlowAgent(base_agent, bundle, server_url, ledger) and drive it"
-          "\n  with evaluate_agent_on_benchmark(agent, WAALiveAdapter(...)). Gated on go.",
-          file=sys.stderr)
-    return 3
+    tasks = [
+        FlowTask(task_id=t["task_id"], bundle_dir=Path(t["bundle_dir"]))
+        for t in plan["tasks"]
+    ]
+    try:
+        metrics = run_demonstrate_then_replay(
+            tasks, args.server_url, run_root, setup_fn=setup_fn, evaluator=evaluator
+        )
+    finally:
+        adapter.close()
+    summary = aggregate_replay_metrics(metrics)
+    # Replay makes ~0 model calls, so the paid ledger should stay at $0;
+    # report it for transparency (and to prove no silent spend).
+    output = {
+        "summary": summary,
+        "ledger": ledger.summary(),
+        "tasks": [m.as_dict() for m in metrics],
+    }
+    results_path = run_root / "results.json"
+    results_path.write_text(json.dumps(output, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps({"summary": summary, "ledger": ledger.summary()}, indent=2))
+    print(f"\n  Per-task results: {results_path}")
+    return 0
 
 
 def _run_live_parallels(args: argparse.Namespace, plan: dict, guard: CostGuardConfig) -> int:

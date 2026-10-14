@@ -5,38 +5,38 @@
 [![Python](https://img.shields.io/pypi/pyversions/openadapt-evals.svg)](https://pypi.org/project/openadapt-evals/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-You changed something in the compiler and you need to know whether it got
-better or worse. This runs GUI agents and compiled OpenAdapt workflows against
-a benchmark, scores them with the benchmark's own verifier instead of asking
-the agent how it did, provisions the VMs that takes, and writes the numbers to
-a file you can commit.
+openadapt-evals measures how well a GUI agent, or a workflow that OpenAdapt
+compiled from one recorded demonstration, completes desktop tasks. It runs each
+task, scores the result with the benchmark's own checker rather than the
+agent's claim of success, and saves scores and step-by-step traces you can
+compare across runs. For
+[Windows Agent Arena](https://microsoft.github.io/WindowsAgentArena/) (WAA), it
+can also create and delete the Windows VMs the benchmark needs, in your own
+Azure or AWS account.
 
-It's for people working on OpenAdapt, and for anyone who wants to measure a GUI
-agent against [Windows Agent Arena](https://microsoft.github.io/WindowsAgentArena/).
-You don't need it to record or replay a workflow, which is
-[openadapt-flow](https://github.com/OpenAdaptAI/openadapt-flow).
+Use it to:
 
-[Docs](https://docs.openadapt.ai) ·
-[CLI reference](docs/CLI.md) ·
-[Workflows and layout](docs/WORKFLOWS.md) ·
-[Evidence boundary](docs/eval_results/PRODUCTION_READINESS.md)
+- Score a GUI agent you're building on WAA tasks
+- Check whether a change to OpenAdapt made replay better or worse
+- Compare a compiled workflow with a model-driven agent on the same tasks
 
-![Benchmark viewer](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/main/animations/benchmark-viewer.webp)
+To record and replay your own workflows, use
+[OpenAdapt](https://github.com/OpenAdaptAI/OpenAdapt) (`pip install openadapt`)
+instead.
 
-## Try it without a VM
+## Quick start
+
+You need Python 3.10 or later. The quick start needs no VM and no API key, and
+it costs nothing.
 
 ```bash
 pip install openadapt-evals
 openadapt-evals mock --tasks 5
 ```
 
-```
-11:24:42 [INFO] Task 5/5: mock_file_explorer_001
-11:24:42 [INFO] Step 0: Agent chose action: click
-11:24:42 [INFO] Step 1: Agent signaled task completion
-11:24:42 [INFO] [SUCCESS] Task mock_file_explorer_001 completed successfully (score: 1.00)
-11:24:42 [INFO] Saved summary: 5/5 outcomes succeeded (100.0%); 0 errors across 5 attempts
+It logs each step, then prints a summary:
 
+```
 ==================================================
 Evaluation Results
 ==================================================
@@ -48,14 +48,95 @@ Avg score:    1.000 (outcomes only)
 Avg steps:    1.0 (all attempts)
 ```
 
-Abridged output from 0.94.0. The mock adapter and its deterministic agent both
-always succeed, so 100% here means the harness is wired up, and nothing else.
-Every other command in this repository can cost money.
+The mock agent clicks the button that the mock checker looks for, so every task
+passes and this run only shows that the install works. `Outcomes` counts the
+attempts the checker scored. A VM or checker outage counts as an error and is
+left out of the success rate.
 
-## Price a real run before you pay for it
+Scores, traces, and screenshots go to a run folder under `benchmark_results/`.
+To browse them, pass that folder's name to the viewer:
 
-`openadapt-eval-flow` is dry-run unless you pass `--live`. Dry runs provision
-nothing, start no VM, and make no network calls:
+```bash
+openadapt-evals view --run-name <run-folder>
+```
+
+## Score your own agent
+
+Subclass `BenchmarkAgent` and return one action per step:
+
+```python
+from openadapt_evals import (
+    BenchmarkAction,
+    BenchmarkAgent,
+    WAAMockAdapter,
+    compute_metrics,
+    evaluate_agent_on_benchmark,
+)
+
+
+class MyAgent(BenchmarkAgent):
+    def act(self, observation, task, history=None):
+        # observation.screenshot holds PNG bytes; task.instruction says what to do.
+        # Return one action per step. This agent gives up at once.
+        return BenchmarkAction(type="done")
+
+
+results = evaluate_agent_on_benchmark(MyAgent(), WAAMockAdapter(num_tasks=5))
+print(compute_metrics(results)["success_rate"])
+```
+
+This prints `0.0`. The agent reports that it's done without doing anything, and
+the checker scores what the agent did. On WAA, the checker inspects the VM's
+files, settings, and app state.
+
+To run the same agent on a real Windows VM (set up in the next section), use
+the live adapter and name the WAA tasks. The live adapter has no task list of
+its own, so without `task_ids` it runs nothing.
+
+```python
+from openadapt_evals import WAALiveAdapter, WAALiveConfig
+
+adapter = WAALiveAdapter(WAALiveConfig(server_url="http://localhost:5001"))
+results = evaluate_agent_on_benchmark(
+    MyAgent(), adapter, task_ids=["04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS"]
+)
+```
+
+![Benchmark viewer](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/main/animations/benchmark-viewer.webp)
+
+## Run on Windows Agent Arena
+
+You need a Windows VM running the WAA server, plus the scoring server this
+package adds next to it. `oa-vm pool-create --workers 1` builds one on Azure
+(the default) or AWS (`--cloud aws`), and billing starts when the VM does.
+Without `--workers`, it builds three. The
+[CLI reference](https://github.com/OpenAdaptAI/openadapt-evals/blob/main/docs/CLI.md)
+covers credentials, `pool-wait`, and the per-worker files that the pool commands
+require.
+
+`oa-vm pool-status` shows the VM's IP address. Forward the two servers to your
+machine and leave this running:
+
+```bash
+ssh -N -L 5001:localhost:5000 -L 5050:localhost:5051 azureuser@<vm-ip>   # ubuntu@ on AWS
+```
+
+Then, in another terminal with `ANTHROPIC_API_KEY` set:
+
+```bash
+openadapt-evals run --agent api-claude --task 04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS
+oa-vm pool-cleanup -y    # deletes the VMs; until you run it, they keep billing
+```
+
+`run` scores each task with WAA's own checker and opens an HTML viewer of the
+run when it finishes. Task IDs come from WAA's `test_small.json` and
+`test_all.json`. The live adapter rejects test IDs such as `notepad_1` and
+`mock_chrome_001`.
+
+## Evaluate a compiled workflow on WAA
+
+`openadapt-eval-flow` replays compiled OpenAdapt workflows on WAA tasks. Without
+`--live`, it only estimates cost: it starts no VM and makes no network calls.
 
 ```bash
 openadapt-eval-flow --mode replay --tasks 154 --dry-run
@@ -68,143 +149,96 @@ openadapt-eval-flow --mode replay --tasks 154 --dry-run
     -> TOTAL:              $0.54   ($0.0035/task)
     Pure-agent baseline:   $39.06   (22 steps/task, all paid)
     Savings vs baseline:   $38.53
-
-  HARD GUARDRAILS (enforced on any --live paid run):
-    per-run cap:      $0.50
-    total cap:        $5.00
-    per-task tokens:  60,000
-    billing-abort:    after 2 consecutive errors
 ```
 
-Those caps aren't decoration. An early uncapped run cost real money, which is
-how they got there.
+The estimate assumes one minute of VM time per replayed task and 22 model steps
+per task for the agent baseline. Neither number comes from a WAA run of this
+package.
 
-## Drive it from Python
+With `--live`, it runs each task's WAA setup steps, replays that task's compiled
+workflow, and scores the result with WAA's checker. Per-task results go to
+`flow_waa_results/results.json`. A live run needs Python 3.12 or earlier,
+`pip install 'openadapt-evals[flow]'`, a running WAA server, and a `--bundles`
+folder with one subfolder per task ID that holds that task's compiled
+`workflow.json`. It refuses to start if a task has no compiled workflow or no
+WAA checker config.
 
-```python
-from openadapt_evals import (
-    ApiAgent, WAALiveAdapter, WAALiveConfig,
-    evaluate_agent_on_benchmark, compute_metrics,
-)
+## Does a compiled workflow survive a UI change?
 
-adapter = WAALiveAdapter(WAALiveConfig(server_url="http://localhost:5001"))
-agent = ApiAgent(provider="anthropic")
+The latest published comparison ran OpenAdapt's compiled replay and two
+Playwright scripts, one that finds elements by position and one by name, on a
+synthetic medical-records web app (MockMed). Each arm ran three times per
+condition. `theme` restyles the app. `rename` changes the `Open` button to
+`View` and `Save Encounter` to `Submit Encounter`.
 
-results = evaluate_agent_on_benchmark(agent, adapter, task_ids=["notepad_1"])
-print(f"Success rate: {compute_metrics(results)['success_rate']:.1%}")
-```
-
-## Run against a live WAA server
-
-```bash
-oa-vm pool-create --workers 1        # or --cloud aws
-oa-vm pool-wait --qualification-dir ./proofs
-openadapt-evals run --agent api-claude --task notepad_1
-openadapt-evals view --run-name live_eval
-oa-vm pool-cleanup -y                # stops billing
-```
-
-Forget the last line and the VM bills until you remember. `pool-wait`,
-`pool-run`, and `pool-auto` require `--qualification-dir`, a directory holding
-a fresh `<worker>.identity.json` and `<worker>.egress.json` for each worker;
-they refuse to run without it. Most pool commands take `--cloud azure`
-(the default) or `--cloud aws`, though `pool-logs`, `pool-vnc`, and `pool-exec`
-do not. The rest of the `oa-vm`
-subcommands, the `oa` and `openadapt-evals` command tables, and the
-configuration and AWS SSO setup are in [docs/CLI.md](docs/CLI.md).
-
-## What the current evidence says
-
-Every published report pins one exact `openadapt-flow` wheel, so a Flow release
-can invalidate a report without a single commit landing here.
-`docs/eval_results/PUBLISHED_EVIDENCE.json` records which set is current and
-which release it was measured against, and
-`scripts/check_published_evidence_freshness.py` fails when that pin drifts. It
-runs offline on every pull request and against PyPI on a daily schedule, and a
-failed scheduled run opens an issue.
-
-The current set is `current_flow_v1_34_0_local_20260829`, measured 2026-08-29
-against Flow 1.34.0 on macOS with headless Chromium. Flow 1.35.0 and 1.35.1
-shipped after it, and Flow 1.35.1 has not been re-measured, so these numbers
-describe 1.34.0 only. The manifest accepts that gap until 2026-10-31. After
-that date the daily check fails again until a new set is published. One
-synthetic MockMed workflow, three arms, three runs each:
-
-| Condition | Compiled replay | DOM positional | DOM name-scoped |
+| Condition | Compiled replay | Playwright, by position | Playwright, by name |
 |---|---|---|---|
 | `clean` | 3/3 | 3/3 | 3/3 |
 | `theme` | 3/3 | 3/3 | 3/3 |
 | `rename` | 3/3 | 0/3 | 0/3 |
 
-The `rename` row is the one worth reading. It changes `Open` to `View` and
-`Save Encounter` to `Submit Encounter`, and both Playwright selector controls
-failed loudly at the first renamed locator before mutating anything. Those are
-unsupported-drift halts, not silent wrong writes. Compiled replay is also
-roughly thirty times slower per run than a working selector, 6.4s against
-0.20s, which is the honest reminder that structural actuation should stay the
-preferred tier wherever an application gives you one.
+A separate screenshot and OCR check confirmed each saved record. After the
+rename, both Playwright scripts stopped at the first renamed button and wrote
+nothing. Compiled replay completed all three runs, with no wrong writes and no
+model calls. Compiled replay is slower. In the `clean` condition it took a
+median of 6.4 seconds per run, against 0.20 seconds for the Playwright scripts.
+Where an application has a stable API or selectors, those are still the faster
+choice.
 
-Zero silent incorrect successes, zero wrong actions, zero over-halts, zero
-model calls, $0.00 across all 27 runs. Full report, caveats, and the dependency
-freeze: [`docs/eval_results/current_flow_v1_34_0_local_20260829/`](docs/eval_results/current_flow_v1_34_0_local_20260829/).
+Measured 2026-08-29 against Flow 1.34.0 on macOS with headless Chromium. Flow
+1.35.0 and 1.35.1 shipped later, and Flow 1.35.1 has not been re-measured. The
+full report, timings, and dependency list are in
+[`current_flow_v1_34_0_local_20260829`](https://github.com/OpenAdaptAI/openadapt-evals/tree/main/docs/eval_results/current_flow_v1_34_0_local_20260829).
 
-Publish a new set rather than editing an old one. Superseded reports stay
-reproducible against the wheel they were measured on, and none of the nine get
-deleted.
+## Check whether a reward pays for wrong writes
 
-## What this repository cannot tell you yet
-
-- **There is no current Flow-versus-zero-shot number.** The word `current` on an
-  evidence set means release-fresh, not production-accepted. No Azure WAA VM was
-  started for the 1.34.0 set and no model was called.
-- **The live WAA path is not finished.** `scripts/eval_flow_on_waa.py` leaves
-  `WAALiveAdapter.evaluate` unwired on the replay path, so it cannot
-  independently score success, and the hybrid live path returns before
-  execution because its adapter isn't connected either. Wiring both is step one
-  of any valid comparison run.
-- **The evidence is local and synthetic.** Bundled MockMed, one workflow, one
-  macOS host. No hosted lifecycle, no Windows UIA, no RDP, no Citrix, and no
-  real customer application is represented anywhere in it.
-- **Only two benchmark families exist.** `BenchmarkAdapter` is built to extend
-  to OSWorld or WebArena. Today there is WAA, live and mock, and there is
-  `LocalAdapter` for native desktop runs.
-- **Some of it is deliberately absent.** Deployment-derived thresholds, tuned
-  adversary parameters, per-system-of-record oracle recipes, and real customer
-  datasets stay out of this open repository.
-
-The missing acceptance tracks and the exit condition for each are written down
-in [docs/eval_results/PRODUCTION_READINESS.md](docs/eval_results/PRODUCTION_READINESS.md).
-
-## What else is in here
-
-A meta-benchmark harness runs record, compile, replay, heal, verify across any
-registered `Environment` and emits one metrics row per `(env, task, mode)`, and
-exports to [Inspect AI](https://inspect.aisi.org.uk/). Thirteen agents ship,
-including a dual-model `PlannerGrounderAgent` that separates what to do from
-where to click, and a `ScrubMiddleware` strips PII before any agent sees a
-screenshot. There's also a standalone GRPO trainer with no openadapt-ml
-dependency, an OpenEnv-compatible environment, and a four-pass pipeline that
-turns desktop recordings into structured workflows.
-
-ExtraDup is the frozen duplicate-write kill-scan. Gold is FAIL when the
-system of record has the wrong cardinality or an extra field. One command
-scores the certified reward against a visual-only baseline, or a paid/not-paid
-map from someone else's checker:
-
-```text
+```bash
 python -m openadapt_evals.extradup kill-scan
 ```
 
-It prints silent-incorrect-success on the FAIL mutants and honest-write on
-the control. `execute_seal` and `production_seal` stay false; mutants stay off
-the training reward. On the committed 2026-09-01 MockMed run, `visual_only`
-paid 15/15 gold-FAIL and `certified_sor` paid 0/15 FAIL and 3/3 honest. See
-[`openadapt_evals/extradup/README.md`](openadapt_evals/extradup/README.md)
-and [docs/reward/README.md](docs/reward/README.md).
+ExtraDup applies five kinds of wrong write to a MockMed record: a duplicate
+record, an extra field, a missing field, a form that was never submitted, and a
+"Saved" banner with nothing saved. It then asks two built-in reference rewards
+whether to pay, three times for each case. The first pays whenever the screen
+looks finished, so it paid all 15 wrong writes. The second reads the stored
+record. It paid none of the wrong writes and all 3 correct ones. The scan runs
+offline in about a second. To score your own checker, see the
+[ExtraDup README](https://github.com/OpenAdaptAI/openadapt-evals/blob/main/openadapt_evals/extradup/README.md).
 
-Runbooks for the demo-conditioned eval, the full evaluation runner, the UI-Venus
-grounder endpoint, GRPO training, and writing your own agent are in
-[docs/WORKFLOWS.md](docs/WORKFLOWS.md), along with the package tree.
+## Also in this package
+
+- A harness that runs record, compile, replay, repair, and verify across
+  environments, with export to [Inspect AI](https://inspect.aisi.org.uk/).
+- Agents for Claude, GPT, Qwen3-VL, and HTTP endpoints, including a planner and
+  grounder agent that separates what to do from where to click.
+- A middleware that removes personal data from screenshots before an agent
+  sees them.
+- A GRPO trainer and an OpenEnv-compatible environment.
+
+Runbooks for these are in
+[docs/WORKFLOWS.md](https://github.com/OpenAdaptAI/openadapt-evals/blob/main/docs/WORKFLOWS.md).
+
+## Limits
+
+- The published results cover one synthetic web workflow on one macOS host. No
+  Windows desktop app, RDP or Citrix session, or real customer application is
+  in them, and there is no published WAA comparison of compiled replay with an
+  agent yet.
+- WAA scoring of `openadapt-eval-flow --live` replays has been tested with
+  fakes only, not yet against a WAA VM. Its `--mode hybrid` (replay with an
+  agent fallback) estimates cost but doesn't run.
+- The spending caps that `openadapt-eval-flow` prints are checked only by
+  `HybridFlowAgent`, which the command doesn't run. A live replay records each
+  task's model calls and estimated model cost in `results.json` but doesn't
+  stop at a cap.
+- The included benchmarks are WAA, live and mock, and local desktop runs through
+  `LocalAdapter`. Others, such as OSWorld or WebArena, need a new
+  `BenchmarkAdapter`.
+- Deployment thresholds, tuned adversary parameters, per-system checking
+  recipes, and real customer data stay private.
+- How results are tied to an exact release, kept current, and kept separate
+  from production sign-off is in
+  [docs/COMPLIANCE.md](https://github.com/OpenAdaptAI/openadapt-evals/blob/main/docs/COMPLIANCE.md).
 
 ## Contributing
 
@@ -212,20 +246,23 @@ grounder endpoint, GRPO training, and writing your own agent are in
 git clone https://github.com/OpenAdaptAI/openadapt-evals.git
 cd openadapt-evals
 uv sync --extra dev
-uv run pytest tests/ -v
+uv run pytest tests/ -q -m "not heavy and not gpu and not vm" \
+  -k "not (test_demo_format_and_persistence or test_synthetic_demos)"
 ```
 
+That's the selection CI runs. The tests it leaves out need ML packages, a GPU,
+a WAA VM, or recordings and demo files that aren't in the repository.
+
 Every dependency installs from PyPI, so you don't need other OpenAdapt
-repositories checked out next to this one. To work against a local copy of
-one, install it into the environment after syncing, for example
+repositories checked out next to this one. To work against a local copy of one,
+install it into the environment after syncing, for example
 `uv pip install -e ../openadapt-ml`, and don't commit a `path` source for it.
 
-This is research infrastructure and it moves fast. Branches and pull requests
-only, never a direct push to `main`. PR titles need
-[conventional commit](https://www.conventionalcommits.org/) format, because
-`python-semantic-release` parses them to decide the version bump.
+Use a branch and a pull request; don't push to `main`. PR titles use
+[Conventional Commits](https://www.conventionalcommits.org/), because
+`python-semantic-release` reads them to pick the version bump.
 [CLAUDE.md](https://github.com/OpenAdaptAI/openadapt-evals/blob/main/CLAUDE.md)
-has the development conventions and the WAA benchmark workflow.
+has the development conventions and the WAA workflow.
 
 ## License
 

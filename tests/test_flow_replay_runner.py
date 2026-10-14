@@ -4,10 +4,14 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+from openadapt_evals.adapters.base import BenchmarkResult, BenchmarkTask
+from openadapt_evals.adapters.waa.live import SyntheticTaskError
 from openadapt_evals.flow.replay_runner import (
     FlowTask,
     aggregate_replay_metrics,
+    load_waa_tasks,
     run_demonstrate_then_replay,
+    waa_live_hooks,
 )
 
 
@@ -134,3 +138,147 @@ def test_no_openadapt_flow_import_during_mocked_run(tmp_path):
         replay_fn=lambda *a: _fake_report(),
     )
     assert "openadapt_flow" not in sys.modules
+
+
+def test_setup_runs_before_each_replay(tmp_path):
+    b = tmp_path / "b"
+    b.mkdir()
+    events = []
+
+    def setup_fn(task_id):
+        events.append(("setup", task_id))
+
+    def replay_fn(*a):
+        events.append(("replay",))
+        return _fake_report()
+
+    def evaluator(task_id):
+        events.append(("evaluate", task_id))
+        return True, None
+
+    run_demonstrate_then_replay(
+        [FlowTask("t1", bundle_dir=b), FlowTask("t2", bundle_dir=b)],
+        "http://x", tmp_path / "r",
+        replay_fn=replay_fn, setup_fn=setup_fn, evaluator=evaluator,
+    )
+    assert events == [
+        ("setup", "t1"), ("replay",), ("evaluate", "t1"),
+        ("setup", "t2"), ("replay",), ("evaluate", "t2"),
+    ]
+
+
+def test_failed_setup_skips_replay_and_scoring(tmp_path):
+    b = tmp_path / "b"
+    b.mkdir()
+    replays = []
+    evaluated = []
+
+    def setup_fn(task_id):
+        if task_id == "bad":
+            raise RuntimeError("app did not open")
+
+    def replay_fn(*a):
+        replays.append(a)
+        return _fake_report()
+
+    def evaluator(task_id):
+        evaluated.append(task_id)
+        return True, None
+
+    metrics = run_demonstrate_then_replay(
+        [FlowTask("bad", bundle_dir=b), FlowTask("good", bundle_dir=b)],
+        "http://x", tmp_path / "r",
+        replay_fn=replay_fn, setup_fn=setup_fn, evaluator=evaluator,
+    )
+    assert metrics[0].error == "task setup failed: app did not open"
+    assert metrics[0].waa_verified_success is None   # unscored, not a failure
+    assert len(replays) == 1
+    assert evaluated == ["good"]
+    agg = aggregate_replay_metrics(metrics)
+    assert agg["waa_verified_num_scored"] == 1
+    assert agg["waa_verified_success_rate"] == 1.0
+
+
+class _FakeWAAAdapter:
+    """Stands in for WAALiveAdapter: load_task, reset, evaluate."""
+
+    def __init__(self, configs, results):
+        self.configs = configs
+        self.results = results
+        self.reset_calls = []
+        self.evaluate_calls = []
+
+    def load_task(self, task_id):
+        if task_id.startswith("notepad_"):
+            raise SyntheticTaskError(task_id)
+        config = self.configs.get(task_id)
+        if config is None:
+            return BenchmarkTask(task_id=task_id, instruction="?", domain="unknown")
+        return BenchmarkTask(
+            task_id=task_id,
+            instruction=config["instruction"],
+            domain="notepad",
+            raw_config=config,
+            evaluation_spec=config.get("evaluator"),
+        )
+
+    def reset(self, task):
+        self.reset_calls.append(task.task_id)
+
+    def evaluate(self, task):
+        self.evaluate_calls.append(task.task_id)
+        return self.results[task.task_id]
+
+
+_CONFIG = {"instruction": "Save the file", "evaluator": {"func": "compare_text_file"}}
+
+
+def test_load_waa_tasks_reports_unscorable_ids():
+    adapter = _FakeWAAAdapter({"real-1": _CONFIG}, {})
+    tasks, problems = load_waa_tasks(adapter, ["real-1", "notepad_1", "no-config"])
+    assert list(tasks) == ["real-1"]
+    assert len(problems) == 2
+    assert problems[0].startswith("notepad_1: Task ID 'notepad_1' appears to be synthetic")
+    assert "\n" not in problems[0]
+    assert problems[1].startswith("no-config: no WAA evaluator spec found")
+
+
+def test_waa_live_hooks_score_with_waa_evaluator(tmp_path):
+    configs = {"pass-1": _CONFIG, "fail-1": _CONFIG, "down-1": _CONFIG}
+    results = {
+        "pass-1": BenchmarkResult(task_id="pass-1", success=True, score=1.0),
+        "fail-1": BenchmarkResult(
+            task_id="fail-1", success=False, score=0.0, reason="file not saved"
+        ),
+        "down-1": BenchmarkResult(
+            task_id="down-1", success=False, score=0.0,
+            reason="Evaluation failed: HTTP 500", error_type="infrastructure",
+        ),
+    }
+    adapter = _FakeWAAAdapter(configs, results)
+    tasks, problems = load_waa_tasks(adapter, list(configs))
+    assert problems == []
+    setup_fn, evaluator = waa_live_hooks(adapter, tasks)
+    b = tmp_path / "b"
+    b.mkdir()
+
+    metrics = run_demonstrate_then_replay(
+        [FlowTask(tid, bundle_dir=b) for tid in configs],
+        "http://x", tmp_path / "r",
+        replay_fn=lambda *a: _fake_report(success=True),
+        setup_fn=setup_fn, evaluator=evaluator,
+    )
+    assert adapter.reset_calls == ["pass-1", "fail-1", "down-1"]
+    assert adapter.evaluate_calls == ["pass-1", "fail-1", "down-1"]
+    by_id = {m.task_id: m for m in metrics}
+    assert by_id["pass-1"].waa_verified_success is True
+    # The replayer said success; WAA's evaluator disagreed and wins.
+    assert by_id["fail-1"].replay_reported_success is True
+    assert by_id["fail-1"].waa_verified_success is False
+    assert by_id["fail-1"].error == "file not saved"
+    # An evaluator outage is unscored, not a 0.
+    assert by_id["down-1"].waa_verified_success is None
+    assert by_id["down-1"].error == "Evaluation failed: HTTP 500"
+    agg = aggregate_replay_metrics(metrics)
+    assert agg["waa_verified_num_scored"] == 2
+    assert agg["waa_verified_success_rate"] == 0.5

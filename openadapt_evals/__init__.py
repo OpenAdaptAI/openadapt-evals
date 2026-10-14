@@ -34,18 +34,23 @@ Quick Start:
     print(f"Success rate: {metrics['success_rate']:.1%}")
     ```
 
-For API-backed evaluation:
+For API-backed evaluation against a live WAA server:
     ```python
-    from openadapt_evals import ApiAgent, WAALiveAdapter
+    from openadapt_evals import ApiAgent, WAALiveAdapter, WAALiveConfig
 
-    # Use Claude Sonnet 4.5 with demo (P0 fix: demo persists across all steps)
+    # The demo text is included in the prompt at every step.
     agent = ApiAgent(
         provider="anthropic",
-        demo="Step 1: Click Start menu..."  # Included at EVERY step
+        demo="Step 1: Click Start menu...",
     )
 
-    adapter = WAALiveAdapter(server_url="http://vm-ip:5000")
-    results = evaluate_agent_on_benchmark(agent, adapter, max_steps=15)
+    adapter = WAALiveAdapter(WAALiveConfig(server_url="http://localhost:5001"))
+    results = evaluate_agent_on_benchmark(
+        agent,
+        adapter,
+        task_ids=["04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS"],  # real WAA task IDs only
+        max_steps=15,
+    )
     ```
 
 For benchmark viewer:

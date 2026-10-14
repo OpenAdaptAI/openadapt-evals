@@ -27,6 +27,7 @@ import logging
 import os
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 logging.basicConfig(
@@ -298,36 +299,28 @@ def cmd_mock(args: argparse.Namespace) -> int:
         print("Available for mock: mock, api-claude, api-openai, api-claude-cu, qwen3vl, smol, http")
         return 1
 
-    # Create config for trace collection
-    done_gate = getattr(args, "done_gate", False)
-    done_gate_max_overrides = getattr(args, "done_gate_max_overrides", 3)
-    done_gate_threshold = getattr(args, "done_gate_threshold", 1.0)
-    config = None
-    if args.output or done_gate:
-        config = EvaluationConfig(
-            save_execution_traces=bool(args.output),
-            output_dir=args.output or "benchmark_results",
-            run_name=args.run_name or "mock_eval",
-            done_gate=done_gate,
-            done_gate_max_overrides=done_gate_max_overrides,
-            done_gate_threshold=done_gate_threshold,
-        )
+    # Traces always go to <output>/<run-name>, so `view --run-name` can find them.
+    run_name = args.run_name or f"mock_eval_{datetime.now():%Y%m%d_%H%M%S}"
+    config = EvaluationConfig(
+        max_steps=args.max_steps,
+        output_dir=args.output or "benchmark_results",
+        run_name=run_name,
+        done_gate=getattr(args, "done_gate", False),
+        done_gate_max_overrides=getattr(args, "done_gate_max_overrides", 3),
+        done_gate_threshold=getattr(args, "done_gate_threshold", 1.0),
+    )
 
     # Run evaluation
-    results = evaluate_agent_on_benchmark(
-        agent=agent,
-        adapter=adapter,
-        max_steps=args.max_steps,
-        config=config,
-    )
+    results = evaluate_agent_on_benchmark(agent=agent, adapter=adapter, config=config)
 
     # Compute and display metrics
     metrics = compute_metrics(results)
 
     _print_evaluation_metrics(metrics)
 
-    if config:
-        print(f"\nResults saved to: {config.output_dir}/{config.run_name}")
+    print(f"\nResults saved to: {config.output_dir}/{config.run_name}")
+    print(f"View them with:   openadapt-evals view --run-name {config.run_name}"
+          + (f" --benchmark-dir {config.output_dir}" if args.output else ""))
 
     return 0
 
@@ -373,9 +366,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"ERROR: Cannot connect to WAA server at {server_url}")
         print()
         print("Make sure:")
-        print("  1. Azure VM is running (openadapt-ml: vm status)")
-        print("  2. SSH tunnels are active (openadapt-ml: vm monitor)")
-        print("  3. WAA server is ready (openadapt-ml: vm probe)")
+        print("  1. The VM is running (oa-vm pool-status)")
+        print("  2. The WAA server answers (openadapt-evals probe --server URL)")
+        print("  3. --server points at it (an SSH tunnel to localhost:5001 by default)")
         return 1
 
     print("Connected!")
@@ -387,9 +380,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     elif args.tasks:
         task_ids = [t.strip() for t in args.tasks.split(",")]
     else:
-        print("ERROR: Specify --task or --tasks")
-        print("Example: --task notepad_1")
-        print("Example: --tasks notepad_1,notepad_2,browser_1")
+        print("ERROR: Specify --task or --tasks with real WAA task IDs")
+        print("Example: --task 04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS")
+        print("Real IDs are listed in WAA's test_small.json and test_all.json.")
         return 1
 
     # Create agent
@@ -2477,9 +2470,9 @@ def main() -> int:
     run_parser.add_argument("--agent-endpoint", type=str,
                            help="HTTP endpoint URL for http agent (e.g., http://localhost:8080)")
     run_parser.add_argument("--task", type=str,
-                           help="Single task ID (e.g., notepad_1)")
+                           help="Single WAA task ID (e.g., 04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS)")
     run_parser.add_argument("--tasks", type=str,
-                           help="Comma-separated task IDs (e.g., notepad_1,notepad_2)")
+                           help="Comma-separated WAA task IDs")
     run_parser.add_argument("--demo", type=str,
                            help="Demo trajectory file for ApiAgent")
     run_parser.add_argument("--model-path", type=str, help="Model path for Qwen3VL agent")

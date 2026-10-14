@@ -1,7 +1,5 @@
 # CLI reference and configuration
 
-Verified against openadapt-evals 0.94.1, this branch's source.
-
 ## Console entry points
 
 The package installs nine: `openadapt-evals`, `oa`, `oa-vm`,
@@ -69,17 +67,28 @@ Most pool commands accept `--cloud azure` (the default) or `--cloud aws`;
 
 Wraps `scripts/eval_flow_on_waa.py`. Dry-run unless you pass `--live`.
 
+With `--live --mode replay`, each task runs its WAA setup steps, replays its
+compiled bundle, and is scored by WAA's own evaluator. Per-task results go to
+`<run-root>/results.json`. The run refuses to start when a task has no bundle,
+when its ID is not a real WAA task ID, or when no WAA evaluator spec can be
+loaded for it. Live replay needs Python 3.12 or earlier and
+`pip install 'openadapt-evals[flow]'`. It has been tested with fakes only, not
+yet against a WAA VM.
+`--mode hybrid` prints a cost estimate only; `--live` refuses it.
+
 | Flag | Meaning |
 |---|---|
 | `--env {waa,parallels}` | `waa` is cloud Azure and costs money; `parallels` is a local Apple Silicon VM at $0, opt in with `OPENADAPT_PARALLELS=1` |
-| `--mode {replay,hybrid}` | Compiled replay, or replay with agent fallback on halt |
+| `--mode {replay,hybrid}` | Compiled replay, or a cost estimate for replay with agent fallback on halt |
 | `--tasks`, `--task-ids` | Task count for the estimate, or explicit comma-separated WAA task ids |
 | `--bundles` | Directory of compiled bundles, one subdirectory per task id |
+| `--server-url`, `--evaluate-url` | WAA server, and its evaluate server if separate (default: the WAA server, then port 5050) |
+| `--waa-examples-path` | Local WAA `evaluation_examples_windows` directory, used when the evaluate server cannot serve task configs |
 | `--model` | Fallback and baseline computer-use model used for costing |
 | `--fallback-rate` | Assumed fraction of tasks that halt into a paid fallback |
 | `--vm-hourly` | VM dollars per hour (Azure D4_v3 = 0.19, AWS m8i.2xlarge = 0.46) |
-| `--max-run-usd`, `--max-total-usd`, `--max-task-tokens`, `--billing-abort-after` | Hard guardrails enforced on any live paid run |
-| `--dry-run`, `--live`, `--json`, `--run-root` | Plan only, actually run, emit JSON, choose the output root |
+| `--max-run-usd`, `--max-total-usd`, `--max-task-tokens`, `--billing-abort-after` | Spend caps printed with the estimate. `HybridFlowAgent` checks them; a `--live` replay records model spend in `results.json` but doesn't stop at them |
+| `--dry-run`, `--live`, `--json`, `--run-root` | Plan only, run against the WAA server, emit JSON, choose the output root |
 
 ## Configuration
 

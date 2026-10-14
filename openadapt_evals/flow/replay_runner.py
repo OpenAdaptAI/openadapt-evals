@@ -6,18 +6,21 @@ For each WAA task we:
   (a) obtain ONE demonstration and ``compile`` it into an openadapt-flow bundle
       (offline, done ahead of time -- see ``scripts/record_waa_demos.py`` to
       record and ``python -m openadapt_flow compile`` to compile);
-  (b) ``replay`` that bundle via :class:`openadapt_flow.backends.windows_backend.WindowsBackend`
+  (b) run the task's WAA setup steps, so the replay starts from the state the
+      demonstration was recorded from;
+  (c) ``replay`` that bundle via :class:`openadapt_flow.backends.windows_backend.WindowsBackend`
       pointed at the WAA in-guest Flask server (the SAME ``/screenshot`` +
       ``/execute_windows`` contract WAA already exposes -- no adapter layer);
-  (c) let **WAA's own task evaluator** score success (NOT the replayer's
-      self-report).
+  (d) let **WAA's own task evaluator** score success (NOT the replayer's
+      self-report). :func:`waa_live_hooks` builds steps (b) and (d) from a
+      ``WAALiveAdapter``.
 
 Per-task metrics emitted: WAA-verified success, replay self-report, structural
 rung fire rate, model calls (~0 on a healthy replay), wall-clock, and any
 halt/heal events.
 
 Everything heavy (``openadapt_flow``) is imported lazily inside the default
-callables, and both the replay step and the WAA evaluator are injectable, so
+callables, and the setup, replay, and evaluator steps are injectable, so
 the whole runner is unit-testable with mocks -- no VM, no ``flow`` extra, no $.
 """
 
@@ -27,7 +30,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +39,13 @@ logger = logging.getLogger(__name__)
 # .est_model_cost_usd, .total_ms, .terminal_outcome, .results.
 ReplayFn = Callable[[Path, str, Path, Optional[dict]], Any]
 
-# A WAA evaluator callable: task_id -> (verified_success, reason).
-EvaluatorFn = Callable[[str], "tuple[bool, Optional[str]]"]
+# A WAA evaluator callable: task_id -> (verified_success, reason). A verdict of
+# None means the verifier could not run, so the task stays unscored.
+EvaluatorFn = Callable[[str], "tuple[Optional[bool], Optional[str]]"]
+
+# A per-task setup callable run before the replay: task_id -> None. It raises
+# when the task's starting state cannot be prepared.
+SetupFn = Callable[[str], None]
 
 
 @dataclass
@@ -154,12 +162,41 @@ def _report_metrics(task: FlowTask, report: Any, wall_clock_s: float) -> PerTask
     )
 
 
+def _unrun_metrics(
+    task: FlowTask,
+    error: str,
+    *,
+    wall_clock_s: float = 0.0,
+    halted: bool = False,
+    terminal_outcome: Optional[str] = None,
+) -> PerTaskReplayMetrics:
+    """Metrics for a task whose replay did not produce a report."""
+    return PerTaskReplayMetrics(
+        task_id=task.task_id,
+        bundle_dir=str(task.bundle_dir) if task.bundle_dir else None,
+        waa_verified_success=None,
+        replay_reported_success=False,
+        structural_rung_counts={},
+        structural_rung_fire_total=0,
+        rung_fire_rate=0.0,
+        model_calls=0,
+        est_model_cost_usd=0.0,
+        wall_clock_s=wall_clock_s,
+        heal_count=0,
+        halted=halted,
+        terminal_outcome=terminal_outcome,
+        num_steps=0,
+        error=error,
+    )
+
+
 def run_demonstrate_then_replay(
     tasks: Sequence[FlowTask],
     server_url: str,
     run_root: Path | str,
     *,
     replay_fn: Optional[ReplayFn] = None,
+    setup_fn: Optional[SetupFn] = None,
     evaluator: Optional[EvaluatorFn] = None,
     on_task: Optional[Callable[[PerTaskReplayMetrics], None]] = None,
 ) -> list[PerTaskReplayMetrics]:
@@ -173,6 +210,9 @@ def run_demonstrate_then_replay(
         run_root: Directory that receives one ``<task_id>/`` replay dir per task.
         replay_fn: Override the replay step (defaults to a real WindowsBackend
             replay; inject a fake for tests).
+        setup_fn: Prepares each task's starting state before its replay (for
+            WAA, the task's own setup steps). A task whose setup raises is
+            recorded as an error and not replayed.
         evaluator: WAA ground-truth verifier ``task_id -> (success, reason)``.
             When None, ``waa_verified_success`` stays None (replay ran but was
             not independently scored).
@@ -188,30 +228,26 @@ def run_demonstrate_then_replay(
 
     for task in tasks:
         if not task.has_bundle:
-            metrics = PerTaskReplayMetrics(
-                task_id=task.task_id,
-                bundle_dir=str(task.bundle_dir) if task.bundle_dir else None,
-                waa_verified_success=None,
-                replay_reported_success=False,
-                structural_rung_counts={},
-                structural_rung_fire_total=0,
-                rung_fire_rate=0.0,
-                model_calls=0,
-                est_model_cost_usd=0.0,
-                wall_clock_s=0.0,
-                heal_count=0,
-                halted=False,
-                terminal_outcome=None,
-                num_steps=0,
-                error=(
-                    "no compiled bundle -- record a demo (scripts/record_waa_demos.py) "
-                    "and compile it (python -m openadapt_flow compile) first"
-                ),
+            metrics = _unrun_metrics(
+                task,
+                "no compiled bundle -- record a demo (scripts/record_waa_demos.py) "
+                "and compile it (python -m openadapt_flow compile) first",
             )
             out.append(metrics)
             if on_task:
                 on_task(metrics)
             continue
+
+        if setup_fn is not None:
+            try:
+                setup_fn(task.task_id)
+            except Exception as e:  # noqa: BLE001 - one bad task must not abort the run
+                logger.warning("task setup failed for %s: %s", task.task_id, e)
+                metrics = _unrun_metrics(task, f"task setup failed: {e}")
+                out.append(metrics)
+                if on_task:
+                    on_task(metrics)
+                continue
 
         run_dir = root / task.task_id
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -222,22 +258,12 @@ def run_demonstrate_then_replay(
             metrics = _report_metrics(task, report, wall)
         except Exception as e:  # noqa: BLE001 - one bad task must not abort the run
             logger.exception("replay failed for %s", task.task_id)
-            metrics = PerTaskReplayMetrics(
-                task_id=task.task_id,
-                bundle_dir=str(task.bundle_dir),
-                waa_verified_success=None,
-                replay_reported_success=False,
-                structural_rung_counts={},
-                structural_rung_fire_total=0,
-                rung_fire_rate=0.0,
-                model_calls=0,
-                est_model_cost_usd=0.0,
+            metrics = _unrun_metrics(
+                task,
+                str(e),
                 wall_clock_s=time.monotonic() - start,
-                heal_count=0,
                 halted=True,
                 terminal_outcome="error",
-                num_steps=0,
-                error=str(e),
             )
             out.append(metrics)
             if on_task:
@@ -295,3 +321,70 @@ def aggregate_replay_metrics(metrics: Sequence[PerTaskReplayMetrics]) -> dict:
             1 for m in metrics if m.error and "no compiled bundle" in (m.error or "")
         ),
     }
+
+
+def _has_waa_evaluator(task: Any) -> bool:
+    raw = getattr(task, "raw_config", None) or {}
+    return bool(getattr(task, "evaluation_spec", None) or raw.get("evaluator"))
+
+
+def load_waa_tasks(adapter: Any, task_ids: Iterable[str]) -> tuple[dict[str, Any], list[str]]:
+    """Load WAA task configs for a replay run.
+
+    Each task needs WAA's own config: its setup steps prepare the starting
+    state the demonstration was recorded from, and its evaluator spec is what
+    WAA's checker scores. A task without an evaluator spec cannot be scored,
+    so it is reported as a problem instead of being run.
+
+    Args:
+        adapter: A ``WAALiveAdapter`` (anything with ``load_task``).
+        task_ids: WAA task IDs.
+
+    Returns:
+        ``(tasks, problems)``: the loaded tasks by ID, and one message per task
+        that could not be loaded or has no evaluator spec.
+    """
+    tasks: dict[str, Any] = {}
+    problems: list[str] = []
+    for task_id in task_ids:
+        try:
+            task = adapter.load_task(task_id)
+        except Exception as e:  # noqa: BLE001 - report every bad ID, not just the first
+            first_line = str(e).splitlines()[0] if str(e) else type(e).__name__
+            problems.append(f"{task_id}: {first_line}")
+            continue
+        if not _has_waa_evaluator(task):
+            problems.append(
+                f"{task_id}: no WAA evaluator spec found; start the WAA evaluate "
+                "server or pass --waa-examples-path"
+            )
+            continue
+        tasks[task_id] = task
+    return tasks, problems
+
+
+def waa_live_hooks(adapter: Any, tasks: Mapping[str, Any]) -> tuple[SetupFn, EvaluatorFn]:
+    """Build the setup and evaluator hooks for a live WAA replay run.
+
+    ``setup`` runs the task's WAA setup steps (``adapter.reset``) so the replay
+    starts from the same state the demonstration was recorded from.
+    ``evaluate`` runs WAA's own checker (``adapter.evaluate``). When the checker
+    could not run (the result carries an ``error_type``), the verdict is None,
+    so the task is left out of the success rate instead of counted as a failure.
+
+    Args:
+        adapter: A ``WAALiveAdapter`` pointed at the WAA server.
+        tasks: Task configs by ID, from :func:`load_waa_tasks`.
+    """
+
+    def setup(task_id: str) -> None:
+        adapter.reset(tasks[task_id])
+
+    def evaluate(task_id: str) -> "tuple[Optional[bool], Optional[str]]":
+        result = adapter.evaluate(tasks[task_id])
+        error_type = getattr(result, "error_type", None)
+        if error_type is not None:
+            return None, result.reason or f"WAA evaluator could not score ({error_type})"
+        return bool(result.success), result.reason
+
+    return setup, evaluate
