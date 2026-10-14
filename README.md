@@ -181,14 +181,13 @@ A separate screenshot and OCR check confirmed each saved record. After the
 rename, both Playwright scripts stopped at the first renamed button and wrote
 nothing. Compiled replay completed all three runs, with no wrong writes and no
 model calls. Compiled replay is slower. In the `clean` condition it took a
-median of 6.4 seconds per run, against 0.20 seconds for the Playwright scripts.
+median of 6.8 seconds per run, against 0.29 seconds for the Playwright scripts.
 Where an application has a stable API or selectors, those are still the faster
 choice.
 
-Measured 2026-08-29 against Flow 1.34.0 on macOS with headless Chromium. Flow
-1.35.0 and 1.35.1 shipped later, and Flow 1.35.1 has not been re-measured. The
+Measured 2026-10-14 against Flow 1.35.1 on macOS with headless Chromium. The
 full report, timings, and dependency list are in
-[`current_flow_v1_34_0_local_20260829`](https://github.com/OpenAdaptAI/openadapt-evals/tree/main/docs/eval_results/current_flow_v1_34_0_local_20260829).
+[`current_flow_v1_35_1_local_20261014`](https://github.com/OpenAdaptAI/openadapt-evals/tree/main/docs/eval_results/current_flow_v1_35_1_local_20261014).
 
 ## Check whether a reward pays for wrong writes
 
