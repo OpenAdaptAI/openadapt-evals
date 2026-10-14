@@ -30,7 +30,7 @@ def test_repo_manifest_is_internally_consistent() -> None:
 def test_repo_manifest_keeps_old_evidence_stale_and_names_the_exact_rerun() -> None:
     manifest = MODULE.load_manifest(MANIFEST)
     current = MODULE.current_entry(manifest)
-    for old_version in ("1.31.0", "1.32.0", "1.33.0"):
+    for old_version in ("1.32.0", "1.33.0", "1.34.0"):
         old = next(
             item
             for item in manifest["evidence"]
@@ -38,12 +38,36 @@ def test_repo_manifest_keeps_old_evidence_stale_and_names_the_exact_rerun() -> N
         )
         assert old["status"] == "superseded"
         assert "not relabeled" in old["stale_reason"].lower()
-    assert current["flow_version"] == "1.34.0"
+        assert "accepted_drift" not in old
+    assert current["flow_version"] == "1.35.1"
     assert current["production_acceptance"] is False
     previous = next(
-        item for item in manifest["evidence"] if item["flow_version"] == "1.33.0"
+        item for item in manifest["evidence"] if item["flow_version"] == "1.34.0"
     )
     assert previous["superseded_by"] == current["path"]
+
+
+# The newest openadapt-flow release on PyPI when the current set was published,
+# with the wheel digest PyPI lists for it. Update both when a newer set
+# replaces the current one.
+PUBLISHED_AGAINST = ("1.35.1", "cfbc89acc6a2e3bcb5502a4d1fb29e985a03149a7f14c32c259254676bb3f11d")
+
+
+def test_current_set_is_measured_on_the_release_it_was_published_against(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A waiver only postpones a re-run. The current set must pass against the
+    release it was published against on its own, on any date, so the check
+    stays green after a waiver would have expired."""
+
+    version, wheel_sha256 = PUBLISHED_AGAINST
+    monkeypatch.setattr(MODULE, "_today", lambda: date(2026, 11, 1))
+
+    argv = ["--current-version", version, "--current-wheel-sha256", wheel_sha256]
+    assert MODULE.main(argv) == 0
+    out = capsys.readouterr().out
+    assert f"is bound to the current openadapt-flow release {version}" in out
+    assert "NOT been re-measured" not in out
 
 
 def test_drift_is_detected_when_a_newer_release_is_published() -> None:
@@ -633,6 +657,29 @@ def test_readme_states_which_release_the_current_numbers_were_measured_on() -> N
         # While drift is accepted, the public page must say the newer release
         # was not measured, not imply the numbers describe it.
         assert f"Flow {waiver['version']} has not been re-measured" in readme
+
+
+def test_readme_comparison_numbers_come_from_the_current_set() -> None:
+    """The README quotes the current set's results. When a new set replaces the
+    old one, the quoted numbers must change with it, or the page names the new
+    release next to numbers measured on the old one."""
+
+    entry = MODULE.current_entry(MODULE.load_manifest(MANIFEST))
+    results = json.loads((ROOT / entry["path"] / "results.json").read_text(encoding="utf-8"))
+    aggregate = results["aggregate"]
+    readme = " ".join((ROOT / "README.md").read_text(encoding="utf-8").split())
+
+    compiled = aggregate["compiled"]["clean"]["steady_wall_s_median"]
+    assert f"median of {compiled:.1f} seconds per run" in readme
+    for arm in ("dom", "dom_named"):
+        median = aggregate[arm]["clean"]["steady_wall_s_median"]
+        assert f"against {median:.2f} seconds for the Playwright scripts" in readme
+    for condition in results["conditions"]:
+        cells = [
+            f"{aggregate[arm][condition]['task_success_count']}/{aggregate[arm][condition]['n']}"
+            for arm in ("compiled", "dom", "dom_named")
+        ]
+        assert f"| `{condition}` | " + " | ".join(cells) + " |" in readme
 
 
 def test_a_failing_scheduled_check_leaves_an_open_issue() -> None:
