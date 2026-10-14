@@ -2426,6 +2426,13 @@ def cmd_eval_suite(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_audit_verifier(args: argparse.Namespace) -> int:
+    """Audit a benchmark's verifier for accepted wrong side effects."""
+    from openadapt_evals.verifier_audit.cli import run
+
+    return run(args)
+
+
 def main() -> int:
     """Main entry point for CLI."""
     parser = argparse.ArgumentParser(
@@ -2887,6 +2894,21 @@ def main() -> int:
         help="Evaluate server URL (default: same as --server)",
     )
 
+    # Verifier audit (Verifier-squared): which wrong side effects does a checker accept?
+    from openadapt_evals.verifier_audit.cli import EPILOG as _AUDIT_EPILOG
+    from openadapt_evals.verifier_audit.cli import add_arguments as _audit_arguments
+
+    audit_parser = subparsers.add_parser(
+        "audit-verifier",
+        help="Find the wrong side effects a benchmark's verifier accepts",
+        description="Edit correct benchmark runs one change at a time, replay them, and "
+        "report which edits the benchmark's own verifier passes although the end state "
+        "is wrong.",
+        epilog=_AUDIT_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    _audit_arguments(audit_parser)
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -2917,6 +2939,7 @@ def main() -> int:
         "wandb-report": cmd_wandb_report,
         "wandb-log": cmd_wandb_log,
         "eval-suite": cmd_eval_suite,
+        "audit-verifier": cmd_audit_verifier,
     }
 
     handler = handlers.get(args.command)

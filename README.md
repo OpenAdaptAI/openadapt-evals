@@ -205,6 +205,190 @@ record. It paid none of the wrong writes and all 3 correct ones. The scan runs
 offline in about a second. To score your own checker, see the
 [ExtraDup README](https://github.com/OpenAdaptAI/openadapt-evals/blob/main/openadapt_evals/extradup/README.md).
 
+## Audit a benchmark's checker
+
+If you build an agent benchmark, or train on rewards computed from one, its
+checker decides what counts as success. `audit-verifier` tests that checker.
+It takes each task's own correct solution, makes one edit to it, replays the
+edited run from a fresh start state, reads the end state back, and only then
+calls the benchmark's checker, unmodified. It lists every edit the checker
+passed although the end state differs from the correct run's. It calls no
+model.
+
+```bash
+pip install openadapt-evals
+openadapt-evals audit-verifier --benchmark toy
+```
+
+```
+[1/5] split-bill: FALSE ACCEPT (extra, extra-ni) (0s)
+[2/5] split-bill-counted: no false accept (0s)
+[3/5] queue-songs: FALSE ACCEPT (extra, extra-ni) (0s)
+[4/5] like-songs: no false accept (0s)
+[5/5] rename-profile: no false accept (0s)
+Verifier audit: toy, 5 task(s), 5 audited, 0s
+
+The verifier passed 4 edited run(s) whose end state is wrong:
+  task         operator  end state compared with the reference run
+  -----------  --------  ------------------------------------------
+  split-bill   extra     toy.Notification +1, toy.PaymentRequest +1
+  split-bill   extra-ni  toy.Notification +1, toy.PaymentRequest +1
+  queue-songs  extra     toy.QueueEntry +1
+  queue-songs  extra-ni  toy.QueueEntry +1
+
+Per operator (each edited run counted once; operators are not pooled):
+  operator     class          runs  killed  false accept  equivalent  unconfirmed  refused  error  invalid
+  -----------  -------------  ----  ------  ------------  ----------  -----------  -------  -----  -------
+  claim-only   postcondition     5       5             0           0            0        0      0        0
+  omit         postcondition     5       5             0           0            0        0      0        0
+  partial      postcondition     4       4             0           0            0        1      0        0
+  wrong-value  postcondition     5       5             0           0            0        0      0        0
+  extra        frame             5       1             2           2            0        0      0        0
+  extra-ni     frame             3       1             2           0            0        2      0        0
+
+false accept: the verifier passed the edited run, and the end state (read
+  back before grading) differs from the reference run's.
+equivalent: the edit left the end state unchanged, so the pass is correct.
+```
+
+`toy` is a small synthetic benchmark inside the package, so this runs offline
+in under a second. Two of its five checkers compare the values of new records
+without counting them, so a repeated write passes both.
+
+Each operator makes one edit:
+
+| Operator | Edit | A correct checker |
+|---|---|---|
+| `claim-only` | report success and write nothing | fails it |
+| `omit` | drop the last write | fails it |
+| `partial` | of the most repeated write, keep only the first | fails it |
+| `wrong-value` | change one value in the last write | fails it |
+| `extra` | repeat the last write | fails it, unless the repeat changed nothing |
+| `extra-ni` | repeat the last write whose repeat changes the end state, found by replaying each candidate without calling the checker | fails it |
+
+Each edited run gets one result. `killed` means the checker failed it.
+`false accept` means the checker passed it and the end state differs from the
+correct run's. `equivalent` means the edit left the end state unchanged, so
+the pass is correct. `refused` means the task gave the operator nothing to
+edit. `unconfirmed`, `error` and `invalid` mark runs that could not be checked
+cleanly, for example because the unedited run itself failed. The command
+exits 1 when it finds a false accept, so a CI job can run it. `--out
+report.json` writes every run's result; the report holds record counts and
+field names, not record values.
+
+### AppWorld
+
+[AppWorld](https://github.com/StonyBrookNLP/appworld) is not bundled. It
+ships its task data and tests encrypted and asks that public copies stay
+encrypted, so you install it yourself, once. It needs its own environment
+because it pins pydantic 1:
+
+```bash
+uv venv --python 3.11 ~/.cache/appworld/venv
+uv pip install --python ~/.cache/appworld/venv/bin/python appworld==0.1.3.post1
+~/.cache/appworld/venv/bin/appworld install
+~/.cache/appworld/venv/bin/appworld download data --root ~/.cache/appworld
+
+openadapt-evals audit-verifier --benchmark appworld \
+    --appworld-python ~/.cache/appworld/venv/bin/python \
+    --appworld-root ~/.cache/appworld \
+    --tasks 22cc237_1,396c5a2_1
+```
+
+```
+[1/2] 22cc237_1: FALSE ACCEPT (extra, extra-ni) (43s)
+[2/2] 396c5a2_1: FALSE ACCEPT (extra, extra-ni) (38s)
+Verifier audit: appworld, 2 task(s), 2 audited, 81s
+
+The verifier passed 4 edited run(s) whose end state is wrong:
+  task       operator  end state compared with the reference run
+  ---------  --------  ----------------------------------------------
+  22cc237_1  extra     venmo.Notification +1, venmo.PaymentRequest +1
+  22cc237_1  extra-ni  venmo.Notification +1, venmo.PaymentRequest +1
+  396c5a2_1  extra     spotify.MusicPlayer: queue_song_ids changed
+  396c5a2_1  extra-ni  spotify.MusicPlayer: queue_song_ids changed
+
+Per operator (each edited run counted once; operators are not pooled):
+  operator     class          runs  killed  false accept  equivalent  unconfirmed  refused  error  invalid
+  -----------  -------------  ----  ------  ------------  ----------  -----------  -------  -----  -------
+  claim-only   postcondition     2       2             0           0            0        0      0        0
+  omit         postcondition     2       2             0           0            0        0      0        0
+  partial      postcondition     1       1             0           0            0        1      0        0
+  wrong-value  postcondition     2       2             0           0            0        0      0        0
+  extra        frame             2       0             2           0            0        0      0        0
+  extra-ni     frame             2       0             2           0            0        0      0        0
+
+false accept: the verifier passed the edited run, and the end state (read
+  back before grading) differs from the reference run's.
+equivalent: the edit left the end state unchanged, so the pass is correct.
+```
+
+Task `22cc237_1` asks for Venmo payment requests to the people who still owe
+their share of a dinner bill. Its tests check the receiver and amount of each
+new request but never count the requests, so a run that sends the last
+request twice passes. In `396c5a2_1` the tests compare the song queue as a
+set, so a song queued twice passes. A task took 12 to 68 seconds in our runs
+on an Apple silicon Mac. Without `--tasks`, the command audits the first 20
+tasks of the `train` split; `--limit 0 --jobs 4` audits the whole split.
+
+We ran the command on the 48 AppWorld tasks the paper audited (AppWorld
+0.1.3.post1, data 0.1.0, `--jobs 4`, 426 seconds). It matched the paper's
+result for all 48 unedited runs and all 288 operator runs, refusals included.
+`extra` passed 39 of 48 runs. In 33 of them the repeat changed nothing; the
+other 6 are false accepts, on the three variants of each task above. The
+checkers killed every postcondition edit that applied.
+
+### Your own benchmark
+
+Write an adapter and pass it as `--benchmark yourpackage.module:YourAdapter`.
+A run is a list of API calls (`{"method", "url", "data"}`), and an effect is
+the records each table gained, lost or changed:
+
+```python
+from openadapt_evals.verifier_audit import CallPolicy, Delivery, Reference
+
+
+class YourAdapter:
+    name = "your-benchmark"
+    ignore_fields = frozenset({"id", "created_at"})  # fields with no task meaning
+    policy = CallPolicy()  # which calls sign in, which claim success
+
+    def describe(self):
+        return {"name": self.name}
+
+    def task_ids(self, split, limit):
+        ...
+
+    def reference(self, task_id) -> Reference:
+        ...  # run the task's own solution; record its calls and its effect
+
+    def deliver(self, task_id, runs) -> list[Delivery]:
+        ...  # per run: fresh start state, replay, read back, then grade
+```
+
+The readback must not use the checker's assertions. It may read the same
+database. [`adapters/toy.py`](https://github.com/OpenAdaptAI/openadapt-evals/blob/main/openadapt_evals/verifier_audit/adapters/toy.py)
+is a complete adapter.
+
+### Limits
+
+- The operators are six fixed, hand-written edits, one per run. A killed edit
+  shows only that the checker catches that edit. The command does not search
+  for exploits, combine edits, or grade one task's run with another task's
+  checker.
+- A false accept means the end state differs from the correct run's. If a task
+  leaves a field free, such as the wording of a note, a changed value there is
+  not an error. The report names the field; `--ignore-fields table.field`
+  excludes it.
+- The benchmark needs resettable start states, a correct reference run,
+  actions that can be replayed as API calls, and a deterministic checker.
+  Checkers that call an LLM judge are out of scope. The paper's WorkArena
+  (browser) runner is not included.
+- Counts describe the tasks you ran. They are not rates.
+
+The method and the full results are in "Verifier²: Finding Loopholes in
+Verifiable Rewards" (NeurIPS 2026 workshop "Who Verifies the Agents?").
+
 ## Also in this package
 
 - A harness that runs record, compile, replay, repair, and verify across
