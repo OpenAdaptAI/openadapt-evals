@@ -62,10 +62,19 @@ and [`docs/reward/README.md`](reward/README.md).
 
 ## Spending caps on paid runs
 
-`openadapt-eval-flow` is a dry run unless you pass `--live`. Any live paid run
-is held to a per-run cap, a total cap, a per-task token cap, and an abort after
-repeated billing errors. The defaults are $0.50, $5.00, 60,000 tokens, and two
-errors. The caps were added after an early run without them cost $40 to $70.
+`openadapt-eval-flow` is a dry run unless you pass `--live`. `SpendLedger`
+holds paid agent runs to a total budget, a per-task token cap, and an abort
+after repeated billing errors. Before each run starts, it checks that the run's
+per-run allowance still fits under the total. The defaults are $0.50 per run,
+$5.00 in total, 60,000 tokens per task, and two billing errors. The caps were
+added after an early run without them cost $40 to $70.
+
+Only `HybridFlowAgent` checks the ledger, before and during its paid fallback.
+It reads tokens and cost from top-level keys of the fallback agent's step logs,
+so it records neither for `ApiAgent`, which reports tokens under `token_usage`.
+`openadapt-eval-flow --live` runs compiled replay only. It records each task's
+model calls and estimated model cost in `results.json` but doesn't stop at a
+cap.
 
 ## What stays out of this repository
 

@@ -15,9 +15,10 @@ Two modes:
 
 Safety: this command is **dry-run by default**. It never provisions Azure,
 never starts a VM, never spends money, and makes no network calls unless you
-pass ``--live`` (which additionally requires a reachable WAA server and stays
-under the hard cost caps). The prior $40-70 uncapped-run incident is why the
-caps below are mandatory.
+pass ``--live``, which also requires a reachable WAA server. The spend caps it
+prints are checked by ``HybridFlowAgent``; a ``--live`` replay records each
+task's model calls and estimated cost in ``results.json`` but does not stop at
+a cap.
 
 Examples:
     # Cost estimate + plan for a 10-task and full (154) replay run (no network):
@@ -146,7 +147,7 @@ def print_estimate(args: argparse.Namespace, guard: CostGuardConfig) -> dict:
         print(f"    Savings vs baseline:   ${r['savings_vs_baseline_usd']:.2f}")
 
     print()
-    print("  HARD GUARDRAILS (enforced on any --live paid run):")
+    print("  SPEND CAPS (HybridFlowAgent checks these; a --live replay does not):")
     print(f"    per-run cap:      ${guard.per_run_usd:.2f}")
     print(f"    total cap:        ${guard.total_usd:.2f}")
     print(f"    per-task tokens:  {guard.per_task_tokens:,}")

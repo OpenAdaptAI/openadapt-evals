@@ -5,19 +5,20 @@
 [![Python](https://img.shields.io/pypi/pyversions/openadapt-evals.svg)](https://pypi.org/project/openadapt-evals/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-openadapt-evals measures how well a GUI agent, or a workflow compiled by
-OpenAdapt, completes desktop tasks. It runs each task, scores the result with
-the benchmark's own checker rather than the agent's claim of success, and saves
-scores and step-by-step traces you can compare across runs. For
+openadapt-evals measures how well a GUI agent, or a workflow that OpenAdapt
+compiled from one recorded demonstration, completes desktop tasks. It runs each
+task, scores the result with the benchmark's own checker rather than the
+agent's claim of success, and saves scores and step-by-step traces you can
+compare across runs. For
 [Windows Agent Arena](https://microsoft.github.io/WindowsAgentArena/) (WAA), it
 can also create and delete the Windows VMs the benchmark needs, in your own
 Azure or AWS account.
 
 Use it to:
 
-- get a reproducible WAA score for a GUI agent you're building,
-- check whether a change to OpenAdapt made replay better or worse, or
-- compare a compiled workflow with a model-driven agent on the same tasks.
+- Score a GUI agent you're building on WAA tasks
+- Check whether a change to OpenAdapt made replay better or worse
+- Compare a compiled workflow with a model-driven agent on the same tasks
 
 To record and replay your own workflows, use
 [OpenAdapt](https://github.com/OpenAdaptAI/OpenAdapt) (`pip install openadapt`)
@@ -33,6 +34,8 @@ pip install openadapt-evals
 openadapt-evals mock --tasks 5
 ```
 
+It logs each step, then prints a summary:
+
 ```
 ==================================================
 Evaluation Results
@@ -45,8 +48,17 @@ Avg score:    1.000 (outcomes only)
 Avg steps:    1.0 (all attempts)
 ```
 
-The mock environment and its scripted agent always succeed, so this run only
-shows that the install works. Scores and traces go to `benchmark_results/`.
+The mock agent clicks the button that the mock checker looks for, so every task
+passes and this run only shows that the install works. `Outcomes` counts the
+attempts the checker scored. A VM or checker outage counts as an error and is
+left out of the success rate.
+
+Scores, traces, and screenshots go to a run folder under `benchmark_results/`.
+To browse them, pass that folder's name to the viewer:
+
+```bash
+openadapt-evals view --run-name <run-folder>
+```
 
 ## Score your own agent
 
@@ -75,21 +87,41 @@ print(compute_metrics(results)["success_rate"])
 
 This prints `0.0`. The agent reports that it's done without doing anything, and
 the checker scores what the agent did. On WAA, the checker inspects the VM's
-files, settings, and app state. To run the same agent on a real Windows VM,
-replace `WAAMockAdapter` with `WAALiveAdapter`.
+files, settings, and app state.
+
+To run the same agent on a real Windows VM (set up in the next section), use
+the live adapter and name the WAA tasks. The live adapter has no task list of
+its own, so without `task_ids` it runs nothing.
+
+```python
+from openadapt_evals import WAALiveAdapter, WAALiveConfig
+
+adapter = WAALiveAdapter(WAALiveConfig(server_url="http://localhost:5001"))
+results = evaluate_agent_on_benchmark(
+    MyAgent(), adapter, task_ids=["04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS"]
+)
+```
 
 ![Benchmark viewer](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/main/animations/benchmark-viewer.webp)
 
 ## Run on Windows Agent Arena
 
-You need a running WAA server that has the `/evaluate` endpoint this package
-adds. `oa-vm pool-create` builds one on Azure (the default) or AWS, and billing
-starts when the VM does. The
+You need a Windows VM running the WAA server, plus the scoring server this
+package adds next to it. `oa-vm pool-create --workers 1` builds one on Azure
+(the default) or AWS (`--cloud aws`), and billing starts when the VM does.
+Without `--workers`, it builds three. The
 [CLI reference](https://github.com/OpenAdaptAI/openadapt-evals/blob/main/docs/CLI.md)
 covers credentials, `pool-wait`, and the per-worker files that the pool commands
 require.
 
-With the server reachable at `localhost:5001` and `ANTHROPIC_API_KEY` set:
+`oa-vm pool-status` shows the VM's IP address. Forward the two servers to your
+machine and leave this running:
+
+```bash
+ssh -N -L 5001:localhost:5000 -L 5050:localhost:5051 azureuser@<vm-ip>   # ubuntu@ on AWS
+```
+
+Then, in another terminal with `ANTHROPIC_API_KEY` set:
 
 ```bash
 openadapt-evals run --agent api-claude --task 04d9aeaf-7bed-4024-bedb-e10e6f00eb7f-WOS
@@ -98,7 +130,8 @@ oa-vm pool-cleanup -y    # deletes the VMs; until you run it, they keep billing
 
 `run` scores each task with WAA's own checker and opens an HTML viewer of the
 run when it finishes. Task IDs come from WAA's `test_small.json` and
-`test_all.json`. The live adapter rejects mock IDs such as `notepad_1`.
+`test_all.json`. The live adapter rejects test IDs such as `notepad_1` and
+`mock_chrome_001`.
 
 ## Evaluate a compiled workflow on WAA
 
@@ -116,20 +149,19 @@ openadapt-eval-flow --mode replay --tasks 154 --dry-run
     -> TOTAL:              $0.54   ($0.0035/task)
     Pure-agent baseline:   $39.06   (22 steps/task, all paid)
     Savings vs baseline:   $38.53
-
-  HARD GUARDRAILS (enforced on any --live paid run):
-    per-run cap:      $0.50
-    total cap:        $5.00
-    per-task tokens:  60,000
-    billing-abort:    after 2 consecutive errors
 ```
 
+The estimate assumes one minute of VM time per replayed task and 22 model steps
+per task for the agent baseline. Neither number comes from a WAA run of this
+package.
+
 With `--live`, it runs each task's WAA setup steps, replays that task's compiled
-bundle, and scores the result with WAA's checker. Per-task results go to
-`flow_waa_results/results.json`. A live run needs
-`pip install 'openadapt-evals[flow]'`, a running WAA server, and one compiled
-bundle per task. It refuses to start if a task has no bundle or no WAA checker
-config.
+workflow, and scores the result with WAA's checker. Per-task results go to
+`flow_waa_results/results.json`. A live run needs Python 3.12 or earlier,
+`pip install 'openadapt-evals[flow]'`, a running WAA server, and a `--bundles`
+folder with one subfolder per task ID that holds that task's compiled
+`workflow.json`. It refuses to start if a task has no compiled workflow or no
+WAA checker config.
 
 ## Does a compiled workflow survive a UI change?
 
@@ -166,11 +198,11 @@ python -m openadapt_evals.extradup kill-scan
 
 ExtraDup applies five kinds of wrong write to a MockMed record: a duplicate
 record, an extra field, a missing field, a form that was never submitted, and a
-"Saved" banner with nothing saved. It then asks two reward functions whether to
-pay, three times for each case. A reward that only looks at the screen paid all
-15 wrong writes. A reward that reads the stored record paid none of them, and
-paid all 3 correct writes. The scan runs offline in about a second. To score
-your own checker, see the
+"Saved" banner with nothing saved. It then asks two built-in reference rewards
+whether to pay, three times for each case. The first pays whenever the screen
+looks finished, so it paid all 15 wrong writes. The second reads the stored
+record. It paid none of the wrong writes and all 3 correct ones. The scan runs
+offline in about a second. To score your own checker, see the
 [ExtraDup README](https://github.com/OpenAdaptAI/openadapt-evals/blob/main/openadapt_evals/extradup/README.md).
 
 ## Also in this package
@@ -192,8 +224,13 @@ Runbooks for these are in
   Windows desktop app, RDP or Citrix session, or real customer application is
   in them, and there is no published WAA comparison of compiled replay with an
   agent yet.
-- `openadapt-eval-flow --mode hybrid` (replay with an agent fallback) estimates
-  cost but doesn't run.
+- WAA scoring of `openadapt-eval-flow --live` replays has been tested with
+  fakes only, not yet against a WAA VM. Its `--mode hybrid` (replay with an
+  agent fallback) estimates cost but doesn't run.
+- The spending caps that `openadapt-eval-flow` prints are checked only by
+  `HybridFlowAgent`, which the command doesn't run. A live replay records each
+  task's model calls and estimated model cost in `results.json` but doesn't
+  stop at a cap.
 - The included benchmarks are WAA, live and mock, and local desktop runs through
   `LocalAdapter`. Others, such as OSWorld or WebArena, need a new
   `BenchmarkAdapter`.
@@ -209,8 +246,12 @@ Runbooks for these are in
 git clone https://github.com/OpenAdaptAI/openadapt-evals.git
 cd openadapt-evals
 uv sync --extra dev
-uv run pytest tests/ -v
+uv run pytest tests/ -q -m "not heavy and not gpu and not vm" \
+  -k "not (test_demo_format_and_persistence or test_synthetic_demos)"
 ```
+
+That's the selection CI runs. The tests it leaves out need ML packages, a GPU,
+a WAA VM, or recordings and demo files that aren't in the repository.
 
 Every dependency installs from PyPI, so you don't need other OpenAdapt
 repositories checked out next to this one. To work against a local copy of one,
