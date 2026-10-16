@@ -24,7 +24,17 @@ To record and replay your own workflows, use
 [OpenAdapt](https://github.com/OpenAdaptAI/OpenAdapt) (`pip install openadapt`)
 instead.
 
-## Quick start
+## Benchmarks
+
+| Benchmark | What it checks | Where it runs | Section |
+|---|---|---|---|
+| Mock tasks | The harness itself, with no VM or API key | Your machine | [Quick start](#quick-start-local-no-vm) |
+| Windows Agent Arena (WAA) | A GUI agent or a compiled workflow on Windows desktop tasks | A Windows VM in your Azure or AWS account | [Cloud VM](#cloud-vm-windows-agent-arena) |
+| MockMed UI change | Whether a compiled workflow survives a theme change or renamed buttons | Your machine | [UI change](#does-a-compiled-workflow-survive-a-ui-change) |
+| ExtraDup | Whether a reward pays for wrong writes | Your machine | [Rewards](#check-whether-a-reward-pays-for-wrong-writes) |
+| Checker audit (AppWorld or your own) | Which wrong runs a benchmark's checker accepts | Your machine | [Audit](#audit-a-benchmarks-checker) |
+
+## Quick start: local, no VM
 
 You need Python 3.10 or later. The quick start needs no VM and no API key, and
 it costs nothing.
@@ -104,7 +114,7 @@ results = evaluate_agent_on_benchmark(
 
 ![Benchmark viewer](https://raw.githubusercontent.com/OpenAdaptAI/openadapt-evals/main/animations/benchmark-viewer.webp)
 
-## Run on Windows Agent Arena
+## Cloud VM: Windows Agent Arena
 
 You need a Windows VM running the WAA server, plus the scoring server this
 package adds next to it. `oa-vm pool-create --workers 1` builds one on Azure
@@ -401,7 +411,7 @@ Verifiable Rewards" (NeurIPS 2026 workshop "Who Verifies the Agents?").
 Runbooks for these are in
 [docs/WORKFLOWS.md](https://github.com/OpenAdaptAI/openadapt-evals/blob/main/docs/WORKFLOWS.md).
 
-## Limits
+## Known limitations
 
 - The published results cover one synthetic web workflow on one macOS host. No
   Windows desktop app, RDP or Citrix session, or real customer application is
