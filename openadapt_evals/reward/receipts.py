@@ -5,7 +5,8 @@ reward endpoint, how a receipt is fetched, how a receipt becomes a scored
 episode, and how unscored episodes are removed from a GRPO group.
 
 Contract source: ``openadapt_types.reward``. This module never re-derives the
-scoring rules; it calls ``score()`` and reads the receipt's own fields, then
+scoring rules; it applies the certification rules ``score()`` uses and reads
+the receipt's own fields, then
 refuses the combinations a trainer must never accept.
 """
 
@@ -27,7 +28,6 @@ from openadapt_types.reward import (
     RewardEvidenceReceiptV1,
     RewardOutcomeV1,
     RewardScoringClassV1,
-    score,
 )
 
 logger = logging.getLogger(__name__)
@@ -419,9 +419,21 @@ def assess_receipt(
                 f"receipt {receipt.receipt_id} scope {scope} differs from certificate "
                 f"scope {certificate_scope}"
             )
-        verdict = score(receipt.reward_outcome, tier, certificate, policy_update)
+        # openadapt-types 0.18 made ``score()`` require the full contract. A
+        # trainer here may hold only the contract digest and its certificate
+        # policy, so apply the same rules directly: tier 2 or 3, a current
+        # certificate, and (when known) a certificate naming the expected
+        # contract. The policy check follows below.
         state = certificate.state_at(policy_update)
-        certified = bool(receipt.certified and verdict.certified)
+        certified = bool(
+            receipt.certified
+            and not development_only
+            and state is RewardCertificateStateV1.CURRENT
+            and (
+                expected_contract_digest is None
+                or certificate.reward_contract_digest == expected_contract_digest
+            )
+        )
         if certificate_policy is not None and not certificate.satisfies(
             certificate_policy
         ):
