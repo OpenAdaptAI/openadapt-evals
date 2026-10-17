@@ -1,6 +1,28 @@
 # CHANGELOG
 
 
+## v0.98.0 (2026-10-17)
+
+### Features
+
+- **evidence**: Publish the Flow 1.35.1 comparison; supersede 1.34.0 (#349) ([`cf2ae4f`](https://github.com/OpenAdaptAI/openadapt-evals/commit/cf2ae4f68a6a99cf6559571468c5bbe25c840d4b))
+- Add audit-verifier to find wrong side effects a checker accepts (#348) ([`e6a2469`](https://github.com/OpenAdaptAI/openadapt-evals/commit/e6a246909be2371a4fc95f871bec49133bc0b9d2))
+
+### Bug Fixes
+
+- Run on openadapt-types 0.19 through 0.21 (#352) ([`b95cbd7`](https://github.com/OpenAdaptAI/openadapt-evals/commit/b95cbd7004d8dd53e010784f42a132e0a09f7d6e))
+- Score live Flow replays with WAA's evaluator; plain README (#347) ([`dd4612a`](https://github.com/OpenAdaptAI/openadapt-evals/commit/dd4612a2e4be67dfa844b7eb5725b2ae2be91df3))
+- Stale evidence notice, fresh-clone installs, RL instruction (#344) ([`cddd591`](https://github.com/OpenAdaptAI/openadapt-evals/commit/cddd591d790391b8b3f8d7342cd88aa0d9baf85b))
+
+### Documentation
+
+- **readme**: Organize by benchmark, local vs cloud VM, known limitations (#351) ([`a469849`](https://github.com/OpenAdaptAI/openadapt-evals/commit/a4698494775a88f280489ca7e1af1c7e6a40a513))
+
+### Chores
+
+- Sync the published source policy (#346) ([`d40b850`](https://github.com/OpenAdaptAI/openadapt-evals/commit/d40b8509f6d0fccac690e0f3fbabed4bd9976efd))
+
+
 ## v0.97.1 (2026-09-03)
 
 ### Bug Fixes
